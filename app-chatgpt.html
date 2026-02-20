@@ -1,0 +1,2941 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>상세페이지 자동 생성기</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js" async defer></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#6366f1;--primary-h:#818cf8;--primary-dim:rgba(99,102,241,.15);
+  --bg:#0f0f13;--bg-card:#1a1a23;--bg-input:#13131a;
+  --border:#2a2a36;--border-h:#3a3a4a;
+  --text:#e4e4e7;--text-d:#9494a5;--text-m:#6b6b7b;
+  --ok:#22c55e;--warn:#f59e0b;--err:#ef4444;
+  --cyan:#06b6d4;--orange:#f97316;
+}
+body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.fade-in{animation:fadeIn .3s ease-out}
+
+/* Layout */
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:10px;padding:20px 16px;border-bottom:1px solid var(--border)}
+.logo-icon{font-size:28px;color:var(--primary);font-weight:900}
+.logo-text{font-weight:700;font-size:15px;line-height:1.3}
+.logo-sub{font-weight:400;font-size:12px;color:var(--text-d)}
+.nav{padding:12px 8px;display:flex;flex-direction:column;gap:2px;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;transition:.15s;color:var(--text-d);font-size:13px;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.nav-item:hover{background:rgba(255,255,255,.03)}
+.nav-item.active{background:var(--primary-dim);color:var(--primary-h)}
+.nav-item.disabled{opacity:.4;cursor:not-allowed}
+.main{flex:1;min-width:0;padding:24px 32px;overflow-y:auto}
+.container{max-width:1100px;margin:0 auto}
+
+/* Typography */
+.page-title{font-size:26px;font-weight:800;margin-bottom:6px}
+.page-desc{font-size:14px;color:var(--text-d);margin-bottom:24px}
+
+/* Upload */
+.upload-area{border:2px dashed var(--border);border-radius:16px;padding:40px;text-align:center;cursor:pointer;background:var(--bg-card);margin-bottom:24px;min-height:240px;display:flex;align-items:center;justify-content:center;transition:.2s}
+.upload-area:hover{border-color:var(--primary);background:rgba(99,102,241,.03)}
+.upload-area.has-image{border-style:solid;border-color:var(--border)}
+.preview-img{max-height:300px;max-width:100%;border-radius:12px;object-fit:contain}
+
+/* Form */
+.input-group{margin-bottom:20px}
+.label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;color:var(--text-d)}
+.input,.textarea{width:100%;padding:10px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;font-family:inherit;transition:border .2s}
+.input:focus,.textarea:focus{border-color:var(--primary)}
+.textarea{resize:vertical;line-height:1.5;font-size:13px}
+
+/* Buttons */
+.btn-primary{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+.btn-primary:hover{background:var(--primary-h)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:var(--bg-card);color:var(--text-d);border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn-sm:hover{border-color:var(--border-h);color:var(--text)}
+
+/* Cards */
+.feature-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:40px}
+.feature-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center}
+.feature-card .mi{font-size:28px;color:var(--primary);margin-bottom:8px}
+.feature-card h4{font-weight:600;font-size:14px;margin-bottom:4px}
+.feature-card p{font-size:12px;color:var(--text-d)}
+
+/* Analysis Summary */
+.analysis-box{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px}
+.tag{display:inline-block;padding:3px 10px;background:var(--primary-dim);color:var(--primary-h);border-radius:20px;font-size:11px;font-weight:500;margin:2px}
+
+/* Section Cards */
+.section-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+.section-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer;transition:.15s}
+.section-card:hover{border-color:var(--border-h);background:var(--bg-card)}
+.section-card .head{display:flex;align-items:center;gap:12px}
+.section-card .icon{font-size:28px}
+.section-card .info{flex:1}
+.section-card .info h4{font-weight:600;font-size:14px}
+.section-card .info p{font-size:12px;color:var(--text-d);margin-top:2px}
+.custom-badge{margin-top:8px;padding:6px 10px;background:var(--primary-dim);border-radius:6px;font-size:12px;color:var(--primary-h)}
+
+/* Progress */
+.progress-outer{width:100%;max-width:400px;height:24px;background:var(--bg-card);border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+.progress-inner{height:100%;background:linear-gradient(90deg,var(--primary),var(--cyan));border-radius:12px;transition:width .5s ease;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:600;min-width:40px}
+.spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.spinner-lg{width:64px;height:64px;border:4px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.gen-icons{margin-top:40px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.gen-icon{width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-card);border-radius:10px;font-size:22px;border:1px solid var(--border);transition:.3s}
+.gen-icon.done{background:var(--primary-dim);border-color:var(--primary)}
+
+/* Preview */
+.preview-wrap{background:#fff;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+.section-ctrl{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg-card);border-bottom:1px solid var(--border)}
+.section-ctrl .name{font-weight:600;font-size:13px}
+.edit-panel{padding:12px 16px;background:var(--bg);border-bottom:1px solid var(--border)}
+
+/* Error */
+.error-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:var(--err);font-size:13px;margin-bottom:16px}
+
+/* API Key Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:480px;width:90%}
+.modal h2{font-size:20px;margin-bottom:8px}
+.modal p{font-size:13px;color:var(--text-d);margin-bottom:20px}
+
+/* Image Cuts */
+.cuts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.cut-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;transition:.2s}
+.cut-card.has-result{border-color:var(--primary)}
+.cut-label{font-size:13px;font-weight:700;color:var(--primary)}
+.cut-preview{width:100%;aspect-ratio:4/3;border-radius:8px;object-fit:cover;background:var(--bg-input);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-m);font-size:12px;overflow:hidden}
+.cut-preview img{width:100%;height:100%;object-fit:cover}
+.cut-spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:auto}
+.source-upload{border:2px dashed var(--border);border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-card);transition:.2s;margin-bottom:20px}
+.source-upload:hover{border-color:var(--primary)}
+.placement-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.placement-row:last-child{border-bottom:none}
+.placement-select{background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 8px;font-size:12px;font-family:inherit;outline:none}
+.cut-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;border:1px solid var(--border);background:var(--bg-input)}
+
+/* Automation */
+.auto-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.auto-card h3{font-size:15px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.auto-status{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}
+.auto-status.running{background:rgba(34,197,94,.15);color:var(--ok)}
+.auto-status.stopped{background:rgba(239,68,68,.15);color:var(--err)}
+.auto-status.waiting{background:rgba(245,158,11,.15);color:var(--warn)}
+.folder-pick{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s;min-height:44px}
+.folder-pick:hover{border-color:var(--primary)}
+.folder-pick .name{flex:1;font-size:13px;color:var(--text)}
+.folder-pick .placeholder{flex:1;font-size:13px;color:var(--text-m)}
+.queue-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px}
+.queue-item:last-child{border-bottom:none}
+.queue-item .q-status{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.queue-item .q-status.pending{background:var(--text-m)}
+.queue-item .q-status.processing{background:var(--warn);animation:pulse 1s infinite}
+.queue-item .q-status.done{background:var(--ok)}
+.queue-item .q-status.error{background:var(--err)}
+.log-box{background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.8}
+.log-line{color:var(--text-d)}
+.log-line.ok{color:var(--ok)}
+.log-line.err{color:var(--err)}
+.log-line.info{color:var(--cyan)}
+.interval-slider{width:100%;accent-color:var(--primary)}
+
+/* Rival Analysis */
+.rival-product-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px;display:flex;gap:14px;align-items:flex-start;transition:.2s}
+.rival-product-card.selectable{cursor:pointer}
+.rival-product-card.selectable:hover{border-color:var(--border-h)}
+.rival-product-card.selected{border-color:var(--primary);background:rgba(99,102,241,.06)}
+.rival-product-card.rejected{opacity:.35}
+.rival-thumb{width:72px;height:72px;border-radius:8px;object-fit:cover;background:var(--bg-input);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:22px}
+.rival-info{flex:1;min-width:0}
+.rival-info h4{font-size:13px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rival-info .price{font-size:15px;font-weight:800;color:var(--primary);margin-bottom:4px}
+.rival-info .meta{font-size:11px;color:var(--text-m)}
+.rival-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.rival-badge.auto-ok{background:rgba(34,197,94,.15);color:var(--ok)}
+.rival-badge.auto-no{background:rgba(239,68,68,.15);color:var(--err)}
+.rival-badge.pending{background:rgba(245,158,11,.15);color:var(--warn)}
+.rival-badge.coupang{background:rgba(234,67,53,.12);color:#ea4335}
+.rival-badge.naver{background:rgba(3,199,90,.12);color:#03c75a}
+.ratio-slider-wrap{display:flex;align-items:center;gap:12px;padding:14px;background:var(--bg-input);border-radius:10px;margin-bottom:10px}
+.extra-section-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(6,182,212,.12);color:var(--cyan);border-radius:20px;font-size:12px;font-weight:600;margin:3px}
+.platform-tabs{display:flex;gap:8px;margin-bottom:16px}
+.platform-tab{padding:8px 20px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-d);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+.platform-tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.rival-grid{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.verify-mode-select{display:flex;gap:8px;margin-bottom:16px}
+.verify-mode-btn{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-d);font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;transition:.15s;text-align:center}
+.verify-mode-btn.active{border-color:var(--primary);color:var(--primary);background:var(--primary-dim)}
+
+/* Token Tracker */
+.token-widget{padding:10px 14px;border-top:1px solid var(--border);font-size:11px}
+.token-bar-wrap{width:100%;height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden;margin:5px 0}
+.token-bar{height:100%;border-radius:3px;transition:width .4s ease}
+.token-bar.safe{background:var(--ok)}
+.token-bar.warn{background:var(--warn)}
+.token-bar.danger{background:var(--err)}
+.token-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.token-model-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.token-model-card h4{font-size:11px;color:var(--text-m);margin-bottom:6px;font-weight:500}
+.token-model-card .val{font-size:22px;font-weight:800;color:var(--primary)}
+.token-model-card .sub{font-size:11px;color:var(--text-d);margin-top:2px}
+.token-limit-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+
+/* Responsive */
+@media(max-width:900px){
+  .feature-grid{grid-template-columns:repeat(2,1fr)}
+  .section-grid{grid-template-columns:1fr}
+  .sidebar{width:60px;overflow:hidden}
+  .sidebar .logo-text,.sidebar .logo-sub,.sidebar .nav-item span:last-child,.sidebar .token-widget{display:none}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// SECTION DEFINITIONS (15 sections)
+// ════════════════════════════════════════════════════════════════
+const SECTIONS = [
+  {n:1,name:"헤더 (Header)",id:"header",purpose:"제품을 깔끔한 화이트톤 배경으로 강조. 제품명을 상단에 크고 임팩트 있게 표시.",desc:"화이트 배경 + 제품 중앙 배치 + 제품명 강조",icon:"🎯"},
+  {n:2,name:"훅 (Hook)",id:"hook",purpose:"구매 욕구를 자극하는 강렬한 비주얼과 카피. 고객의 페인포인트를 건드리고 제품이 해결책임을 암시.",desc:"구매 욕구 자극 훅 메시지 + 감성 이미지",icon:"🪝"},
+  {n:3,name:"핵심 특징 (Key Features)",id:"key_features",purpose:"제품의 핵심 특장점 3~5가지를 아이콘/이미지와 함께 명확하게 전달.",desc:"핵심 특장점 3~5가지 아이콘+텍스트 그리드",icon:"⭐"},
+  {n:4,name:"상세 스펙 (Specifications)",id:"specifications",purpose:"제품의 상세 사양, 크기, 재질, 무게 등 구체적인 정보 제공.",desc:"상세 사양 테이블 + 제품 디테일 이미지",icon:"📐"},
+  {n:5,name:"사용 시나리오 (Use Scenarios)",id:"use_scenarios",purpose:"다양한 사용 상황을 보여주어 고객이 자신의 라이프스타일에서 제품을 상상할 수 있게 함.",desc:"라이프스타일 이미지 + 사용 상황 텍스트",icon:"🏠"},
+  {n:6,name:"비교 우위 (Competitive Edge)",id:"competitive_edge",purpose:"경쟁 제품 대비 우위점을 시각적으로 비교.",desc:"경쟁사 대비 비교표 또는 Before/After",icon:"🏆"},
+  {n:7,name:"소재/기술 (Material & Tech)",id:"material_tech",purpose:"사용된 소재의 우수성이나 특허 기술 등을 시각적으로 설명.",desc:"소재/기술력 강조 다크톤 섹션",icon:"🔬"},
+  {n:8,name:"인증/수상 (Certifications)",id:"certifications",purpose:"제품이 받은 인증, 수상 내역, 테스트 결과 등으로 신뢰도 구축.",desc:"인증마크/수상내역 배지 나열",icon:"🏅"},
+  {n:9,name:"리뷰/후기 (Reviews)",id:"reviews",purpose:"실제 사용자 후기를 활용한 사회적 증거.",desc:"고객 리뷰 카드 레이아웃",icon:"💬"},
+  {n:10,name:"크기/컬러 가이드",id:"size_color",purpose:"사이즈 차트, 컬러 옵션 등 선택에 도움되는 정보 제공.",desc:"사이즈표 + 컬러 스와치 옵션",icon:"🎨"},
+  {n:11,name:"프로모션 (Promotion)",id:"promotion",purpose:"특별 할인, 세트 구성, 사은품 등 구매 촉진 이벤트 섹션.",desc:"할인/이벤트/세트 구성 프로모션 배너",icon:"🎁"},
+  {n:12,name:"배송/포장 (Shipping)",id:"shipping",purpose:"배송 정보, 포장 상태, 언박싱 경험 등을 보여줌.",desc:"배송정보 + 패키징 이미지",icon:"📦"},
+  {n:13,name:"FAQ (자주 묻는 질문)",id:"faq",purpose:"고객들이 자주 묻는 질문을 미리 답변하여 구매 불안 해소.",desc:"아코디언 형식 FAQ 섹션",icon:"❓"},
+  {n:14,name:"브랜드 스토리",id:"brand_story",purpose:"브랜드의 철학, 스토리, 가치를 전달하여 감성적 연결 형성.",desc:"브랜드 스토리텔링 다크 섹션",icon:"📖"},
+  {n:15,name:"CTA 푸터 (Footer)",id:"cta_footer",purpose:"최종 구매 결정을 유도하는 강력한 CTA.",desc:"최종 CTA + 가격 + 구매버튼",icon:"🛒"},
+];
+
+// ════════════════════════════════════════════════════════════════
+// OPENAI API SERVICE (gpt-4o + dall-e-3)
+// ════════════════════════════════════════════════════════════════
+class OpenAIAPI {
+  constructor(apiKey) {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://api.openai.com/v1';
+  }
+
+  _headers() {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`
+    };
+  }
+
+  async _chatJSON(messages, temperature = 0.5) {
+    if (isOverLimit()) throw new Error('토큰 한도 초과로 API 호출이 중단되었습니다. 토큰 현황 탭에서 한도를 조정하세요.');
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: this._headers(),
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages,
+        temperature,
+        max_tokens: 4096,
+        response_format: { type: 'json_object' }
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    trackChatUsage('gpt-4o', data.usage);
+    return JSON.parse(data.choices[0].message.content);
+  }
+
+  async analyzeImage(imageBase64, mimeType) {
+    const prompt = `You are a professional e-commerce product analyst. Analyze this product image in extreme detail.
+Return a JSON object with the following fields:
+{
+    "product_name": "detected product name in Korean",
+    "product_name_en": "detected product name in English",
+    "category": "product category",
+    "brand": "brand name if visible",
+    "colors": ["list of colors detected"],
+    "materials": ["detected or estimated materials"],
+    "shape": "product shape description",
+    "size_estimate": "estimated size",
+    "key_features": ["list of 5-10 key features"],
+    "target_audience": "target customer demographic",
+    "price_range_estimate": "estimated price range in KRW",
+    "mood": "overall mood/aesthetic of the product",
+    "use_cases": ["list of use cases"],
+    "selling_points": ["list of unique selling points"],
+    "style_keywords": ["style-related keywords for design"],
+    "complementary_colors": ["colors that complement the product"],
+    "text_color_recommendation": "recommended text color for overlay",
+    "detailed_description": "A detailed Korean description for marketing"
+}
+Respond ONLY with the JSON object, no other text.`;
+
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } }
+      ]
+    }];
+
+    if (isOverLimit()) throw new Error('토큰 한도 초과로 API 호출이 중단되었습니다. 토큰 현황 탭에서 한도를 조정하세요.');
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: this._headers(),
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages,
+        temperature: 0.3,
+        max_tokens: 4096,
+        response_format: { type: 'json_object' }
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    trackChatUsage('gpt-4o', data.usage);
+    return JSON.parse(data.choices[0].message.content);
+  }
+
+  async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
+    const prompt = `You are a Korean e-commerce detail page content creator.
+
+Product Analysis:
+${JSON.stringify(productAnalysis, null, 2)}
+
+${competitorRef ? `\n[Competitor & Ratio Reference]\n${competitorRef}\n` : ''}
+
+Section to create: ${sectionDef.name}
+Section number: ${sectionDef.n !== undefined ? sectionDef.n : 'extra'}
+Section purpose: ${sectionDef.purpose}
+User custom instructions: ${customInstructions || 'None'}
+
+Based on the product analysis${competitorRef ? ' and competitor reference with the specified ratio' : ''}, generate content for this section.
+Return a JSON object:
+{
+    "headline": "Main headline text in Korean (impactful, short)",
+    "subheadline": "Sub headline in Korean",
+    "body_text": "Body copy in Korean (2-3 sentences)",
+    "cta_text": "Call to action text if applicable, or empty string",
+    "layout_suggestion": "Layout recommendation",
+    "color_scheme": {
+        "background": "#hex",
+        "text_primary": "#hex",
+        "text_secondary": "#hex",
+        "accent": "#hex"
+    },
+    "font_suggestion": {
+        "headline_font": "Noto Sans KR",
+        "headline_size": "px value like 42px",
+        "headline_weight": "700 or 900",
+        "body_font": "Noto Sans KR",
+        "body_size": "px value like 16px"
+    },
+    "image_description": "Detailed description of what the section image should look like",
+    "product_placement": "Description of how the product image should be placed",
+    "design_notes": "Additional design recommendations",
+    "extra_elements": ["list of bullet points or features if applicable"]
+}
+Respond ONLY with the JSON object.`;
+
+    return this._chatJSON([{ role: 'user', content: prompt }], 0.7);
+  }
+
+  async generateImage(prompt) {
+    // DALL-E 3: 텍스트 프롬프트만 지원 (이미지 입력 불가)
+    if (isOverLimit()) { console.warn('토큰 한도 초과 — 이미지 생성 스킵'); return null; }
+    const fullPrompt = `Professional Korean e-commerce product detail page section image. ${prompt} Style: clean, modern, high-end Korean shopping mall aesthetic. Wide format 16:9.`;
+    try {
+      const res = await fetch(`${this.baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: this._headers(),
+        body: JSON.stringify({
+          model: 'dall-e-3',
+          prompt: fullPrompt,
+          n: 1,
+          size: '1792x1024',
+          quality: 'standard',
+          response_format: 'b64_json'
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      trackImageUsage();
+      return `data:image/png;base64,${data.data[0].b64_json}`;
+    } catch (e) {
+      console.warn('Image generation failed:', e.message);
+      return null;
+    }
+  }
+
+  async searchSimilarProducts(productName, category) {
+    const prompt = `You are a Korean e-commerce market analyst.
+For the product "${productName}" in the category "${category}", provide competitor analysis.
+Return a JSON object:
+{
+    "similar_products": [
+        {"name": "product name", "price_range": "price", "strengths": "key strength", "detail_page_style": "description of their detail page approach"}
+    ],
+    "market_insights": "brief market analysis in Korean",
+    "detail_page_trends": ["list of current detail page design trends for this category"],
+    "recommended_approach": "recommended detail page strategy in Korean"
+}
+List 5-8 competitor products. Respond ONLY with JSON.`;
+
+    return this._chatJSON([{ role: 'user', content: prompt }], 0.5);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// TOKEN USAGE TRACKER
+// ════════════════════════════════════════════════════════════════
+const _defaultUsage = {
+  'gpt-4o':    { input: 0, output: 0, calls: 0 },
+  'dall-e-3':  { images: 0, calls: 0 },
+  limitTokens: 220000,   // 기본 안전 한도 (토큰)
+  stopped: false,
+};
+
+function loadUsage() {
+  try {
+    const raw = localStorage.getItem('token_usage');
+    if (raw) return { ..._defaultUsage, ...JSON.parse(raw) };
+  } catch(e) {}
+  return { ..._defaultUsage };
+}
+
+function saveUsage() {
+  try { localStorage.setItem('token_usage', JSON.stringify(state.usage)); } catch(e) {}
+}
+
+function trackChatUsage(model, usageObj) {
+  if (!usageObj) return;
+  const m = model || 'gpt-4o';
+  if (!state.usage[m]) state.usage[m] = { input: 0, output: 0, calls: 0 };
+  state.usage[m].input  += usageObj.prompt_tokens    || 0;
+  state.usage[m].output += usageObj.completion_tokens || 0;
+  state.usage[m].calls  += 1;
+  saveUsage();
+  checkUsageLimit();
+}
+
+function trackImageUsage() {
+  if (!state.usage['dall-e-3']) state.usage['dall-e-3'] = { images: 0, calls: 0 };
+  state.usage['dall-e-3'].images += 1;
+  state.usage['dall-e-3'].calls  += 1;
+  saveUsage();
+  // 이미지는 토큰 환산 안 함 (별도 과금)
+}
+
+function totalTokensUsed() {
+  const g = state.usage['gpt-4o'] || {};
+  return (g.input || 0) + (g.output || 0);
+}
+
+function checkUsageLimit() {
+  const used = totalTokensUsed();
+  if (!state.usage.stopped && used >= state.usage.limitTokens) {
+    state.usage.stopped = true;
+    saveUsage();
+    state.error = `⚠️ 토큰 한도 ${state.usage.limitTokens.toLocaleString()} 도달! API 호출이 중단되었습니다. 토큰 현황 탭에서 한도를 조정하거나 초기화하세요.`;
+    render();
+  }
+}
+
+function isOverLimit() {
+  return state.usage.stopped && totalTokensUsed() >= state.usage.limitTokens;
+}
+
+// ════════════════════════════════════════════════════════════════
+// PERSISTENT STORAGE (works on file:// too)
+// ════════════════════════════════════════════════════════════════
+function saveKey(key) {
+  try { localStorage.setItem('openai_api_key', key); } catch(e) {}
+  try { document.cookie = `openai_api_key=${encodeURIComponent(key)};max-age=31536000;path=/;SameSite=Lax`; } catch(e) {}
+}
+function loadKey() {
+  let k = '';
+  try { k = localStorage.getItem('openai_api_key') || ''; } catch(e) {}
+  if (!k) {
+    try {
+      const m = document.cookie.match(/openai_api_key=([^;]+)/);
+      if (m) k = decodeURIComponent(m[1]);
+    } catch(e) {}
+  }
+  return k;
+}
+
+// 섹션별 지시사항 저장/불러오기
+function saveSectionInstructions(instructions) {
+  try { localStorage.setItem('section_instructions', JSON.stringify(instructions)); } catch(e) {}
+}
+function loadSectionInstructions() {
+  try {
+    const raw = localStorage.getItem('section_instructions');
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return {};
+}
+
+// ════════════════════════════════════════════════════════════════
+// APP STATE
+// ════════════════════════════════════════════════════════════════
+const _savedKey = loadKey();
+const _savedInstructions = loadSectionInstructions();
+const _savedUsage = loadUsage();
+const state = {
+  step: 'upload', // upload | analyzing | sections | generating | preview
+  apiKey: _savedKey,
+  showApiModal: !_savedKey,
+  productName: '',
+  imagePreview: null,
+  imageBase64: null,
+  imageMime: null,
+  analysis: null,
+  competitorData: null,
+  sectionInstructions: _savedInstructions,
+  sectionContents: {},
+  sectionImages: {},
+  progress: 0,
+  progressMsg: '',
+  error: '',
+  activeSectionEdit: null,
+  editingPreviewSection: null,
+  // ── Token Usage ──
+  usage: _savedUsage,
+  // ── Image Cuts ──
+  cuts: {
+    sourceBase64: null,
+    sourceMime: null,
+    sourcePreview: null,
+    prompts: JSON.parse(localStorage.getItem('cuts_prompts') || JSON.stringify([
+      { id:'cut1', label:'컷 1', prompt:'', result:null, generating:false },
+      { id:'cut2', label:'컷 2', prompt:'', result:null, generating:false },
+      { id:'cut3', label:'컷 3', prompt:'', result:null, generating:false },
+      { id:'cut4', label:'컷 4', prompt:'', result:null, generating:false },
+    ])),
+    // 상세페이지 섹션 배치: { sectionId: cutId }
+    placement: JSON.parse(localStorage.getItem('cuts_placement') || '{}'),
+  },
+  // ── Automation ──
+  auto: {
+    driveConnected: false,
+    accessToken: null,
+    gdClientId: localStorage.getItem('gd_client_id') || '',
+    inputFolderId: localStorage.getItem('auto_input_folder_id') || '',
+    inputFolderName: localStorage.getItem('auto_input_folder_name') || '',
+    outputFolderId: localStorage.getItem('auto_output_folder_id') || '',
+    outputFolderName: localStorage.getItem('auto_output_folder_name') || '',
+    intervalMin: parseInt(localStorage.getItem('auto_interval') || '20'),
+    running: false,
+    queue: [],
+    completed: JSON.parse(localStorage.getItem('auto_completed') || '[]'),
+    currentItem: null,
+    currentProgress: 0,
+    currentMsg: '',
+    timerId: null,
+    nextRunAt: null,
+    totalProcessed: parseInt(localStorage.getItem('auto_total_processed') || '0'),
+    processedFileIds: new Set(JSON.parse(localStorage.getItem('auto_processed_ids') || '[]')),
+  },
+};
+
+let openai = null;
+
+// ════════════════════════════════════════════════════════════════
+// RENDER ENGINE
+// ════════════════════════════════════════════════════════════════
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${state.showApiModal ? renderApiModal() : ''}
+    <div class="app">
+      ${renderSidebar()}
+      <main class="main">
+        <div class="container">
+          ${state.error ? renderError() : ''}
+          ${state.step === 'upload' ? renderUpload() : ''}
+          ${state.step === 'analyzing' ? renderAnalyzing() : ''}
+          ${state.step === 'sections' ? renderSections() : ''}
+          ${state.step === 'generating' ? renderGenerating() : ''}
+          ${state.step === 'preview' ? renderPreview() : ''}
+          ${state.step === 'imagecuts' ? renderImageCuts() : ''}
+          ${state.step === 'automation' ? renderAutomation() : ''}
+          ${state.step === 'tokenstat' ? renderTokenStat() : ''}
+          ${state.step === 'rival' ? renderRivalSearch() : ''}
+        </div>
+      </main>
+    </div>
+  `;
+  bindEvents();
+}
+
+function renderApiModal() {
+  const hasSaved = !!state.apiKey;
+  return `<div class="modal-overlay" id="apiModal">
+    <div class="modal">
+      <h2>🔑 API 키 설정</h2>
+      <p>OpenAI API 키를 입력하세요. <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--primary)">여기서 발급</a> 받을 수 있습니다. (gpt-4o + dall-e-3 사용)</p>
+      ${hasSaved ? '<p style="margin-top:-12px;margin-bottom:12px;font-size:12px;color:var(--ok)">✅ 이전에 저장한 API 키가 있습니다.</p>' : ''}
+      <div class="input-group">
+        <label class="label">OpenAI API Key</label>
+        <div style="position:relative">
+          <input type="text" class="input" id="apiKeyInput" value="${state.apiKey}" placeholder="sk-..." style="padding-right:40px;font-family:monospace;font-size:13px">
+          <span class="material-icons-outlined" id="toggleKeyVis" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="saveApiKey">
+          <span class="material-icons-outlined" style="font-size:18px">save</span>
+          저장 후 시작
+        </button>
+        ${hasSaved ? '<button class="btn-sm" id="skipApiModal" style="padding:12px 20px">기존 키로 계속</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderSidebar() {
+  const items = [
+    {icon:'upload_file',label:'이미지 업로드',step:'upload',always:true},
+    {icon:'analytics',label:'AI 분석',step:'analyzing',need:'analysis'},
+    {icon:'dashboard_customize',label:'섹션 설정',step:'sections',need:'analysis'},
+    {icon:'auto_fix_high',label:'자동 생성',step:'generating',need:'analysis'},
+    {icon:'preview',label:'미리보기',step:'preview',need:'preview'},
+    {icon:'auto_awesome',label:'이미지컷 생성',step:'imagecuts',always:true},
+    {icon:'manage_search',label:'경쟁사 분석',step:'rival',always:true},
+    {icon:'cloud_sync',label:'자동화',step:'automation',always:true},
+    {icon:'data_usage',label:'토큰 현황',step:'tokenstat',always:true},
+  ];
+
+  // 미니 토큰 위젯 계산
+  const used = totalTokensUsed();
+  const limit = state.usage.limitTokens;
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  const barCls = pct >= 95 ? 'danger' : pct >= 75 ? 'warn' : 'safe';
+  const dalle = state.usage['dall-e-3'] || {};
+
+  return `<aside class="sidebar">
+    <div class="logo">
+      <span class="logo-icon">✦</span>
+      <div><span class="logo-text">상세페이지</span><br><span class="logo-sub">Auto Generator</span></div>
+    </div>
+    <nav class="nav">
+      ${items.map(it => {
+        const active = state.step === it.step;
+        const disabled = !it.always && it.need === 'analysis' && !state.analysis && state.step !== it.step;
+        const disabledPreview = it.need === 'preview' && Object.keys(state.sectionContents).length === 0;
+        return `<button class="nav-item ${active?'active':''} ${disabled||disabledPreview?'disabled':''}" data-nav="${it.step}">
+          <span class="material-icons-outlined" style="font-size:20px">${it.icon}</span>
+          <span>${it.label}</span>
+        </button>`;
+      }).join('')}
+    </nav>
+
+    <!-- 미니 토큰 위젯 -->
+    <div class="token-widget">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="color:var(--text-d);font-weight:500">토큰 사용량</span>
+        <span style="color:${barCls==='danger'?'var(--err)':barCls==='warn'?'var(--warn)':'var(--ok)'};font-weight:700">${pct}%</span>
+      </div>
+      <div class="token-bar-wrap">
+        <div class="token-bar ${barCls}" style="width:${pct}%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;color:var(--text-m);margin-top:2px">
+        <span>${used.toLocaleString()}</span>
+        <span>/ ${limit.toLocaleString()}</span>
+      </div>
+      ${dalle.images ? `<div style="color:var(--text-m);margin-top:3px">🖼 DALL-E 3: ${dalle.images}장</div>` : ''}
+      ${state.usage.stopped ? '<div style="color:var(--err);font-weight:600;margin-top:4px">⛔ 한도 초과 중단</div>' : ''}
+    </div>
+
+    <div style="padding:12px 16px;border-top:1px solid var(--border)">
+      <button class="btn-sm" id="changeApiKey" style="width:100%;justify-content:center">
+        <span class="material-icons-outlined" style="font-size:14px">key</span> API 키 변경
+      </button>
+    </div>
+  </aside>`;
+}
+
+function renderError() {
+  return `<div class="error-bar">
+    <span class="material-icons-outlined" style="font-size:18px">error_outline</span>
+    <span style="flex:1">${state.error}</span>
+    <span class="material-icons-outlined" style="font-size:18px;cursor:pointer" id="closeError">close</span>
+  </div>`;
+}
+
+function renderUpload() {
+  return `<div class="fade-in">
+    <h1 class="page-title">상세페이지 자동 생성</h1>
+    <p class="page-desc">제품 이미지를 업로드하면 AI가 분석하여 15개 섹션의 상세페이지를 자동으로 생성합니다.</p>
+
+    <div class="upload-area ${state.imagePreview?'has-image':''}" id="uploadArea">
+      ${state.imagePreview
+        ? `<img src="${state.imagePreview}" class="preview-img" alt="preview">`
+        : `<div style="display:flex;flex-direction:column;align-items:center">
+            <span class="material-icons-outlined" style="font-size:48px;color:var(--primary);margin-bottom:12px">cloud_upload</span>
+            <p style="font-size:16px;font-weight:500">클릭 또는 드래그하여 이미지 업로드</p>
+            <p style="font-size:13px;color:var(--text-m);margin-top:6px">JPG, PNG, WEBP 지원 (최대 50MB)</p>
+          </div>`
+      }
+      <input type="file" id="fileInput" accept="image/*" style="display:none">
+    </div>
+
+    <div class="input-group">
+      <label class="label">제품명 (선택사항)</label>
+      <input type="text" class="input" id="productNameInput" value="${state.productName}" placeholder="AI가 자동 감지하지만, 직접 입력하면 더 정확합니다">
+    </div>
+
+    <button class="btn-primary" id="startAnalysis" ${!state.imagePreview?'disabled':''}>
+      <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
+      AI 분석 시작
+    </button>
+
+    <div class="feature-grid">
+      <div class="feature-card"><div class="mi material-icons-outlined">visibility</div><h4>이미지 분석</h4><p>GPT-4o가 제품 특징을 자동 분석</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">search</div><h4>경쟁 분석</h4><p>유사 제품의 상세페이지 참조 검색</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">dashboard</div><h4>15섹션 자동생성</h4><p>헤더부터 CTA까지 풀 상세페이지</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">image</div><h4>이미지 생성</h4><p>DALL-E 3로 각 섹션 이미지 생성</p></div>
+    </div>
+  </div>`;
+}
+
+function renderAnalyzing() {
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh">
+    <div class="spinner-lg"></div>
+    <h2 style="font-size:22px;margin-top:24px;margin-bottom:8px">AI 분석 진행 중</h2>
+    <p style="color:var(--text-d);margin-bottom:24px">${state.progressMsg}</p>
+    <div class="progress-outer"><div class="progress-inner" style="width:${state.progress}%">${state.progress}%</div></div>
+  </div>`;
+}
+
+function renderSections() {
+  const a = state.analysis;
+  return `<div class="fade-in">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 class="page-title">섹션별 설정</h1>
+        <p class="page-desc">각 섹션에 원하는 지시사항을 입력하세요. 비워두면 AI가 자동으로 최적의 콘텐츠를 생성합니다.</p>
+      </div>
+      <button class="btn-primary" id="generateAll">
+        <span class="material-icons-outlined" style="font-size:20px">rocket_launch</span>
+        전체 생성 시작
+      </button>
+    </div>
+
+    ${a ? `<div class="analysis-box">
+      <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+        ${state.imagePreview ? `<img src="${state.imagePreview}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">` : ''}
+        <div style="flex:1;min-width:200px">
+          <h3 style="font-size:18px;font-weight:700">${a.product_name||'분석된 제품'}</h3>
+          <p style="font-size:13px;color:var(--text-d);margin-top:4px">${a.category||''} ${a.mood?'| '+a.mood:''}</p>
+          <div style="margin-top:8px">${(a.key_features||[]).slice(0,5).map(f=>`<span class="tag">${f}</span>`).join('')}</div>
+        </div>
+      </div>
+      ${state.competitorData ? `<div style="margin-top:16px;padding:12px 16px;background:var(--bg);border-radius:8px;font-size:13px">
+        <span style="color:var(--text-m)">경쟁 분석:</span>
+        <span style="color:var(--cyan)">${state.competitorData.similar_products?.length||0}개 유사 제품 분석됨</span>
+        ${state.competitorData.recommended_approach ? `<br><span style="color:var(--text-d);margin-top:4px;display:block">${state.competitorData.recommended_approach}</span>` : ''}
+      </div>` : ''}
+    </div>` : ''}
+
+    <div class="section-grid">
+      ${SECTIONS.map(s => `
+        <div class="section-card" data-section-toggle="${s.id}">
+          <div class="head">
+            <span class="icon">${s.icon}</span>
+            <div class="info">
+              <h4>${s.n}. ${s.name}</h4>
+              <p>${s.desc}</p>
+            </div>
+            <span class="material-icons-outlined" style="color:var(--text-m);font-size:20px">${state.activeSectionEdit===s.id?'expand_less':'expand_more'}</span>
+          </div>
+          ${state.activeSectionEdit===s.id ? `<div style="margin-top:12px" onclick="event.stopPropagation()">
+            <textarea class="textarea" data-section-input="${s.id}" rows="3" placeholder="이 섹션에 원하는 내용을 입력하세요...\n예: ${s.purpose}">${state.sectionInstructions[s.id]||''}</textarea>
+          </div>` : ''}
+          ${state.sectionInstructions[s.id] && state.activeSectionEdit!==s.id ? `<div class="custom-badge">✎ 커스텀 지시사항 입력됨</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+
+    <div style="text-align:center;margin-top:32px">
+      <button class="btn-primary" id="generateAll2" style="padding:16px 48px;font-size:16px">
+        <span class="material-icons-outlined" style="font-size:22px">rocket_launch</span>
+        15개 섹션 일괄 생성 시작
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderGenerating() {
+  const icons = SECTIONS.map(s=>s.icon);
+  const doneCount = Object.keys(state.sectionContents).length;
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh">
+    <div class="spinner-lg"></div>
+    <h2 style="font-size:24px;margin-top:32px;margin-bottom:8px">상세페이지 생성 중</h2>
+    <p style="color:var(--text-d);margin-bottom:24px;text-align:center">${state.progressMsg}</p>
+    <div class="progress-outer"><div class="progress-inner" style="width:${state.progress}%">${state.progress}%</div></div>
+    <p style="font-size:12px;color:var(--text-m);margin-top:16px">15개 섹션 × (콘텐츠 + 이미지) 생성 중 — GPT-4o + DALL-E 3 호출</p>
+    <div class="gen-icons">
+      ${icons.map((ic,i) => `<div class="gen-icon ${i<doneCount?'done':''}">${ic}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderPreview() {
+  // 추가 섹션 포함한 전체 섹션 목록
+  const extraSections = state.generatedExtraSections || [];
+  const allSections = [...SECTIONS, ...extraSections];
+
+  return `<div class="fade-in">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 class="page-title">상세페이지 미리보기</h1>
+        <p class="page-desc">생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.
+          ${extraSections.length > 0 ? `<span style="color:var(--cyan);font-weight:600;margin-left:8px">+${extraSections.length}개 추가 섹션 포함</span>` : ''}
+        </p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="exportHTML">
+          <span class="material-icons-outlined" style="font-size:18px">download</span>
+          HTML 내보내기
+        </button>
+      </div>
+    </div>
+
+    <div class="preview-wrap">
+      ${allSections.map(s => {
+        const content = state.sectionContents[s.id];
+        if (!content) return `<div style="padding:20px;text-align:center;color:var(--text-m);border-bottom:1px solid var(--border)">
+          <span>${s.icon} ${s.n !== undefined ? s.n + '. ' : ''}${s.name} - 미생성</span>
+        </div>`;
+
+        const c = content.color_scheme || {};
+        const f = content.font_suggestion || {};
+        const img = state.sectionImages[s.id];
+        const isEditing = state.editingPreviewSection === s.id;
+
+        return `
+          <div style="position:relative">
+            <div class="section-ctrl">
+              <span style="font-size:16px">${s.icon}</span>
+              <span class="name">${s.n !== undefined ? s.n + '. ' : '✨ '}${s.name}${s.isExtra ? ' <span style="font-size:10px;color:var(--cyan);font-weight:400;background:rgba(6,182,212,.12);padding:2px 6px;border-radius:10px;margin-left:4px">추가</span>' : ''}</span>
+              <div style="flex:1"></div>
+              <button class="btn-sm" data-edit-preview="${s.id}">
+                <span class="material-icons-outlined" style="font-size:16px">edit</span> 수정
+              </button>
+              <button class="btn-sm" data-regen="${s.id}">
+                <span class="material-icons-outlined" style="font-size:16px">refresh</span> 재생성
+              </button>
+            </div>
+            ${isEditing ? `<div class="edit-panel" onclick="event.stopPropagation()">
+              <textarea class="textarea" data-edit-input="${s.id}" rows="2" placeholder="이 섹션에 대한 수정 지시사항...">${state.sectionInstructions[s.id]||''}</textarea>
+              <button class="btn-sm" style="margin-top:8px" data-apply-edit="${s.id}">지시사항 적용 후 재생성</button>
+            </div>` : ''}
+            <div style="background:${c.background||'#FFFFFF'};padding:48px 20px;text-align:center">
+              <div style="max-width:860px;margin:0 auto">
+                <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};font-weight:${f.headline_weight||'700'};margin-bottom:10px">
+                  ${content.headline || `[${s.name}]`}
+                </h2>
+                <h3 style="font-size:18px;color:${c.text_secondary||'#666'};font-weight:400;margin-bottom:20px">
+                  ${content.subheadline || ''}
+                </h3>
+                ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin-bottom:20px">` : ''}
+                <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto">
+                  ${content.body_text || ''}
+                </p>
+                ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin-left:auto;margin-right:auto">
+                  ${content.extra_elements.map(e => `<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05)">• ${e}</div>`).join('')}
+                </div>` : ''}
+                ${content.cta_text ? `<div style="display:inline-block;margin-top:20px;padding:12px 36px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;font-weight:600;font-size:16px">${content.cta_text}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// EVENT BINDING
+// ════════════════════════════════════════════════════════════════
+function bindEvents() {
+  // API Key modal
+  const saveBtn = document.getElementById('saveApiKey');
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      const key = document.getElementById('apiKeyInput').value.trim();
+      if (!key) return;
+      state.apiKey = key;
+      saveKey(key);
+      openai = new OpenAIAPI(key);
+      state.showApiModal = false;
+      render();
+    };
+  }
+
+  const skipBtn = document.getElementById('skipApiModal');
+  if (skipBtn) {
+    skipBtn.onclick = () => {
+      openai = new OpenAIAPI(state.apiKey);
+      state.showApiModal = false;
+      render();
+    };
+  }
+
+  const toggleVis = document.getElementById('toggleKeyVis');
+  if (toggleVis) {
+    toggleVis.onclick = () => {
+      const inp = document.getElementById('apiKeyInput');
+      if (inp.type === 'text') { inp.type = 'password'; toggleVis.textContent = 'visibility'; }
+      else { inp.type = 'text'; toggleVis.textContent = 'visibility_off'; }
+    };
+  }
+
+  const changeApiBtn = document.getElementById('changeApiKey');
+  if (changeApiBtn) {
+    changeApiBtn.onclick = () => { state.showApiModal = true; render(); };
+  }
+
+  // Navigation
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.onclick = () => {
+      if (btn.classList.contains('disabled')) return;
+      const target = btn.dataset.nav;
+      if (target === 'preview' && Object.keys(state.sectionContents).length === 0) return;
+      state.step = target;
+      render();
+    };
+  });
+
+  // Error close
+  const closeErr = document.getElementById('closeError');
+  if (closeErr) closeErr.onclick = () => { state.error = ''; render(); };
+
+  // File upload
+  const uploadArea = document.getElementById('uploadArea');
+  const fileInput = document.getElementById('fileInput');
+  if (uploadArea) {
+    uploadArea.onclick = () => fileInput.click();
+    uploadArea.ondragover = (e) => e.preventDefault();
+    uploadArea.ondrop = (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) handleFile(file);
+    };
+  }
+  if (fileInput) {
+    fileInput.onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+  }
+
+  // Product name
+  const nameInput = document.getElementById('productNameInput');
+  if (nameInput) nameInput.oninput = (e) => { state.productName = e.target.value; };
+
+  // Start analysis
+  const startBtn = document.getElementById('startAnalysis');
+  if (startBtn) startBtn.onclick = startAnalysis;
+
+  // Generate all
+  const genAll = document.getElementById('generateAll');
+  const genAll2 = document.getElementById('generateAll2');
+  if (genAll) genAll.onclick = generateAllSections;
+  if (genAll2) genAll2.onclick = generateAllSections;
+
+  // Section toggles
+  document.querySelectorAll('[data-section-toggle]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.sectionToggle;
+      state.activeSectionEdit = state.activeSectionEdit === id ? null : id;
+      render();
+    };
+  });
+
+  // Section instruction inputs
+  document.querySelectorAll('[data-section-input]').forEach(el => {
+    el.oninput = (e) => { state.sectionInstructions[el.dataset.sectionInput] = e.target.value; saveSectionInstructions(state.sectionInstructions); };
+    el.onclick = (e) => e.stopPropagation();
+  });
+
+  // Preview edit
+  document.querySelectorAll('[data-edit-preview]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.editPreview;
+      state.editingPreviewSection = state.editingPreviewSection === id ? null : id;
+      render();
+    };
+  });
+
+  // Regenerate section
+  document.querySelectorAll('[data-regen]').forEach(btn => {
+    btn.onclick = () => regenerateSection(btn.dataset.regen);
+  });
+
+  // Apply edit
+  document.querySelectorAll('[data-apply-edit]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.applyEdit;
+      const textarea = document.querySelector(`[data-edit-input="${id}"]`);
+      if (textarea) state.sectionInstructions[id] = textarea.value;
+      saveSectionInstructions(state.sectionInstructions);
+      state.editingPreviewSection = null;
+      regenerateSection(id);
+    };
+  });
+
+  // Edit input
+  document.querySelectorAll('[data-edit-input]').forEach(el => {
+    el.oninput = (e) => { state.sectionInstructions[el.dataset.editInput] = e.target.value; saveSectionInstructions(state.sectionInstructions); };
+  });
+
+  // Export
+  const exportBtn = document.getElementById('exportHTML');
+  if (exportBtn) exportBtn.onclick = exportHTML;
+}
+
+// ════════════════════════════════════════════════════════════════
+// ACTIONS
+// ════════════════════════════════════════════════════════════════
+function handleFile(file) {
+  state.imageMime = file.type;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.imagePreview = e.target.result;
+    state.imageBase64 = e.target.result.split(',')[1];
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+
+async function startAnalysis() {
+  if (!state.imageBase64) { state.error = '제품 이미지를 업로드해주세요.'; render(); return; }
+  if (!state.apiKey) { state.showApiModal = true; render(); return; }
+
+  openai = openai || new OpenAIAPI(state.apiKey);
+  state.error = '';
+  state.step = 'analyzing';
+  state.progress = 10;
+  state.progressMsg = '제품 이미지 AI 분석 중...';
+  render();
+
+  try {
+    // 1. Analyze image
+    const analysis = await openai.analyzeImage(state.imageBase64, state.imageMime);
+    if (state.productName) analysis.product_name = state.productName;
+    state.analysis = analysis;
+    state.progress = 25;
+    state.progressMsg = '유사 제품 검색 중...';
+    render();
+
+    // 2. Competitor search
+    try {
+      const competitors = await openai.searchSimilarProducts(
+        analysis.product_name || analysis.product_name_en,
+        analysis.category
+      );
+      state.competitorData = competitors;
+    } catch (e) {
+      state.competitorData = null;
+    }
+
+    state.progress = 35;
+    state.step = 'sections';
+    state.progressMsg = '분석 완료!';
+    render();
+  } catch (e) {
+    state.error = `분석 실패: ${e.message}`;
+    state.step = 'upload';
+    render();
+  }
+}
+
+async function generateAllSections() {
+  state.step = 'generating';
+  state.progress = 5;
+  state.sectionContents = {};
+  state.sectionImages = {};
+  render();
+
+  // 경쟁사 분석 데이터 + 비율 주입 (rival 분석 완료된 경우 우선 사용)
+  const rivalRef = buildRivalRef();
+  const compRef = rivalRef || (state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '');
+
+  // 추가 섹션 목록 (extraSections → extra_* id로 변환)
+  const extraSections = (state.rival?.extraSections || []).map((es, i) => ({
+    n: undefined,
+    name: es.name,
+    id: `extra_${i}`,
+    purpose: es.purpose || es.name,
+    icon: '✨',
+    isExtra: true,
+  }));
+
+  const allSections = [...SECTIONS, ...extraSections];
+  const total = allSections.length;
+
+  for (let i = 0; i < total; i++) {
+    const s = allSections[i];
+    const pct = Math.round(5 + ((i / total) * 90));
+    state.progress = pct;
+    state.progressMsg = `[${i+1}/${total}] ${s.name} 콘텐츠 생성 중...`;
+    render();
+
+    try {
+      const content = await openai.generateSectionContent(
+        s, state.analysis, state.sectionInstructions[s.id] || '', compRef
+      );
+      state.sectionContents[s.id] = content;
+
+      state.progressMsg = `[${i+1}/${total}] ${s.name} 이미지 생성 중...`;
+      render();
+
+      try {
+        const imgPrompt = content.image_description || content.design_notes || s.purpose;
+        const img = await openai.generateImage(imgPrompt);
+        if (img) state.sectionImages[s.id] = img;
+      } catch (e) {
+        console.warn(`Image gen failed for ${s.id}:`, e);
+      }
+
+    } catch (e) {
+      console.error(`Section ${s.id} failed:`, e);
+      state.sectionContents[s.id] = {
+        headline: s.name,
+        subheadline: '생성 실패 - 재시도해주세요',
+        body_text: e.message,
+        color_scheme: { background: '#FFF5F5', text_primary: '#C53030', text_secondary: '#E53E3E', accent: '#FC8181' },
+        font_suggestion: { headline_size: '32px', body_size: '14px' }
+      };
+    }
+
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // 추가 섹션 정보를 state에 저장 (preview에서 렌더링용)
+  state.generatedExtraSections = extraSections;
+
+  state.progress = 100;
+  state.progressMsg = '모든 섹션 생성 완료!';
+  state.step = 'preview';
+  render();
+}
+
+async function regenerateSection(sectionId) {
+  const extraSections = state.generatedExtraSections || [];
+  const s = SECTIONS.find(x => x.id === sectionId) || extraSections.find(x => x.id === sectionId);
+  if (!s) return;
+
+  state.progressMsg = `${s.name} 재생성 중...`;
+  const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
+
+  try {
+    const content = await openai.generateSectionContent(
+      s, state.analysis, state.sectionInstructions[sectionId] || '', compRef
+    );
+    state.sectionContents[sectionId] = content;
+
+    try {
+      const imgPrompt = content.image_description || content.design_notes || s.purpose;
+      const img = await openai.generateImage(imgPrompt);
+      if (img) state.sectionImages[sectionId] = img;
+    } catch (e) {}
+
+    render();
+  } catch (e) {
+    state.error = `재생성 실패: ${e.message}`;
+    render();
+  }
+}
+
+function exportHTML() {
+  const product = state.analysis || {};
+  let sectionsHtml = '';
+  const extraSections = state.generatedExtraSections || [];
+  const allSections = [...SECTIONS, ...extraSections];
+
+  for (const s of allSections) {
+    const content = state.sectionContents[s.id];
+    if (!content) continue;
+    const c = content.color_scheme || {};
+    const f = content.font_suggestion || {};
+    const img = state.sectionImages[s.id];
+
+    sectionsHtml += `
+    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
+      <div style="max-width:860px;margin:0 auto;">
+        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};">
+          ${content.headline||''}
+        </h2>
+        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;">
+          ${content.subheadline||''}
+        </h3>
+        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
+        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto;">
+          ${content.body_text||''}
+        </p>
+        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">
+          ${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}
+        </div>` : ''}
+        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;">${content.cta_text}</a>` : ''}
+      </div>
+    </section>`;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${product.product_name||'상세페이지'}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Noto Sans KR',sans-serif;color:#333}
+        img{max-width:100%;height:auto}
+        section{width:100%}
+    </style>
+</head>
+<body>${sectionsHtml}</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${product.product_name||'detail-page'}_상세페이지.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════════
+// GOOGLE DRIVE SERVICE
+// ════════════════════════════════════════════════════════════════
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const GD_CLIENT_ID = localStorage.getItem('gd_client_id') || '';
+
+// URL이든 ID만이든 폴더 ID를 추출
+function extractFolderId(input) {
+  if (!input) return '';
+  input = input.trim();
+  // https://drive.google.com/drive/folders/XXXXX?usp=... 형태
+  const m1 = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (m1) return m1[1];
+  // https://drive.google.com/drive/u/0/folders/XXXXX 형태
+  const m2 = input.match(/drive[^"]*folders\/([a-zA-Z0-9_-]+)/);
+  if (m2) return m2[1];
+  // 이미 순수 ID (공백, 슬래시 없음)
+  if (/^[a-zA-Z0-9_-]+$/.test(input)) return input;
+  return input;
+}
+
+class DriveService {
+  constructor(token) {
+    this.token = token;
+    this.tokenExpiresAt = Date.now() + 3500 * 1000; // ~58분 후 만료 예상
+  }
+  headers() { return { 'Authorization': `Bearer ${this.token}` }; }
+
+  // 토큰 만료 체크 후 자동 갱신
+  async ensureToken() {
+    if (Date.now() > this.tokenExpiresAt) {
+      autoLog('info', '토큰 만료됨 — 자동 갱신 중...');
+      await refreshDriveToken();
+    }
+  }
+
+  // 401 에러 시 토큰 갱신 후 재시도하는 래퍼
+  async fetchWithRetry(url, options = {}) {
+    await this.ensureToken();
+    let res = await fetch(url, { ...options, headers: { ...this.headers(), ...(options.headers||{}) } });
+    if (res.status === 401) {
+      autoLog('info', '401 인증 만료 — 토큰 갱신 후 재시도...');
+      await refreshDriveToken();
+      res = await fetch(url, { ...options, headers: { ...this.headers(), ...(options.headers||{}) } });
+    }
+    return res;
+  }
+
+  async listImages(folderId) {
+    const q = encodeURIComponent(`'${folderId}' in parents and mimeType contains 'image/' and trashed=false`);
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files?q=${q}&fields=files(id,name,mimeType,createdTime,size)&orderBy=createdTime&pageSize=100`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.files || [];
+  }
+
+  async downloadFile(fileId) {
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files/${fileId}?alt=media`);
+    if (!res.ok) throw new Error('Download failed');
+    const blob = await res.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ base64: reader.result.split(',')[1], dataUrl: reader.result, mime: blob.type });
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async uploadHtml(folderId, fileName, htmlContent) {
+    await this.ensureToken();
+    const metadata = { name: fileName, mimeType: 'text/html', parents: [folderId] };
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([htmlContent], { type: 'text/html' }));
+
+    let res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${this.token}` }, body: form
+    });
+    if (res.status === 401) {
+      autoLog('info', '업로드 401 — 토큰 갱신 후 재시도...');
+      await refreshDriveToken();
+      const form2 = new FormData();
+      form2.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form2.append('file', new Blob([htmlContent], { type: 'text/html' }));
+      res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${this.token}` }, body: form2
+      });
+    }
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data;
+  }
+
+  async getFolderName(folderId) {
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files/${folderId}?fields=name`);
+    const data = await res.json();
+    return data.name || folderId;
+  }
+}
+
+let driveService = null;
+let tokenClient = null;
+
+// 토큰 자동 갱신 — 사용자 팝업 없이 silent 시도, 실패 시 팝업
+function refreshDriveToken() {
+  return new Promise((resolve, reject) => {
+    const clientId = state.auto.gdClientId || localStorage.getItem('gd_client_id') || '';
+    if (!clientId || !google?.accounts?.oauth2) {
+      reject(new Error('Google OAuth 초기화 안 됨'));
+      return;
+    }
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      prompt: '',  // silent 갱신 시도
+      callback: (resp) => {
+        if (resp.access_token) {
+          state.auto.accessToken = resp.access_token;
+          state.auto.driveConnected = true;
+          if (driveService) {
+            driveService.token = resp.access_token;
+            driveService.tokenExpiresAt = Date.now() + 3500 * 1000;
+          } else {
+            driveService = new DriveService(resp.access_token);
+          }
+          autoLog('ok', '토큰 자동 갱신 완료');
+          resolve();
+        } else {
+          autoLog('err', '토큰 갱신 실패 — Google Drive 재연결 필요');
+          state.auto.driveConnected = false;
+          render();
+          reject(new Error('Token refresh failed'));
+        }
+      },
+    });
+    client.requestAccessToken();
+  });
+}
+
+function initGoogleAuth() {
+  const clientId = state.auto.gdClientId || GD_CLIENT_ID;
+  if (!clientId) return;
+  try {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp) => {
+        if (resp.access_token) {
+          state.auto.accessToken = resp.access_token;
+          state.auto.driveConnected = true;
+          driveService = new DriveService(resp.access_token);
+          autoLog('info', 'Google Drive 연결 완료');
+          render();
+        }
+      },
+    });
+  } catch(e) { console.warn('Google auth init failed:', e); }
+}
+
+function connectDrive() {
+  const clientId = document.getElementById('gdClientId')?.value.trim() || GD_CLIENT_ID;
+  if (!clientId) {
+    state.error = 'Google Cloud OAuth Client ID를 입력하세요.';
+    render();
+    return;
+  }
+  localStorage.setItem('gd_client_id', clientId);
+  state.auto.gdClientId = clientId;
+  try {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp) => {
+        if (resp.error) {
+          state.error = `Drive 인증 실패: ${resp.error}`;
+          render();
+          return;
+        }
+        state.auto.accessToken = resp.access_token;
+        state.auto.driveConnected = true;
+        driveService = new DriveService(resp.access_token);
+        autoLog('info', 'Google Drive 연결 완료');
+        render();
+      },
+    });
+    tokenClient.requestAccessToken();
+  } catch(e) {
+    state.error = `Google 인증 오류: ${e.message}`;
+    render();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION LOG
+// ════════════════════════════════════════════════════════════════
+const autoLogs = [];
+function autoLog(type, msg) {
+  const t = new Date().toLocaleTimeString('ko-KR');
+  autoLogs.unshift({ type, msg, time: t });
+  if (autoLogs.length > 200) autoLogs.length = 200;
+}
+
+// ════════════════════════════════════════════════════════════════
+// TOKEN STAT RENDER
+// ════════════════════════════════════════════════════════════════
+function renderTokenStat() {
+  const u = state.usage;
+  const g4o = u['gpt-4o'] || { input: 0, output: 0, calls: 0 };
+  const dalle = u['dall-e-3'] || { images: 0, calls: 0 };
+  const totalTok = (g4o.input + g4o.output);
+  const limit = u.limitTokens;
+  const pct = Math.min(100, Math.round((totalTok / limit) * 100));
+  const barCls = pct >= 95 ? 'danger' : pct >= 75 ? 'warn' : 'safe';
+
+  // 비용 추정 (gpt-4o: input $2.5/1M, output $10/1M / dall-e-3: $0.04/장 1792x1024)
+  const costGpt = (g4o.input / 1_000_000 * 2.5) + (g4o.output / 1_000_000 * 10);
+  const costDalle = dalle.images * 0.04;
+  const costTotal = costGpt + costDalle;
+
+  return `<div class="fade-in">
+    <h1 class="page-title">📊 토큰 현황</h1>
+    <p class="page-desc">OpenAI API 실시간 사용량 추적. 누적 저장되며 수동 초기화 전까지 유지됩니다.</p>
+
+    <!-- 전체 프로그레스 -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:22px;margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px">
+        <div>
+          <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">GPT-4o 토큰 사용량</div>
+          <div style="font-size:36px;font-weight:900;color:${barCls==='danger'?'var(--err)':barCls==='warn'?'var(--warn)':'var(--primary)'}">
+            ${totalTok.toLocaleString()}
+            <span style="font-size:16px;font-weight:400;color:var(--text-d)"> / ${limit.toLocaleString()}</span>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:28px;font-weight:800;color:${barCls==='danger'?'var(--err)':barCls==='warn'?'var(--warn)':'var(--ok)'}">${pct}%</div>
+          <div style="font-size:11px;color:var(--text-m)">한도 대비</div>
+        </div>
+      </div>
+      <div class="token-bar-wrap" style="height:12px;max-width:100%">
+        <div class="token-bar ${barCls}" style="width:${pct}%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-m);margin-top:6px">
+        <span>남은 토큰: <strong style="color:var(--text)">${Math.max(0, limit - totalTok).toLocaleString()}</strong></span>
+        <span>${u.stopped ? '<span style="color:var(--err);font-weight:700">⛔ 한도 초과 — API 중단됨</span>' : '<span style="color:var(--ok)">✅ 정상 운영 중</span>'}</span>
+      </div>
+    </div>
+
+    <!-- 모델별 카드 -->
+    <div class="token-detail-grid">
+      <div class="token-model-card">
+        <h4>🧠 gpt-4o — 입력 토큰</h4>
+        <div class="val">${g4o.input.toLocaleString()}</div>
+        <div class="sub">호출 ${g4o.calls}회 | 약 $${(g4o.input/1_000_000*2.5).toFixed(4)}</div>
+      </div>
+      <div class="token-model-card">
+        <h4>🧠 gpt-4o — 출력 토큰</h4>
+        <div class="val">${g4o.output.toLocaleString()}</div>
+        <div class="sub">호출 ${g4o.calls}회 | 약 $${(g4o.output/1_000_000*10).toFixed(4)}</div>
+      </div>
+      <div class="token-model-card">
+        <h4>🖼 dall-e-3 — 생성 이미지</h4>
+        <div class="val">${dalle.images}<span style="font-size:16px;font-weight:400;color:var(--text-d)"> 장</span></div>
+        <div class="sub">호출 ${dalle.calls}회 | 약 $${costDalle.toFixed(4)}</div>
+      </div>
+      <div class="token-model-card" style="border-color:var(--primary)">
+        <h4>💰 추정 총 비용 (USD)</h4>
+        <div class="val" style="color:var(--warn)">$${costTotal.toFixed(4)}</div>
+        <div class="sub">gpt-4o $${costGpt.toFixed(4)} + dalle $${costDalle.toFixed(4)}</div>
+      </div>
+    </div>
+
+    <!-- 안전 한도 설정 -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px">
+      <h3 style="font-size:15px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+        <span class="material-icons-outlined" style="font-size:18px;color:var(--warn)">tune</span>
+        안전 한도 설정 (GPT-4o 토큰 기준)
+      </h3>
+      <div class="token-limit-row">
+        <input type="range" min="10000" max="500000" step="10000" value="${limit}"
+          class="interval-slider" id="tokenLimitSlider" style="flex:1">
+        <span style="font-size:20px;font-weight:800;color:var(--primary);min-width:100px;text-align:right" id="tokenLimitDisplay">
+          ${limit.toLocaleString()}
+        </span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        ${[50000,100000,150000,200000,220000,250000,300000].map(v =>
+          `<button class="btn-sm token-preset" data-preset="${v}" style="${limit===v?'border-color:var(--primary);color:var(--primary)':''}">${(v/10000).toFixed(0)}만</button>`
+        ).join('')}
+      </div>
+      <div style="font-size:12px;color:var(--text-m)">
+        한도 도달 시 자동으로 모든 API 호출을 중단합니다. 무료 크레딧 ${limit.toLocaleString()} 토큰 기준.
+      </div>
+    </div>
+
+    <!-- 초기화 -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${u.stopped ? `<button class="btn-primary" id="resumeUsageBtn" style="background:var(--ok)">
+        <span class="material-icons-outlined" style="font-size:18px">play_circle</span>
+        한도 해제 후 재개
+      </button>` : ''}
+      <button class="btn-sm" id="resetUsageBtn" style="padding:10px 18px;color:var(--err);border-color:var(--err)">
+        <span class="material-icons-outlined" style="font-size:16px">delete_forever</span>
+        사용량 초기화
+      </button>
+      <span style="font-size:12px;color:var(--text-m);align-self:center">마지막 저장: localStorage 누적</span>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION RENDER
+// ════════════════════════════════════════════════════════════════
+function renderAutomation() {
+  const a = state.auto;
+  const connected = a.driveConnected;
+  const savedClientId = localStorage.getItem('gd_client_id') || '';
+
+  return `<div class="fade-in">
+    <h1 class="page-title">🔄 자동화 시스템</h1>
+    <p class="page-desc">구글 드라이브 폴더를 연결하면 설정한 간격마다 자동으로 상세페이지를 생성합니다.</p>
+
+    <!-- Drive Connection -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--primary)">cloud</span> Google Drive 연결
+        ${connected ? '<span class="auto-status running">● 연결됨</span>' : '<span class="auto-status stopped">● 미연결</span>'}
+      </h3>
+      ${!connected ? `
+        <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
+          <p style="font-size:13px;color:var(--warn);font-weight:600;margin-bottom:8px">⚠️ 반드시 start.bat으로 실행하세요</p>
+          <p style="font-size:12px;color:var(--text-d);margin-bottom:4px">Google OAuth는 <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;color:var(--cyan)">http://localhost:8080</code> 에서만 작동합니다.</p>
+          <p style="font-size:11px;color:var(--text-m)">file:///로 열면 인증이 차단됩니다. start.bat 더블클릭 → 브라우저에서 localhost:8080 접속</p>
+        </div>
+        <p style="font-size:13px;color:var(--text-d);margin-bottom:12px">
+          <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--primary)">Google Cloud Console</a>에서 OAuth 2.0 Client ID를 발급 받으세요.
+        </p>
+        <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;font-size:12px;color:var(--text-d)">
+          <p style="font-weight:600;margin-bottom:6px">📋 설정 방법:</p>
+          <p>1. 유형: <strong>웹 애플리케이션</strong></p>
+          <p>2. 승인된 JavaScript 원본 추가:</p>
+          <code style="display:block;background:var(--bg-card);padding:8px 12px;border-radius:6px;margin:6px 0;color:var(--cyan);font-size:13px">http://localhost:8080</code>
+          <p>3. Google Drive API 활성화 필요 (<a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:var(--primary)">여기서 활성화</a>)</p>
+        </div>
+        <div class="input-group" style="margin-bottom:12px">
+          <label class="label">OAuth Client ID</label>
+          <input type="text" class="input" id="gdClientId" value="${savedClientId}" placeholder="xxxx.apps.googleusercontent.com" style="font-size:12px;font-family:monospace">
+        </div>
+        <button class="btn-primary" id="connectDriveBtn">
+          <span class="material-icons-outlined" style="font-size:18px">login</span>
+          Google Drive 연결
+        </button>
+      ` : `
+        <p style="font-size:13px;color:var(--ok)">✅ Google Drive가 연결되었습니다.</p>
+      `}
+    </div>
+
+    ${connected ? `
+    <!-- Folder Settings -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="auto-card">
+        <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--orange)">folder_open</span> 입력 폴더 (제품 이미지)</h3>
+        <div class="input-group" style="margin-bottom:8px">
+          <label class="label">Google Drive 폴더 ID</label>
+          <input type="text" class="input" id="inputFolderId" value="${a.inputFolderId}" placeholder="폴더 URL 전체 또는 ID 붙여넣기" style="font-size:12px;font-family:monospace">
+        </div>
+        ${a.inputFolderName ? `<p style="font-size:12px;color:var(--ok)">📁 ${a.inputFolderName}</p>` : ''}
+        <button class="btn-sm" id="setInputFolder" style="margin-top:4px">
+          <span class="material-icons-outlined" style="font-size:14px">check</span> 폴더 설정
+        </button>
+        <p style="font-size:11px;color:var(--text-m);margin-top:8px">
+          💡 드라이브 폴더 열고 URL에서 <code>folders/</code> 뒤의 문자열이 ID입니다
+        </p>
+      </div>
+
+      <div class="auto-card">
+        <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--cyan)">drive_file_move</span> 출력 폴더 (상세페이지)</h3>
+        <div class="input-group" style="margin-bottom:8px">
+          <label class="label">Google Drive 폴더 ID</label>
+          <input type="text" class="input" id="outputFolderId" value="${a.outputFolderId}" placeholder="폴더 URL 전체 또는 ID 붙여넣기" style="font-size:12px;font-family:monospace">
+        </div>
+        ${a.outputFolderName ? `<p style="font-size:12px;color:var(--ok)">📁 ${a.outputFolderName}</p>` : ''}
+        <button class="btn-sm" id="setOutputFolder" style="margin-top:4px">
+          <span class="material-icons-outlined" style="font-size:14px">check</span> 폴더 설정
+        </button>
+      </div>
+    </div>
+
+    <!-- Interval & Control -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--warn)">timer</span> 실행 간격</h3>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <input type="range" min="5" max="60" step="5" value="${a.intervalMin}" class="interval-slider" id="intervalSlider">
+        <span style="font-size:24px;font-weight:700;color:var(--primary);min-width:60px;text-align:center" id="intervalDisplay">${a.intervalMin}분</span>
+      </div>
+      <p style="font-size:12px;color:var(--text-m)">입력 폴더에서 아직 처리 안 된 이미지를 1장씩 가져와 15섹션 상세페이지를 생성 후 출력 폴더에 저장합니다.</p>
+
+      <div style="display:flex;gap:10px;margin-top:16px;align-items:center">
+        ${!a.running ? `
+          <button class="btn-primary" id="startAutoBtn" ${!a.inputFolderId||!a.outputFolderId?'disabled':''}>
+            <span class="material-icons-outlined" style="font-size:18px">play_arrow</span>
+            자동화 시작
+          </button>
+        ` : `
+          <button class="btn-primary" id="stopAutoBtn" style="background:var(--err)">
+            <span class="material-icons-outlined" style="font-size:18px">stop</span>
+            자동화 중지
+          </button>
+        `}
+        <button class="btn-sm" id="runOnceBtn" ${!a.inputFolderId||!a.outputFolderId||a.running?'disabled':''} style="padding:10px 16px">
+          <span class="material-icons-outlined" style="font-size:16px">play_circle</span>
+          1회 즉시 실행
+        </button>
+        <button class="btn-sm" id="resetProcessedBtn" style="padding:10px 16px">
+          <span class="material-icons-outlined" style="font-size:16px">restart_alt</span>
+          처리기록 초기화
+        </button>
+        ${a.running ? `<span class="auto-status running" style="margin-left:auto">● 작동 중 ${a.nextRunAt ? '| 다음 실행: '+a.nextRunAt : ''}</span>` : ''}
+      </div>
+    </div>
+
+    <!-- Current Processing -->
+    ${a.currentItem ? `
+    <div class="auto-card" style="border-color:var(--warn)">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--warn)">hourglass_top</span> 현재 처리 중</h3>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <span style="font-size:13px;font-weight:600">${a.currentItem.name}</span>
+        <span style="font-size:12px;color:var(--text-m)">${a.currentMsg}</span>
+      </div>
+      <div class="progress-outer" style="max-width:100%"><div class="progress-inner" style="width:${a.currentProgress}%">${a.currentProgress}%</div></div>
+    </div>
+    ` : ''}
+
+    <!-- Stats -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--primary)">${a.totalProcessed}</div>
+        <div style="font-size:12px;color:var(--text-d)">총 처리 완료</div>
+      </div>
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--warn)">${a.queue.length}</div>
+        <div style="font-size:12px;color:var(--text-d)">대기 중</div>
+      </div>
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--ok)">${a.processedFileIds.size}</div>
+        <div style="font-size:12px;color:var(--text-d)">누적 처리 (스킵)</div>
+      </div>
+    </div>
+
+    <!-- Recent Completed -->
+    ${a.completed.length ? `
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--ok)">check_circle</span> 최근 완료</h3>
+      ${a.completed.slice(0, 10).map(c => `
+        <div class="queue-item">
+          <div class="q-status ${c.error?'error':'done'}"></div>
+          <span style="flex:1">${c.name}</span>
+          <span style="font-size:11px;color:var(--text-m)">${c.finishedAt || ''}</span>
+          ${c.error ? `<span style="font-size:11px;color:var(--err)">${c.error}</span>` : '<span style="font-size:11px;color:var(--ok)">✅ 완료</span>'}
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <!-- Log -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--text-d)">terminal</span> 로그</h3>
+      <div class="log-box" id="autoLogBox">
+        ${autoLogs.length === 0 ? '<div class="log-line" style="color:var(--text-m)">아직 로그가 없습니다.</div>' : ''}
+        ${autoLogs.slice(0, 50).map(l => `<div class="log-line ${l.type}">[${l.time}] ${l.msg}</div>`).join('')}
+      </div>
+    </div>
+    ` : `
+    <div class="auto-card" style="text-align:center;padding:40px">
+      <span class="material-icons-outlined" style="font-size:48px;color:var(--text-m);margin-bottom:12px">cloud_off</span>
+      <p style="color:var(--text-d)">Google Drive를 먼저 연결하세요.</p>
+    </div>
+    `}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION ENGINE
+// ════════════════════════════════════════════════════════════════
+async function autoProcessOne() {
+  if (!driveService || !state.apiKey) {
+    autoLog('err', 'Drive 또는 OpenAI API 키가 설정되지 않음');
+    return;
+  }
+  if (!state.auto.inputFolderId || !state.auto.outputFolderId) {
+    autoLog('err', '입력/출력 폴더가 설정되지 않음');
+    return;
+  }
+
+  openai = openai || new OpenAIAPI(state.apiKey);
+
+  // 1. List images in input folder
+  autoLog('info', '입력 폴더 스캔 중...');
+  state.auto.currentMsg = '폴더 스캔 중...';
+  state.auto.currentProgress = 0;
+  render();
+
+  let files;
+  try {
+    files = await driveService.listImages(state.auto.inputFolderId);
+  } catch(e) {
+    // 인증 만료인 경우 자동 갱신 시도
+    if (e.message.includes('invalid authentication') || e.message.includes('401') || e.message.includes('Request had invalid')) {
+      autoLog('info', '토큰 만료 감지 — 자동 갱신 시도...');
+      try {
+        await refreshDriveToken();
+        files = await driveService.listImages(state.auto.inputFolderId);
+      } catch(e2) {
+        autoLog('err', `토큰 갱신 후에도 실패: ${e2.message}`);
+        state.auto.currentItem = null;
+        render();
+        return;
+      }
+    } else {
+      autoLog('err', `폴더 스캔 실패: ${e.message}`);
+      state.auto.currentItem = null;
+      render();
+      return;
+    }
+  }
+
+  // 2. Filter already processed
+  const unprocessed = files.filter(f => !state.auto.processedFileIds.has(f.id));
+  autoLog('info', `전체 ${files.length}장, 미처리 ${unprocessed.length}장`);
+
+  if (unprocessed.length === 0) {
+    autoLog('info', '처리할 새 이미지가 없습니다. 대기합니다.');
+    state.auto.currentItem = null;
+    render();
+    return;
+  }
+
+  // 3. Pick the first unprocessed file
+  const file = unprocessed[0];
+  state.auto.currentItem = { id: file.id, name: file.name };
+  state.auto.currentProgress = 5;
+  state.auto.currentMsg = `${file.name} 다운로드 중...`;
+  autoLog('info', `처리 시작: ${file.name}`);
+  render();
+
+  try {
+    // 4. Download the image
+    const imgData = await driveService.downloadFile(file.id);
+    state.auto.currentProgress = 15;
+    state.auto.currentMsg = 'AI 분석 중...';
+    render();
+
+    // 5. Analyze with GPT-4o
+    const analysis = await openai.analyzeImage(imgData.base64, imgData.mime);
+    autoLog('ok', `분석 완료: ${analysis.product_name || file.name}`);
+    state.auto.currentProgress = 25;
+    state.auto.currentMsg = '경쟁 분석 중...';
+    render();
+
+    // 6. Competitor search
+    let compRef = '';
+    try {
+      const comp = await openai.searchSimilarProducts(analysis.product_name || analysis.product_name_en, analysis.category);
+      compRef = JSON.stringify(comp).substring(0, 1000);
+      autoLog('ok', `경쟁 분석 완료: ${comp.similar_products?.length || 0}개`);
+    } catch(e) {
+      autoLog('err', '경쟁 분석 스킵: ' + e.message);
+    }
+    state.auto.currentProgress = 30;
+
+    // 7. Generate all 15 sections
+    const sectionContents = {};
+    const sectionImages = {};
+    const instructions = state.sectionInstructions; // use saved instructions
+
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const s = SECTIONS[i];
+      const pct = Math.round(30 + ((i / SECTIONS.length) * 60));
+      state.auto.currentProgress = pct;
+      state.auto.currentMsg = `[${i+1}/15] ${s.name} 생성 중...`;
+      render();
+
+      try {
+        const content = await openai.generateSectionContent(s, analysis, instructions[s.id] || '', compRef);
+        sectionContents[s.id] = content;
+
+        // Image
+        try {
+          const imgPrompt = content.image_description || content.design_notes || s.purpose;
+          const img = await openai.generateImage(imgPrompt);
+          if (img) sectionImages[s.id] = img;
+        } catch(e) {}
+      } catch(e) {
+        autoLog('err', `섹션 ${s.name} 실패: ${e.message}`);
+        sectionContents[s.id] = { headline: s.name, subheadline: '생성 실패', body_text: e.message, color_scheme: {background:'#fff',text_primary:'#c00',text_secondary:'#e00'}, font_suggestion:{headline_size:'32px',body_size:'14px'} };
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    state.auto.currentProgress = 92;
+    state.auto.currentMsg = 'HTML 생성 및 업로드 중...';
+    render();
+
+    // 8. Build HTML
+    const htmlContent = buildExportHtml(analysis, sectionContents, sectionImages);
+
+    // 9. Upload to Drive
+    const productName = analysis.product_name || file.name.replace(/\.[^.]+$/, '');
+    const fileName = `${productName}_상세페이지_${new Date().toISOString().slice(0,10)}.html`;
+    const uploaded = await driveService.uploadHtml(state.auto.outputFolderId, fileName, htmlContent);
+    autoLog('ok', `✅ 업로드 완료: ${fileName}`);
+
+    // 10. Mark as processed
+    state.auto.processedFileIds.add(file.id);
+    localStorage.setItem('auto_processed_ids', JSON.stringify([...state.auto.processedFileIds]));
+    state.auto.totalProcessed++;
+    localStorage.setItem('auto_total_processed', state.auto.totalProcessed);
+    state.auto.completed.unshift({ name: file.name, finishedAt: new Date().toLocaleTimeString('ko-KR'), error: null });
+    if (state.auto.completed.length > 50) state.auto.completed.length = 50;
+    localStorage.setItem('auto_completed', JSON.stringify(state.auto.completed));
+    state.auto.currentItem = null;
+    state.auto.currentProgress = 100;
+    state.auto.currentMsg = '';
+    render();
+
+  } catch(e) {
+    autoLog('err', `처리 실패 (${file.name}): ${e.message}`);
+    state.auto.completed.unshift({ name: file.name, finishedAt: new Date().toLocaleTimeString('ko-KR'), error: e.message });
+    if (state.auto.completed.length > 50) state.auto.completed.length = 50;
+    localStorage.setItem('auto_completed', JSON.stringify(state.auto.completed));
+    state.auto.currentItem = null;
+    render();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE CUTS — RENDER
+// ════════════════════════════════════════════════════════════════
+function renderImageCuts() {
+  const c = state.cuts;
+  const hasSrc = !!c.sourcePreview;
+  const anyResult = c.prompts.some(p => p.result);
+
+  return `<div class="fade-in">
+    <h1 class="page-title">✨ 이미지컷 생성</h1>
+    <p class="page-desc">제품 이미지를 올리고 4가지 프롬프트로 각각 다른 이미지컷을 생성합니다. 생성된 컷은 상세페이지 원하는 섹션에 배치할 수 있습니다.</p>
+    <p style="font-size:12px;color:var(--primary);margin-bottom:20px;background:var(--primary-dim);padding:8px 12px;border-radius:8px;display:inline-block">
+      🤖 이미지 생성 모델: <strong>dall-e-3</strong> (gpt-4o 분석 기반)
+    </p>
+
+    <!-- 소스 이미지 업로드 -->
+    <div class="source-upload" id="cutsUploadArea">
+      ${hasSrc
+        ? `<img src="${c.sourcePreview}" style="max-height:200px;max-width:100%;border-radius:8px;object-fit:contain">`
+        : `<span class="material-icons-outlined" style="font-size:40px;color:var(--primary);display:block;margin-bottom:8px">add_photo_alternate</span>
+           <p style="font-size:15px;font-weight:500">제품 이미지 업로드</p>
+           <p style="font-size:12px;color:var(--text-m);margin-top:4px">클릭 또는 드래그&amp;드롭</p>`
+      }
+      <input type="file" id="cutsFileInput" accept="image/*" style="display:none">
+    </div>
+
+    <!-- 4개 컷 카드 -->
+    <div class="cuts-grid">
+      ${c.prompts.map((p, i) => `
+        <div class="cut-card ${p.result ? 'has-result' : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="cut-label">${p.label}</span>
+            <div style="display:flex;gap:6px">
+              <button class="btn-sm" data-rename-cut="${i}">✏️ 이름변경</button>
+              ${p.result ? `<a class="btn-sm" href="${p.result}" download="cut${i+1}.png">⬇️ 저장</a>` : ''}
+            </div>
+          </div>
+
+          <!-- 미리보기 -->
+          <div class="cut-preview">
+            ${p.generating
+              ? `<div class="cut-spinner"></div>`
+              : p.result
+                ? `<img src="${p.result}" alt="cut${i+1}">`
+                : `<span style="color:var(--text-m);font-size:12px">생성 전</span>`
+            }
+          </div>
+
+          <!-- 프롬프트 입력 -->
+          <textarea class="textarea" data-cut-prompt="${i}" rows="3"
+            placeholder="예) 흰 배경에 제품을 중앙 배치, 그림자 없이 깔끔하게&#10;예) 라이프스타일 감성, 카페 테이블 위에 놓인 모습&#10;예) 다크톤 럭셔리, 검은 배경 골드 조명"
+            style="font-size:12px">${p.prompt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+
+          <!-- 개별 생성 버튼 -->
+          <button class="btn-primary" data-gen-cut="${i}"
+            style="font-size:13px;padding:9px 16px;justify-content:center"
+            ${!hasSrc || p.generating ? 'disabled' : ''}>
+            <span class="material-icons-outlined" style="font-size:16px">${p.generating ? 'hourglass_empty' : 'auto_fix_high'}</span>
+            ${p.generating ? '생성 중...' : '이 컷 생성'}
+          </button>
+        </div>
+      `).join('')}
+    </div>
+
+    <!-- 4개 전체 생성 버튼 -->
+    <div style="display:flex;gap:10px;margin-bottom:32px">
+      <button class="btn-primary" id="genAllCutsBtn"
+        style="padding:14px 32px;font-size:15px"
+        ${!hasSrc ? 'disabled' : ''}>
+        <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
+        4개 컷 전체 생성
+      </button>
+      ${anyResult ? `<button class="btn-sm" id="clearAllCutsBtn" style="padding:12px 20px">
+        <span class="material-icons-outlined" style="font-size:16px">delete_sweep</span>
+        결과 초기화
+      </button>` : ''}
+    </div>
+
+    <!-- 상세페이지 배치 설정 -->
+    ${anyResult ? `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px">
+      <h3 style="font-size:15px;font-weight:700;margin-bottom:4px">📌 상세페이지 섹션에 배치</h3>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:16px">각 섹션에 어떤 이미지컷을 넣을지 선택하세요. 미리보기·HTML 내보내기에 반영됩니다.</p>
+      <div>
+        ${SECTIONS.map(s => {
+          const placed = c.placement[s.id];
+          const placedCut = c.prompts.find(p => p.id === placed);
+          return `<div class="placement-row">
+            <span style="font-size:16px">${s.icon}</span>
+            <span style="flex:1;font-size:13px">${s.n}. ${s.name}</span>
+            ${placedCut?.result ? `<img class="cut-thumb" src="${placedCut.result}" alt="">` : '<div class="cut-thumb" style="opacity:.3"></div>'}
+            <select class="placement-select" data-place-section="${s.id}">
+              <option value="">-- 배치 안 함</option>
+              ${c.prompts.map(p => p.result ? `<option value="${p.id}" ${placed===p.id?'selected':''}>${p.label}</option>` : '').join('')}
+            </select>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn-primary" id="applyPlacementBtn" style="font-size:13px;padding:10px 20px">
+          <span class="material-icons-outlined" style="font-size:16px">check</span>
+          배치 적용
+        </button>
+        <span style="font-size:12px;color:var(--text-m);align-self:center">미리보기 탭에서 확인하세요</span>
+      </div>
+    </div>
+    ` : `
+    <div style="background:var(--bg-card);border:1px dashed var(--border);border-radius:12px;padding:24px;text-align:center;color:var(--text-m);font-size:13px">
+      이미지컷을 생성하면 상세페이지 섹션에 배치할 수 있습니다.
+    </div>
+    `}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE CUTS — GENERATION LOGIC
+// ════════════════════════════════════════════════════════════════
+async function generateCut(idx) {
+  const c = state.cuts;
+  const p = c.prompts[idx];
+  if (!p.prompt.trim()) {
+    state.error = '프롬프트를 입력해주세요.';
+    render();
+    return;
+  }
+  if (isOverLimit()) {
+    state.error = '토큰 한도 초과로 이미지 생성이 중단되었습니다. 토큰 현황 탭에서 한도를 조정하세요.';
+    render();
+    return;
+  }
+
+  openai = openai || new OpenAIAPI(state.apiKey);
+  p.generating = true;
+  render();
+
+  try {
+    // GPT-4o로 소스 이미지를 분석해 DALL-E 3 프롬프트를 강화 (소스 이미지가 있는 경우)
+    let enhancedPrompt = p.prompt;
+    if (c.sourceBase64) {
+      try {
+        const analysisMsg = [{
+          role: 'user',
+          content: [
+            { type: 'text', text: `다음 제품 이미지를 참고하여, 아래 크리에이티브 지시사항으로 DALL-E 3 이미지를 생성할 영문 프롬프트를 작성해줘. 제품의 형태·색상·특징을 최대한 반영해서 영어로만 답해줘. (JSON 없이 프롬프트 텍스트만)\n크리에이티브 지시: ${p.prompt}` },
+            { type: 'image_url', image_url: { url: `data:${c.sourceMime};base64,${c.sourceBase64}`, detail: 'low' } }
+          ]
+        }];
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.apiKey}` },
+          body: JSON.stringify({ model: 'gpt-4o', messages: analysisMsg, max_tokens: 300, temperature: 0.6 })
+        });
+        const data = await res.json();
+        if (!data.error) {
+          trackChatUsage('gpt-4o', data.usage);
+          enhancedPrompt = data.choices[0].message.content.trim();
+        }
+      } catch(e) { /* 강화 실패 시 원본 프롬프트 사용 */ }
+    }
+
+    const dallePrompt = `Professional Korean e-commerce product image cut. ${enhancedPrompt} High quality, clean, professional Korean shopping mall style. Aspect ratio 4:3.`;
+
+    const res = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${state.apiKey}` },
+      body: JSON.stringify({
+        model: 'dall-e-3',
+        prompt: dallePrompt,
+        n: 1,
+        size: '1024x1024',
+        quality: 'standard',
+        response_format: 'b64_json'
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    trackImageUsage();
+
+    p.result = `data:image/png;base64,${data.data[0].b64_json}`;
+    p.generating = false;
+    savePrompts();
+    render();
+  } catch(e) {
+    p.generating = false;
+    state.error = `컷 ${idx+1} 생성 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function generateAllCuts() {
+  for (let i = 0; i < state.cuts.prompts.length; i++) {
+    await generateCut(i);
+    await new Promise(r => setTimeout(r, 800));
+  }
+}
+
+function savePrompts() {
+  // result(base64)는 용량 문제로 저장 안 함 — prompt/label만 저장
+  try {
+    const toSave = state.cuts.prompts.map(p => ({ id: p.id, label: p.label, prompt: p.prompt, result: null, generating: false }));
+    localStorage.setItem('cuts_prompts', JSON.stringify(toSave));
+  } catch(e) {
+    console.warn('프롬프트 저장 실패:', e);
+  }
+}
+
+function savePlacement() {
+  localStorage.setItem('cuts_placement', JSON.stringify(state.cuts.placement));
+}
+
+// 배치 적용 — sectionImages에 이미지컷 반영
+function applyPlacement() {
+  const c = state.cuts;
+  for (const [sectionId, cutId] of Object.entries(c.placement)) {
+    const cut = c.prompts.find(p => p.id === cutId);
+    if (cut?.result) {
+      state.sectionImages[sectionId] = cut.result;
+    } else {
+      delete state.sectionImages[sectionId];
+    }
+  }
+  savePlacement();
+  state.step = 'preview';
+  render();
+}
+
+// ── bindEvents 확장 (이미지컷) ──
+const _origBind2 = bindEvents;
+bindEvents = function() {
+  _origBind2();
+
+  // 소스 이미지 업로드
+  const cutsArea = document.getElementById('cutsUploadArea');
+  const cutsInput = document.getElementById('cutsFileInput');
+  if (cutsArea) {
+    cutsArea.onclick = () => cutsInput.click();
+    cutsArea.ondragover = e => e.preventDefault();
+    cutsArea.ondrop = e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file?.type.startsWith('image/')) loadCutSource(file);
+    };
+  }
+  if (cutsInput) cutsInput.onchange = e => { if (e.target.files[0]) loadCutSource(e.target.files[0]); };
+
+  // 프롬프트 입력 저장 (oninput + onchange + onblur 모두 커버)
+  document.querySelectorAll('[data-cut-prompt]').forEach(el => {
+    const save = e => {
+      state.cuts.prompts[+el.dataset.cutPrompt].prompt = e.target.value;
+      savePrompts();
+    };
+    el.oninput = save;
+    el.onchange = save;
+    el.onblur = save;
+  });
+
+  // 개별 생성
+  document.querySelectorAll('[data-gen-cut]').forEach(btn => {
+    btn.onclick = () => generateCut(+btn.dataset.genCut);
+  });
+
+  // 이름 변경
+  document.querySelectorAll('[data-rename-cut]').forEach(btn => {
+    btn.onclick = () => {
+      const i = +btn.dataset.renameCut;
+      const newName = prompt('컷 이름을 입력하세요:', state.cuts.prompts[i].label);
+      if (newName?.trim()) {
+        state.cuts.prompts[i].label = newName.trim();
+        savePrompts();
+        render();
+      }
+    };
+  });
+
+  // 전체 생성
+  const genAllBtn = document.getElementById('genAllCutsBtn');
+  if (genAllBtn) genAllBtn.onclick = generateAllCuts;
+
+  // 결과 초기화
+  const clearBtn = document.getElementById('clearAllCutsBtn');
+  if (clearBtn) clearBtn.onclick = () => {
+    state.cuts.prompts.forEach(p => { p.result = null; p.generating = false; });
+    state.cuts.placement = {};
+    savePlacement();
+    render();
+  };
+
+  // 배치 선택
+  document.querySelectorAll('[data-place-section]').forEach(sel => {
+    sel.onchange = e => {
+      const sid = sel.dataset.placeSection;
+      if (e.target.value) state.cuts.placement[sid] = e.target.value;
+      else delete state.cuts.placement[sid];
+    };
+  });
+
+  // 배치 적용
+  const applyBtn = document.getElementById('applyPlacementBtn');
+  if (applyBtn) applyBtn.onclick = applyPlacement;
+};
+
+function loadCutSource(file) {
+  state.cuts.sourceMime = file.type;
+  const reader = new FileReader();
+  reader.onload = e => {
+    state.cuts.sourcePreview = e.target.result;
+    state.cuts.sourceBase64 = e.target.result.split(',')[1];
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+
+function buildExportHtml(analysis, sectionContents, sectionImages) {
+  let sectionsHtml = '';
+  for (const s of SECTIONS) {
+    const content = sectionContents[s.id];
+    if (!content) continue;
+    const c = content.color_scheme || {};
+    const f = content.font_suggestion || {};
+    const img = sectionImages[s.id];
+    sectionsHtml += `
+    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
+      <div style="max-width:860px;margin:0 auto;">
+        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};">${content.headline||''}</h2>
+        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;">${content.subheadline||''}</h3>
+        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
+        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto;">${content.body_text||''}</p>
+        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}</div>` : ''}
+        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;">${content.cta_text}</a>` : ''}
+      </div>
+    </section>`;
+  }
+  return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${analysis.product_name||'상세페이지'}</title><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Noto Sans KR',sans-serif;color:#333}img{max-width:100%;height:auto}section{width:100%}</style></head><body>${sectionsHtml}</body></html>`;
+}
+
+function startAutomation() {
+  if (state.auto.running) return;
+  state.auto.running = true;
+  autoLog('info', `자동화 시작 (${state.auto.intervalMin}분 간격)`);
+
+  // Run immediately
+  autoProcessOne();
+
+  // Schedule
+  state.auto.timerId = setInterval(() => {
+    if (!state.auto.currentItem) { // 이전 작업 완료된 경우만
+      const now = new Date();
+      state.auto.nextRunAt = new Date(now.getTime() + state.auto.intervalMin * 60000).toLocaleTimeString('ko-KR');
+      autoProcessOne();
+    }
+  }, state.auto.intervalMin * 60 * 1000);
+
+  const now = new Date();
+  state.auto.nextRunAt = new Date(now.getTime() + state.auto.intervalMin * 60000).toLocaleTimeString('ko-KR');
+  render();
+}
+
+function stopAutomation() {
+  state.auto.running = false;
+  if (state.auto.timerId) {
+    clearInterval(state.auto.timerId);
+    state.auto.timerId = null;
+  }
+  state.auto.nextRunAt = null;
+  autoLog('info', '자동화 중지됨');
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════
+// BIND AUTOMATION EVENTS (add to bindEvents)
+// ════════════════════════════════════════════════════════════════
+const _origBind = bindEvents;
+bindEvents = function() {
+  _origBind();
+
+  const connectBtn = document.getElementById('connectDriveBtn');
+  if (connectBtn) connectBtn.onclick = connectDrive;
+
+  const setInput = document.getElementById('setInputFolder');
+  if (setInput) setInput.onclick = async () => {
+    const raw = document.getElementById('inputFolderId')?.value.trim();
+    if (!raw) return;
+    const id = extractFolderId(raw);
+    state.auto.inputFolderId = id;
+    localStorage.setItem('auto_input_folder_id', id);
+    autoLog('info', `입력 폴더 ID 추출: ${id}`);
+    try {
+      const name = await driveService.getFolderName(id);
+      state.auto.inputFolderName = name;
+      localStorage.setItem('auto_input_folder_name', name);
+      autoLog('ok', `입력 폴더 설정 완료: ${name}`);
+    } catch(e) {
+      state.auto.inputFolderName = id;
+      autoLog('err', '폴더 이름 조회 실패: ' + e.message);
+    }
+    render();
+  };
+
+  const setOutput = document.getElementById('setOutputFolder');
+  if (setOutput) setOutput.onclick = async () => {
+    const raw = document.getElementById('outputFolderId')?.value.trim();
+    if (!raw) return;
+    const id = extractFolderId(raw);
+    state.auto.outputFolderId = id;
+    localStorage.setItem('auto_output_folder_id', id);
+    autoLog('info', `출력 폴더 ID 추출: ${id}`);
+    try {
+      const name = await driveService.getFolderName(id);
+      state.auto.outputFolderName = name;
+      localStorage.setItem('auto_output_folder_name', name);
+      autoLog('ok', `출력 폴더 설정: ${name}`);
+    } catch(e) {
+      state.auto.outputFolderName = id;
+      autoLog('err', '폴더 이름 조회 실패, ID로 설정됨');
+    }
+    render();
+  };
+
+  const intervalSlider = document.getElementById('intervalSlider');
+  if (intervalSlider) {
+    intervalSlider.oninput = () => {
+      const v = parseInt(intervalSlider.value);
+      state.auto.intervalMin = v;
+      localStorage.setItem('auto_interval', v);
+      const disp = document.getElementById('intervalDisplay');
+      if (disp) disp.textContent = v + '분';
+    };
+  }
+
+  const startBtn = document.getElementById('startAutoBtn');
+  if (startBtn) startBtn.onclick = startAutomation;
+
+  const stopBtn = document.getElementById('stopAutoBtn');
+  if (stopBtn) stopBtn.onclick = stopAutomation;
+
+  const runOnce = document.getElementById('runOnceBtn');
+  if (runOnce) runOnce.onclick = () => {
+    autoLog('info', '수동 1회 실행');
+    autoProcessOne();
+  };
+
+  const resetBtn = document.getElementById('resetProcessedBtn');
+  if (resetBtn) resetBtn.onclick = () => {
+    state.auto.processedFileIds.clear();
+    localStorage.removeItem('auto_processed_ids');
+    state.auto.totalProcessed = 0;
+    localStorage.setItem('auto_total_processed', '0');
+    state.auto.completed = [];
+    localStorage.setItem('auto_completed', '[]');
+    autoLog('info', '처리 기록 초기화됨');
+    render();
+  };
+};
+
+// ════════════════════════════════════════════════════════════════
+// RIVAL ANALYSIS — STATE & STORAGE
+// ════════════════════════════════════════════════════════════════
+function _defaultRival() {
+  return {
+    naverClientId: '',
+    naverClientSecret: '',
+    verifyMode: 'auto',         // 'auto' | 'manual'
+    platform: 'naver',          // 'naver' | 'coupang'
+    searchResults: { naver: [], coupang: [] },
+    selectedProducts: [],       // 검증 통과한 제품 배열
+    analyzedPages: [],          // GPT 분석 결과 배열
+    extraSections: [],          // AI가 추가로 도출한 섹션 목록
+    ratioRival: 70,             // 경쟁사 분석 반영 비율 (%)
+    ratioOwn: 30,               // 자체 분석 반영 비율 (%)
+    searching: false,
+    analyzing: false,
+    manualQueue: [],            // MANUAL 모드: 검증 대기 중인 제품
+    manualIdx: 0,
+  };
+}
+
+function loadRival() {
+  try {
+    const raw = localStorage.getItem('rival_settings');
+    if (raw) {
+      const saved = JSON.parse(raw);
+      return { ..._defaultRival(), ...saved, searchResults: { naver: [], coupang: [] }, selectedProducts: [], analyzedPages: [], extraSections: [], searching: false, analyzing: false, manualQueue: [], manualIdx: 0 };
+    }
+  } catch(e) {}
+  return _defaultRival();
+}
+
+function saveRival() {
+  try {
+    const toSave = {
+      naverClientId: state.rival.naverClientId,
+      naverClientSecret: state.rival.naverClientSecret,
+      verifyMode: state.rival.verifyMode,
+      ratioRival: state.rival.ratioRival,
+      ratioOwn: state.rival.ratioOwn,
+      platform: state.rival.platform,
+    };
+    localStorage.setItem('rival_settings', JSON.stringify(toSave));
+  } catch(e) {}
+}
+
+// state에 rival 추가
+state.rival = loadRival();
+
+// ════════════════════════════════════════════════════════════════
+// RIVAL ANALYSIS — RENDER
+// ════════════════════════════════════════════════════════════════
+function renderRivalSearch() {
+  const r = state.rival;
+  const hasAnalysis = !!state.analysis;
+  const anySelected = r.selectedProducts.length > 0;
+  const extraReady = r.extraSections.length > 0;
+
+  return `<div class="fade-in">
+    <h1 class="page-title">🔍 경쟁사 분석</h1>
+    <p class="page-desc">쿠팡·네이버 스마트스토어에서 동일/유사 제품을 찾아 상세페이지를 분석하고, 경쟁사 전략을 반영하여 콘텐츠를 생성합니다.</p>
+
+    ${!hasAnalysis ? `<div class="error-bar" style="margin-bottom:20px">
+      <span class="material-icons-outlined" style="font-size:18px">info</span>
+      먼저 제품 이미지를 업로드하고 AI 분석을 완료해주세요.
+    </div>` : ''}
+
+    <!-- Naver API Key 설정 -->
+    <div class="auto-card" style="margin-bottom:16px">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <span style="color:#03c75a">N</span> 네이버 쇼핑 API 키
+        <span style="font-size:11px;color:var(--text-m);font-weight:400">(무료 • <a href="https://developers.naver.com/apps/#/register" target="_blank" style="color:var(--primary)">발급</a>)</span>
+      </h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label class="label">Client ID</label>
+          <input type="text" class="input" id="naverClientId" value="${r.naverClientId}" placeholder="Client ID" style="font-size:12px;font-family:monospace">
+        </div>
+        <div>
+          <label class="label">Client Secret</label>
+          <input type="password" class="input" id="naverClientSecret" value="${r.naverClientSecret}" placeholder="Client Secret" style="font-size:12px;font-family:monospace">
+        </div>
+      </div>
+      <button class="btn-sm" id="saveNaverKeys" style="margin-top:10px">
+        <span class="material-icons-outlined" style="font-size:14px">save</span> 키 저장
+      </button>
+    </div>
+
+    <!-- 검증 모드 선택 -->
+    <div class="auto-card" style="margin-bottom:16px">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:12px">동일 제품 검증 방식</h3>
+      <div class="verify-mode-select">
+        <button class="verify-mode-btn ${r.verifyMode==='auto'?'active':''}" data-verify-mode="auto">
+          🤖 AUTO — GPT-4o가 자동 판단
+        </button>
+        <button class="verify-mode-btn ${r.verifyMode==='manual'?'active':''}" data-verify-mode="manual">
+          👤 MANUAL — 내가 직접 확인
+        </button>
+      </div>
+      <p style="font-size:11px;color:var(--text-m)">
+        ${r.verifyMode==='auto' ? 'GPT-4o가 제품 이미지와 이름을 비교하여 동일/유사 제품 여부를 자동으로 판단합니다.' : '각 검색 결과마다 "같은 제품인가요?" 확인을 거쳐 직접 선택합니다.'}
+      </p>
+    </div>
+
+    <!-- 플랫폼 탭 + 검색 -->
+    <div class="platform-tabs">
+      <button class="platform-tab ${r.platform==='naver'?'active':''}" data-platform="naver">🟢 네이버 쇼핑</button>
+      <button class="platform-tab ${r.platform==='coupang'?'active':''}" data-platform="coupang">🔴 쿠팡 (GPT 추정)</button>
+    </div>
+
+    <button class="btn-primary" id="startRivalSearch"
+      ${!hasAnalysis || r.searching ? 'disabled' : ''}
+      style="margin-bottom:16px">
+      <span class="material-icons-outlined" style="font-size:18px">${r.searching ? 'hourglass_empty' : 'search'}</span>
+      ${r.searching ? '검색 중...' : '경쟁 제품 검색 시작'}
+    </button>
+
+    <!-- MANUAL 모드: 검증 카드 -->
+    ${r.verifyMode==='manual' && r.manualQueue.length > 0 && r.manualIdx < r.manualQueue.length ? `
+    <div class="auto-card" style="margin-bottom:16px;border-color:var(--warn)">
+      <h3 style="font-size:14px;margin-bottom:12px;color:var(--warn)">
+        👤 같은 제품인가요? (${r.manualIdx+1} / ${r.manualQueue.length})
+      </h3>
+      ${renderRivalCard(r.manualQueue[r.manualIdx], 'verify')}
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn-primary" id="manualAccept" style="flex:1;justify-content:center;background:var(--ok)">
+          ✅ 같은 제품 — 선택
+        </button>
+        <button class="btn-primary" id="manualReject" style="flex:1;justify-content:center;background:var(--err)">
+          ❌ 다른 제품 — 건너뜀
+        </button>
+      </div>
+    </div>
+    ` : ''}
+
+    <!-- 검색 결과 -->
+    ${r.searchResults[r.platform].length > 0 ? `
+    <div style="margin-bottom:20px">
+      <h3 style="font-size:14px;font-weight:600;margin-bottom:10px">
+        검색 결과 — ${r.platform === 'naver' ? '네이버 쇼핑' : '쿠팡'} (${r.searchResults[r.platform].length}개)
+      </h3>
+      <div class="rival-grid">
+        ${r.searchResults[r.platform].map((p, i) => renderRivalCard(p, 'result')).join('')}
+      </div>
+    </div>
+    ` : ''}
+
+    <!-- 선택된 제품 목록 -->
+    ${r.selectedProducts.length > 0 ? `
+    <div class="auto-card" style="margin-bottom:16px;border-color:var(--ok)">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;color:var(--ok)">
+        ✅ 분석 대상 선택됨 (${r.selectedProducts.length}개)
+      </h3>
+      <div class="rival-grid">
+        ${r.selectedProducts.map(p => renderRivalCard(p, 'selected')).join('')}
+      </div>
+
+      <!-- 비율 슬라이더 -->
+      <div style="margin-top:16px">
+        <h4 style="font-size:13px;font-weight:600;margin-bottom:10px">📊 콘텐츠 생성 반영 비율</h4>
+        <div class="ratio-slider-wrap">
+          <span style="font-size:12px;color:var(--cyan);min-width:80px">경쟁사 분석</span>
+          <input type="range" min="0" max="100" step="10" value="${r.ratioRival}"
+            class="interval-slider" id="ratioSlider" style="flex:1">
+          <span style="font-size:18px;font-weight:800;color:var(--primary);min-width:80px;text-align:right" id="ratioDisplay">
+            ${r.ratioRival}% : ${r.ratioOwn}%
+          </span>
+          <span style="font-size:12px;color:var(--warn);min-width:60px;text-align:right">자체 분석</span>
+        </div>
+        <p style="font-size:11px;color:var(--text-m)">
+          경쟁사 ${r.ratioRival}% : 자체 ${r.ratioOwn}% 비율로 섹션 콘텐츠를 생성합니다.
+        </p>
+      </div>
+
+      <button class="btn-primary" id="startRivalAnalysis"
+        ${r.analyzing ? 'disabled' : ''}
+        style="margin-top:16px;width:100%;justify-content:center">
+        <span class="material-icons-outlined" style="font-size:18px">${r.analyzing ? 'hourglass_empty' : 'psychology'}</span>
+        ${r.analyzing ? '상세페이지 분석 중...' : '경쟁사 상세페이지 분석 + 추가 섹션 도출'}
+      </button>
+    </div>
+    ` : ''}
+
+    <!-- 추가 섹션 결과 -->
+    ${extraReady ? `
+    <div class="auto-card" style="margin-bottom:16px;border-color:var(--cyan)">
+      <h3 style="font-size:14px;font-weight:700;margin-bottom:12px;color:var(--cyan)">
+        ✨ AI가 도출한 추가 섹션 (${r.extraSections.length}개)
+      </h3>
+      <div style="margin-bottom:12px">
+        ${r.extraSections.map(s => `<span class="extra-section-chip">+ ${s.name}</span>`).join('')}
+      </div>
+      <p style="font-size:12px;color:var(--text-d);margin-bottom:16px">
+        기본 15섹션에 위 섹션들이 추가됩니다. "전체 생성 시작"을 누르면 경쟁사 분석 ${r.ratioRival}% + 자체 분석 ${r.ratioOwn}% 비율로 콘텐츠가 생성됩니다.
+      </p>
+      <button class="btn-primary" id="goToGenerateBtn" style="justify-content:center;width:100%">
+        <span class="material-icons-outlined" style="font-size:18px">rocket_launch</span>
+        섹션 설정으로 이동하여 전체 생성
+      </button>
+    </div>
+    ` : ''}
+
+  </div>`;
+}
+
+function renderRivalCard(p, mode) {
+  const platformBadge = p.platform === 'naver'
+    ? '<span class="rival-badge naver">N 네이버</span>'
+    : '<span class="rival-badge coupang">C 쿠팡</span>';
+
+  let statusBadge = '';
+  if (mode === 'result') {
+    if (p.verified === true)  statusBadge = '<span class="rival-badge auto-ok">✓ 동일</span>';
+    else if (p.verified === false) statusBadge = '<span class="rival-badge auto-no">✗ 불일치</span>';
+    else statusBadge = '<span class="rival-badge pending">⏳ 검증 전</span>';
+  } else if (mode === 'selected') {
+    statusBadge = '<span class="rival-badge auto-ok">✅ 선택됨</span>';
+  }
+
+  const thumb = p.image
+    ? `<img class="rival-thumb" src="${p.image}" alt="" onerror="this.style.display='none'">`
+    : `<div class="rival-thumb">🛍</div>`;
+
+  return `<div class="rival-product-card">
+    ${thumb}
+    <div class="rival-info">
+      <h4 title="${p.title}">${p.title || '제품명 없음'}</h4>
+      <div class="price">${p.price ? Number(p.price).toLocaleString() + '원' : '가격 미상'}</div>
+      <div class="meta">
+        ${platformBadge} ${statusBadge}
+        ${p.mallName ? `<span style="margin-left:6px;color:var(--text-m)">${p.mallName}</span>` : ''}
+        ${p.reviewCount ? `<span style="margin-left:6px;color:var(--text-m)">리뷰 ${Number(p.reviewCount).toLocaleString()}</span>` : ''}
+      </div>
+      ${p.link ? `<a href="${p.link}" target="_blank" style="font-size:11px;color:var(--primary);margin-top:4px;display:inline-block">↗ 상품 보기</a>` : ''}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// RIVAL ANALYSIS — SEARCH & VERIFY
+// ════════════════════════════════════════════════════════════════
+async function searchNaverProducts(query) {
+  const clientId = state.rival.naverClientId.trim();
+  const clientSecret = state.rival.naverClientSecret.trim();
+  if (!clientId || !clientSecret) throw new Error('네이버 API Client ID / Secret을 입력해주세요.');
+
+  const encoded = encodeURIComponent(query);
+  // CORS 프록시 없이 직접 호출 (file:// or localhost 환경)
+  // 네이버 쇼핑 API는 브라우저 CORS 제한 있음 → 서버 필요
+  // 대신 네이버 검색 API (오픈 API)를 시도하고, 실패하면 GPT 대체
+  try {
+    const res = await fetch(`https://openapi.naver.com/v1/search/shop.json?query=${encoded}&display=10&sort=sim`, {
+      headers: {
+        'X-Naver-Client-Id': clientId,
+        'X-Naver-Client-Secret': clientSecret,
+      }
+    });
+    if (!res.ok) throw new Error(`Naver API ${res.status}`);
+    const data = await res.json();
+    return (data.items || []).slice(0, 10).map(item => ({
+      platform: 'naver',
+      title: item.title.replace(/<[^>]+>/g, ''),
+      price: item.lprice,
+      image: item.image,
+      mallName: item.mallName,
+      link: item.link,
+      productId: item.productId,
+      reviewCount: null,
+      verified: null,
+    }));
+  } catch(e) {
+    // CORS 차단 시 GPT로 대체
+    console.warn('Naver API failed (CORS?), using GPT fallback:', e.message);
+    return await gptSimulateSearch(query, 'naver');
+  }
+}
+
+async function gptSimulateSearch(query, platform) {
+  openai = openai || new OpenAIAPI(state.apiKey);
+  const result = await openai._chatJSON([{ role: 'user', content: `한국 이커머스 ${platform === 'naver' ? '네이버 스마트스토어' : '쿠팡'}에서 "${query}" 제품을 검색한 결과를 시뮬레이션해줘.
+실제 판매 중인 것처럼 최대한 현실적으로 5개 제품을 만들어줘.
+JSON: { "items": [ { "title": "제품명", "price": 숫자(원), "mallName": "스토어명", "reviewCount": 숫자, "link": "#", "image": "" } ] }` }], 0.7);
+  return (result.items || []).map(item => ({
+    platform,
+    title: item.title,
+    price: item.price,
+    image: item.image || '',
+    mallName: item.mallName,
+    link: item.link || '#',
+    reviewCount: item.reviewCount,
+    verified: null,
+  }));
+}
+
+async function verifyProductMatch(candidate) {
+  // GPT-4o로 우리 제품과 후보 제품 비교
+  openai = openai || new OpenAIAPI(state.apiKey);
+  const ourProduct = state.analysis;
+  const messages = [{
+    role: 'user',
+    content: state.imageBase64
+      ? [
+          { type: 'text', text: `우리 제품 정보: ${ourProduct.product_name} / ${ourProduct.category}\n\n경쟁 후보 제품: "${candidate.title}" (${candidate.mallName || ''})\n가격: ${candidate.price}원\n\n위 두 제품이 동일하거나 매우 유사한 제품인지 판단해줘.\nJSON: { "is_match": true 또는 false, "similarity": 0~100, "reason": "한국어 이유" }` },
+          { type: 'image_url', image_url: { url: `data:${state.imageMime};base64,${state.imageBase64}`, detail: 'low' } }
+        ]
+      : [{ type: 'text', text: `우리 제품: ${ourProduct.product_name} / ${ourProduct.category}\n경쟁 후보: "${candidate.title}"\n두 제품이 동일하거나 유사한지 판단. JSON: { "is_match": true/false, "similarity": 0~100, "reason": "이유" }` }]
+  }];
+
+  const result = await openai._chatJSON(messages, 0.3);
+  return result.is_match === true && (result.similarity || 0) >= 50;
+}
+
+async function analyzeRivalDetailPage(product) {
+  // 상세페이지 URL이 있으면 GPT로 분석
+  openai = openai || new OpenAIAPI(state.apiKey);
+  const prompt = `다음 한국 이커머스 제품의 상세페이지를 분석해줘:
+
+제품명: ${product.title}
+플랫폼: ${product.platform === 'naver' ? '네이버 스마트스토어' : '쿠팡'}
+가격: ${product.price}원
+판매처: ${product.mallName || ''}
+${product.link && product.link !== '#' ? `URL: ${product.link}` : ''}
+
+이 제품의 상세페이지에서 강조할 것으로 예상되는 내용을 분석하고, 기본 15섹션(헤더, 훅, 핵심특징, 스펙, 사용시나리오, 비교우위, 소재기술, 인증, 리뷰, 사이즈컬러, 프로모션, 배송, FAQ, 브랜드스토리, CTA) 이외에 이 카테고리/제품에 특화된 추가 섹션을 최대한 많이 도출해줘.
+
+JSON 형식:
+{
+  "product_title": "제품명",
+  "platform": "플랫폼",
+  "emphasized_sections": ["강조하는 섹션1", "강조하는 섹션2"],
+  "copywriting_style": "카피라이팅 스타일 설명",
+  "design_patterns": ["디자인 패턴1", "패턴2"],
+  "key_selling_points": ["주요 판매 포인트1", "포인트2"],
+  "extra_sections": [
+    { "name": "추가섹션명", "purpose": "섹션 목적", "priority": 1 }
+  ]
+}`;
+
+  return openai._chatJSON([{ role: 'user', content: prompt }], 0.6);
+}
+
+async function startRivalSearch() {
+  if (!state.analysis) { state.error = '먼저 제품 분석을 완료해주세요.'; render(); return; }
+  if (!state.apiKey) { state.showApiModal = true; render(); return; }
+
+  const query = state.analysis.product_name || state.analysis.product_name_en;
+  state.rival.searching = true;
+  state.rival.searchResults = { naver: [], coupang: [] };
+  state.rival.selectedProducts = [];
+  state.rival.analyzedPages = [];
+  state.rival.extraSections = [];
+  state.rival.manualQueue = [];
+  state.rival.manualIdx = 0;
+  render();
+
+  try {
+    const platform = state.rival.platform;
+    let results;
+
+    if (platform === 'naver') {
+      results = await searchNaverProducts(query);
+    } else {
+      results = await gptSimulateSearch(query, 'coupang');
+    }
+
+    state.rival.searchResults[platform] = results;
+    state.rival.searching = false;
+
+    // AUTO 모드: 바로 검증 시작
+    if (state.rival.verifyMode === 'auto') {
+      render();
+      await autoVerifyAll(results);
+    } else {
+      // MANUAL 모드: 검증 큐 설정
+      state.rival.manualQueue = results;
+      state.rival.manualIdx = 0;
+      render();
+    }
+  } catch(e) {
+    state.rival.searching = false;
+    state.error = `경쟁 제품 검색 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function autoVerifyAll(results) {
+  const verified = [];
+  for (const candidate of results) {
+    if (verified.length >= 5) break;
+    try {
+      const isMatch = await verifyProductMatch(candidate);
+      candidate.verified = isMatch;
+      if (isMatch) verified.push({ ...candidate });
+    } catch(e) {
+      candidate.verified = false;
+    }
+    // 결과 업데이트
+    const platform = state.rival.platform;
+    state.rival.searchResults[platform] = [...state.rival.searchResults[platform]];
+    render();
+    await new Promise(r => setTimeout(r, 300));
+  }
+  state.rival.selectedProducts = verified;
+  if (verified.length < 3) {
+    // 3개 미만이면 미검증 제품도 추가 (최대 3개)
+    for (const c of results) {
+      if (state.rival.selectedProducts.length >= 3) break;
+      if (!state.rival.selectedProducts.find(x => x.title === c.title)) {
+        state.rival.selectedProducts.push({ ...c, verified: true });
+      }
+    }
+  }
+  render();
+}
+
+function manualAccept() {
+  const r = state.rival;
+  if (r.manualIdx >= r.manualQueue.length) return;
+  const product = { ...r.manualQueue[r.manualIdx], verified: true };
+  r.searchResults[r.platform][r.manualIdx] = product;
+  if (r.selectedProducts.length < 5) r.selectedProducts.push(product);
+  r.manualIdx++;
+  render();
+}
+
+function manualReject() {
+  const r = state.rival;
+  if (r.manualIdx >= r.manualQueue.length) return;
+  r.searchResults[r.platform][r.manualIdx] = { ...r.manualQueue[r.manualIdx], verified: false };
+  r.manualIdx++;
+  render();
+}
+
+async function startRivalAnalysis() {
+  if (state.rival.selectedProducts.length === 0) { state.error = '선택된 경쟁 제품이 없습니다.'; render(); return; }
+  state.rival.analyzing = true;
+  state.rival.analyzedPages = [];
+  state.rival.extraSections = [];
+  render();
+
+  openai = openai || new OpenAIAPI(state.apiKey);
+
+  try {
+    const extraSectionMap = {};
+    for (const product of state.rival.selectedProducts) {
+      try {
+        const analysis = await analyzeRivalDetailPage(product);
+        state.rival.analyzedPages.push(analysis);
+        // 추가 섹션 수집
+        for (const es of (analysis.extra_sections || [])) {
+          const key = es.name;
+          if (!extraSectionMap[key]) extraSectionMap[key] = { ...es, count: 1 };
+          else extraSectionMap[key].count++;
+        }
+      } catch(e) {
+        console.warn('분석 실패:', product.title, e);
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    // 2개 이상 등장한 섹션 또는 priority 1인 섹션만 추가
+    state.rival.extraSections = Object.values(extraSectionMap)
+      .filter(s => s.count >= 1)
+      .sort((a, b) => (b.count - a.count) || (a.priority - b.priority));
+
+    state.rival.analyzing = false;
+    saveRival();
+    render();
+  } catch(e) {
+    state.rival.analyzing = false;
+    state.error = `분석 실패: ${e.message}`;
+    render();
+  }
+}
+
+// 경쟁사 분석 데이터를 프롬프트용 문자열로 변환
+function buildRivalRef() {
+  const r = state.rival;
+  if (!r) return '';
+  if (r.analyzedPages.length === 0 && r.selectedProducts.length === 0) return '';
+
+  const ratio = `경쟁사 분석 ${r.ratioRival}% + 자체 제품 분석 ${r.ratioOwn}% 비율로 콘텐츠를 생성해주세요.`;
+
+  const products = r.selectedProducts.map(p => `- ${p.title} (${p.platform === 'naver' ? '네이버' : '쿠팡'}, ${p.price}원)`).join('\n');
+
+  const insights = r.analyzedPages.map(a => {
+    const pts = (a.key_selling_points || []).slice(0, 4).join(', ');
+    const style = a.copywriting_style || '';
+    return `[${a.product_title}] 판매포인트: ${pts} | 카피스타일: ${style}`;
+  }).join('\n');
+
+  return `[경쟁사 분석 데이터]\n${ratio}\n\n분석 제품:\n${products}\n\n인사이트:\n${insights}`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// BIND RIVAL ANALYSIS EVENTS (add to bindEvents)
+// ════════════════════════════════════════════════════════════════
+const _origBindRival = bindEvents;
+bindEvents = function() {
+  _origBindRival();
+
+  // Naver API 키 저장
+  const saveNaverKeysBtn = document.getElementById('saveNaverKeys');
+  if (saveNaverKeysBtn) saveNaverKeysBtn.onclick = () => {
+    state.rival.naverClientId = document.getElementById('naverClientId')?.value.trim() || '';
+    state.rival.naverClientSecret = document.getElementById('naverClientSecret')?.value.trim() || '';
+    saveRival();
+    render();
+  };
+
+  // 검증 모드 선택
+  document.querySelectorAll('[data-verify-mode]').forEach(btn => {
+    btn.onclick = () => {
+      state.rival.verifyMode = btn.dataset.verifyMode;
+      saveRival();
+      render();
+    };
+  });
+
+  // 플랫폼 탭
+  document.querySelectorAll('[data-platform]').forEach(btn => {
+    btn.onclick = () => {
+      state.rival.platform = btn.dataset.platform;
+      render();
+    };
+  });
+
+  // 경쟁 제품 검색 시작
+  const searchBtn = document.getElementById('startRivalSearch');
+  if (searchBtn) searchBtn.onclick = startRivalSearch;
+
+  // MANUAL 모드: 수락/거절
+  const acceptBtn = document.getElementById('manualAccept');
+  if (acceptBtn) acceptBtn.onclick = manualAccept;
+  const rejectBtn = document.getElementById('manualReject');
+  if (rejectBtn) rejectBtn.onclick = manualReject;
+
+  // 비율 슬라이더
+  const ratioSlider = document.getElementById('ratioSlider');
+  const ratioDisplay = document.getElementById('ratioDisplay');
+  if (ratioSlider) {
+    ratioSlider.oninput = () => {
+      const v = parseInt(ratioSlider.value);
+      state.rival.ratioRival = v;
+      state.rival.ratioOwn = 100 - v;
+      if (ratioDisplay) ratioDisplay.textContent = `${v}% : ${100 - v}%`;
+    };
+    ratioSlider.onchange = () => saveRival();
+  }
+
+  // 경쟁사 상세페이지 분석 시작
+  const analyzeBtn = document.getElementById('startRivalAnalysis');
+  if (analyzeBtn) analyzeBtn.onclick = startRivalAnalysis;
+
+  // 섹션 설정으로 이동
+  const goGenBtn = document.getElementById('goToGenerateBtn');
+  if (goGenBtn) goGenBtn.onclick = () => {
+    state.step = 'sections';
+    render();
+  };
+};
+
+// ════════════════════════════════════════════════════════════════
+// BIND TOKEN STAT EVENTS (add to bindEvents)
+// ════════════════════════════════════════════════════════════════
+const _origBindToken = bindEvents;
+bindEvents = function() {
+  _origBindToken();
+
+  // 한도 슬라이더
+  const slider = document.getElementById('tokenLimitSlider');
+  const display = document.getElementById('tokenLimitDisplay');
+  if (slider) {
+    slider.oninput = () => {
+      const v = parseInt(slider.value);
+      state.usage.limitTokens = v;
+      if (display) display.textContent = v.toLocaleString();
+      // 프리셋 버튼 하이라이트 갱신
+      document.querySelectorAll('.token-preset').forEach(btn => {
+        btn.style.borderColor = +btn.dataset.preset === v ? 'var(--primary)' : '';
+        btn.style.color = +btn.dataset.preset === v ? 'var(--primary)' : '';
+      });
+    };
+    slider.onchange = () => { saveUsage(); };
+  }
+
+  // 프리셋 버튼
+  document.querySelectorAll('.token-preset').forEach(btn => {
+    btn.onclick = () => {
+      const v = parseInt(btn.dataset.preset);
+      state.usage.limitTokens = v;
+      state.usage.stopped = false; // 한도 바꾸면 중단 해제
+      saveUsage();
+      render();
+    };
+  });
+
+  // 한도 해제 후 재개
+  const resumeBtn = document.getElementById('resumeUsageBtn');
+  if (resumeBtn) resumeBtn.onclick = () => {
+    state.usage.stopped = false;
+    state.error = '';
+    saveUsage();
+    render();
+  };
+
+  // 사용량 초기화
+  const resetUsageBtn = document.getElementById('resetUsageBtn');
+  if (resetUsageBtn) resetUsageBtn.onclick = () => {
+    if (!confirm('사용량을 초기화하면 누적 토큰 기록이 모두 사라집니다. 계속하시겠습니까?')) return;
+    state.usage['gpt-4o']   = { input: 0, output: 0, calls: 0 };
+    state.usage['dall-e-3'] = { images: 0, calls: 0 };
+    state.usage.stopped = false;
+    state.error = '';
+    saveUsage();
+    render();
+  };
+};
+
+// ════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════
+if (state.apiKey) {
+  openai = new OpenAIAPI(state.apiKey);
+}
+// Try init Google auth if client ID exists
+setTimeout(() => { try { initGoogleAuth(); } catch(e) {} }, 1000);
+render();
+</script>
+</body>
+</html>

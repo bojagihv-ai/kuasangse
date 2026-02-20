@@ -1,0 +1,2925 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>상세페이지 자동 생성기</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js" async defer></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --primary:#6366f1;--primary-h:#818cf8;--primary-dim:rgba(99,102,241,.15);
+  --bg:#0f0f13;--bg-card:#1a1a23;--bg-input:#13131a;
+  --border:#2a2a36;--border-h:#3a3a4a;
+  --text:#e4e4e7;--text-d:#9494a5;--text-m:#6b6b7b;
+  --ok:#22c55e;--warn:#f59e0b;--err:#ef4444;
+  --cyan:#06b6d4;--orange:#f97316;
+}
+body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.fade-in{animation:fadeIn .3s ease-out}
+
+/* Layout */
+.app{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;flex-shrink:0}
+.logo{display:flex;align-items:center;gap:10px;padding:20px 16px;border-bottom:1px solid var(--border)}
+.logo-icon{font-size:28px;color:var(--primary);font-weight:900}
+.logo-text{font-weight:700;font-size:15px;line-height:1.3}
+.logo-sub{font-weight:400;font-size:12px;color:var(--text-d)}
+.nav{padding:12px 8px;display:flex;flex-direction:column;gap:2px;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;transition:.15s;color:var(--text-d);font-size:13px;border:none;background:none;width:100%;text-align:left;font-family:inherit}
+.nav-item:hover{background:rgba(255,255,255,.03)}
+.nav-item.active{background:var(--primary-dim);color:var(--primary-h)}
+.nav-item.disabled{opacity:.4;cursor:not-allowed}
+.main{flex:1;min-width:0;padding:24px 32px;overflow-y:auto}
+.container{max-width:1100px;margin:0 auto}
+
+/* Typography */
+.page-title{font-size:26px;font-weight:800;margin-bottom:6px}
+.page-desc{font-size:14px;color:var(--text-d);margin-bottom:24px}
+
+/* Upload */
+.upload-area{border:2px dashed var(--border);border-radius:16px;padding:40px;text-align:center;cursor:pointer;background:var(--bg-card);margin-bottom:24px;min-height:240px;display:flex;align-items:center;justify-content:center;transition:.2s}
+.upload-area:hover{border-color:var(--primary);background:rgba(99,102,241,.03)}
+.upload-area.has-image{border-style:solid;border-color:var(--border)}
+.preview-img{max-height:300px;max-width:100%;border-radius:12px;object-fit:contain}
+
+/* Form */
+.input-group{margin-bottom:20px}
+.label{display:block;font-size:13px;font-weight:500;margin-bottom:6px;color:var(--text-d)}
+.input,.textarea{width:100%;padding:10px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;font-family:inherit;transition:border .2s}
+.input:focus,.textarea:focus{border-color:var(--primary)}
+.textarea{resize:vertical;line-height:1.5;font-size:13px}
+
+/* Buttons */
+.btn-primary{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;background:var(--primary);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+.btn-primary:hover{background:var(--primary-h)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.btn-sm{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;background:var(--bg-card);color:var(--text-d);border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn-sm:hover{border-color:var(--border-h);color:var(--text)}
+
+/* Cards */
+.feature-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:40px}
+.feature-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;text-align:center}
+.feature-card .mi{font-size:28px;color:var(--primary);margin-bottom:8px}
+.feature-card h4{font-weight:600;font-size:14px;margin-bottom:4px}
+.feature-card p{font-size:12px;color:var(--text-d)}
+
+/* Analysis Summary */
+.analysis-box{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px}
+.tag{display:inline-block;padding:3px 10px;background:var(--primary-dim);color:var(--primary-h);border-radius:20px;font-size:11px;font-weight:500;margin:2px}
+
+/* Section Cards */
+.section-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+.section-card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer;transition:.15s}
+.section-card:hover{border-color:var(--border-h);background:var(--bg-card)}
+.section-card .head{display:flex;align-items:center;gap:12px}
+.section-card .icon{font-size:28px}
+.section-card .info{flex:1}
+.section-card .info h4{font-weight:600;font-size:14px}
+.section-card .info p{font-size:12px;color:var(--text-d);margin-top:2px}
+.custom-badge{margin-top:8px;padding:6px 10px;background:var(--primary-dim);border-radius:6px;font-size:12px;color:var(--primary-h)}
+
+/* Progress */
+.progress-outer{width:100%;max-width:400px;height:24px;background:var(--bg-card);border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+.progress-inner{height:100%;background:linear-gradient(90deg,var(--primary),var(--cyan));border-radius:12px;transition:width .5s ease;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:600;min-width:40px}
+.spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.spinner-lg{width:64px;height:64px;border:4px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.gen-icons{margin-top:40px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.gen-icon{width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-card);border-radius:10px;font-size:22px;border:1px solid var(--border);transition:.3s}
+.gen-icon.done{background:var(--primary-dim);border-color:var(--primary)}
+
+/* Preview */
+.preview-wrap{background:#fff;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
+.section-ctrl{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg-card);border-bottom:1px solid var(--border)}
+.section-ctrl .name{font-weight:600;font-size:13px}
+.edit-panel{padding:12px 16px;background:var(--bg);border-bottom:1px solid var(--border)}
+
+/* Error */
+.error-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:var(--err);font-size:13px;margin-bottom:16px}
+
+/* API Key Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:32px;max-width:480px;width:90%}
+.modal h2{font-size:20px;margin-bottom:8px}
+.modal p{font-size:13px;color:var(--text-d);margin-bottom:20px}
+
+/* Image Cuts */
+.cuts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.cut-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;transition:.2s}
+.cut-card.has-result{border-color:var(--primary)}
+.cut-label{font-size:13px;font-weight:700;color:var(--primary)}
+.cut-preview{width:100%;aspect-ratio:4/3;border-radius:8px;object-fit:cover;background:var(--bg-input);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--text-m);font-size:12px;overflow:hidden}
+.cut-preview img{width:100%;height:100%;object-fit:cover}
+.cut-spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:auto}
+.source-upload{border:2px dashed var(--border);border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:var(--bg-card);transition:.2s;margin-bottom:20px}
+.source-upload:hover{border-color:var(--primary)}
+.placement-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.placement-row:last-child{border-bottom:none}
+.placement-select{background:var(--bg-input);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 8px;font-size:12px;font-family:inherit;outline:none}
+.cut-thumb{width:40px;height:40px;border-radius:6px;object-fit:cover;border:1px solid var(--border);background:var(--bg-input)}
+
+/* Automation */
+.auto-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.auto-card h3{font-size:15px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.auto-status{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}
+.auto-status.running{background:rgba(34,197,94,.15);color:var(--ok)}
+.auto-status.stopped{background:rgba(239,68,68,.15);color:var(--err)}
+.auto-status.waiting{background:rgba(245,158,11,.15);color:var(--warn)}
+.folder-pick{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s;min-height:44px}
+.folder-pick:hover{border-color:var(--primary)}
+.folder-pick .name{flex:1;font-size:13px;color:var(--text)}
+.folder-pick .placeholder{flex:1;font-size:13px;color:var(--text-m)}
+.queue-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px}
+.queue-item:last-child{border-bottom:none}
+.queue-item .q-status{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.queue-item .q-status.pending{background:var(--text-m)}
+.queue-item .q-status.processing{background:var(--warn);animation:pulse 1s infinite}
+.queue-item .q-status.done{background:var(--ok)}
+.queue-item .q-status.error{background:var(--err)}
+.log-box{background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:300px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.8}
+.log-line{color:var(--text-d)}
+.log-line.ok{color:var(--ok)}
+.log-line.err{color:var(--err)}
+.log-line.info{color:var(--cyan)}
+.interval-slider{width:100%;accent-color:var(--primary)}
+
+/* Token Tracker */
+.token-bar{position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:6px 16px;display:flex;align-items:center;gap:16px;font-size:11px;z-index:500;flex-wrap:wrap}
+.token-bar .tb-label{color:var(--text-m);white-space:nowrap}
+.token-bar .tb-val{font-weight:700;font-family:monospace}
+.token-bar .tb-val.flash{animation:pulse .4s ease}
+.token-bar .sep{color:var(--border);user-select:none}
+.token-bar .tb-model{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
+.token-bar .m-flash{background:rgba(99,102,241,.2);color:var(--primary-h)}
+.token-bar .m-img{background:rgba(249,115,22,.2);color:var(--orange)}
+.token-bar .tb-cost{color:var(--ok);font-weight:700;font-family:monospace}
+.token-bar .tb-reset{cursor:pointer;color:var(--text-m);padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:none;font-size:10px;font-family:inherit}
+.token-bar .tb-reset:hover{color:var(--text);border-color:var(--border-h)}
+.token-detail-btn{cursor:pointer;color:var(--primary-h);font-size:10px;text-decoration:underline;background:none;border:none;font-family:inherit;padding:0}
+.token-modal{position:fixed;bottom:44px;right:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;min-width:360px;max-width:480px;z-index:600;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.token-modal h3{font-size:14px;font-weight:700;margin-bottom:12px}
+.token-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px}
+.token-row:last-child{border-bottom:none}
+.token-row .model-name{font-family:monospace;font-size:11px;color:var(--text-d)}
+/* Model Settings */
+.provider-tabs{display:flex;gap:8px;margin-bottom:20px}
+.provider-tab{flex:1;padding:14px;border-radius:10px;border:2px solid var(--border);background:var(--bg-card);cursor:pointer;text-align:center;transition:.15s}
+.provider-tab:hover{border-color:var(--border-h)}
+.provider-tab.active-gemini{border-color:#6366f1;background:rgba(99,102,241,.1)}
+.provider-tab.active-openai{border-color:#10a37f;background:rgba(16,163,127,.1)}
+.provider-tab .pt-icon{font-size:22px;font-weight:900;margin-bottom:4px}
+.provider-tab .pt-label{font-size:13px;font-weight:700}
+.provider-tab .pt-sub{font-size:11px;color:var(--text-m);margin-top:2px}
+.model-list{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px}
+.model-card{padding:12px 14px;border-radius:8px;border:2px solid var(--border);background:var(--bg-card);cursor:pointer;transition:.15s}
+.model-card:hover{border-color:var(--border-h)}
+.model-card.selected{border-color:var(--primary);background:var(--primary-dim)}
+.model-card.selected-green{border-color:#10a37f;background:rgba(16,163,127,.1)}
+.model-card .mc-label{font-size:13px;font-weight:700;margin-bottom:2px}
+.model-card .mc-id{font-size:10px;font-family:monospace;color:var(--text-m)}
+.model-card .mc-desc{font-size:11px;color:var(--text-d);margin-top:4px}
+.model-card .mc-price{font-size:10px;color:var(--warn);margin-top:4px}
+.settings-section{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:16px}
+.settings-section h3{font-size:14px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.cur-model-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-left:8px}
+.cur-model-badge.gemini{background:rgba(99,102,241,.2);color:var(--primary-h)}
+.cur-model-badge.openai{background:rgba(16,163,127,.2);color:#10a37f}
+
+/* Responsive */
+@media(max-width:900px){
+  .feature-grid{grid-template-columns:repeat(2,1fr)}
+  .section-grid{grid-template-columns:1fr}
+  .sidebar{width:60px;overflow:hidden}
+  .sidebar .logo-text,.sidebar .logo-sub,.sidebar .nav-item span:last-child{display:none}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// SECTION DEFINITIONS (15 sections)
+// ════════════════════════════════════════════════════════════════
+const SECTIONS = [
+  {n:1,name:"헤더 (Header)",id:"header",purpose:"제품을 깔끔한 화이트톤 배경으로 강조. 제품명을 상단에 크고 임팩트 있게 표시.",desc:"화이트 배경 + 제품 중앙 배치 + 제품명 강조",icon:"🎯"},
+  {n:2,name:"훅 (Hook)",id:"hook",purpose:"구매 욕구를 자극하는 강렬한 비주얼과 카피. 고객의 페인포인트를 건드리고 제품이 해결책임을 암시.",desc:"구매 욕구 자극 훅 메시지 + 감성 이미지",icon:"🪝"},
+  {n:3,name:"핵심 특징 (Key Features)",id:"key_features",purpose:"제품의 핵심 특장점 3~5가지를 아이콘/이미지와 함께 명확하게 전달.",desc:"핵심 특장점 3~5가지 아이콘+텍스트 그리드",icon:"⭐"},
+  {n:4,name:"상세 스펙 (Specifications)",id:"specifications",purpose:"제품의 상세 사양, 크기, 재질, 무게 등 구체적인 정보 제공.",desc:"상세 사양 테이블 + 제품 디테일 이미지",icon:"📐"},
+  {n:5,name:"사용 시나리오 (Use Scenarios)",id:"use_scenarios",purpose:"다양한 사용 상황을 보여주어 고객이 자신의 라이프스타일에서 제품을 상상할 수 있게 함.",desc:"라이프스타일 이미지 + 사용 상황 텍스트",icon:"🏠"},
+  {n:6,name:"비교 우위 (Competitive Edge)",id:"competitive_edge",purpose:"경쟁 제품 대비 우위점을 시각적으로 비교.",desc:"경쟁사 대비 비교표 또는 Before/After",icon:"🏆"},
+  {n:7,name:"소재/기술 (Material & Tech)",id:"material_tech",purpose:"사용된 소재의 우수성이나 특허 기술 등을 시각적으로 설명.",desc:"소재/기술력 강조 다크톤 섹션",icon:"🔬"},
+  {n:8,name:"인증/수상 (Certifications)",id:"certifications",purpose:"제품이 받은 인증, 수상 내역, 테스트 결과 등으로 신뢰도 구축.",desc:"인증마크/수상내역 배지 나열",icon:"🏅"},
+  {n:9,name:"리뷰/후기 (Reviews)",id:"reviews",purpose:"실제 사용자 후기를 활용한 사회적 증거.",desc:"고객 리뷰 카드 레이아웃",icon:"💬"},
+  {n:10,name:"크기/컬러 가이드",id:"size_color",purpose:"사이즈 차트, 컬러 옵션 등 선택에 도움되는 정보 제공.",desc:"사이즈표 + 컬러 스와치 옵션",icon:"🎨"},
+  {n:11,name:"프로모션 (Promotion)",id:"promotion",purpose:"특별 할인, 세트 구성, 사은품 등 구매 촉진 이벤트 섹션.",desc:"할인/이벤트/세트 구성 프로모션 배너",icon:"🎁"},
+  {n:12,name:"배송/포장 (Shipping)",id:"shipping",purpose:"배송 정보, 포장 상태, 언박싱 경험 등을 보여줌.",desc:"배송정보 + 패키징 이미지",icon:"📦"},
+  {n:13,name:"FAQ (자주 묻는 질문)",id:"faq",purpose:"고객들이 자주 묻는 질문을 미리 답변하여 구매 불안 해소.",desc:"아코디언 형식 FAQ 섹션",icon:"❓"},
+  {n:14,name:"브랜드 스토리",id:"brand_story",purpose:"브랜드의 철학, 스토리, 가치를 전달하여 감성적 연결 형성.",desc:"브랜드 스토리텔링 다크 섹션",icon:"📖"},
+  {n:15,name:"CTA 푸터 (Footer)",id:"cta_footer",purpose:"최종 구매 결정을 유도하는 강력한 CTA.",desc:"최종 CTA + 가격 + 구매버튼",icon:"🛒"},
+];
+
+// ════════════════════════════════════════════════════════════════
+// MODEL CONFIG SYSTEM
+// ════════════════════════════════════════════════════════════════
+// LLM 프로바이더 및 모델 목록 정의
+const LLM_PROVIDERS = {
+  gemini: {
+    label: 'Google Gemini',
+    icon: '✦',
+    color: '#6366f1',
+    models: [
+      { id: 'gemini-2.0-flash',       label: 'Gemini 2.0 Flash',       desc: '빠름 · 저비용',         inputPerM: 0.10,  outputPerM: 0.40  },
+      { id: 'gemini-2.0-flash-lite',  label: 'Gemini 2.0 Flash Lite',  desc: '최저비용',              inputPerM: 0.075, outputPerM: 0.30  },
+      { id: 'gemini-1.5-pro',         label: 'Gemini 1.5 Pro',         desc: '고성능 · 긴 컨텍스트',  inputPerM: 1.25,  outputPerM: 5.00  },
+      { id: 'gemini-2.5-pro-preview', label: 'Gemini 2.5 Pro Preview', desc: '최고성능 (프리뷰)',      inputPerM: 1.25,  outputPerM: 10.00 },
+    ],
+  },
+  openai: {
+    label: 'OpenAI ChatGPT',
+    icon: '◆',
+    color: '#10a37f',
+    models: [
+      { id: 'gpt-4.1-nano', label: 'GPT-4.1 nano', desc: '초저비용 · 1M 컨텍스트',    inputPerM: 0.10,  outputPerM: 0.40  },
+      { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini', desc: '저비용 · 1M 컨텍스트',      inputPerM: 0.40,  outputPerM: 1.60  },
+      { id: 'o3',           label: 'o3',            desc: '추론 · 저비용',             inputPerM: 0.40,  outputPerM: 1.60  },
+      { id: 'gpt-4o-mini',  label: 'GPT-4o mini',  desc: '빠름 · 멀티모달',           inputPerM: 0.15,  outputPerM: 0.60  },
+      { id: 'gpt-4.1',      label: 'GPT-4.1',      desc: '고성능 · 1M 컨텍스트',      inputPerM: 2.00,  outputPerM: 8.00  },
+      { id: 'gpt-4o',       label: 'GPT-4o',        desc: '고성능 · 멀티모달',         inputPerM: 2.50,  outputPerM: 10.00 },
+      { id: 'o4-mini',      label: 'o4-mini',       desc: '고급 추론 · 200K 컨텍스트', inputPerM: 1.10,  outputPerM: 4.40  },
+      { id: 'gpt-5',        label: 'GPT-5',         desc: '최강 플래그십',             inputPerM: 1.25,  outputPerM: 10.00 },
+    ],
+  },
+};
+
+// 이미지 생성 모델 목록 (Gemini 전용)
+const IMAGE_MODELS = [
+  { id: 'gemini-3-pro-image-preview',       label: 'Gemini 3 Pro Image Preview', desc: '최고품질 (권장)',  inputPerM: 3.50,  outputPerM: 10.50, imageOut: 0.039 },
+  { id: 'gemini-2.0-flash-exp-image-generation', label: 'Gemini 2.0 Flash Image', desc: '빠름 · 실험적', inputPerM: 0.10,  outputPerM: 0.40,  imageOut: 0.02  },
+];
+
+// 설정 저장/불러오기
+function saveModelConfig(cfg) {
+  try { localStorage.setItem('model_config', JSON.stringify(cfg)); } catch(e) {}
+}
+function loadModelConfig() {
+  try {
+    const raw = localStorage.getItem('model_config');
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return {
+    llmProvider: 'gemini',
+    llmModel: 'gemini-2.0-flash',
+    imageModel: 'gemini-3-pro-image-preview',
+    openaiKey: '',
+    imageSizeMode: 'auto',   // 'auto' | 'custom'
+    imageWidth: 860,          // px (custom 모드 시 사용)
+    imageHeight: null,        // px or null (null = 비율 자동 유지)
+  };
+}
+function saveOpenAIKey(key) {
+  try { localStorage.setItem('openai_api_key', key); } catch(e) {}
+}
+function loadOpenAIKey() {
+  try { return localStorage.getItem('openai_api_key') || ''; } catch(e) { return ''; }
+}
+
+// ════════════════════════════════════════════════════════════════
+// TOKEN / COST TRACKER
+// ════════════════════════════════════════════════════════════════
+// 가격표를 동적으로 구성 (LLM_PROVIDERS + IMAGE_MODELS 기반)
+function buildModelPricing() {
+  const pricing = {};
+  for (const prov of Object.values(LLM_PROVIDERS)) {
+    for (const m of prov.models) {
+      pricing[m.id] = { inputPerM: m.inputPerM, outputPerM: m.outputPerM, label: m.label, type: 'text' };
+    }
+  }
+  for (const m of IMAGE_MODELS) {
+    pricing[m.id] = { inputPerM: m.inputPerM, outputPerM: m.outputPerM, imageOut: m.imageOut, label: m.label, type: 'image' };
+  }
+  return pricing;
+}
+const MODEL_PRICING = buildModelPricing();
+
+const tokenTracker = {
+  sessions: {},   // modelId → { inputTokens, outputTokens, calls, imageCount, costUSD }
+  showDetail: false,
+
+  // 사용량 기록
+  record(modelId, inputTokens, outputTokens, isImage = false) {
+    if (!this.sessions[modelId]) {
+      this.sessions[modelId] = { inputTokens: 0, outputTokens: 0, calls: 0, imageCount: 0, costUSD: 0 };
+    }
+    const s = this.sessions[modelId];
+    s.inputTokens  += inputTokens  || 0;
+    s.outputTokens += outputTokens || 0;
+    s.calls++;
+    if (isImage) s.imageCount++;
+
+    // 비용 계산
+    const p = MODEL_PRICING[modelId];
+    if (p) {
+      const inCost  = (s.inputTokens  / 1_000_000) * p.inputPerM;
+      const outCost = (s.outputTokens / 1_000_000) * p.outputPerM;
+      const imgCost = p.imageOut ? s.imageCount * p.imageOut : 0;
+      s.costUSD = inCost + outCost + imgCost;
+    }
+    this.save();
+    this.renderBar();
+  },
+
+  // 전체 합계
+  totals() {
+    let totalIn = 0, totalOut = 0, totalCost = 0, totalCalls = 0;
+    for (const s of Object.values(this.sessions)) {
+      totalIn    += s.inputTokens;
+      totalOut   += s.outputTokens;
+      totalCost  += s.costUSD;
+      totalCalls += s.calls;
+    }
+    return { totalIn, totalOut, totalCost, totalCalls };
+  },
+
+  // localStorage 저장
+  save() {
+    try { localStorage.setItem('token_tracker', JSON.stringify(this.sessions)); } catch(e) {}
+  },
+
+  // localStorage 불러오기
+  load() {
+    try {
+      const raw = localStorage.getItem('token_tracker');
+      if (raw) this.sessions = JSON.parse(raw);
+    } catch(e) {}
+  },
+
+  reset() {
+    this.sessions = {};
+    try { localStorage.removeItem('token_tracker'); } catch(e) {}
+    this.renderBar();
+  },
+
+  // 하단 바 렌더
+  renderBar() {
+    let bar = document.getElementById('tokenBar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'tokenBar';
+      bar.className = 'token-bar';
+      document.body.appendChild(bar);
+    }
+
+    const { totalIn, totalOut, totalCost, totalCalls } = this.totals();
+    const fmtN = n => n >= 1000 ? (n/1000).toFixed(1)+'K' : n;
+    const fmtUSD = d => d < 0.001 ? '$0.000' : '$' + d.toFixed(4);
+    const fmtKRW = d => '≈₩' + Math.round(d * 1380).toLocaleString();
+
+    // 마지막 사용 모델
+    const lastModel = Object.keys(this.sessions).slice(-1)[0];
+    const lastLabel = lastModel ? (MODEL_PRICING[lastModel]?.label || lastModel) : '-';
+    const isImg = lastModel && MODEL_PRICING[lastModel]?.type === 'image';
+
+    bar.innerHTML = `
+      <span class="tb-label">💰 API 비용</span>
+      <span class="tb-cost" id="tbCostVal">${fmtUSD(totalCost)}</span>
+      <span class="tb-cost" style="color:var(--warn)">${fmtKRW(totalCost)}</span>
+      <span class="sep">│</span>
+      <span class="tb-label">입력</span>
+      <span class="tb-val" id="tbIn">${fmtN(totalIn)} tok</span>
+      <span class="tb-label">출력</span>
+      <span class="tb-val" id="tbOut">${fmtN(totalOut)} tok</span>
+      <span class="sep">│</span>
+      <span class="tb-label">호출</span>
+      <span class="tb-val">${totalCalls}회</span>
+      <span class="sep">│</span>
+      <span class="tb-label">마지막 모델</span>
+      <span class="tb-model ${isImg?'m-img':'m-flash'}">${lastLabel}</span>
+      <span class="sep">│</span>
+      <button class="token-detail-btn" id="tbDetailBtn">상세보기 ▲</button>
+      <button class="tb-reset" id="tbResetBtn">초기화</button>
+    `;
+
+    // 하단 바 때문에 main 패딩 추가
+    const main = document.querySelector('.main');
+    if (main) main.style.paddingBottom = '52px';
+
+    document.getElementById('tbDetailBtn')?.addEventListener('click', () => {
+      this.showDetail = !this.showDetail;
+      this.renderDetail();
+    });
+    document.getElementById('tbResetBtn')?.addEventListener('click', () => {
+      if (confirm('토큰 사용 기록을 초기화할까요?')) this.reset();
+    });
+  },
+
+  // 상세 모달
+  renderDetail() {
+    let modal = document.getElementById('tokenModal');
+    if (!this.showDetail) { modal?.remove(); return; }
+
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'tokenModal';
+      modal.className = 'token-modal';
+      document.body.appendChild(modal);
+    }
+
+    const fmtUSD = d => '$' + d.toFixed(5);
+    const fmtKRW = d => '₩' + Math.round(d * 1380).toLocaleString();
+    const fmtN   = n => n.toLocaleString();
+
+    let rows = '';
+    for (const [modelId, s] of Object.entries(this.sessions)) {
+      const p   = MODEL_PRICING[modelId];
+      const lbl = p?.label || modelId;
+      const typ = p?.type  || 'text';
+      rows += `
+        <div class="token-row">
+          <div>
+            <div style="font-weight:600">${lbl}</div>
+            <div class="model-name">${modelId}</div>
+          </div>
+          <div style="text-align:right;font-size:11px;line-height:1.8">
+            <div>입력 <b>${fmtN(s.inputTokens)}</b> tok</div>
+            <div>출력 <b>${fmtN(s.outputTokens)}</b> tok</div>
+            ${typ==='image' ? `<div>이미지 <b>${s.imageCount}</b>장</div>` : ''}
+            <div>호출 <b>${s.calls}</b>회</div>
+            <div style="color:var(--ok);font-weight:700">${fmtUSD(s.costUSD)} ${fmtKRW(s.costUSD)}</div>
+          </div>
+        </div>`;
+    }
+
+    const { totalCost } = this.totals();
+    modal.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0">📊 모델별 사용량 상세</h3>
+        <span style="cursor:pointer;font-size:18px;color:var(--text-m)" id="closeTokenModal">✕</span>
+      </div>
+      ${rows || '<div style="color:var(--text-m);font-size:13px">아직 API 호출 없음</div>'}
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:13px;font-weight:700">
+        <span>총 비용</span>
+        <span style="color:var(--ok)">${fmtUSD(totalCost)} (${fmtKRW(totalCost)})</span>
+      </div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text-m)">
+        * 환율 1USD = 1,380원 기준 | Gemini 공식 가격 기준 (변동 가능)
+      </div>
+    `;
+    document.getElementById('closeTokenModal')?.addEventListener('click', () => {
+      this.showDetail = false;
+      modal.remove();
+    });
+  },
+};
+
+// 앱 시작 시 저장된 사용량 복원
+tokenTracker.load();
+
+// ════════════════════════════════════════════════════════════════
+// GEMINI API SERVICE
+// ════════════════════════════════════════════════════════════════
+class GeminiAPI {
+  constructor(apiKey, model) {
+    this.apiKey = apiKey;
+    this.model = model || 'gemini-2.0-flash';
+    this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  }
+
+  async analyzeImage(imageBase64, mimeType) {
+    const prompt = `You are a professional e-commerce product analyst. Analyze this product image in extreme detail.
+Return a JSON object with the following fields:
+{
+    "product_name": "detected product name in Korean",
+    "product_name_en": "detected product name in English",
+    "category": "product category",
+    "brand": "brand name if visible",
+    "colors": ["list of colors detected"],
+    "materials": ["detected or estimated materials"],
+    "shape": "product shape description",
+    "size_estimate": "estimated size",
+    "key_features": ["list of 5-10 key features"],
+    "target_audience": "target customer demographic",
+    "price_range_estimate": "estimated price range in KRW",
+    "mood": "overall mood/aesthetic of the product",
+    "use_cases": ["list of use cases"],
+    "selling_points": ["list of unique selling points"],
+    "style_keywords": ["style-related keywords for design"],
+    "complementary_colors": ["colors that complement the product"],
+    "text_color_recommendation": "recommended text color for overlay",
+    "detailed_description": "A detailed Korean description for marketing"
+}
+Respond ONLY with the JSON object, no other text.`;
+
+    const body = {
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType, data: imageBase64 } }
+        ]
+      }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
+    };
+
+    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
+    let text = data.candidates[0].content.parts[0].text.trim();
+    text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+    return JSON.parse(text);
+  }
+
+  async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
+    const prompt = `You are a Korean e-commerce detail page content creator.
+
+Product Analysis:
+${JSON.stringify(productAnalysis, null, 2)}
+
+${competitorRef ? 'Competitor Reference: ' + competitorRef : ''}
+
+Section to create: ${sectionDef.name}
+Section number: ${sectionDef.n}
+Section purpose: ${sectionDef.purpose}
+User custom instructions: ${customInstructions || 'None'}
+
+Based on the product analysis, generate content for this section.
+Return a JSON object:
+{
+    "headline": "Main headline text in Korean (impactful, short)",
+    "subheadline": "Sub headline in Korean",
+    "body_text": "Body copy in Korean (2-3 sentences)",
+    "cta_text": "Call to action text if applicable, or empty string",
+    "layout_suggestion": "Layout recommendation",
+    "color_scheme": {
+        "background": "#hex",
+        "text_primary": "#hex",
+        "text_secondary": "#hex",
+        "accent": "#hex"
+    },
+    "font_suggestion": {
+        "headline_font": "Noto Sans KR",
+        "headline_size": "px value like 42px",
+        "headline_weight": "700 or 900",
+        "body_font": "Noto Sans KR",
+        "body_size": "px value like 16px"
+    },
+    "image_description": "Detailed description of what the section image should look like",
+    "product_placement": "Description of how the product image should be placed",
+    "design_notes": "Additional design recommendations",
+    "extra_elements": ["list of bullet points or features if applicable"]
+}
+Respond ONLY with the JSON object.`;
+
+    const body = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
+    };
+
+    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
+    let text = data.candidates[0].content.parts[0].text.trim();
+    text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+    return JSON.parse(text);
+  }
+
+  async generateImage(prompt, productImageBase64, mimeType, imageModel) {
+    const imgMod = imageModel || getImageModel();
+    const cfg = state.modelConfig;
+    const sizeHint = (cfg.imageSizeMode === 'custom' && cfg.imageWidth)
+      ? `Exact size: ${cfg.imageWidth}px wide${cfg.imageHeight ? ' × ' + cfg.imageHeight + 'px tall' : ''}.`
+      : 'Size: 860px wide.';
+    const parts = [
+      { text: `Create a professional Korean e-commerce product detail page section image. ${prompt} Style: clean, modern, high-end Korean shopping mall aesthetic. ${sizeHint}` }
+    ];
+    if (productImageBase64) {
+      parts.push({ inline_data: { mime_type: mimeType, data: productImageBase64 } });
+    }
+
+    const body = {
+      contents: [{ parts }],
+      generationConfig: {
+        temperature: 0.8,
+        responseModalities: ["TEXT", "IMAGE"]
+      }
+    };
+
+    try {
+      const res = await fetch(`${this.baseUrl}/models/${imgMod}:generateContent?key=${this.apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      tokenTracker.record(imgMod, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, true);
+
+      for (const part of data.candidates[0].content.parts) {
+        let raw = null;
+        if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+          raw = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        } else if (part.inline_data && part.inline_data.mime_type?.startsWith('image/')) {
+          raw = `data:${part.inline_data.mime_type};base64,${part.inline_data.data}`;
+        }
+        if (raw) return await applyImageSizeConfig(raw);
+      }
+      return null;
+    } catch (e) {
+      console.warn('Image generation failed:', e.message);
+      return null;
+    }
+  }
+
+  async searchSimilarProducts(productName, category) {
+    // Use Gemini to generate competitor analysis since we can't call SerpAPI from browser
+    const prompt = `You are a Korean e-commerce market analyst.
+For the product "${productName}" in the category "${category}", provide competitor analysis.
+Return a JSON object:
+{
+    "similar_products": [
+        {"name": "product name", "price_range": "price", "strengths": "key strength", "detail_page_style": "description of their detail page approach"}
+    ],
+    "market_insights": "brief market analysis in Korean",
+    "detail_page_trends": ["list of current detail page design trends for this category"],
+    "recommended_approach": "recommended detail page strategy in Korean"
+}
+List 5-8 competitor products. Respond ONLY with JSON.`;
+
+    const body = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.5, maxOutputTokens: 2048 }
+    };
+
+    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
+    let text = data.candidates[0].content.parts[0].text.trim();
+    text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+    return JSON.parse(text);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE RESIZE HELPER (Canvas API — 정확한 픽셀 강제)
+// ════════════════════════════════════════════════════════════════
+function resizeImageDataUrl(dataUrl, targetW, targetH) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ratio = img.naturalWidth / img.naturalHeight;
+        const w = Math.round(targetW);
+        // targetH가 null이면 가로/세로 비율 유지
+        const h = (targetH != null) ? Math.round(targetH) : Math.round(w / ratio);
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        // 선명한 렌더링을 위해 이중 패스 다운스케일
+        if (img.naturalWidth > w * 2 || img.naturalHeight > h * 2) {
+          const tmp = document.createElement('canvas');
+          tmp.width = Math.round(img.naturalWidth / 2);
+          tmp.height = Math.round(img.naturalHeight / 2);
+          tmp.getContext('2d').drawImage(img, 0, 0, tmp.width, tmp.height);
+          ctx.drawImage(tmp, 0, 0, w, h);
+        } else {
+          ctx.drawImage(img, 0, 0, w, h);
+        }
+        resolve(canvas.toDataURL('image/png'));
+      } catch(e) {
+        // 리사이즈 실패 시 원본 반환
+        console.warn('resizeImageDataUrl failed, using original:', e);
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl); // 로드 실패 시 원본 반환
+    img.src = dataUrl;
+  });
+}
+
+// 현재 설정에 따라 이미지를 리사이즈 (auto 모드면 그냥 반환)
+async function applyImageSizeConfig(dataUrl) {
+  const cfg = state.modelConfig;
+  if (!dataUrl || cfg.imageSizeMode !== 'custom' || !cfg.imageWidth) return dataUrl;
+  return resizeImageDataUrl(dataUrl, cfg.imageWidth, cfg.imageHeight || null);
+}
+
+// ════════════════════════════════════════════════════════════════
+// OPENAI API SERVICE
+// ════════════════════════════════════════════════════════════════
+class OpenAIAPI {
+  constructor(apiKey, model) {
+    this.apiKey = apiKey;
+    this.model = model || 'gpt-4o-mini';
+    this.baseUrl = 'https://api.openai.com/v1';
+  }
+
+  // JSON 응답 파싱 헬퍼
+  _parseJSON(text) {
+    text = text.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+    return JSON.parse(text);
+  }
+
+  async analyzeImage(imageBase64, mimeType) {
+    const prompt = `You are a professional e-commerce product analyst. Analyze this product image in extreme detail.
+Return a JSON object with the following fields:
+{
+    "product_name": "detected product name in Korean",
+    "product_name_en": "detected product name in English",
+    "category": "product category",
+    "brand": "brand name if visible",
+    "colors": ["list of colors detected"],
+    "materials": ["detected or estimated materials"],
+    "shape": "product shape description",
+    "size_estimate": "estimated size",
+    "key_features": ["list of 5-10 key features"],
+    "target_audience": "target customer demographic",
+    "price_range_estimate": "estimated price range in KRW",
+    "mood": "overall mood/aesthetic of the product",
+    "use_cases": ["list of use cases"],
+    "selling_points": ["list of unique selling points"],
+    "style_keywords": ["style-related keywords for design"],
+    "complementary_colors": ["colors that complement the product"],
+    "text_color_recommendation": "recommended text color for overlay",
+    "detailed_description": "A detailed Korean description for marketing"
+}
+Respond ONLY with the JSON object, no other text.`;
+
+    const body = {
+      model: this.model,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } }
+        ]
+      }],
+      max_tokens: 4096,
+      temperature: 0.3,
+    };
+
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usage?.prompt_tokens, data.usage?.completion_tokens);
+    return this._parseJSON(data.choices[0].message.content);
+  }
+
+  async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
+    const prompt = `You are a Korean e-commerce detail page content creator.
+
+Product Analysis:
+${JSON.stringify(productAnalysis, null, 2)}
+
+${competitorRef ? 'Competitor Reference: ' + competitorRef : ''}
+
+Section to create: ${sectionDef.name}
+Section number: ${sectionDef.n}
+Section purpose: ${sectionDef.purpose}
+User custom instructions: ${customInstructions || 'None'}
+
+Based on the product analysis, generate content for this section.
+Return a JSON object:
+{
+    "headline": "Main headline text in Korean (impactful, short)",
+    "subheadline": "Sub headline in Korean",
+    "body_text": "Body copy in Korean (2-3 sentences)",
+    "cta_text": "Call to action text if applicable, or empty string",
+    "layout_suggestion": "Layout recommendation",
+    "color_scheme": {
+        "background": "#hex",
+        "text_primary": "#hex",
+        "text_secondary": "#hex",
+        "accent": "#hex"
+    },
+    "font_suggestion": {
+        "headline_font": "Noto Sans KR",
+        "headline_size": "px value like 42px",
+        "headline_weight": "700 or 900",
+        "body_font": "Noto Sans KR",
+        "body_size": "px value like 16px"
+    },
+    "image_description": "Detailed description of what the section image should look like",
+    "product_placement": "Description of how the product image should be placed",
+    "design_notes": "Additional design recommendations",
+    "extra_elements": ["list of bullet points or features if applicable"]
+}
+Respond ONLY with the JSON object.`;
+
+    const body = {
+      model: this.model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2048,
+      temperature: 0.7,
+    };
+
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usage?.prompt_tokens, data.usage?.completion_tokens);
+    return this._parseJSON(data.choices[0].message.content);
+  }
+
+  async searchSimilarProducts(productName, category) {
+    const prompt = `You are a Korean e-commerce market analyst.
+For the product "${productName}" in the category "${category}", provide competitor analysis.
+Return a JSON object:
+{
+    "similar_products": [
+        {"name": "product name", "price_range": "price", "strengths": "key strength", "detail_page_style": "description of their detail page approach"}
+    ],
+    "market_insights": "brief market analysis in Korean",
+    "detail_page_trends": ["list of current detail page design trends for this category"],
+    "recommended_approach": "recommended detail page strategy in Korean"
+}
+List 5-8 competitor products. Respond ONLY with JSON.`;
+
+    const body = {
+      model: this.model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 2048,
+      temperature: 0.5,
+    };
+
+    const res = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(this.model, data.usage?.prompt_tokens, data.usage?.completion_tokens);
+    return this._parseJSON(data.choices[0].message.content);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// LLM ROUTER — 선택된 프로바이더/모델로 자동 분기
+// ════════════════════════════════════════════════════════════════
+function getLLMClient() {
+  const cfg = state.modelConfig;
+  if (cfg.llmProvider === 'openai') {
+    if (!state.openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. 모델 설정에서 입력해주세요.');
+    return new OpenAIAPI(state.openaiKey, cfg.llmModel);
+  }
+  // gemini
+  if (!state.apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
+  return new GeminiAPI(state.apiKey, cfg.llmModel);
+}
+
+function getImageModel() {
+  return state.modelConfig.imageModel || 'gemini-3-pro-image-preview';
+}
+
+// ════════════════════════════════════════════════════════════════
+// PERSISTENT STORAGE (works on file:// too)
+// ════════════════════════════════════════════════════════════════
+function saveKey(key) {
+  try { localStorage.setItem('gemini_api_key', key); } catch(e) {}
+  try { document.cookie = `gemini_api_key=${encodeURIComponent(key)};max-age=31536000;path=/;SameSite=Lax`; } catch(e) {}
+}
+function loadKey() {
+  let k = '';
+  try { k = localStorage.getItem('gemini_api_key') || ''; } catch(e) {}
+  if (!k) {
+    try {
+      const m = document.cookie.match(/gemini_api_key=([^;]+)/);
+      if (m) k = decodeURIComponent(m[1]);
+    } catch(e) {}
+  }
+  return k;
+}
+
+// 섹션별 지시사항 저장/불러오기
+function saveSectionInstructions(instructions) {
+  try { localStorage.setItem('section_instructions', JSON.stringify(instructions)); } catch(e) {}
+}
+function loadSectionInstructions() {
+  try {
+    const raw = localStorage.getItem('section_instructions');
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return {};
+}
+
+// ════════════════════════════════════════════════════════════════
+// APP STATE
+// ════════════════════════════════════════════════════════════════
+const _savedKey = loadKey();
+const _savedInstructions = loadSectionInstructions();
+const _savedModelConfig = loadModelConfig();
+const state = {
+  step: 'upload', // upload | analyzing | sections | generating | preview | modelsettings
+  apiKey: _savedKey,
+  showApiModal: !_savedKey,
+  modelConfig: _savedModelConfig,
+  openaiKey: loadOpenAIKey(),
+  productName: '',
+  imagePreview: null,
+  imageBase64: null,
+  imageMime: null,
+  analysis: null,
+  competitorData: null,
+  sectionInstructions: _savedInstructions,
+  sectionContents: {},
+  sectionImages: {},
+  progress: 0,
+  progressMsg: '',
+  error: '',
+  activeSectionEdit: null,
+  editingPreviewSection: null,
+  // ── Image Cuts ──
+  cuts: {
+    sourceBase64: null,
+    sourceMime: null,
+    sourcePreview: null,
+    prompts: loadPrompts(),
+    // 상세페이지 섹션 배치: { sectionId: cutId }
+    placement: JSON.parse(localStorage.getItem('cuts_placement') || '{}'),
+  },
+  // ── Automation ──
+  auto: {
+    driveConnected: false,
+    accessToken: null,
+    gdClientId: localStorage.getItem('gd_client_id') || '',
+    inputFolderId: localStorage.getItem('auto_input_folder_id') || '',
+    inputFolderName: localStorage.getItem('auto_input_folder_name') || '',
+    outputFolderId: localStorage.getItem('auto_output_folder_id') || '',
+    outputFolderName: localStorage.getItem('auto_output_folder_name') || '',
+    intervalMin: parseInt(localStorage.getItem('auto_interval') || '20'),
+    running: false,
+    queue: [],
+    completed: JSON.parse(localStorage.getItem('auto_completed') || '[]'),
+    currentItem: null,
+    currentProgress: 0,
+    currentMsg: '',
+    timerId: null,
+    nextRunAt: null,
+    totalProcessed: parseInt(localStorage.getItem('auto_total_processed') || '0'),
+    processedFileIds: new Set(JSON.parse(localStorage.getItem('auto_processed_ids') || '[]')),
+  },
+};
+
+let gemini = null;
+
+// ════════════════════════════════════════════════════════════════
+// RENDER ENGINE
+// ════════════════════════════════════════════════════════════════
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${state.showApiModal ? renderApiModal() : ''}
+    <div class="app">
+      ${renderSidebar()}
+      <main class="main">
+        <div class="container">
+          ${state.error ? renderError() : ''}
+          ${state.step === 'upload' ? renderUpload() : ''}
+          ${state.step === 'analyzing' ? renderAnalyzing() : ''}
+          ${state.step === 'sections' ? renderSections() : ''}
+          ${state.step === 'generating' ? renderGenerating() : ''}
+          ${state.step === 'preview' ? renderPreview() : ''}
+          ${state.step === 'imagecuts' ? renderImageCuts() : ''}
+          ${state.step === 'automation' ? renderAutomation() : ''}
+          ${state.step === 'modelsettings' ? renderModelSettings() : ''}
+        </div>
+      </main>
+    </div>
+  `;
+  bindEvents();
+}
+
+function renderApiModal() {
+  const hasSaved = !!state.apiKey;
+  return `<div class="modal-overlay" id="apiModal">
+    <div class="modal">
+      <h2>🔑 API 키 설정</h2>
+      <p>Google Gemini API 키를 입력하세요. <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--primary)">여기서 발급</a> 받을 수 있습니다.</p>
+      ${hasSaved ? '<p style="margin-top:-12px;margin-bottom:12px;font-size:12px;color:var(--ok)">✅ 이전에 저장한 API 키가 있습니다.</p>' : ''}
+      <div class="input-group">
+        <label class="label">Gemini API Key</label>
+        <div style="position:relative">
+          <input type="text" class="input" id="apiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="padding-right:40px;font-family:monospace;font-size:13px">
+          <span class="material-icons-outlined" id="toggleKeyVis" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="saveApiKey">
+          <span class="material-icons-outlined" style="font-size:18px">save</span>
+          저장 후 시작
+        </button>
+        ${hasSaved ? '<button class="btn-sm" id="skipApiModal" style="padding:12px 20px">기존 키로 계속</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderSidebar() {
+  const items = [
+    {icon:'upload_file',label:'이미지 업로드',step:'upload',always:true},
+    {icon:'analytics',label:'AI 분석',step:'analyzing',need:'analysis'},
+    {icon:'dashboard_customize',label:'섹션 설정',step:'sections',need:'analysis'},
+    {icon:'auto_fix_high',label:'자동 생성',step:'generating',need:'analysis'},
+    {icon:'preview',label:'미리보기',step:'preview',need:'preview'},
+    {icon:'auto_awesome',label:'이미지컷 생성',step:'imagecuts',always:true},
+    {icon:'cloud_sync',label:'자동화',step:'automation',always:true},
+    {icon:'tune',label:'모델 설정',step:'modelsettings',always:true},
+  ];
+  const cfg = state.modelConfig;
+  const prov = LLM_PROVIDERS[cfg.llmProvider];
+  const mdl = prov?.models.find(m => m.id === cfg.llmModel);
+  const imgMdl = IMAGE_MODELS.find(m => m.id === cfg.imageModel);
+
+  return `<aside class="sidebar">
+    <div class="logo">
+      <span class="logo-icon">✦</span>
+      <div><span class="logo-text">상세페이지</span><br><span class="logo-sub">Auto Generator</span></div>
+    </div>
+    <nav class="nav">
+      ${items.map(it => {
+        const active = state.step === it.step;
+        const disabled = !it.always && it.need === 'analysis' && !state.analysis && state.step !== it.step;
+        const disabledPreview = it.need === 'preview' && Object.keys(state.sectionContents).length === 0;
+        return `<button class="nav-item ${active?'active':''} ${disabled||disabledPreview?'disabled':''}" data-nav="${it.step}">
+          <span class="material-icons-outlined" style="font-size:20px">${it.icon}</span>
+          <span>${it.label}</span>
+        </button>`;
+      }).join('')}
+    </nav>
+    <!-- 현재 모델 표시 -->
+    <div style="padding:8px 12px;border-top:1px solid var(--border);font-size:10px;color:var(--text-m)">
+      <div style="margin-bottom:4px">LLM: <span style="color:${cfg.llmProvider==='openai'?'#10a37f':'var(--primary-h)'};font-weight:700">${mdl?.label||cfg.llmModel}</span></div>
+      <div>IMG: <span style="color:var(--orange);font-weight:700">${imgMdl?.label||cfg.imageModel}</span></div>
+    </div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border)">
+      <button class="btn-sm" id="changeApiKey" style="width:100%;justify-content:center">
+        <span class="material-icons-outlined" style="font-size:14px">key</span> API 키 변경
+      </button>
+    </div>
+  </aside>`;
+}
+
+function renderError() {
+  return `<div class="error-bar">
+    <span class="material-icons-outlined" style="font-size:18px">error_outline</span>
+    <span style="flex:1">${state.error}</span>
+    <span class="material-icons-outlined" style="font-size:18px;cursor:pointer" id="closeError">close</span>
+  </div>`;
+}
+
+function renderUpload() {
+  return `<div class="fade-in">
+    <h1 class="page-title">상세페이지 자동 생성</h1>
+    <p class="page-desc">제품 이미지를 업로드하면 AI가 분석하여 15개 섹션의 상세페이지를 자동으로 생성합니다.</p>
+
+    <div class="upload-area ${state.imagePreview?'has-image':''}" id="uploadArea">
+      ${state.imagePreview
+        ? `<img src="${state.imagePreview}" class="preview-img" alt="preview">`
+        : `<div style="display:flex;flex-direction:column;align-items:center">
+            <span class="material-icons-outlined" style="font-size:48px;color:var(--primary);margin-bottom:12px">cloud_upload</span>
+            <p style="font-size:16px;font-weight:500">클릭 또는 드래그하여 이미지 업로드</p>
+            <p style="font-size:13px;color:var(--text-m);margin-top:6px">JPG, PNG, WEBP 지원 (최대 50MB)</p>
+          </div>`
+      }
+      <input type="file" id="fileInput" accept="image/*" style="display:none">
+    </div>
+
+    <div class="input-group">
+      <label class="label">제품명 (선택사항)</label>
+      <input type="text" class="input" id="productNameInput" value="${state.productName}" placeholder="AI가 자동 감지하지만, 직접 입력하면 더 정확합니다">
+    </div>
+
+    <button class="btn-primary" id="startAnalysis" ${!state.imagePreview?'disabled':''}>
+      <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
+      AI 분석 시작
+    </button>
+
+    <div class="feature-grid">
+      <div class="feature-card"><div class="mi material-icons-outlined">visibility</div><h4>이미지 분석</h4><p>Gemini AI가 제품 특징을 자동 분석</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">search</div><h4>경쟁 분석</h4><p>유사 제품의 상세페이지 참조 검색</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">dashboard</div><h4>15섹션 자동생성</h4><p>헤더부터 CTA까지 풀 상세페이지</p></div>
+      <div class="feature-card"><div class="mi material-icons-outlined">image</div><h4>이미지 생성</h4><p>각 섹션에 맞는 이미지 AI 생성</p></div>
+    </div>
+  </div>`;
+}
+
+function renderAnalyzing() {
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh">
+    <div class="spinner-lg"></div>
+    <h2 style="font-size:22px;margin-top:24px;margin-bottom:8px">AI 분석 진행 중</h2>
+    <p style="color:var(--text-d);margin-bottom:24px">${state.progressMsg}</p>
+    <div class="progress-outer"><div class="progress-inner" style="width:${state.progress}%">${state.progress}%</div></div>
+  </div>`;
+}
+
+function renderSections() {
+  const a = state.analysis;
+  return `<div class="fade-in">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 class="page-title">섹션별 설정</h1>
+        <p class="page-desc">각 섹션에 원하는 지시사항을 입력하세요. 비워두면 AI가 자동으로 최적의 콘텐츠를 생성합니다.</p>
+      </div>
+      <button class="btn-primary" id="generateAll">
+        <span class="material-icons-outlined" style="font-size:20px">rocket_launch</span>
+        전체 생성 시작
+      </button>
+    </div>
+
+    ${a ? `<div class="analysis-box">
+      <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
+        ${state.imagePreview ? `<img src="${state.imagePreview}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">` : ''}
+        <div style="flex:1;min-width:200px">
+          <h3 style="font-size:18px;font-weight:700">${a.product_name||'분석된 제품'}</h3>
+          <p style="font-size:13px;color:var(--text-d);margin-top:4px">${a.category||''} ${a.mood?'| '+a.mood:''}</p>
+          <div style="margin-top:8px">${(a.key_features||[]).slice(0,5).map(f=>`<span class="tag">${f}</span>`).join('')}</div>
+        </div>
+      </div>
+      ${state.competitorData ? `<div style="margin-top:16px;padding:12px 16px;background:var(--bg);border-radius:8px;font-size:13px">
+        <span style="color:var(--text-m)">경쟁 분석:</span>
+        <span style="color:var(--cyan)">${state.competitorData.similar_products?.length||0}개 유사 제품 분석됨</span>
+        ${state.competitorData.recommended_approach ? `<br><span style="color:var(--text-d);margin-top:4px;display:block">${state.competitorData.recommended_approach}</span>` : ''}
+      </div>` : ''}
+    </div>` : ''}
+
+    <div class="section-grid">
+      ${SECTIONS.map(s => `
+        <div class="section-card" data-section-toggle="${s.id}">
+          <div class="head">
+            <span class="icon">${s.icon}</span>
+            <div class="info">
+              <h4>${s.n}. ${s.name}</h4>
+              <p>${s.desc}</p>
+            </div>
+            <span class="material-icons-outlined" style="color:var(--text-m);font-size:20px">${state.activeSectionEdit===s.id?'expand_less':'expand_more'}</span>
+          </div>
+          ${state.activeSectionEdit===s.id ? `<div style="margin-top:12px" onclick="event.stopPropagation()">
+            <textarea class="textarea" data-section-input="${s.id}" rows="3" placeholder="이 섹션에 원하는 내용을 입력하세요...\n예: ${s.purpose}">${state.sectionInstructions[s.id]||''}</textarea>
+          </div>` : ''}
+          ${state.sectionInstructions[s.id] && state.activeSectionEdit!==s.id ? `<div class="custom-badge">✎ 커스텀 지시사항 입력됨</div>` : ''}
+        </div>
+      `).join('')}
+    </div>
+
+    <div style="text-align:center;margin-top:32px">
+      <button class="btn-primary" id="generateAll2" style="padding:16px 48px;font-size:16px">
+        <span class="material-icons-outlined" style="font-size:22px">rocket_launch</span>
+        15개 섹션 일괄 생성 시작
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderGenerating() {
+  const icons = SECTIONS.map(s=>s.icon);
+  const doneCount = Object.keys(state.sectionContents).length;
+  return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh">
+    <div class="spinner-lg"></div>
+    <h2 style="font-size:24px;margin-top:32px;margin-bottom:8px">상세페이지 생성 중</h2>
+    <p style="color:var(--text-d);margin-bottom:24px;text-align:center">${state.progressMsg}</p>
+    <div class="progress-outer"><div class="progress-inner" style="width:${state.progress}%">${state.progress}%</div></div>
+    <p style="font-size:12px;color:var(--text-m);margin-top:16px">15개 섹션 × (콘텐츠 + 이미지) 생성 중 — Gemini API 호출</p>
+    <div class="gen-icons">
+      ${icons.map((ic,i) => `<div class="gen-icon ${i<doneCount?'done':''}">${ic}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderPreview() {
+  return `<div class="fade-in">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 class="page-title">상세페이지 미리보기</h1>
+        <p class="page-desc">생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.</p>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" id="exportHTML">
+          <span class="material-icons-outlined" style="font-size:18px">download</span>
+          HTML 내보내기
+        </button>
+      </div>
+    </div>
+
+    <div class="preview-wrap">
+      ${SECTIONS.map(s => {
+        const content = state.sectionContents[s.id];
+        if (!content) return `<div style="padding:20px;text-align:center;color:var(--text-m);border-bottom:1px solid var(--border)">
+          <span>${s.icon} ${s.n}. ${s.name} - 미생성</span>
+        </div>`;
+
+        const c = content.color_scheme || {};
+        const f = content.font_suggestion || {};
+        const img = state.sectionImages[s.id];
+        const isEditing = state.editingPreviewSection === s.id;
+
+        return `
+          <div style="position:relative">
+            <div class="section-ctrl">
+              <span style="font-size:16px">${s.icon}</span>
+              <span class="name">${s.n}. ${s.name}</span>
+              <div style="flex:1"></div>
+              <button class="btn-sm" data-edit-preview="${s.id}">
+                <span class="material-icons-outlined" style="font-size:16px">edit</span> 수정
+              </button>
+              <button class="btn-sm" data-regen="${s.id}">
+                <span class="material-icons-outlined" style="font-size:16px">refresh</span> 재생성
+              </button>
+            </div>
+            ${isEditing ? `<div class="edit-panel" onclick="event.stopPropagation()">
+              <textarea class="textarea" data-edit-input="${s.id}" rows="2" placeholder="이 섹션에 대한 수정 지시사항...">${state.sectionInstructions[s.id]||''}</textarea>
+              <button class="btn-sm" style="margin-top:8px" data-apply-edit="${s.id}">지시사항 적용 후 재생성</button>
+            </div>` : ''}
+            <div style="background:${c.background||'#FFFFFF'};padding:48px 20px;text-align:center">
+              <div style="max-width:860px;margin:0 auto">
+                <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};font-weight:${f.headline_weight||'700'};margin-bottom:10px">
+                  ${content.headline || `[${s.name}]`}
+                </h2>
+                <h3 style="font-size:18px;color:${c.text_secondary||'#666'};font-weight:400;margin-bottom:20px">
+                  ${content.subheadline || ''}
+                </h3>
+                ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin-bottom:20px">` : ''}
+                <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto">
+                  ${content.body_text || ''}
+                </p>
+                ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin-left:auto;margin-right:auto">
+                  ${content.extra_elements.map(e => `<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05)">• ${e}</div>`).join('')}
+                </div>` : ''}
+                ${content.cta_text ? `<div style="display:inline-block;margin-top:20px;padding:12px 36px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;font-weight:600;font-size:16px">${content.cta_text}</div>` : ''}
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// EVENT BINDING
+// ════════════════════════════════════════════════════════════════
+function bindEvents() {
+  // API Key modal
+  const saveBtn = document.getElementById('saveApiKey');
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      const key = document.getElementById('apiKeyInput').value.trim();
+      if (!key) return;
+      state.apiKey = key;
+      saveKey(key);
+      gemini = new GeminiAPI(key);
+      state.showApiModal = false;
+      render();
+    };
+  }
+
+  const skipBtn = document.getElementById('skipApiModal');
+  if (skipBtn) {
+    skipBtn.onclick = () => {
+      gemini = new GeminiAPI(state.apiKey);
+      state.showApiModal = false;
+      render();
+    };
+  }
+
+  const toggleVis = document.getElementById('toggleKeyVis');
+  if (toggleVis) {
+    toggleVis.onclick = () => {
+      const inp = document.getElementById('apiKeyInput');
+      if (inp.type === 'text') { inp.type = 'password'; toggleVis.textContent = 'visibility'; }
+      else { inp.type = 'text'; toggleVis.textContent = 'visibility_off'; }
+    };
+  }
+
+  const changeApiBtn = document.getElementById('changeApiKey');
+  if (changeApiBtn) {
+    changeApiBtn.onclick = () => { state.showApiModal = true; render(); };
+  }
+
+  // Navigation
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.onclick = () => {
+      if (btn.classList.contains('disabled')) return;
+      const target = btn.dataset.nav;
+      if (target === 'preview' && Object.keys(state.sectionContents).length === 0) return;
+      state.step = target;
+      render();
+    };
+  });
+
+  // Error close
+  const closeErr = document.getElementById('closeError');
+  if (closeErr) closeErr.onclick = () => { state.error = ''; render(); };
+
+  // File upload
+  const uploadArea = document.getElementById('uploadArea');
+  const fileInput = document.getElementById('fileInput');
+  if (uploadArea) {
+    uploadArea.onclick = () => fileInput.click();
+    uploadArea.ondragover = (e) => e.preventDefault();
+    uploadArea.ondrop = (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file && file.type.startsWith('image/')) handleFile(file);
+    };
+  }
+  if (fileInput) {
+    fileInput.onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+  }
+
+  // Product name
+  const nameInput = document.getElementById('productNameInput');
+  if (nameInput) nameInput.oninput = (e) => { state.productName = e.target.value; };
+
+  // Start analysis
+  const startBtn = document.getElementById('startAnalysis');
+  if (startBtn) startBtn.onclick = startAnalysis;
+
+  // Generate all
+  const genAll = document.getElementById('generateAll');
+  const genAll2 = document.getElementById('generateAll2');
+  if (genAll) genAll.onclick = generateAllSections;
+  if (genAll2) genAll2.onclick = generateAllSections;
+
+  // Section toggles
+  document.querySelectorAll('[data-section-toggle]').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.sectionToggle;
+      state.activeSectionEdit = state.activeSectionEdit === id ? null : id;
+      render();
+    };
+  });
+
+  // Section instruction inputs
+  document.querySelectorAll('[data-section-input]').forEach(el => {
+    el.oninput = (e) => { state.sectionInstructions[el.dataset.sectionInput] = e.target.value; saveSectionInstructions(state.sectionInstructions); };
+    el.onclick = (e) => e.stopPropagation();
+  });
+
+  // Preview edit
+  document.querySelectorAll('[data-edit-preview]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.editPreview;
+      state.editingPreviewSection = state.editingPreviewSection === id ? null : id;
+      render();
+    };
+  });
+
+  // Regenerate section
+  document.querySelectorAll('[data-regen]').forEach(btn => {
+    btn.onclick = () => regenerateSection(btn.dataset.regen);
+  });
+
+  // Apply edit
+  document.querySelectorAll('[data-apply-edit]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.applyEdit;
+      const textarea = document.querySelector(`[data-edit-input="${id}"]`);
+      if (textarea) state.sectionInstructions[id] = textarea.value;
+      saveSectionInstructions(state.sectionInstructions);
+      state.editingPreviewSection = null;
+      regenerateSection(id);
+    };
+  });
+
+  // Edit input
+  document.querySelectorAll('[data-edit-input]').forEach(el => {
+    el.oninput = (e) => { state.sectionInstructions[el.dataset.editInput] = e.target.value; saveSectionInstructions(state.sectionInstructions); };
+  });
+
+  // Export
+  const exportBtn = document.getElementById('exportHTML');
+  if (exportBtn) exportBtn.onclick = exportHTML;
+}
+
+// ════════════════════════════════════════════════════════════════
+// ACTIONS
+// ════════════════════════════════════════════════════════════════
+function handleFile(file) {
+  state.imageMime = file.type;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.imagePreview = e.target.result;
+    state.imageBase64 = e.target.result.split(',')[1];
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+
+async function startAnalysis() {
+  if (!state.imageBase64) { state.error = '제품 이미지를 업로드해주세요.'; render(); return; }
+
+  let llm;
+  try { llm = getLLMClient(); } catch(e) {
+    if (state.modelConfig.llmProvider === 'openai') { state.error = e.message; render(); return; }
+    state.showApiModal = true; render(); return;
+  }
+
+  state.error = '';
+  state.step = 'analyzing';
+  state.progress = 10;
+  state.progressMsg = '제품 이미지 AI 분석 중...';
+  render();
+
+  try {
+    // 1. Analyze image
+    const analysis = await llm.analyzeImage(state.imageBase64, state.imageMime);
+    if (state.productName) analysis.product_name = state.productName;
+    state.analysis = analysis;
+    state.progress = 25;
+    state.progressMsg = '유사 제품 검색 중...';
+    render();
+
+    // 2. Competitor search
+    try {
+      const competitors = await llm.searchSimilarProducts(
+        analysis.product_name || analysis.product_name_en,
+        analysis.category
+      );
+      state.competitorData = competitors;
+    } catch (e) {
+      state.competitorData = null;
+    }
+
+    state.progress = 35;
+    state.step = 'sections';
+    state.progressMsg = '분석 완료!';
+    render();
+  } catch (e) {
+    state.error = `분석 실패: ${e.message}`;
+    state.step = 'upload';
+    render();
+  }
+}
+
+async function generateAllSections() {
+  state.step = 'generating';
+  state.progress = 35;
+  state.sectionContents = {};
+  state.sectionImages = {};
+  render();
+
+  let llm;
+  try { llm = getLLMClient(); } catch(e) { state.error = e.message; state.step = 'sections'; render(); return; }
+  // gemini 인스턴스도 이미지 생성용으로 유지
+  const geminiForImage = new GeminiAPI(state.apiKey);
+
+  const total = SECTIONS.length;
+  const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
+
+  for (let i = 0; i < total; i++) {
+    const s = SECTIONS[i];
+    const pct = Math.round(35 + ((i / total) * 60));
+    state.progress = pct;
+    state.progressMsg = `[${i+1}/${total}] ${s.name} 콘텐츠 생성 중...`;
+    render();
+
+    try {
+      // Generate content via selected LLM
+      const content = await llm.generateSectionContent(
+        s, state.analysis, state.sectionInstructions[s.id] || '', compRef
+      );
+      state.sectionContents[s.id] = content;
+
+      // Try to generate image (항상 Gemini 이미지 모델 사용)
+      if (state.apiKey) {
+        state.progressMsg = `[${i+1}/${total}] ${s.name} 이미지 생성 중...`;
+        render();
+        try {
+          const imgPrompt = content.image_description || content.design_notes || s.purpose;
+          const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
+          if (img) state.sectionImages[s.id] = img;
+        } catch (e) {
+          console.warn(`Image gen failed for ${s.id}:`, e);
+        }
+      }
+
+    } catch (e) {
+      console.error(`Section ${s.id} failed:`, e);
+      state.sectionContents[s.id] = {
+        headline: s.name,
+        subheadline: '생성 실패 - 재시도해주세요',
+        body_text: e.message,
+        color_scheme: { background: '#FFF5F5', text_primary: '#C53030', text_secondary: '#E53E3E', accent: '#FC8181' },
+        font_suggestion: { headline_size: '32px', body_size: '14px' }
+      };
+    }
+
+    // Small delay for rate limiting
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  state.progress = 100;
+  state.progressMsg = '모든 섹션 생성 완료!';
+  state.step = 'preview';
+  render();
+}
+
+async function regenerateSection(sectionId) {
+  const s = SECTIONS.find(x => x.id === sectionId);
+  if (!s) return;
+
+  state.progressMsg = `${s.name} 재생성 중...`;
+  const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
+
+  let llm;
+  try { llm = getLLMClient(); } catch(e) { state.error = e.message; render(); return; }
+
+  try {
+    const content = await llm.generateSectionContent(
+      s, state.analysis, state.sectionInstructions[sectionId] || '', compRef
+    );
+    state.sectionContents[sectionId] = content;
+
+    if (state.apiKey) {
+      try {
+        const geminiForImage = new GeminiAPI(state.apiKey);
+        const imgPrompt = content.image_description || content.design_notes || s.purpose;
+        const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
+        if (img) state.sectionImages[sectionId] = img;
+      } catch (e) {}
+    }
+
+    render();
+  } catch (e) {
+    state.error = `재생성 실패: ${e.message}`;
+    render();
+  }
+}
+
+function exportHTML() {
+  const product = state.analysis || {};
+  let sectionsHtml = '';
+
+  for (const s of SECTIONS) {
+    const content = state.sectionContents[s.id];
+    if (!content) continue;
+    const c = content.color_scheme || {};
+    const f = content.font_suggestion || {};
+    const img = state.sectionImages[s.id];
+
+    sectionsHtml += `
+    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
+      <div style="max-width:860px;margin:0 auto;">
+        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};">
+          ${content.headline||''}
+        </h2>
+        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;">
+          ${content.subheadline||''}
+        </h3>
+        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
+        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto;">
+          ${content.body_text||''}
+        </p>
+        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">
+          ${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}
+        </div>` : ''}
+        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;">${content.cta_text}</a>` : ''}
+      </div>
+    </section>`;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${product.product_name||'상세페이지'}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Noto Sans KR',sans-serif;color:#333}
+        img{max-width:100%;height:auto}
+        section{width:100%}
+    </style>
+</head>
+<body>${sectionsHtml}</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${product.product_name||'detail-page'}_상세페이지.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════════════════════
+// GOOGLE DRIVE SERVICE
+// ════════════════════════════════════════════════════════════════
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const GD_CLIENT_ID = localStorage.getItem('gd_client_id') || '';
+
+// URL이든 ID만이든 폴더 ID를 추출
+function extractFolderId(input) {
+  if (!input) return '';
+  input = input.trim();
+  // https://drive.google.com/drive/folders/XXXXX?usp=... 형태
+  const m1 = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (m1) return m1[1];
+  // https://drive.google.com/drive/u/0/folders/XXXXX 형태
+  const m2 = input.match(/drive[^"]*folders\/([a-zA-Z0-9_-]+)/);
+  if (m2) return m2[1];
+  // 이미 순수 ID (공백, 슬래시 없음)
+  if (/^[a-zA-Z0-9_-]+$/.test(input)) return input;
+  return input;
+}
+
+class DriveService {
+  constructor(token) {
+    this.token = token;
+    this.tokenExpiresAt = Date.now() + 3500 * 1000; // ~58분 후 만료 예상
+  }
+  headers() { return { 'Authorization': `Bearer ${this.token}` }; }
+
+  // 토큰 만료 체크 후 자동 갱신
+  async ensureToken() {
+    if (Date.now() > this.tokenExpiresAt) {
+      autoLog('info', '토큰 만료됨 — 자동 갱신 중...');
+      await refreshDriveToken();
+    }
+  }
+
+  // 401 에러 시 토큰 갱신 후 재시도하는 래퍼
+  async fetchWithRetry(url, options = {}) {
+    await this.ensureToken();
+    let res = await fetch(url, { ...options, headers: { ...this.headers(), ...(options.headers||{}) } });
+    if (res.status === 401) {
+      autoLog('info', '401 인증 만료 — 토큰 갱신 후 재시도...');
+      await refreshDriveToken();
+      res = await fetch(url, { ...options, headers: { ...this.headers(), ...(options.headers||{}) } });
+    }
+    return res;
+  }
+
+  async listImages(folderId) {
+    const q = encodeURIComponent(`'${folderId}' in parents and mimeType contains 'image/' and trashed=false`);
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files?q=${q}&fields=files(id,name,mimeType,createdTime,size)&orderBy=createdTime&pageSize=100`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.files || [];
+  }
+
+  async downloadFile(fileId) {
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files/${fileId}?alt=media`);
+    if (!res.ok) throw new Error('Download failed');
+    const blob = await res.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ base64: reader.result.split(',')[1], dataUrl: reader.result, mime: blob.type });
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async uploadHtml(folderId, fileName, htmlContent) {
+    await this.ensureToken();
+    const metadata = { name: fileName, mimeType: 'text/html', parents: [folderId] };
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([htmlContent], { type: 'text/html' }));
+
+    let res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${this.token}` }, body: form
+    });
+    if (res.status === 401) {
+      autoLog('info', '업로드 401 — 토큰 갱신 후 재시도...');
+      await refreshDriveToken();
+      const form2 = new FormData();
+      form2.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form2.append('file', new Blob([htmlContent], { type: 'text/html' }));
+      res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${this.token}` }, body: form2
+      });
+    }
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data;
+  }
+
+  async getFolderName(folderId) {
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files/${folderId}?fields=name`);
+    const data = await res.json();
+    return data.name || folderId;
+  }
+}
+
+let driveService = null;
+let tokenClient = null;
+
+// 토큰 자동 갱신 — 사용자 팝업 없이 silent 시도, 실패 시 팝업
+function refreshDriveToken() {
+  return new Promise((resolve, reject) => {
+    const clientId = state.auto.gdClientId || localStorage.getItem('gd_client_id') || '';
+    if (!clientId || !google?.accounts?.oauth2) {
+      reject(new Error('Google OAuth 초기화 안 됨'));
+      return;
+    }
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      prompt: '',  // silent 갱신 시도
+      callback: (resp) => {
+        if (resp.access_token) {
+          state.auto.accessToken = resp.access_token;
+          state.auto.driveConnected = true;
+          if (driveService) {
+            driveService.token = resp.access_token;
+            driveService.tokenExpiresAt = Date.now() + 3500 * 1000;
+          } else {
+            driveService = new DriveService(resp.access_token);
+          }
+          autoLog('ok', '토큰 자동 갱신 완료');
+          resolve();
+        } else {
+          autoLog('err', '토큰 갱신 실패 — Google Drive 재연결 필요');
+          state.auto.driveConnected = false;
+          render();
+          reject(new Error('Token refresh failed'));
+        }
+      },
+    });
+    client.requestAccessToken();
+  });
+}
+
+function initGoogleAuth() {
+  const clientId = state.auto.gdClientId || GD_CLIENT_ID;
+  if (!clientId) return;
+  try {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp) => {
+        if (resp.access_token) {
+          state.auto.accessToken = resp.access_token;
+          state.auto.driveConnected = true;
+          driveService = new DriveService(resp.access_token);
+          autoLog('info', 'Google Drive 연결 완료');
+          render();
+        }
+      },
+    });
+  } catch(e) { console.warn('Google auth init failed:', e); }
+}
+
+function connectDrive() {
+  const clientId = document.getElementById('gdClientId')?.value.trim() || GD_CLIENT_ID;
+  if (!clientId) {
+    state.error = 'Google Cloud OAuth Client ID를 입력하세요.';
+    render();
+    return;
+  }
+  localStorage.setItem('gd_client_id', clientId);
+  state.auto.gdClientId = clientId;
+  try {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
+      callback: (resp) => {
+        if (resp.error) {
+          state.error = `Drive 인증 실패: ${resp.error}`;
+          render();
+          return;
+        }
+        state.auto.accessToken = resp.access_token;
+        state.auto.driveConnected = true;
+        driveService = new DriveService(resp.access_token);
+        autoLog('info', 'Google Drive 연결 완료');
+        render();
+      },
+    });
+    tokenClient.requestAccessToken();
+  } catch(e) {
+    state.error = `Google 인증 오류: ${e.message}`;
+    render();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION LOG
+// ════════════════════════════════════════════════════════════════
+const autoLogs = [];
+function autoLog(type, msg) {
+  const t = new Date().toLocaleTimeString('ko-KR');
+  autoLogs.unshift({ type, msg, time: t });
+  if (autoLogs.length > 200) autoLogs.length = 200;
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION RENDER
+// ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// MODEL SETTINGS UI
+// ════════════════════════════════════════════════════════════════
+function renderModelSettings() {
+  const cfg = state.modelConfig;
+  const geminiProv = LLM_PROVIDERS.gemini;
+  const openaiProv = LLM_PROVIDERS.openai;
+
+  const renderModelCard = (m, selectedId, colorClass) => {
+    const sel = m.id === selectedId;
+    return `<div class="model-card ${sel ? colorClass : ''}" data-pick-model="${m.id}">
+      <div class="mc-label">${m.label}</div>
+      <div class="mc-id">${m.id}</div>
+      <div class="mc-desc">${m.desc}</div>
+      <div class="mc-price">in $${m.inputPerM}/M · out $${m.outputPerM}/M</div>
+      ${sel ? '<div style="margin-top:6px;font-size:11px;color:var(--ok);font-weight:700">✔ 선택됨</div>' : ''}
+    </div>`;
+  };
+
+  const renderImgModelCard = (m) => {
+    const sel = m.id === cfg.imageModel;
+    return `<div class="model-card ${sel ? 'selected' : ''}" data-pick-imgmodel="${m.id}">
+      <div class="mc-label">${m.label}</div>
+      <div class="mc-id">${m.id}</div>
+      <div class="mc-desc">${m.desc}</div>
+      <div class="mc-price">in $${m.inputPerM}/M · out $${m.outputPerM}/M · img $${m.imageOut}/장</div>
+      ${sel ? '<div style="margin-top:6px;font-size:11px;color:var(--ok);font-weight:700">✔ 선택됨</div>' : ''}
+    </div>`;
+  };
+
+  return `<div class="fade-in">
+    <h1 class="page-title">⚙️ 모델 설정</h1>
+    <p class="page-desc">LLM 프로바이더와 모델을 선택하세요. 이미지 생성은 항상 Gemini 모델을 사용합니다.</p>
+
+    <!-- ── LLM 프로바이더 선택 ── -->
+    <div class="settings-section">
+      <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--primary)">psychology</span> LLM 프로바이더 (텍스트/분석)</h3>
+
+      <div class="provider-tabs">
+        <div class="provider-tab ${cfg.llmProvider==='gemini' ? 'active-gemini' : ''}" data-pick-provider="gemini">
+          <div class="pt-icon" style="color:#6366f1">✦</div>
+          <div class="pt-label">Google Gemini</div>
+          <div class="pt-sub">Gemini API Key 사용</div>
+        </div>
+        <div class="provider-tab ${cfg.llmProvider==='openai' ? 'active-openai' : ''}" data-pick-provider="openai">
+          <div class="pt-icon" style="color:#10a37f">◆</div>
+          <div class="pt-label">OpenAI ChatGPT</div>
+          <div class="pt-sub">OpenAI API Key 사용</div>
+        </div>
+      </div>
+
+      <!-- Gemini LLM 모델 목록 -->
+      ${cfg.llmProvider === 'gemini' ? `
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:10px">Gemini 텍스트 모델 선택</p>
+      <div class="model-list">
+        ${geminiProv.models.map(m => renderModelCard(m, cfg.llmModel, 'selected')).join('')}
+      </div>
+      <div class="input-group">
+        <label class="label">Gemini API Key</label>
+        <div style="position:relative">
+          <input type="password" class="input" id="geminiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <span class="material-icons-outlined" id="toggleGeminiKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      ` : `
+      <!-- OpenAI LLM 모델 목록 -->
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:10px">OpenAI 모델 선택</p>
+      <div class="model-list">
+        ${openaiProv.models.map(m => renderModelCard(m, cfg.llmModel, 'selected-green')).join('')}
+      </div>
+      <div class="input-group">
+        <label class="label">OpenAI API Key</label>
+        <div style="position:relative">
+          <input type="password" class="input" id="openaiKeyInput" value="${state.openaiKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <span class="material-icons-outlined" id="toggleOpenAIKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      `}
+    </div>
+
+    <!-- ── 이미지 생성 모델 ── -->
+    <div class="settings-section">
+      <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--orange)">image</span> 이미지 생성 모델 (Gemini 전용)</h3>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지 및 이미지컷 생성 시 사용됩니다. Gemini API Key가 필요합니다.</p>
+      <div class="model-list">
+        ${IMAGE_MODELS.map(m => renderImgModelCard(m)).join('')}
+      </div>
+      ${cfg.llmProvider === 'openai' ? `
+      <div class="input-group" style="margin-top:4px">
+        <label class="label">이미지 생성용 Gemini API Key (OpenAI 사용 시에도 필요)</label>
+        <div style="position:relative">
+          <input type="password" class="input" id="geminiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <span class="material-icons-outlined" id="toggleGeminiKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      ` : ''}
+    </div>
+
+    <!-- ── 이미지 크기(픽셀) 설정 ── -->
+    <div class="settings-section">
+      <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--cyan)">photo_size_select_large</span> 이미지 출력 크기</h3>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:14px">
+        AI가 생성한 이미지를 지정한 픽셀로 <b>정확하게</b> 출력합니다. (Canvas 리사이즈 적용)<br>
+        auto 모드는 AI가 자유롭게 크기를 결정합니다.
+      </p>
+
+      <!-- 모드 토글 -->
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <button class="provider-tab ${cfg.imageSizeMode==='auto' ? 'active-gemini' : ''}"
+          id="imgSizeModeAuto" style="flex:1;padding:10px">
+          <div class="pt-icon" style="font-size:16px;color:var(--text-d)">🔄</div>
+          <div class="pt-label" style="font-size:13px">auto</div>
+          <div class="pt-sub">AI가 크기 자동 결정</div>
+        </button>
+        <button class="provider-tab ${cfg.imageSizeMode==='custom' ? 'active-gemini' : ''}"
+          id="imgSizeModeCustom" style="flex:1;padding:10px">
+          <div class="pt-icon" style="font-size:16px;color:var(--cyan)">📐</div>
+          <div class="pt-label" style="font-size:13px">custom px</div>
+          <div class="pt-sub">정확한 픽셀 지정</div>
+        </button>
+      </div>
+
+      <!-- 픽셀 입력 (custom 모드에서만 활성화) -->
+      <div style="display:flex;gap:12px;align-items:flex-end;${cfg.imageSizeMode!=='custom'?'opacity:.4;pointer-events:none':''}">
+        <div class="input-group" style="margin-bottom:0;flex:1">
+          <label class="label">가로 (W) px</label>
+          <input type="number" class="input" id="imgWidthInput"
+            value="${cfg.imageWidth || 860}" min="64" max="4096" step="1"
+            placeholder="860" style="font-family:monospace"
+            ${cfg.imageSizeMode!=='custom' ? 'disabled' : ''}>
+        </div>
+        <div style="padding-bottom:10px;color:var(--text-m);font-size:18px">×</div>
+        <div class="input-group" style="margin-bottom:0;flex:1">
+          <label class="label">세로 (H) px <span style="font-weight:400;color:var(--text-m)">(비워두면 비율 유지)</span></label>
+          <input type="number" class="input" id="imgHeightInput"
+            value="${cfg.imageHeight || ''}" min="64" max="4096" step="1"
+            placeholder="비율 유지" style="font-family:monospace"
+            ${cfg.imageSizeMode!=='custom' ? 'disabled' : ''}>
+        </div>
+      </div>
+
+      ${cfg.imageSizeMode === 'custom' ? `
+      <div style="margin-top:10px;padding:8px 12px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.2);border-radius:6px;font-size:12px;color:var(--cyan)">
+        📐 설정됨: ${cfg.imageWidth}px × ${cfg.imageHeight ? cfg.imageHeight+'px' : '(비율 유지)'}
+        — AI 생성 후 Canvas로 정확히 리사이즈됩니다
+      </div>` : `
+      <div style="margin-top:10px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-m)">
+        🔄 auto 모드 — AI가 자유롭게 크기를 결정합니다
+      </div>`}
+    </div>
+
+    <!-- ── 저장 버튼 ── -->
+    <div style="display:flex;gap:12px;align-items:center">
+      <button class="btn-primary" id="saveModelSettings">
+        <span class="material-icons-outlined" style="font-size:18px">save</span>
+        설정 저장
+      </button>
+      <div id="modelSaveMsg" style="font-size:13px;color:var(--ok);display:none">✅ 저장되었습니다!</div>
+    </div>
+
+    <!-- ── 현재 설정 요약 ── -->
+    <div style="margin-top:24px;padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;font-size:12px;line-height:2">
+      <div style="font-weight:700;margin-bottom:8px;color:var(--text-d)">현재 설정 요약</div>
+      <div>LLM 프로바이더: <b style="color:${cfg.llmProvider==='openai'?'#10a37f':'var(--primary-h)'}">${LLM_PROVIDERS[cfg.llmProvider]?.label}</b></div>
+      <div>LLM 모델: <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px">${cfg.llmModel}</code></div>
+      <div>이미지 모델: <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px">${cfg.imageModel}</code></div>
+      <div>이미지 크기: <b style="color:var(--cyan)">${cfg.imageSizeMode === 'custom' ? (cfg.imageWidth + 'px × ' + (cfg.imageHeight ? cfg.imageHeight+'px' : '비율유지')) : 'auto'}</b></div>
+      <div>Gemini Key: <span style="color:${state.apiKey?'var(--ok)':'var(--err)'}">${state.apiKey ? '✅ 설정됨' : '❌ 미설정'}</span></div>
+      <div>OpenAI Key: <span style="color:${state.openaiKey?'var(--ok)':'var(--text-m)'}">${state.openaiKey ? '✅ 설정됨' : '— 미설정'}</span></div>
+    </div>
+  </div>`;
+}
+
+function renderAutomation() {
+  const a = state.auto;
+  const connected = a.driveConnected;
+  const savedClientId = localStorage.getItem('gd_client_id') || '';
+
+  return `<div class="fade-in">
+    <h1 class="page-title">🔄 자동화 시스템</h1>
+    <p class="page-desc">구글 드라이브 폴더를 연결하면 설정한 간격마다 자동으로 상세페이지를 생성합니다.</p>
+
+    <!-- Drive Connection -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--primary)">cloud</span> Google Drive 연결
+        ${connected ? '<span class="auto-status running">● 연결됨</span>' : '<span class="auto-status stopped">● 미연결</span>'}
+      </h3>
+      ${!connected ? `
+        <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px">
+          <p style="font-size:13px;color:var(--warn);font-weight:600;margin-bottom:8px">⚠️ 반드시 start.bat으로 실행하세요</p>
+          <p style="font-size:12px;color:var(--text-d);margin-bottom:4px">Google OAuth는 <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;color:var(--cyan)">http://localhost:8080</code> 에서만 작동합니다.</p>
+          <p style="font-size:11px;color:var(--text-m)">file:///로 열면 인증이 차단됩니다. start.bat 더블클릭 → 브라우저에서 localhost:8080 접속</p>
+        </div>
+        <p style="font-size:13px;color:var(--text-d);margin-bottom:12px">
+          <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:var(--primary)">Google Cloud Console</a>에서 OAuth 2.0 Client ID를 발급 받으세요.
+        </p>
+        <div style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;font-size:12px;color:var(--text-d)">
+          <p style="font-weight:600;margin-bottom:6px">📋 설정 방법:</p>
+          <p>1. 유형: <strong>웹 애플리케이션</strong></p>
+          <p>2. 승인된 JavaScript 원본 추가:</p>
+          <code style="display:block;background:var(--bg-card);padding:8px 12px;border-radius:6px;margin:6px 0;color:var(--cyan);font-size:13px">http://localhost:8080</code>
+          <p>3. Google Drive API 활성화 필요 (<a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:var(--primary)">여기서 활성화</a>)</p>
+        </div>
+        <div class="input-group" style="margin-bottom:12px">
+          <label class="label">OAuth Client ID</label>
+          <input type="text" class="input" id="gdClientId" value="${savedClientId}" placeholder="xxxx.apps.googleusercontent.com" style="font-size:12px;font-family:monospace">
+        </div>
+        <button class="btn-primary" id="connectDriveBtn">
+          <span class="material-icons-outlined" style="font-size:18px">login</span>
+          Google Drive 연결
+        </button>
+      ` : `
+        <p style="font-size:13px;color:var(--ok)">✅ Google Drive가 연결되었습니다.</p>
+      `}
+    </div>
+
+    ${connected ? `
+    <!-- Folder Settings -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="auto-card">
+        <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--orange)">folder_open</span> 입력 폴더 (제품 이미지)</h3>
+        <div class="input-group" style="margin-bottom:8px">
+          <label class="label">Google Drive 폴더 ID</label>
+          <input type="text" class="input" id="inputFolderId" value="${a.inputFolderId}" placeholder="폴더 URL 전체 또는 ID 붙여넣기" style="font-size:12px;font-family:monospace">
+        </div>
+        ${a.inputFolderName ? `<p style="font-size:12px;color:var(--ok)">📁 ${a.inputFolderName}</p>` : ''}
+        <button class="btn-sm" id="setInputFolder" style="margin-top:4px">
+          <span class="material-icons-outlined" style="font-size:14px">check</span> 폴더 설정
+        </button>
+        <p style="font-size:11px;color:var(--text-m);margin-top:8px">
+          💡 드라이브 폴더 열고 URL에서 <code>folders/</code> 뒤의 문자열이 ID입니다
+        </p>
+      </div>
+
+      <div class="auto-card">
+        <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--cyan)">drive_file_move</span> 출력 폴더 (상세페이지)</h3>
+        <div class="input-group" style="margin-bottom:8px">
+          <label class="label">Google Drive 폴더 ID</label>
+          <input type="text" class="input" id="outputFolderId" value="${a.outputFolderId}" placeholder="폴더 URL 전체 또는 ID 붙여넣기" style="font-size:12px;font-family:monospace">
+        </div>
+        ${a.outputFolderName ? `<p style="font-size:12px;color:var(--ok)">📁 ${a.outputFolderName}</p>` : ''}
+        <button class="btn-sm" id="setOutputFolder" style="margin-top:4px">
+          <span class="material-icons-outlined" style="font-size:14px">check</span> 폴더 설정
+        </button>
+      </div>
+    </div>
+
+    <!-- Interval & Control -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--warn)">timer</span> 실행 간격</h3>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+        <input type="range" min="5" max="60" step="5" value="${a.intervalMin}" class="interval-slider" id="intervalSlider">
+        <span style="font-size:24px;font-weight:700;color:var(--primary);min-width:60px;text-align:center" id="intervalDisplay">${a.intervalMin}분</span>
+      </div>
+      <p style="font-size:12px;color:var(--text-m)">입력 폴더에서 아직 처리 안 된 이미지를 1장씩 가져와 15섹션 상세페이지를 생성 후 출력 폴더에 저장합니다.</p>
+
+      <div style="display:flex;gap:10px;margin-top:16px;align-items:center">
+        ${!a.running ? `
+          <button class="btn-primary" id="startAutoBtn" ${!a.inputFolderId||!a.outputFolderId?'disabled':''}>
+            <span class="material-icons-outlined" style="font-size:18px">play_arrow</span>
+            자동화 시작
+          </button>
+        ` : `
+          <button class="btn-primary" id="stopAutoBtn" style="background:var(--err)">
+            <span class="material-icons-outlined" style="font-size:18px">stop</span>
+            자동화 중지
+          </button>
+        `}
+        <button class="btn-sm" id="runOnceBtn" ${!a.inputFolderId||!a.outputFolderId||a.running?'disabled':''} style="padding:10px 16px">
+          <span class="material-icons-outlined" style="font-size:16px">play_circle</span>
+          1회 즉시 실행
+        </button>
+        <button class="btn-sm" id="resetProcessedBtn" style="padding:10px 16px">
+          <span class="material-icons-outlined" style="font-size:16px">restart_alt</span>
+          처리기록 초기화
+        </button>
+        ${a.running ? `<span class="auto-status running" style="margin-left:auto">● 작동 중 ${a.nextRunAt ? '| 다음 실행: '+a.nextRunAt : ''}</span>` : ''}
+      </div>
+    </div>
+
+    <!-- Current Processing -->
+    ${a.currentItem ? `
+    <div class="auto-card" style="border-color:var(--warn)">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--warn)">hourglass_top</span> 현재 처리 중</h3>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <span style="font-size:13px;font-weight:600">${a.currentItem.name}</span>
+        <span style="font-size:12px;color:var(--text-m)">${a.currentMsg}</span>
+      </div>
+      <div class="progress-outer" style="max-width:100%"><div class="progress-inner" style="width:${a.currentProgress}%">${a.currentProgress}%</div></div>
+    </div>
+    ` : ''}
+
+    <!-- Stats -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--primary)">${a.totalProcessed}</div>
+        <div style="font-size:12px;color:var(--text-d)">총 처리 완료</div>
+      </div>
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--warn)">${a.queue.length}</div>
+        <div style="font-size:12px;color:var(--text-d)">대기 중</div>
+      </div>
+      <div class="auto-card" style="text-align:center">
+        <div style="font-size:32px;font-weight:900;color:var(--ok)">${a.processedFileIds.size}</div>
+        <div style="font-size:12px;color:var(--text-d)">누적 처리 (스킵)</div>
+      </div>
+    </div>
+
+    <!-- Recent Completed -->
+    ${a.completed.length ? `
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--ok)">check_circle</span> 최근 완료</h3>
+      ${a.completed.slice(0, 10).map(c => `
+        <div class="queue-item">
+          <div class="q-status ${c.error?'error':'done'}"></div>
+          <span style="flex:1">${c.name}</span>
+          <span style="font-size:11px;color:var(--text-m)">${c.finishedAt || ''}</span>
+          ${c.error ? `<span style="font-size:11px;color:var(--err)">${c.error}</span>` : '<span style="font-size:11px;color:var(--ok)">✅ 완료</span>'}
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <!-- Log -->
+    <div class="auto-card">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--text-d)">terminal</span> 로그</h3>
+      <div class="log-box" id="autoLogBox">
+        ${autoLogs.length === 0 ? '<div class="log-line" style="color:var(--text-m)">아직 로그가 없습니다.</div>' : ''}
+        ${autoLogs.slice(0, 50).map(l => `<div class="log-line ${l.type}">[${l.time}] ${l.msg}</div>`).join('')}
+      </div>
+    </div>
+    ` : `
+    <div class="auto-card" style="text-align:center;padding:40px">
+      <span class="material-icons-outlined" style="font-size:48px;color:var(--text-m);margin-bottom:12px">cloud_off</span>
+      <p style="color:var(--text-d)">Google Drive를 먼저 연결하세요.</p>
+    </div>
+    `}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// AUTOMATION ENGINE
+// ════════════════════════════════════════════════════════════════
+async function autoProcessOne() {
+  if (!driveService) {
+    autoLog('err', 'Drive가 연결되지 않음');
+    return;
+  }
+  if (!state.auto.inputFolderId || !state.auto.outputFolderId) {
+    autoLog('err', '입력/출력 폴더가 설정되지 않음');
+    return;
+  }
+
+  let autoLLM;
+  try { autoLLM = getLLMClient(); } catch(e) { autoLog('err', e.message); return; }
+  const autoGeminiImage = new GeminiAPI(state.apiKey);
+
+  // 1. List images in input folder
+  autoLog('info', '입력 폴더 스캔 중...');
+  state.auto.currentMsg = '폴더 스캔 중...';
+  state.auto.currentProgress = 0;
+  render();
+
+  let files;
+  try {
+    files = await driveService.listImages(state.auto.inputFolderId);
+  } catch(e) {
+    // 인증 만료인 경우 자동 갱신 시도
+    if (e.message.includes('invalid authentication') || e.message.includes('401') || e.message.includes('Request had invalid')) {
+      autoLog('info', '토큰 만료 감지 — 자동 갱신 시도...');
+      try {
+        await refreshDriveToken();
+        files = await driveService.listImages(state.auto.inputFolderId);
+      } catch(e2) {
+        autoLog('err', `토큰 갱신 후에도 실패: ${e2.message}`);
+        state.auto.currentItem = null;
+        render();
+        return;
+      }
+    } else {
+      autoLog('err', `폴더 스캔 실패: ${e.message}`);
+      state.auto.currentItem = null;
+      render();
+      return;
+    }
+  }
+
+  // 2. Filter already processed
+  const unprocessed = files.filter(f => !state.auto.processedFileIds.has(f.id));
+  autoLog('info', `전체 ${files.length}장, 미처리 ${unprocessed.length}장`);
+
+  if (unprocessed.length === 0) {
+    autoLog('info', '처리할 새 이미지가 없습니다. 대기합니다.');
+    state.auto.currentItem = null;
+    render();
+    return;
+  }
+
+  // 3. Pick the first unprocessed file
+  const file = unprocessed[0];
+  state.auto.currentItem = { id: file.id, name: file.name };
+  state.auto.currentProgress = 5;
+  state.auto.currentMsg = `${file.name} 다운로드 중...`;
+  autoLog('info', `처리 시작: ${file.name}`);
+  render();
+
+  try {
+    // 4. Download the image
+    const imgData = await driveService.downloadFile(file.id);
+    state.auto.currentProgress = 15;
+    state.auto.currentMsg = 'AI 분석 중...';
+    render();
+
+    // 5. Analyze with selected LLM
+    const analysis = await autoLLM.analyzeImage(imgData.base64, imgData.mime);
+    autoLog('ok', `분석 완료: ${analysis.product_name || file.name}`);
+    state.auto.currentProgress = 25;
+    state.auto.currentMsg = '경쟁 분석 중...';
+    render();
+
+    // 6. Competitor search
+    let compRef = '';
+    try {
+      const comp = await autoLLM.searchSimilarProducts(analysis.product_name || analysis.product_name_en, analysis.category);
+      compRef = JSON.stringify(comp).substring(0, 1000);
+      autoLog('ok', `경쟁 분석 완료: ${comp.similar_products?.length || 0}개`);
+    } catch(e) {
+      autoLog('err', '경쟁 분석 스킵: ' + e.message);
+    }
+    state.auto.currentProgress = 30;
+
+    // 7. Generate all 15 sections
+    const sectionContents = {};
+    const sectionImages = {};
+    const instructions = state.sectionInstructions; // use saved instructions
+
+    for (let i = 0; i < SECTIONS.length; i++) {
+      const s = SECTIONS[i];
+      const pct = Math.round(30 + ((i / SECTIONS.length) * 60));
+      state.auto.currentProgress = pct;
+      state.auto.currentMsg = `[${i+1}/15] ${s.name} 생성 중...`;
+      render();
+
+      try {
+        const content = await autoLLM.generateSectionContent(s, analysis, instructions[s.id] || '', compRef);
+        sectionContents[s.id] = content;
+
+        // Image (항상 Gemini 이미지 모델)
+        if (state.apiKey) {
+          try {
+            const imgPrompt = content.image_description || content.design_notes || s.purpose;
+            const img = await autoGeminiImage.generateImage(imgPrompt, imgData.base64, imgData.mime);
+            if (img) sectionImages[s.id] = img;
+          } catch(e) {}
+        }
+      } catch(e) {
+        autoLog('err', `섹션 ${s.name} 실패: ${e.message}`);
+        sectionContents[s.id] = { headline: s.name, subheadline: '생성 실패', body_text: e.message, color_scheme: {background:'#fff',text_primary:'#c00',text_secondary:'#e00'}, font_suggestion:{headline_size:'32px',body_size:'14px'} };
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    state.auto.currentProgress = 92;
+    state.auto.currentMsg = 'HTML 생성 및 업로드 중...';
+    render();
+
+    // 8. Build HTML
+    const htmlContent = buildExportHtml(analysis, sectionContents, sectionImages);
+
+    // 9. Upload to Drive
+    const productName = analysis.product_name || file.name.replace(/\.[^.]+$/, '');
+    const fileName = `${productName}_상세페이지_${new Date().toISOString().slice(0,10)}.html`;
+    const uploaded = await driveService.uploadHtml(state.auto.outputFolderId, fileName, htmlContent);
+    autoLog('ok', `✅ 업로드 완료: ${fileName}`);
+
+    // 10. Mark as processed
+    state.auto.processedFileIds.add(file.id);
+    localStorage.setItem('auto_processed_ids', JSON.stringify([...state.auto.processedFileIds]));
+    state.auto.totalProcessed++;
+    localStorage.setItem('auto_total_processed', state.auto.totalProcessed);
+    state.auto.completed.unshift({ name: file.name, finishedAt: new Date().toLocaleTimeString('ko-KR'), error: null });
+    if (state.auto.completed.length > 50) state.auto.completed.length = 50;
+    localStorage.setItem('auto_completed', JSON.stringify(state.auto.completed));
+    state.auto.currentItem = null;
+    state.auto.currentProgress = 100;
+    state.auto.currentMsg = '';
+    render();
+
+  } catch(e) {
+    autoLog('err', `처리 실패 (${file.name}): ${e.message}`);
+    state.auto.completed.unshift({ name: file.name, finishedAt: new Date().toLocaleTimeString('ko-KR'), error: e.message });
+    if (state.auto.completed.length > 50) state.auto.completed.length = 50;
+    localStorage.setItem('auto_completed', JSON.stringify(state.auto.completed));
+    state.auto.currentItem = null;
+    render();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE CUTS — RENDER
+// ════════════════════════════════════════════════════════════════
+function renderImageCuts() {
+  const c = state.cuts;
+  const hasSrc = !!c.sourcePreview;
+  const anyResult = c.prompts.some(p => p.result);
+
+  return `<div class="fade-in">
+    <h1 class="page-title">✨ 이미지컷 생성</h1>
+    <p class="page-desc">제품 이미지를 올리고 4가지 프롬프트로 각각 다른 이미지컷을 생성합니다. 생성된 컷은 상세페이지 원하는 섹션에 배치할 수 있습니다.</p>
+    <p style="font-size:12px;color:var(--primary);margin-bottom:20px;background:var(--primary-dim);padding:8px 12px;border-radius:8px;display:inline-block">
+      🤖 이미지 생성 모델: <strong>gemini-3-pro-image-preview</strong>
+    </p>
+
+    <!-- 소스 이미지 업로드 -->
+    <div class="source-upload" id="cutsUploadArea">
+      ${hasSrc
+        ? `<img src="${c.sourcePreview}" style="max-height:200px;max-width:100%;border-radius:8px;object-fit:contain">`
+        : `<span class="material-icons-outlined" style="font-size:40px;color:var(--primary);display:block;margin-bottom:8px">add_photo_alternate</span>
+           <p style="font-size:15px;font-weight:500">제품 이미지 업로드</p>
+           <p style="font-size:12px;color:var(--text-m);margin-top:4px">클릭 또는 드래그&amp;드롭</p>`
+      }
+      <input type="file" id="cutsFileInput" accept="image/*" style="display:none">
+    </div>
+
+    <!-- 4개 컷 카드 -->
+    <div class="cuts-grid">
+      ${c.prompts.map((p, i) => `
+        <div class="cut-card ${p.result ? 'has-result' : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="cut-label">${p.label}</span>
+            <div style="display:flex;gap:6px">
+              <button class="btn-sm" data-rename-cut="${i}">✏️ 이름변경</button>
+              ${p.result ? `<a class="btn-sm" href="${p.result}" download="cut${i+1}.png">⬇️ 저장</a>` : ''}
+            </div>
+          </div>
+
+          <!-- 미리보기 -->
+          <div class="cut-preview">
+            ${p.generating
+              ? `<div class="cut-spinner"></div>`
+              : p.result
+                ? `<img src="${p.result}" alt="cut${i+1}">`
+                : `<span style="color:var(--text-m);font-size:12px">생성 전</span>`
+            }
+          </div>
+
+          <!-- 프롬프트 입력 -->
+          <textarea class="textarea" data-cut-prompt="${i}" rows="3"
+            placeholder="예) 흰 배경에 제품을 중앙 배치, 그림자 없이 깔끔하게&#10;예) 라이프스타일 감성, 카페 테이블 위에 놓인 모습&#10;예) 다크톤 럭셔리, 검은 배경 골드 조명"
+            style="font-size:12px">${p.prompt}</textarea>
+
+          <!-- 개별 생성 버튼 -->
+          <button class="btn-primary" data-gen-cut="${i}"
+            style="font-size:13px;padding:9px 16px;justify-content:center"
+            ${!hasSrc || p.generating ? 'disabled' : ''}>
+            <span class="material-icons-outlined" style="font-size:16px">${p.generating ? 'hourglass_empty' : 'auto_fix_high'}</span>
+            ${p.generating ? '생성 중...' : '이 컷 생성'}
+          </button>
+        </div>
+      `).join('')}
+    </div>
+
+    <!-- 4개 전체 생성 버튼 -->
+    <div style="display:flex;gap:10px;margin-bottom:32px">
+      <button class="btn-primary" id="genAllCutsBtn"
+        style="padding:14px 32px;font-size:15px"
+        ${!hasSrc ? 'disabled' : ''}>
+        <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
+        4개 컷 전체 생성
+      </button>
+      ${anyResult ? `<button class="btn-sm" id="clearAllCutsBtn" style="padding:12px 20px">
+        <span class="material-icons-outlined" style="font-size:16px">delete_sweep</span>
+        결과 초기화
+      </button>` : ''}
+    </div>
+
+    <!-- 상세페이지 배치 설정 -->
+    ${anyResult ? `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px">
+      <h3 style="font-size:15px;font-weight:700;margin-bottom:4px">📌 상세페이지 섹션에 배치</h3>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:16px">각 섹션에 어떤 이미지컷을 넣을지 선택하세요. 미리보기·HTML 내보내기에 반영됩니다.</p>
+      <div>
+        ${SECTIONS.map(s => {
+          const placed = c.placement[s.id];
+          const placedCut = c.prompts.find(p => p.id === placed);
+          return `<div class="placement-row">
+            <span style="font-size:16px">${s.icon}</span>
+            <span style="flex:1;font-size:13px">${s.n}. ${s.name}</span>
+            ${placedCut?.result ? `<img class="cut-thumb" src="${placedCut.result}" alt="">` : '<div class="cut-thumb" style="opacity:.3"></div>'}
+            <select class="placement-select" data-place-section="${s.id}">
+              <option value="">-- 배치 안 함</option>
+              ${c.prompts.map(p => p.result ? `<option value="${p.id}" ${placed===p.id?'selected':''}>${p.label}</option>` : '').join('')}
+            </select>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn-primary" id="applyPlacementBtn" style="font-size:13px;padding:10px 20px">
+          <span class="material-icons-outlined" style="font-size:16px">check</span>
+          배치 적용
+        </button>
+        <span style="font-size:12px;color:var(--text-m);align-self:center">미리보기 탭에서 확인하세요</span>
+      </div>
+    </div>
+    ` : `
+    <div style="background:var(--bg-card);border:1px dashed var(--border);border-radius:12px;padding:24px;text-align:center;color:var(--text-m);font-size:13px">
+      이미지컷을 생성하면 상세페이지 섹션에 배치할 수 있습니다.
+    </div>
+    `}
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE CUTS — GENERATION LOGIC
+// ════════════════════════════════════════════════════════════════
+async function generateCut(idx) {
+  const c = state.cuts;
+  const p = c.prompts[idx];
+  if (!c.sourceBase64 || !p.prompt.trim()) {
+    state.error = '이미지와 프롬프트를 모두 입력해주세요.';
+    render();
+    return;
+  }
+
+  gemini = gemini || new GeminiAPI(state.apiKey);
+  p.generating = true;
+  render();
+
+  try {
+    const cfg = state.modelConfig;
+    const sizeHint = (cfg.imageSizeMode === 'custom' && cfg.imageWidth)
+      ? `Exact output size: ${cfg.imageWidth}px wide${cfg.imageHeight ? ' × ' + cfg.imageHeight + 'px tall' : ''}.`
+      : 'Aspect ratio 4:3.';
+    const fullPrompt = `Create a professional Korean e-commerce product detail page image cut.
+Product image is provided. Apply the following creative direction:
+${p.prompt}
+Requirements: High quality, clean, professional Korean e-commerce style.
+Maintain the product as the focal point. ${sizeHint}`;
+
+    const parts = [
+      { text: fullPrompt },
+      { inline_data: { mime_type: c.sourceMime, data: c.sourceBase64 } }
+    ];
+    const body = {
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.8, responseModalities: ['TEXT', 'IMAGE'] }
+    };
+
+    // 선택된 이미지 모델 사용
+    const cutImgModel = getImageModel();
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${cutImgModel}:generateContent?key=${state.apiKey}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    );
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    tokenTracker.record(cutImgModel, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, true);
+
+    let imgResult = null;
+    for (const part of data.candidates[0].content.parts) {
+      const id = part.inlineData || part.inline_data;
+      if (id && id.mime_type?.startsWith('image/')) {
+        imgResult = `data:${id.mime_type};base64,${id.data}`;
+        break;
+      }
+      if (id && id.mimeType?.startsWith('image/')) {
+        imgResult = `data:${id.mimeType};base64,${id.data}`;
+        break;
+      }
+    }
+    if (!imgResult) throw new Error('이미지가 반환되지 않았습니다');
+
+    // 픽셀 설정이 custom이면 Canvas로 정확히 리사이즈
+    imgResult = await applyImageSizeConfig(imgResult);
+
+    p.result = imgResult;
+    p.generating = false;
+    savePrompts();
+    render();
+  } catch(e) {
+    p.generating = false;
+    state.error = `컷 ${idx+1} 생성 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function generateAllCuts() {
+  for (let i = 0; i < state.cuts.prompts.length; i++) {
+    await generateCut(i);
+    await new Promise(r => setTimeout(r, 800));
+  }
+}
+
+function savePrompts() {
+  // result(base64)는 용량 문제로 저장 안 함 — prompt/label만 저장
+  const toSave = state.cuts.prompts.map(p => ({
+    id: p.id,
+    label: p.label,
+    prompt: p.prompt,
+    result: null,
+    generating: false,
+  }));
+  try { localStorage.setItem('cuts_prompts', JSON.stringify(toSave)); } catch(e) {}
+  try {
+    document.cookie = `cuts_prompts=${encodeURIComponent(JSON.stringify(toSave))};max-age=31536000;path=/;SameSite=Lax`;
+  } catch(e) {}
+}
+
+function loadPrompts() {
+  let data = null;
+  try {
+    const raw = localStorage.getItem('cuts_prompts');
+    if (raw) data = JSON.parse(raw);
+  } catch(e) {}
+  if (!data) {
+    try {
+      const m = document.cookie.match(/cuts_prompts=([^;]+)/);
+      if (m) data = JSON.parse(decodeURIComponent(m[1]));
+    } catch(e) {}
+  }
+  return data || [
+    { id:'cut1', label:'컷 1', prompt:'', result:null, generating:false },
+    { id:'cut2', label:'컷 2', prompt:'', result:null, generating:false },
+    { id:'cut3', label:'컷 3', prompt:'', result:null, generating:false },
+    { id:'cut4', label:'컷 4', prompt:'', result:null, generating:false },
+  ];
+}
+
+function savePlacement() {
+  localStorage.setItem('cuts_placement', JSON.stringify(state.cuts.placement));
+}
+
+// 배치 적용 — sectionImages에 이미지컷 반영
+function applyPlacement() {
+  const c = state.cuts;
+  for (const [sectionId, cutId] of Object.entries(c.placement)) {
+    const cut = c.prompts.find(p => p.id === cutId);
+    if (cut?.result) {
+      state.sectionImages[sectionId] = cut.result;
+    } else {
+      delete state.sectionImages[sectionId];
+    }
+  }
+  savePlacement();
+  state.step = 'preview';
+  render();
+}
+
+// ── bindEvents 확장 (이미지컷) ──
+const _origBind2 = bindEvents;
+bindEvents = function() {
+  _origBind2();
+
+  // 소스 이미지 업로드
+  const cutsArea = document.getElementById('cutsUploadArea');
+  const cutsInput = document.getElementById('cutsFileInput');
+  if (cutsArea) {
+    cutsArea.onclick = () => cutsInput.click();
+    cutsArea.ondragover = e => e.preventDefault();
+    cutsArea.ondrop = e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file?.type.startsWith('image/')) loadCutSource(file);
+    };
+  }
+  if (cutsInput) cutsInput.onchange = e => { if (e.target.files[0]) loadCutSource(e.target.files[0]); };
+
+  // 프롬프트 입력 저장
+  document.querySelectorAll('[data-cut-prompt]').forEach(el => {
+    el.oninput = e => {
+      state.cuts.prompts[+el.dataset.cutPrompt].prompt = e.target.value;
+      savePrompts();
+    };
+  });
+
+  // 개별 생성
+  document.querySelectorAll('[data-gen-cut]').forEach(btn => {
+    btn.onclick = () => generateCut(+btn.dataset.genCut);
+  });
+
+  // 이름 변경
+  document.querySelectorAll('[data-rename-cut]').forEach(btn => {
+    btn.onclick = () => {
+      const i = +btn.dataset.renameCut;
+      const newName = prompt('컷 이름을 입력하세요:', state.cuts.prompts[i].label);
+      if (newName?.trim()) {
+        state.cuts.prompts[i].label = newName.trim();
+        savePrompts();
+        render();
+      }
+    };
+  });
+
+  // 전체 생성
+  const genAllBtn = document.getElementById('genAllCutsBtn');
+  if (genAllBtn) genAllBtn.onclick = generateAllCuts;
+
+  // 결과 초기화
+  const clearBtn = document.getElementById('clearAllCutsBtn');
+  if (clearBtn) clearBtn.onclick = () => {
+    state.cuts.prompts.forEach(p => { p.result = null; p.generating = false; });
+    state.cuts.placement = {};
+    savePlacement();
+    render();
+  };
+
+  // 배치 선택
+  document.querySelectorAll('[data-place-section]').forEach(sel => {
+    sel.onchange = e => {
+      const sid = sel.dataset.placeSection;
+      if (e.target.value) state.cuts.placement[sid] = e.target.value;
+      else delete state.cuts.placement[sid];
+    };
+  });
+
+  // 배치 적용
+  const applyBtn = document.getElementById('applyPlacementBtn');
+  if (applyBtn) applyBtn.onclick = applyPlacement;
+
+  // ── 모델 설정 이벤트 ──
+  // 프로바이더 선택
+  document.querySelectorAll('[data-pick-provider]').forEach(el => {
+    el.onclick = () => {
+      const prov = el.dataset.pickProvider;
+      state.modelConfig.llmProvider = prov;
+      // 프로바이더 변경 시 해당 프로바이더의 첫 번째 모델로 자동 선택
+      const firstModel = LLM_PROVIDERS[prov]?.models[0]?.id;
+      if (firstModel) state.modelConfig.llmModel = firstModel;
+      render();
+    };
+  });
+
+  // LLM 모델 선택
+  document.querySelectorAll('[data-pick-model]').forEach(el => {
+    el.onclick = () => {
+      state.modelConfig.llmModel = el.dataset.pickModel;
+      render();
+    };
+  });
+
+  // 이미지 모델 선택
+  document.querySelectorAll('[data-pick-imgmodel]').forEach(el => {
+    el.onclick = () => {
+      state.modelConfig.imageModel = el.dataset.pickImgmodel;
+      render();
+    };
+  });
+
+  // Gemini 키 visibility 토글
+  const toggleGemini = document.getElementById('toggleGeminiKey');
+  if (toggleGemini) {
+    toggleGemini.onclick = () => {
+      const inp = document.getElementById('geminiKeyInput');
+      if (!inp) return;
+      if (inp.type === 'password') { inp.type = 'text'; toggleGemini.textContent = 'visibility_off'; }
+      else { inp.type = 'password'; toggleGemini.textContent = 'visibility'; }
+    };
+  }
+
+  // OpenAI 키 visibility 토글
+  const toggleOAI = document.getElementById('toggleOpenAIKey');
+  if (toggleOAI) {
+    toggleOAI.onclick = () => {
+      const inp = document.getElementById('openaiKeyInput');
+      if (!inp) return;
+      if (inp.type === 'password') { inp.type = 'text'; toggleOAI.textContent = 'visibility_off'; }
+      else { inp.type = 'password'; toggleOAI.textContent = 'visibility'; }
+    };
+  }
+
+  // 이미지 크기 모드 토글
+  const imgSizeModeAuto = document.getElementById('imgSizeModeAuto');
+  if (imgSizeModeAuto) {
+    imgSizeModeAuto.onclick = () => {
+      state.modelConfig.imageSizeMode = 'auto';
+      render();
+    };
+  }
+  const imgSizeModeCustom = document.getElementById('imgSizeModeCustom');
+  if (imgSizeModeCustom) {
+    imgSizeModeCustom.onclick = () => {
+      state.modelConfig.imageSizeMode = 'custom';
+      render();
+    };
+  }
+
+  // 설정 저장
+  const saveModelBtn = document.getElementById('saveModelSettings');
+  if (saveModelBtn) {
+    saveModelBtn.onclick = () => {
+      // Gemini 키
+      const geminiInp = document.getElementById('geminiKeyInput');
+      if (geminiInp && geminiInp.value.trim()) {
+        state.apiKey = geminiInp.value.trim();
+        saveKey(state.apiKey);
+      }
+      // OpenAI 키
+      const openaiInp = document.getElementById('openaiKeyInput');
+      if (openaiInp && openaiInp.value.trim()) {
+        state.openaiKey = openaiInp.value.trim();
+        saveOpenAIKey(state.openaiKey);
+      }
+      // 이미지 픽셀 설정
+      const wInp = document.getElementById('imgWidthInput');
+      const hInp = document.getElementById('imgHeightInput');
+      if (wInp) {
+        const w = parseInt(wInp.value);
+        if (w >= 64 && w <= 4096) state.modelConfig.imageWidth = w;
+      }
+      if (hInp) {
+        const h = parseInt(hInp.value);
+        state.modelConfig.imageHeight = (hInp.value.trim() === '' || isNaN(h)) ? null : Math.max(64, Math.min(4096, h));
+      }
+      // 모델 설정 저장
+      saveModelConfig(state.modelConfig);
+      // 저장 완료 메시지
+      const msg = document.getElementById('modelSaveMsg');
+      if (msg) { msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2000); }
+      render(); // 사이드바 요약 및 설정 요약 갱신
+    };
+  }
+};
+
+function loadCutSource(file) {
+  state.cuts.sourceMime = file.type;
+  const reader = new FileReader();
+  reader.onload = e => {
+    state.cuts.sourcePreview = e.target.result;
+    state.cuts.sourceBase64 = e.target.result.split(',')[1];
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+
+function buildExportHtml(analysis, sectionContents, sectionImages) {
+  let sectionsHtml = '';
+  for (const s of SECTIONS) {
+    const content = sectionContents[s.id];
+    if (!content) continue;
+    const c = content.color_scheme || {};
+    const f = content.font_suggestion || {};
+    const img = sectionImages[s.id];
+    sectionsHtml += `
+    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
+      <div style="max-width:860px;margin:0 auto;">
+        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};">${content.headline||''}</h2>
+        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;">${content.subheadline||''}</h3>
+        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
+        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;max-width:680px;margin:0 auto;">${content.body_text||''}</p>
+        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}</div>` : ''}
+        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;">${content.cta_text}</a>` : ''}
+      </div>
+    </section>`;
+  }
+  return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${analysis.product_name||'상세페이지'}</title><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Noto Sans KR',sans-serif;color:#333}img{max-width:100%;height:auto}section{width:100%}</style></head><body>${sectionsHtml}</body></html>`;
+}
+
+function startAutomation() {
+  if (state.auto.running) return;
+  state.auto.running = true;
+  autoLog('info', `자동화 시작 (${state.auto.intervalMin}분 간격)`);
+
+  // Run immediately
+  autoProcessOne();
+
+  // Schedule
+  state.auto.timerId = setInterval(() => {
+    if (!state.auto.currentItem) { // 이전 작업 완료된 경우만
+      const now = new Date();
+      state.auto.nextRunAt = new Date(now.getTime() + state.auto.intervalMin * 60000).toLocaleTimeString('ko-KR');
+      autoProcessOne();
+    }
+  }, state.auto.intervalMin * 60 * 1000);
+
+  const now = new Date();
+  state.auto.nextRunAt = new Date(now.getTime() + state.auto.intervalMin * 60000).toLocaleTimeString('ko-KR');
+  render();
+}
+
+function stopAutomation() {
+  state.auto.running = false;
+  if (state.auto.timerId) {
+    clearInterval(state.auto.timerId);
+    state.auto.timerId = null;
+  }
+  state.auto.nextRunAt = null;
+  autoLog('info', '자동화 중지됨');
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════
+// BIND AUTOMATION EVENTS (add to bindEvents)
+// ════════════════════════════════════════════════════════════════
+const _origBind = bindEvents;
+bindEvents = function() {
+  _origBind();
+
+  const connectBtn = document.getElementById('connectDriveBtn');
+  if (connectBtn) connectBtn.onclick = connectDrive;
+
+  const setInput = document.getElementById('setInputFolder');
+  if (setInput) setInput.onclick = async () => {
+    const raw = document.getElementById('inputFolderId')?.value.trim();
+    if (!raw) return;
+    const id = extractFolderId(raw);
+    state.auto.inputFolderId = id;
+    localStorage.setItem('auto_input_folder_id', id);
+    autoLog('info', `입력 폴더 ID 추출: ${id}`);
+    try {
+      const name = await driveService.getFolderName(id);
+      state.auto.inputFolderName = name;
+      localStorage.setItem('auto_input_folder_name', name);
+      autoLog('ok', `입력 폴더 설정 완료: ${name}`);
+    } catch(e) {
+      state.auto.inputFolderName = id;
+      autoLog('err', '폴더 이름 조회 실패: ' + e.message);
+    }
+    render();
+  };
+
+  const setOutput = document.getElementById('setOutputFolder');
+  if (setOutput) setOutput.onclick = async () => {
+    const raw = document.getElementById('outputFolderId')?.value.trim();
+    if (!raw) return;
+    const id = extractFolderId(raw);
+    state.auto.outputFolderId = id;
+    localStorage.setItem('auto_output_folder_id', id);
+    autoLog('info', `출력 폴더 ID 추출: ${id}`);
+    try {
+      const name = await driveService.getFolderName(id);
+      state.auto.outputFolderName = name;
+      localStorage.setItem('auto_output_folder_name', name);
+      autoLog('ok', `출력 폴더 설정: ${name}`);
+    } catch(e) {
+      state.auto.outputFolderName = id;
+      autoLog('err', '폴더 이름 조회 실패, ID로 설정됨');
+    }
+    render();
+  };
+
+  const intervalSlider = document.getElementById('intervalSlider');
+  if (intervalSlider) {
+    intervalSlider.oninput = () => {
+      const v = parseInt(intervalSlider.value);
+      state.auto.intervalMin = v;
+      localStorage.setItem('auto_interval', v);
+      const disp = document.getElementById('intervalDisplay');
+      if (disp) disp.textContent = v + '분';
+    };
+  }
+
+  const startBtn = document.getElementById('startAutoBtn');
+  if (startBtn) startBtn.onclick = startAutomation;
+
+  const stopBtn = document.getElementById('stopAutoBtn');
+  if (stopBtn) stopBtn.onclick = stopAutomation;
+
+  const runOnce = document.getElementById('runOnceBtn');
+  if (runOnce) runOnce.onclick = () => {
+    autoLog('info', '수동 1회 실행');
+    autoProcessOne();
+  };
+
+  const resetBtn = document.getElementById('resetProcessedBtn');
+  if (resetBtn) resetBtn.onclick = () => {
+    state.auto.processedFileIds.clear();
+    localStorage.removeItem('auto_processed_ids');
+    state.auto.totalProcessed = 0;
+    localStorage.setItem('auto_total_processed', '0');
+    state.auto.completed = [];
+    localStorage.setItem('auto_completed', '[]');
+    autoLog('info', '처리 기록 초기화됨');
+    render();
+  };
+};
+
+// ════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════
+if (state.apiKey) {
+  gemini = new GeminiAPI(state.apiKey);
+}
+// Try init Google auth if client ID exists
+setTimeout(() => { try { initGoogleAuth(); } catch(e) {} }, 1000);
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0f0f13;
+  color: #e4e4e7;
+  min-height: 100vh;
+}
+
+:root {
+  --primary: #6366f1;
+  --primary-hover: #818cf8;
+  --primary-dim: rgba(99, 102, 241, 0.15);
+  --bg-dark: #0f0f13;
+  --bg-card: #1a1a23;
+  --bg-card-hover: #22222e;
+  --bg-input: #13131a;
+  --border: #2a2a36;
+  --border-hover: #3a3a4a;
+  --text: #e4e4e7;
+  --text-dim: #9494a5;
+  --text-muted: #6b6b7b;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --accent-orange: #f97316;
+  --accent-cyan: #06b6d4;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-dark); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
