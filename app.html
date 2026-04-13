@@ -486,10 +486,49 @@ tokenTracker.load();
 // GEMINI API SERVICE
 // ════════════════════════════════════════════════════════════════
 class GeminiAPI {
-  constructor(apiKey, model) {
-    this.apiKey = apiKey;
-    this.model = model || 'gemini-2.0-flash';
+  constructor(apiKeyOrOptions, model) {
+    const isObject = apiKeyOrOptions && typeof apiKeyOrOptions === 'object';
+    this.apiKey = isObject ? (apiKeyOrOptions.apiKey || '') : (apiKeyOrOptions || '');
+    this.model = isObject
+      ? (apiKeyOrOptions.model || model || 'gemini-2.0-flash')
+      : (model || 'gemini-2.0-flash');
+    this.backendBaseUrl = (isObject ? apiKeyOrOptions.backendBaseUrl : '') || '';
     this.baseUrl = 'https://generativelanguage.googleapis.com/v1beta';
+  }
+
+  _normalizeBackendUrl() {
+    return (this.backendBaseUrl || '').replace(/\/+$/, '');
+  }
+
+  _hasBackendRoute() {
+    return !!this._normalizeBackendUrl();
+  }
+
+  async _generateContent(model, body) {
+    if (this._hasBackendRoute()) {
+      const backendUrl = this._normalizeBackendUrl();
+      const res = await fetch(`${backendUrl}/api/gemini/generate-content`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, ...body }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data?.error?.message || data?.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    if (!this.apiKey) {
+      throw new Error('Gemini API key is required when backend URL is not set.');
+    }
+
+    const res = await fetch(`${this.baseUrl}/models/${model}:generateContent?key=${this.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data?.error?.message || data?.error || `HTTP ${res.status}`);
+    return data;
   }
 
   async analyzeImage(imageBase64, mimeType) {
@@ -527,13 +566,7 @@ Respond ONLY with the JSON object, no other text.`;
       generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
     };
 
-    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
+    const data = await this._generateContent(this.model, body);
     tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
     let text = data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -586,13 +619,7 @@ Respond ONLY with the JSON object.`;
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }
     };
 
-    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
+    const data = await this._generateContent(this.model, body);
     tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
     let text = data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -621,13 +648,7 @@ Respond ONLY with the JSON object.`;
     };
 
     try {
-      const res = await fetch(`${this.baseUrl}/models/${imgMod}:generateContent?key=${this.apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
+      const data = await this._generateContent(imgMod, body);
       tokenTracker.record(imgMod, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, true);
 
       for (const part of data.candidates[0].content.parts) {
@@ -666,13 +687,7 @@ List 5-8 competitor products. Respond ONLY with JSON.`;
       generationConfig: { temperature: 0.5, maxOutputTokens: 2048 }
     };
 
-    const res = await fetch(`${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
+    const data = await this._generateContent(this.model, body);
     tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount);
     let text = data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -892,8 +907,20 @@ function getLLMClient() {
     return new OpenAIAPI(state.openaiKey, cfg.llmModel);
   }
   // gemini
-  if (!state.apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
-  return new GeminiAPI(state.apiKey, cfg.llmModel);
+  if (!hasGeminiConnection()) throw new Error('Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.');
+  return createGeminiClient(cfg.llmModel);
+}
+
+function hasGeminiConnection() {
+  return !!(state.apiKey || state.backendBaseUrl);
+}
+
+function createGeminiClient(model) {
+  return new GeminiAPI({
+    apiKey: state.apiKey,
+    model: model || state.modelConfig.llmModel,
+    backendBaseUrl: state.backendBaseUrl,
+  });
 }
 
 function getImageModel() {
@@ -919,6 +946,51 @@ function loadKey() {
   return k;
 }
 
+function saveBackendUrl(url) {
+  try { localStorage.setItem('gemini_backend_url', url || ''); } catch(e) {}
+}
+
+function loadBackendUrl() {
+  try { return localStorage.getItem('gemini_backend_url') || ''; } catch(e) { return ''; }
+}
+
+function defaultServerAutomationApiBase() {
+  const backend = (loadBackendUrl() || '').trim().replace(/\/+$/, '');
+  if (backend) {
+    return /\/v1$/i.test(backend) ? backend : `${backend}/v1`;
+  }
+  return 'http://127.0.0.1:4000/v1';
+}
+
+function normalizeServerAutomationApiBase(url) {
+  let base = (url || '').trim();
+  if (!base) return defaultServerAutomationApiBase();
+  base = base.replace(/\/+$/, '');
+  if (!/\/v1$/i.test(base)) base += '/v1';
+  return base;
+}
+
+function loadServerAutomationApiBase() {
+  try {
+    return normalizeServerAutomationApiBase(localStorage.getItem('server_auto_api_base') || '');
+  } catch(e) {
+    return 'http://127.0.0.1:4000/v1';
+  }
+}
+
+function saveServerAutomationApiBase(url) {
+  const normalized = normalizeServerAutomationApiBase(url);
+  try { localStorage.setItem('server_auto_api_base', normalized); } catch(e) {}
+  return normalized;
+}
+
+function assertServerAutomationApiBaseAllowed(base) {
+  const isHttpsPage = typeof window !== 'undefined' && window.location?.protocol === 'https:';
+  if (isHttpsPage && /^http:\/\//i.test(base)) {
+    throw new Error('HTTPS 페이지에서는 http:// 자동화 API 호출이 차단됩니다. https:// 엔드포인트를 사용하거나 localhost 앱(start.bat)으로 실행하세요.');
+  }
+}
+
 // 섹션별 지시사항 저장/불러오기
 function saveSectionInstructions(instructions) {
   try { localStorage.setItem('section_instructions', JSON.stringify(instructions)); } catch(e) {}
@@ -935,12 +1007,14 @@ function loadSectionInstructions() {
 // APP STATE
 // ════════════════════════════════════════════════════════════════
 const _savedKey = loadKey();
+const _savedBackendUrl = loadBackendUrl();
 const _savedInstructions = loadSectionInstructions();
 const _savedModelConfig = loadModelConfig();
 const state = {
   step: 'upload', // upload | analyzing | sections | generating | preview | modelsettings
   apiKey: _savedKey,
-  showApiModal: !_savedKey,
+  backendBaseUrl: _savedBackendUrl,
+  showApiModal: !_savedKey && !_savedBackendUrl,
   modelConfig: _savedModelConfig,
   openaiKey: loadOpenAIKey(),
   productName: '',
@@ -986,6 +1060,12 @@ const state = {
     nextRunAt: null,
     totalProcessed: parseInt(localStorage.getItem('auto_total_processed') || '0'),
     processedFileIds: new Set(JSON.parse(localStorage.getItem('auto_processed_ids') || '[]')),
+    serverApiBase: loadServerAutomationApiBase(),
+    serverLoading: false,
+    serverError: '',
+    serverConfig: null,
+    serverStatus: null,
+    serverFetchedOnce: false,
   },
 };
 
@@ -1019,16 +1099,20 @@ function render() {
 }
 
 function renderApiModal() {
-  const hasSaved = !!state.apiKey;
+  const hasSaved = !!(state.apiKey || state.backendBaseUrl);
   return `<div class="modal-overlay" id="apiModal">
     <div class="modal">
-      <h2>🔑 API 키 설정</h2>
-      <p>Google Gemini API 키를 입력하세요. <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--primary)">여기서 발급</a> 받을 수 있습니다.</p>
-      ${hasSaved ? '<p style="margin-top:-12px;margin-bottom:12px;font-size:12px;color:var(--ok)">✅ 이전에 저장한 API 키가 있습니다.</p>' : ''}
+      <h2>🔑 Gemini 연결 설정</h2>
+      <p style="margin-bottom:12px">권장: Vertex 백엔드 URL을 입력하면 API 키 없이 Vertex AI 과금 경로로 호출됩니다.</p>
+      ${hasSaved ? '<p style="margin-top:-6px;margin-bottom:12px;font-size:12px;color:var(--ok)">✅ 저장된 Gemini 연결 설정이 있습니다.</p>' : ''}
       <div class="input-group">
-        <label class="label">Gemini API Key</label>
+        <label class="label">Vertex Backend URL (권장)</label>
+        <input type="text" class="input" id="backendUrlInput" value="${state.backendBaseUrl || ''}" placeholder="http://localhost:5000" style="font-family:monospace;font-size:13px">
+      </div>
+      <div class="input-group">
+        <label class="label">Gemini API Key (선택, Direct 호출용)</label>
         <div style="position:relative">
-          <input type="text" class="input" id="apiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="padding-right:40px;font-family:monospace;font-size:13px">
+          <input type="password" class="input" id="apiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="padding-right:40px;font-family:monospace;font-size:13px">
           <span class="material-icons-outlined" id="toggleKeyVis" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
         </div>
       </div>
@@ -1037,7 +1121,7 @@ function renderApiModal() {
           <span class="material-icons-outlined" style="font-size:18px">save</span>
           저장 후 시작
         </button>
-        ${hasSaved ? '<button class="btn-sm" id="skipApiModal" style="padding:12px 20px">기존 키로 계속</button>' : ''}
+        ${hasSaved ? '<button class="btn-sm" id="skipApiModal" style="padding:12px 20px">기존 설정으로 계속</button>' : ''}
       </div>
     </div>
   </div>`;
@@ -1290,11 +1374,16 @@ function bindEvents() {
   const saveBtn = document.getElementById('saveApiKey');
   if (saveBtn) {
     saveBtn.onclick = () => {
-      const key = document.getElementById('apiKeyInput').value.trim();
-      if (!key) return;
+      const key = document.getElementById('apiKeyInput')?.value.trim() || '';
+      const backendUrl = document.getElementById('backendUrlInput')?.value.trim() || '';
+      if (!key && !backendUrl) return;
+
       state.apiKey = key;
+      state.backendBaseUrl = backendUrl;
       saveKey(key);
-      gemini = new GeminiAPI(key);
+      saveBackendUrl(backendUrl);
+
+      gemini = createGeminiClient();
       state.showApiModal = false;
       render();
     };
@@ -1303,7 +1392,8 @@ function bindEvents() {
   const skipBtn = document.getElementById('skipApiModal');
   if (skipBtn) {
     skipBtn.onclick = () => {
-      gemini = new GeminiAPI(state.apiKey);
+      if (!hasGeminiConnection()) return;
+      gemini = createGeminiClient();
       state.showApiModal = false;
       render();
     };
@@ -1489,7 +1579,7 @@ async function generateAllSections() {
   let llm;
   try { llm = getLLMClient(); } catch(e) { state.error = e.message; state.step = 'sections'; render(); return; }
   // gemini 인스턴스도 이미지 생성용으로 유지
-  const geminiForImage = new GeminiAPI(state.apiKey);
+  const geminiForImage = hasGeminiConnection() ? createGeminiClient() : null;
 
   const total = SECTIONS.length;
   const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
@@ -1509,7 +1599,7 @@ async function generateAllSections() {
       state.sectionContents[s.id] = content;
 
       // Try to generate image (항상 Gemini 이미지 모델 사용)
-      if (state.apiKey) {
+      if (geminiForImage) {
         state.progressMsg = `[${i+1}/${total}] ${s.name} 이미지 생성 중...`;
         render();
         try {
@@ -1558,9 +1648,9 @@ async function regenerateSection(sectionId) {
     );
     state.sectionContents[sectionId] = content;
 
-    if (state.apiKey) {
+    if (hasGeminiConnection()) {
       try {
-        const geminiForImage = new GeminiAPI(state.apiKey);
+        const geminiForImage = createGeminiClient();
         const imgPrompt = content.image_description || content.design_notes || s.purpose;
         const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
         if (img) state.sectionImages[sectionId] = img;
@@ -1833,6 +1923,137 @@ function autoLog(type, msg) {
   if (autoLogs.length > 200) autoLogs.length = 200;
 }
 
+function escAttr(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function parsePositiveInt(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+async function fetchServerAutomationConfig() {
+  const base = saveServerAutomationApiBase(state.auto.serverApiBase);
+  state.auto.serverApiBase = base;
+  state.auto.serverLoading = true;
+  state.auto.serverError = '';
+  render();
+  try {
+    assertServerAutomationApiBaseAllowed(base);
+    const res = await fetch(`${base}/pdp/automation/config`);
+    const data = await res.json();
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || data?.error || '자동화 설정 조회 실패');
+    }
+    state.auto.serverConfig = data;
+    state.auto.serverStatus = data.status || null;
+    autoLog('ok', '서버 자동화 상태를 불러왔습니다.');
+  } catch(e) {
+    state.auto.serverError = e.message || String(e);
+    autoLog('err', `서버 자동화 연결 실패: ${state.auto.serverError}`);
+  } finally {
+    state.auto.serverLoading = false;
+    render();
+  }
+}
+
+async function updateServerAutomationProfiles(profilePatch) {
+  const base = saveServerAutomationApiBase(state.auto.serverApiBase);
+  state.auto.serverApiBase = base;
+  state.auto.serverLoading = true;
+  state.auto.serverError = '';
+  render();
+  try {
+    assertServerAutomationApiBaseAllowed(base);
+    const res = await fetch(`${base}/pdp/automation/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profiles: profilePatch })
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || data?.error || '자동화 설정 저장 실패');
+    }
+    state.auto.serverConfig = data;
+    state.auto.serverStatus = data.status || null;
+    autoLog('ok', '서버 자동화 설정을 저장했습니다.');
+  } catch(e) {
+    state.auto.serverError = e.message || String(e);
+    autoLog('err', `서버 자동화 저장 실패: ${state.auto.serverError}`);
+  } finally {
+    state.auto.serverLoading = false;
+    render();
+  }
+}
+
+async function runServerAutomationMode(mode) {
+  const base = saveServerAutomationApiBase(state.auto.serverApiBase);
+  state.auto.serverApiBase = base;
+  state.auto.serverLoading = true;
+  state.auto.serverError = '';
+  render();
+  try {
+    assertServerAutomationApiBaseAllowed(base);
+    const res = await fetch(`${base}/pdp/automation/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.message || data?.error || '자동 실행 요청 실패');
+    }
+    if (data.status) state.auto.serverStatus = data.status;
+    autoLog('info', data.message || `${mode} 실행을 요청했습니다.`);
+  } catch(e) {
+    state.auto.serverError = e.message || String(e);
+    autoLog('err', `서버 실행 요청 실패: ${state.auto.serverError}`);
+  } finally {
+    state.auto.serverLoading = false;
+    render();
+  }
+}
+
+function renderServerAutomationModeEditor(mode, title, profile, status) {
+  if (!profile) return '';
+  const modeId = mode === 'image-cuts' ? 'ImageCuts' : 'DetailPage';
+  const runLabel = mode === 'image-cuts' ? '이미지컷 즉시 실행' : '상세페이지 즉시 실행';
+  const running = !!status?.isRunning;
+  const summary = status?.lastSummary || '기록 없음';
+  const error = status?.lastError || '';
+
+  return `
+    <div class="auto-card" style="margin-top:10px">
+      <h3 style="margin-bottom:10px">${title}</h3>
+      <div class="input-group">
+        <label class="label">
+          <input type="checkbox" id="serverEnabled${modeId}" ${profile.enabled ? 'checked' : ''} style="margin-right:8px">
+          자동 실행 사용
+        </label>
+      </div>
+      <div class="input-group"><label class="label">입력 폴더 ID/URL</label><input class="input" id="serverInput${modeId}" value="${escAttr(profile.inputFolderId)}" placeholder="Drive folder ID or URL"></div>
+      <div class="input-group"><label class="label">원본 완료 폴더 ID/URL</label><input class="input" id="serverDone${modeId}" value="${escAttr(profile.sourceDoneFolderId)}" placeholder="Drive folder ID or URL"></div>
+      <div class="input-group"><label class="label">결과 출력 폴더 ID/URL</label><input class="input" id="serverOutput${modeId}" value="${escAttr(profile.outputFolderId)}" placeholder="Drive folder ID or URL"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="input-group"><label class="label">확인 간격(초)</label><input class="input" id="serverPoll${modeId}" type="number" min="30" max="3600" value="${escAttr(profile.pollIntervalSeconds)}"></div>
+        <div class="input-group"><label class="label">한 번에 파일 수</label><input class="input" id="serverMax${modeId}" type="number" min="1" max="20" value="${escAttr(profile.maxFilesPerRun)}"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-sm" id="serverSave${modeId}">저장</button>
+        <button class="btn-sm" id="serverRun${modeId}" ${running ? 'disabled' : ''}>${runLabel}</button>
+        <span class="auto-status ${running ? 'running' : 'waiting'}">${running ? '실행 중' : '대기'}</span>
+      </div>
+      <p style="font-size:12px;color:var(--text-d);margin-top:8px">최근 요약: ${summary}</p>
+      ${error ? `<p style="font-size:12px;color:var(--err);margin-top:4px">최근 오류: ${error}</p>` : ''}
+    </div>
+  `;
+}
+
 // ════════════════════════════════════════════════════════════════
 // AUTOMATION RENDER
 // ════════════════════════════════════════════════════════════════
@@ -1894,6 +2115,10 @@ function renderModelSettings() {
         ${geminiProv.models.map(m => renderModelCard(m, cfg.llmModel, 'selected')).join('')}
       </div>
       <div class="input-group">
+        <label class="label">Vertex Backend URL (권장)</label>
+        <input type="text" class="input" id="geminiBackendInput" value="${state.backendBaseUrl || ''}" placeholder="http://localhost:5000" style="font-family:monospace;font-size:13px">
+      </div>
+      <div class="input-group">
         <label class="label">Gemini API Key</label>
         <div style="position:relative">
           <input type="password" class="input" id="geminiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="font-family:monospace;font-size:13px;padding-right:40px">
@@ -1919,13 +2144,15 @@ function renderModelSettings() {
     <!-- ── 이미지 생성 모델 ── -->
     <div class="settings-section">
       <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--orange)">image</span> 이미지 생성 모델 (Gemini 전용)</h3>
-      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지 및 이미지컷 생성 시 사용됩니다. Gemini API Key가 필요합니다.</p>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지 및 이미지컷 생성 시 사용됩니다. Gemini API Key 또는 Vertex Backend URL이 필요합니다.</p>
       <div class="model-list">
         ${IMAGE_MODELS.map(m => renderImgModelCard(m)).join('')}
       </div>
       ${cfg.llmProvider === 'openai' ? `
       <div class="input-group" style="margin-top:4px">
-        <label class="label">이미지 생성용 Gemini API Key (OpenAI 사용 시에도 필요)</label>
+        <label class="label">이미지 생성용 Vertex Backend URL (권장)</label>
+        <input type="text" class="input" id="geminiBackendInput" value="${state.backendBaseUrl || ''}" placeholder="http://localhost:5000" style="font-family:monospace;font-size:13px;margin-bottom:8px">
+        <label class="label">이미지 생성용 Gemini API Key (선택)</label>
         <div style="position:relative">
           <input type="password" class="input" id="geminiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="font-family:monospace;font-size:13px;padding-right:40px">
           <span class="material-icons-outlined" id="toggleGeminiKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
@@ -2003,6 +2230,7 @@ function renderModelSettings() {
       <div>LLM 모델: <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px">${cfg.llmModel}</code></div>
       <div>이미지 모델: <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px">${cfg.imageModel}</code></div>
       <div>이미지 크기: <b style="color:var(--cyan)">${cfg.imageSizeMode === 'custom' ? (cfg.imageWidth + 'px × ' + (cfg.imageHeight ? cfg.imageHeight+'px' : '비율유지')) : 'auto'}</b></div>
+      <div>Gemini Backend: <span style="color:${state.backendBaseUrl?'var(--ok)':'var(--text-m)'}">${state.backendBaseUrl ? state.backendBaseUrl : '— 미설정'}</span></div>
       <div>Gemini Key: <span style="color:${state.apiKey?'var(--ok)':'var(--err)'}">${state.apiKey ? '✅ 설정됨' : '❌ 미설정'}</span></div>
       <div>OpenAI Key: <span style="color:${state.openaiKey?'var(--ok)':'var(--text-m)'}">${state.openaiKey ? '✅ 설정됨' : '— 미설정'}</span></div>
     </div>
@@ -2013,10 +2241,37 @@ function renderAutomation() {
   const a = state.auto;
   const connected = a.driveConnected;
   const savedClientId = localStorage.getItem('gd_client_id') || '';
+  const serverCfg = a.serverConfig;
+  const serverDrive = serverCfg?.driveConnection || null;
+  const serverProfiles = serverCfg?.profiles || null;
+  const serverModeStatus = (a.serverStatus || serverCfg?.status || {}).byMode || {};
 
   return `<div class="fade-in">
     <h1 class="page-title">🔄 자동화 시스템</h1>
     <p class="page-desc">구글 드라이브 폴더를 연결하면 설정한 간격마다 자동으로 상세페이지를 생성합니다.</p>
+
+    <div class="auto-card" style="border-color:var(--primary);margin-bottom:14px">
+      <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--primary)">hub</span> 서버 Drive 자동화 연결 (권장)</h3>
+      <p style="font-size:12px;color:var(--text-d);margin-bottom:10px">
+        GitHub Pages에서도 로컬 자동화 API(기본: <code>http://127.0.0.1:4000/v1</code>)를 직접 호출해 image-cuts/detail-page를 제어합니다.
+      </p>
+      <div class="input-group" style="margin-bottom:8px">
+        <label class="label">자동화 API Base</label>
+        <input class="input" id="serverAutoApiBase" value="${escAttr(a.serverApiBase)}" placeholder="http://127.0.0.1:4000/v1" style="font-family:monospace">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-sm" id="serverAutoRefreshBtn">${a.serverLoading ? '불러오는 중...' : '상태 불러오기'}</button>
+        ${serverDrive ? `<span class="auto-status ${serverDrive.ready ? 'running' : 'stopped'}">${serverDrive.ready ? 'Drive ready' : 'Drive not ready'}</span>` : ''}
+        ${serverDrive?.accountEmail ? `<span style="font-size:12px;color:var(--text-d)">${serverDrive.accountEmail}</span>` : ''}
+      </div>
+      ${a.serverError ? `<p style="font-size:12px;color:var(--err);margin-top:8px">${a.serverError}</p>` : ''}
+      ${serverDrive?.message ? `<p style="font-size:12px;color:var(--text-d);margin-top:8px">${serverDrive.message}</p>` : ''}
+
+      ${serverProfiles ? `
+        ${renderServerAutomationModeEditor('image-cuts', 'Image Cuts', serverProfiles['image-cuts'], serverModeStatus['image-cuts'])}
+        ${renderServerAutomationModeEditor('detail-page', 'Detail Page', serverProfiles['detail-page'], serverModeStatus['detail-page'])}
+      ` : ''}
+    </div>
 
     <!-- Drive Connection -->
     <div class="auto-card">
@@ -2190,7 +2445,7 @@ async function autoProcessOne() {
 
   let autoLLM;
   try { autoLLM = getLLMClient(); } catch(e) { autoLog('err', e.message); return; }
-  const autoGeminiImage = new GeminiAPI(state.apiKey);
+  const autoGeminiImage = hasGeminiConnection() ? createGeminiClient() : null;
 
   // 1. List images in input folder
   autoLog('info', '입력 폴더 스캔 중...');
@@ -2283,7 +2538,7 @@ async function autoProcessOne() {
         sectionContents[s.id] = content;
 
         // Image (항상 Gemini 이미지 모델)
-        if (state.apiKey) {
+        if (autoGeminiImage) {
           try {
             const imgPrompt = content.image_description || content.design_notes || s.purpose;
             const img = await autoGeminiImage.generateImage(imgPrompt, imgData.base64, imgData.mime);
@@ -2459,7 +2714,12 @@ async function generateCut(idx) {
     return;
   }
 
-  gemini = gemini || new GeminiAPI(state.apiKey);
+  if (!hasGeminiConnection()) {
+    state.error = 'Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.';
+    render();
+    return;
+  }
+  gemini = gemini || createGeminiClient();
   p.generating = true;
   render();
 
@@ -2485,12 +2745,7 @@ Maintain the product as the focal point. ${sizeHint}`;
 
     // 선택된 이미지 모델 사용
     const cutImgModel = getImageModel();
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${cutImgModel}:generateContent?key=${state.apiKey}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-    );
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
+    const data = await gemini._generateContent(cutImgModel, body);
     tokenTracker.record(cutImgModel, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, true);
 
     let imgResult = null;
@@ -2725,9 +2980,16 @@ bindEvents = function() {
   const saveModelBtn = document.getElementById('saveModelSettings');
   if (saveModelBtn) {
     saveModelBtn.onclick = () => {
+      // Gemini backend URL
+      const backendInp = document.getElementById('geminiBackendInput');
+      if (backendInp) {
+        state.backendBaseUrl = (backendInp.value || '').trim();
+        saveBackendUrl(state.backendBaseUrl);
+      }
+
       // Gemini 키
       const geminiInp = document.getElementById('geminiKeyInput');
-      if (geminiInp && geminiInp.value.trim()) {
+      if (geminiInp) {
         state.apiKey = geminiInp.value.trim();
         saveKey(state.apiKey);
       }
@@ -2753,6 +3015,7 @@ bindEvents = function() {
       // 저장 완료 메시지
       const msg = document.getElementById('modelSaveMsg');
       if (msg) { msg.style.display = 'inline'; setTimeout(() => { msg.style.display = 'none'; }, 2000); }
+      gemini = hasGeminiConnection() ? createGeminiClient() : null;
       render(); // 사이드바 요약 및 설정 요약 갱신
     };
   }
@@ -2831,6 +3094,55 @@ function stopAutomation() {
 const _origBind = bindEvents;
 bindEvents = function() {
   _origBind();
+
+  if (state.step === 'automation' && !state.auto.serverFetchedOnce && !state.auto.serverLoading) {
+    state.auto.serverFetchedOnce = true;
+    fetchServerAutomationConfig();
+  }
+
+  const serverRefreshBtn = document.getElementById('serverAutoRefreshBtn');
+  if (serverRefreshBtn) {
+    serverRefreshBtn.onclick = async () => {
+      const baseInput = document.getElementById('serverAutoApiBase');
+      if (baseInput) state.auto.serverApiBase = baseInput.value.trim();
+      await fetchServerAutomationConfig();
+    };
+  }
+
+  const bindServerMode = (mode, modeId) => {
+    const saveBtn = document.getElementById(`serverSave${modeId}`);
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        const enabled = !!document.getElementById(`serverEnabled${modeId}`)?.checked;
+        const inputFolderId = extractFolderId(document.getElementById(`serverInput${modeId}`)?.value.trim() || '');
+        const sourceDoneFolderId = extractFolderId(document.getElementById(`serverDone${modeId}`)?.value.trim() || '');
+        const outputFolderId = extractFolderId(document.getElementById(`serverOutput${modeId}`)?.value.trim() || '');
+        const pollIntervalSeconds = parsePositiveInt(document.getElementById(`serverPoll${modeId}`)?.value, 120, 30, 3600);
+        const maxFilesPerRun = parsePositiveInt(document.getElementById(`serverMax${modeId}`)?.value, 1, 1, 20);
+
+        await updateServerAutomationProfiles({
+          [mode]: {
+            enabled,
+            inputFolderId,
+            sourceDoneFolderId,
+            outputFolderId,
+            pollIntervalSeconds,
+            maxFilesPerRun
+          }
+        });
+      };
+    }
+
+    const runBtn = document.getElementById(`serverRun${modeId}`);
+    if (runBtn) {
+      runBtn.onclick = async () => {
+        await runServerAutomationMode(mode);
+      };
+    }
+  };
+
+  bindServerMode('image-cuts', 'ImageCuts');
+  bindServerMode('detail-page', 'DetailPage');
 
   const connectBtn = document.getElementById('connectDriveBtn');
   if (connectBtn) connectBtn.onclick = connectDrive;
@@ -2914,8 +3226,8 @@ bindEvents = function() {
 // ════════════════════════════════════════════════════════════════
 // INIT
 // ════════════════════════════════════════════════════════════════
-if (state.apiKey) {
-  gemini = new GeminiAPI(state.apiKey);
+if (hasGeminiConnection()) {
+  gemini = createGeminiClient();
 }
 // Try init Google auth if client ID exists
 setTimeout(() => { try { initGoogleAuth(); } catch(e) {} }, 1000);
