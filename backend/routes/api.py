@@ -3,12 +3,46 @@ API Routes for the Product Detail Page Generator
 """
 import os
 import uuid
+import json
 import threading
 from flask import Blueprint, request, jsonify, send_file
 from werkzeug.utils import secure_filename
+import requests
+import google.auth
+from google.auth.transport.requests import Request as GoogleAuthRequest
 from services.pipeline import pipeline
 from services.section_definitions import get_all_sections
 from config import Config
+
+# ── Vertex Config (공용 중앙 설정) ─────────────────────────────────
+_VERTEX_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'vertex-config.json')
+_SACHYOSANGSE_VERTEX_CONFIG_PATH = r'C:\Users\kua\Documents\Playground\sachyosangse\apps\api\.local\vertex-config.json'
+
+def _load_vertex_config():
+    """요청마다 호출 — 파일에서 읽어 재시작 없이 즉시 반영."""
+    try:
+        with open(_VERTEX_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return {
+            'project': str(data.get('project') or '').strip() or Config.GOOGLE_CLOUD_PROJECT,
+            'location': str(data.get('location') or '').strip() or 'us-central1',
+        }
+    except Exception:
+        return {
+            'project': Config.GOOGLE_CLOUD_PROJECT,
+            'location': Config.GOOGLE_CLOUD_LOCATION or 'us-central1',
+        }
+
+def _save_vertex_config(project: str, location: str):
+    """두 곳 동시 저장 (kuasangse + sachyosangse)."""
+    data = {'project': project, 'location': location}
+    for path in [_VERTEX_CONFIG_PATH, _SACHYOSANGSE_VERTEX_CONFIG_PATH]:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
 api = Blueprint("api", __name__)
 
@@ -20,6 +54,34 @@ def allowed_file(filename):
 
 
 # ── Project Management ──────────────────────────────────────────
+
+def _normalize_vertex_payload(obj):
+    """Convert Gemini Developer-style keys to Vertex REST-style keys."""
+    if isinstance(obj, list):
+        return [_normalize_vertex_payload(item) for item in obj]
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            mapped = key
+            if key == "inline_data":
+                mapped = "inlineData"
+            elif key == "mime_type":
+                mapped = "mimeType"
+            out[mapped] = _normalize_vertex_payload(value)
+        # Vertex expects an explicit role for each content item.
+        if "parts" in out and "role" not in out:
+            out["role"] = "user"
+        return out
+    return obj
+
+
+def _get_adc_access_token():
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    credentials.refresh(GoogleAuthRequest())
+    return credentials.token
+
 
 @api.route("/projects", methods=["POST"])
 def create_project():
@@ -190,6 +252,87 @@ def generate_all_sections(project_id):
 def list_sections():
     """Get all 15 section definitions."""
     return jsonify(get_all_sections())
+
+
+@api.route("/provider", methods=["GET"])
+def provider_status():
+    """Return active Gemini transport route for billing-path verification."""
+    use_vertex = getattr(pipeline.gemini, "use_vertex", False)
+    vcfg = _load_vertex_config()
+    return jsonify({
+        "gemini_route": "vertex_ai" if use_vertex else "gemini_developer_api",
+        "google_cloud_project": vcfg['project'] if use_vertex else None,
+        "google_cloud_location": vcfg['location'] if use_vertex else None,
+    })
+
+
+@api.route("/vertex-config", methods=["GET"])
+def get_vertex_config():
+    """Vertex AI 설정 조회 (프로젝트 ID + 리전)."""
+    return jsonify(_load_vertex_config())
+
+
+@api.route("/vertex-config", methods=["POST"])
+def update_vertex_config():
+    """Vertex AI 설정 저장 — 재시작 없이 즉시 반영."""
+    body = request.get_json(silent=True) or {}
+    project = str(body.get('project') or '').strip()
+    location = str(body.get('location') or '').strip() or 'us-central1'
+    if not project:
+        return jsonify({"error": "project is required"}), 400
+    _save_vertex_config(project, location)
+    return jsonify({"ok": True, "project": project, "location": location})
+
+
+@api.route("/gemini/generate-content", methods=["POST"])
+def gemini_generate_content_proxy():
+    """
+    Proxy Gemini generateContent calls to Vertex AI.
+    Accepts a Gemini-style request body from browser and routes it to Vertex.
+    """
+    vcfg = _load_vertex_config()
+    if not vcfg['project']:
+        return jsonify({"error": {"message": "GOOGLE_CLOUD_PROJECT is not configured"}}), 500
+
+    body = request.get_json(silent=True) or {}
+    model = body.get("model", "").strip()
+    if not model:
+        return jsonify({"error": {"message": "Request must include model"}}), 400
+
+    payload = dict(body)
+    payload.pop("model", None)
+    payload = _normalize_vertex_payload(payload)
+
+    location = vcfg['location']
+    vertex_url = (
+        f"https://aiplatform.googleapis.com/v1/projects/{vcfg['project']}"
+        f"/locations/{location}/publishers/google/models/{model}:generateContent"
+    )
+
+    try:
+        access_token = _get_adc_access_token()
+    except Exception as e:
+        return jsonify({"error": {"message": f"Vertex auth failed: {str(e)}"}}), 500
+
+    try:
+        resp = requests.post(
+            vertex_url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=180,
+        )
+    except Exception as e:
+        return jsonify({"error": {"message": f"Vertex request failed: {str(e)}"}}), 502
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"error": {"message": resp.text or "Unexpected Vertex response"}}
+
+    return jsonify(data), resp.status_code
 
 
 # ── Export ───────────────────────────────────────────────────────

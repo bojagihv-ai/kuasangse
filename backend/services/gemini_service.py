@@ -13,7 +13,28 @@ from config import Config
 
 class GeminiService:
     def __init__(self):
-        self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
+        self.use_vertex = Config.GENAI_USE_VERTEXAI
+
+        if self.use_vertex:
+            if not Config.GOOGLE_CLOUD_PROJECT:
+                raise ValueError(
+                    "Vertex AI mode is enabled, but GOOGLE_CLOUD_PROJECT is not set."
+                )
+            if Config.GOOGLE_CLOUD_PROJECT.startswith("your_"):
+                raise ValueError(
+                    "Set a real GOOGLE_CLOUD_PROJECT value before using Vertex AI mode."
+                )
+            self.client = genai.Client(
+                vertexai=True,
+                project=Config.GOOGLE_CLOUD_PROJECT,
+                location=Config.GOOGLE_CLOUD_LOCATION,
+            )
+        else:
+            if not Config.GEMINI_API_KEY:
+                raise ValueError(
+                    "Gemini Developer API mode requires GEMINI_API_KEY."
+                )
+            self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
     def analyze_product_image(self, image_path: str) -> dict:
         """Analyze product image and extract comprehensive features using Gemini Vision."""

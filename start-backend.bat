@@ -1,15 +1,32 @@
 @echo off
 echo ============================================
-echo   상세페이지 자동 생성기 - 백엔드 서버 시작
+echo   Product Detail Generator - Backend Start
 echo ============================================
 cd /d "%~dp0backend"
-if not exist "venv" (
-    echo [1/3] Python 가상환경 생성 중...
-    python -m venv venv
+
+set "VENV_DIR=venv311"
+py -3.11 --version >nul 2>&1
+if %errorlevel%==0 (
+    set "PYTHON_CMD=py -3.11"
+) else (
+    set "PYTHON_CMD=python"
 )
-echo [2/3] 패키지 설치 중...
-call venv\Scripts\activate.bat
-pip install -r requirements.txt -q
-echo [3/3] 서버 시작!
-python app.py
+
+if not exist "%VENV_DIR%\Scripts\python.exe" (
+    echo [1/3] Creating Python virtual environment...
+    %PYTHON_CMD% -m venv %VENV_DIR%
+)
+
+echo [2/3] Installing packages...
+call %VENV_DIR%\Scripts\activate.bat
+python -m pip install -r requirements.txt -q
+
+echo [3/3] Starting backend server...
+echo Backend URL: http://127.0.0.1:5050
+
+:: SSL 인증서 경로 설정 (certifi 사용)
+for /f "delims=" %%i in ('python -c "import certifi; print(certifi.where())"') do set SSL_CERT_FILE=%%i
+echo SSL_CERT_FILE=%SSL_CERT_FILE%
+
+waitress-serve --call --listen=127.0.0.1:5050 app:create_app
 pause

@@ -45,8 +45,10 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
+    port = int(os.getenv("PORT", "5000"))
+    debug = os.getenv("FLASK_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
     print("\n" + "=" * 60)
-    print("  상세페이지 자동 생성기 서버 시작!")
-    print("  http://localhost:5000")
+    print("  Product Detail Page Auto-Generator backend starting")
+    print(f"  http://localhost:{port}")
     print("=" * 60 + "\n")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=debug)
