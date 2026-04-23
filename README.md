@@ -7,6 +7,13 @@ This project now supports both Gemini billing routes:
 - Vertex AI route (recommended for GCP billing/credits)
 - Gemini Developer API route (API key billing)
 
+## Secrets policy
+
+Do not commit real API keys, service account JSON files, or local credential files to GitHub.
+Use `backend/.env` locally and keep only placeholder examples such as `backend/.env.example` in the repository.
+
+For GitHub Actions or hosted deployments, put values like `OPENAI_API_KEY`, `GEMINI_API_KEY`, `SERPAPI_KEY`, and `GOOGLE_APPLICATION_CREDENTIALS` in the platform's secret manager instead of source files.
+
 ### 1) Configure backend env
 
 Edit `backend/.env`:
