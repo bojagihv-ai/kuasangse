@@ -776,14 +776,16 @@ Respond ONLY with the JSON object, no other text.`;
     tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, '제품분석');
     let text = data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
-    return JSON.parse(text);
+    return applyBrandPresetToContent(JSON.parse(text));
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
-    const activeDirectives = (state.imageDirectives||[]).filter(d=>d.active).map(d=>d.text);
+    const activeDirectives = getEffectiveImageDirectives();
     const directiveBlock = activeDirectives.length > 0
       ? `\nSTRICT USER CONSTRAINTS (must be followed — override defaults):\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n`
       : '';
+    const brandBlock = buildBrandPromptBlock();
+    const layoutBlock = buildLayoutPromptBlock();
     const prompt = `You are a Korean e-commerce detail page content creator.
 
 Product Analysis:
@@ -796,6 +798,8 @@ Section number: ${sectionDef.n}
 Section purpose: ${sectionDef.purpose}
 User custom instructions: ${customInstructions || 'None'}
 ${directiveBlock}
+${brandBlock}
+${layoutBlock}
 Based on the product analysis, generate content for this section.
 Return a JSON object:
 {
@@ -842,12 +846,14 @@ Respond ONLY with the JSON object.`;
     const sizeHint = (cfg.imageSizeMode === 'custom' && cfg.imageWidth)
       ? `Exact size: ${cfg.imageWidth}px wide${cfg.imageHeight ? ' × ' + cfg.imageHeight + 'px tall' : ''}.`
       : 'Size: 860px wide.';
-    const activeDirectives = (state.imageDirectives||[]).filter(d=>d.active).map(d=>d.text);
+    const activeDirectives = getEffectiveImageDirectives();
     const directiveStr = activeDirectives.length > 0
       ? `\n\nCRITICAL CONSTRAINTS — you MUST follow these exactly, no exceptions:\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}`
       : '';
+    const brandBlock = buildBrandPromptBlock();
+    const layoutBlock = buildLayoutPromptBlock();
     const parts = [
-      { text: `Create a professional Korean e-commerce product detail page section image. ${prompt} Style: clean, modern, high-end Korean shopping mall aesthetic. ${sizeHint}${directiveStr}` }
+      { text: `Create a professional Korean e-commerce product detail page section image. ${prompt} Style: clean, modern, high-end Korean shopping mall aesthetic. ${sizeHint}${directiveStr}\n${brandBlock}\n${layoutBlock}` }
     ];
     if (productImageBase64) {
       parts.push({ inline_data: { mime_type: mimeType, data: productImageBase64 } });
@@ -1192,11 +1198,11 @@ Respond ONLY with the JSON object, no other text.`;
     const data = await res.json();
     if (data.error) throw new Error(data.error.message);
     tokenTracker.record(this.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, '제품분석');
-    return this._parseJSON(data.choices[0].message.content);
+    return applyBrandPresetToContent(this._parseJSON(data.choices[0].message.content));
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
-    const activeDirectives = (state.imageDirectives||[]).filter(d=>d.active).map(d=>d.text);
+    const activeDirectives = getEffectiveImageDirectives();
     const directiveBlock = activeDirectives.length > 0
       ? `\nSTRICT USER CONSTRAINTS (must be followed — override defaults):\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n`
       : '';
@@ -1212,6 +1218,8 @@ Section number: ${sectionDef.n}
 Section purpose: ${sectionDef.purpose}
 User custom instructions: ${customInstructions || 'None'}
 ${directiveBlock}
+${brandBlock}
+${layoutBlock}
 Based on the product analysis, generate content for this section.
 Return a JSON object:
 {
@@ -1464,6 +1472,196 @@ function cssFontFamily(value, fallback = "'Pretendard','Noto Sans KR',sans-serif
   return `'${cleaned}'`;
 }
 
+const STORAGE_KEYS = {
+  sectionInstructions: 'section_instructions',
+  imageDirectives: 'image_directives',
+  brandPresets: 'brand_presets_v1',
+  activeBrandPresetId: 'active_brand_preset_id',
+  layoutTemplate: 'layout_template_v1',
+};
+
+const LAYOUT_TEMPLATES = [
+  { id: 'classic', label: 'Classic', desc: 'Centered hero sections with a familiar shopping-mall rhythm.' },
+  { id: 'split', label: 'Split', desc: 'Alternating image/text blocks for faster scanning.' },
+  { id: 'spotlight', label: 'Spotlight', desc: 'Bold headline-first layout with stronger visual emphasis.' },
+  { id: 'minimal', label: 'Minimal', desc: 'Clean information-forward layout with restrained styling.' },
+];
+
+const WORKSPACE_DB = {
+  name: 'pdp_workspace_v1',
+  version: 1,
+  projects: 'projects',
+  snapshots: 'snapshots',
+};
+
+function loadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function saveJson(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+}
+
+function cloneData(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function uid(prefix = 'id') {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function nl2br(value) {
+  return escapeHtml(value).replace(/\n/g, '<br>');
+}
+
+function summarizeText(value, limit = 90) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function loadImageDirectives() {
+  return loadJson(STORAGE_KEYS.imageDirectives, []);
+}
+
+function createEmptyBrandPreset() {
+  return {
+    id: '',
+    name: '',
+    tone: '',
+    requiredKeywords: '',
+    bannedPhrases: '',
+    headlineFont: 'Pretendard',
+    bodyFont: 'Pretendard',
+    accentColor: '#b56d3a',
+    backgroundColor: '',
+    imageDirectives: '',
+    globalInstruction: '',
+  };
+}
+
+function normalizeBrandPreset(preset) {
+  const next = { ...createEmptyBrandPreset(), ...(preset || {}) };
+  next.name = String(next.name || '').trim();
+  next.tone = String(next.tone || '').trim();
+  next.requiredKeywords = String(next.requiredKeywords || '').trim();
+  next.bannedPhrases = String(next.bannedPhrases || '').trim();
+  next.headlineFont = String(next.headlineFont || '').trim() || 'Pretendard';
+  next.bodyFont = String(next.bodyFont || '').trim() || next.headlineFont || 'Pretendard';
+  next.accentColor = String(next.accentColor || '').trim() || '#b56d3a';
+  next.backgroundColor = String(next.backgroundColor || '').trim();
+  next.imageDirectives = String(next.imageDirectives || '').trim();
+  next.globalInstruction = String(next.globalInstruction || '').trim();
+  return next;
+}
+
+function loadBrandPresets() {
+  return loadJson(STORAGE_KEYS.brandPresets, []).map(normalizeBrandPreset);
+}
+
+function saveBrandPresets(presets) {
+  saveJson(STORAGE_KEYS.brandPresets, (presets || []).map(normalizeBrandPreset));
+}
+
+function loadActiveBrandPresetId() {
+  try { return localStorage.getItem(STORAGE_KEYS.activeBrandPresetId) || ''; } catch (e) { return ''; }
+}
+
+function saveActiveBrandPresetId(id) {
+  try { localStorage.setItem(STORAGE_KEYS.activeBrandPresetId, id || ''); } catch (e) {}
+}
+
+function loadLayoutTemplate() {
+  try {
+    const id = localStorage.getItem(STORAGE_KEYS.layoutTemplate) || 'classic';
+    return LAYOUT_TEMPLATES.some(t => t.id === id) ? id : 'classic';
+  } catch (e) {
+    return 'classic';
+  }
+}
+
+function saveLayoutTemplate(id) {
+  try { localStorage.setItem(STORAGE_KEYS.layoutTemplate, id); } catch (e) {}
+}
+
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+  });
+}
+
+function idbDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'));
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+  });
+}
+
+async function openWorkspaceDb() {
+  if (!('indexedDB' in window)) throw new Error('IndexedDB unavailable');
+  if (openWorkspaceDb._db) return openWorkspaceDb._db;
+  const request = indexedDB.open(WORKSPACE_DB.name, WORKSPACE_DB.version);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    if (!db.objectStoreNames.contains(WORKSPACE_DB.projects)) {
+      db.createObjectStore(WORKSPACE_DB.projects, { keyPath: 'id' });
+    }
+    if (!db.objectStoreNames.contains(WORKSPACE_DB.snapshots)) {
+      const store = db.createObjectStore(WORKSPACE_DB.snapshots, { keyPath: 'id' });
+      store.createIndex('projectId', 'projectId', { unique: false });
+      store.createIndex('createdAt', 'createdAt', { unique: false });
+    }
+  };
+  openWorkspaceDb._db = await idbRequest(request);
+  return openWorkspaceDb._db;
+}
+
+async function workspaceGet(storeName, key) {
+  const db = await openWorkspaceDb();
+  const tx = db.transaction(storeName, 'readonly');
+  const result = await idbRequest(tx.objectStore(storeName).get(key));
+  await idbDone(tx);
+  return result;
+}
+
+async function workspaceGetAll(storeName) {
+  const db = await openWorkspaceDb();
+  const tx = db.transaction(storeName, 'readonly');
+  const result = await idbRequest(tx.objectStore(storeName).getAll());
+  await idbDone(tx);
+  return result;
+}
+
+async function workspacePut(storeName, value) {
+  const db = await openWorkspaceDb();
+  const tx = db.transaction(storeName, 'readwrite');
+  tx.objectStore(storeName).put(value);
+  await idbDone(tx);
+}
+
+async function workspaceDelete(storeName, key) {
+  const db = await openWorkspaceDb();
+  const tx = db.transaction(storeName, 'readwrite');
+  tx.objectStore(storeName).delete(key);
+  await idbDone(tx);
+}
+
 // ════════════════════════════════════════════════════════════════
 // PERSISTENT STORAGE (works on file:// too)
 // ════════════════════════════════════════════════════════════════
@@ -1580,14 +1778,10 @@ function loadCompAnalysis() {
 
 // 섹션별 지시사항 저장/불러오기
 function saveSectionInstructions(instructions) {
-  try { localStorage.setItem('section_instructions', JSON.stringify(instructions)); } catch(e) {}
+  saveJson(STORAGE_KEYS.sectionInstructions, instructions || {});
 }
 function loadSectionInstructions() {
-  try {
-    const raw = localStorage.getItem('section_instructions');
-    if (raw) return JSON.parse(raw);
-  } catch(e) {}
-  return {};
+  return loadJson(STORAGE_KEYS.sectionInstructions, {});
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1604,6 +1798,22 @@ function savePersistentState() {
       imageMime: state.imageMime,
       productName: state.productName,
       analysisTimestamp: state.analysisTimestamp,
+      currentProjectId: state.currentProjectId,
+      currentProjectName: state.currentProjectName,
+      currentProjectCreatedAt: state.currentProjectCreatedAt,
+      sectionLocks: state.sectionLocks,
+      sectionVariants: state.sectionVariants,
+      currentSectionVariantIds: state.currentSectionVariantIds,
+      manualSectionEdits: state.manualSectionEdits,
+      layoutTemplate: state.layoutTemplate,
+      activeBrandPresetId: state.activeBrandPresetId,
+      contentVersion: state.contentVersion,
+      qaVersion: state.qaVersion,
+      compPage: {
+        analysisResult: state.compPage.analysisResult,
+        sectionPlan: state.compPage.sectionPlan,
+        planEdits: state.compPage.planEdits,
+      },
     };
     localStorage.setItem('pdp_session', JSON.stringify(payload));
   } catch(e) {}
@@ -1625,6 +1835,18 @@ function loadPersistentSession() {
     if (s.step === 'generating') s.step = Object.keys(s.sectionContents||{}).length > 0 ? 'preview' : 'sections';
     s.imageBase64 = localStorage.getItem('pdp_session_img') || null;
     try { s.sectionImages = JSON.parse(localStorage.getItem('pdp_session_imgs') || '{}'); } catch(e) { s.sectionImages = {}; }
+    s.currentProjectId = s.currentProjectId || '';
+    s.currentProjectName = s.currentProjectName || '';
+    s.currentProjectCreatedAt = s.currentProjectCreatedAt || null;
+    s.sectionLocks = s.sectionLocks || {};
+    s.sectionVariants = s.sectionVariants || {};
+    s.currentSectionVariantIds = s.currentSectionVariantIds || {};
+    s.manualSectionEdits = s.manualSectionEdits || {};
+    s.layoutTemplate = LAYOUT_TEMPLATES.some(t => t.id === s.layoutTemplate) ? s.layoutTemplate : loadLayoutTemplate();
+    s.activeBrandPresetId = typeof s.activeBrandPresetId === 'string' ? s.activeBrandPresetId : loadActiveBrandPresetId();
+    s.contentVersion = Number.isFinite(s.contentVersion) ? s.contentVersion : 0;
+    s.qaVersion = Number.isFinite(s.qaVersion) ? s.qaVersion : 0;
+    s.compPage = s.compPage || null;
     return s;
   } catch(e) { return null; }
 }
@@ -1643,6 +1865,9 @@ const _savedOpenAIKey = loadOpenAIKey();
 const _savedInstructions = loadSectionInstructions();
 const _savedModelConfig = loadModelConfig();
 const _savedSession = loadPersistentSession();
+const _savedBrandPresets = loadBrandPresets();
+const _savedActiveBrandPresetId = loadActiveBrandPresetId();
+const _savedLayoutTemplate = _savedSession?.layoutTemplate || loadLayoutTemplate();
 const state = {
   step: _savedSession?.step || 'upload', // upload | analyzing | sections | generating | preview | modelsettings
   apiKey: _savedKey,
@@ -1650,6 +1875,13 @@ const state = {
   showApiModal: !_savedKey && !_savedBackendUrl && !_savedOpenAIKey,
   modelConfig: _savedModelConfig,
   openaiKey: _savedOpenAIKey,
+  currentProjectId: _savedSession?.currentProjectId || '',
+  currentProjectName: _savedSession?.currentProjectName || '',
+  currentProjectCreatedAt: _savedSession?.currentProjectCreatedAt || null,
+  projectsLoaded: false,
+  projectBusy: false,
+  projects: [],
+  snapshots: [],
   productName: _savedSession?.productName || '',
   imagePreview: _savedSession?.imagePreview || null,
   imageBase64: _savedSession?.imageBase64 || null,
@@ -1662,9 +1894,20 @@ const state = {
   sectionInstructions: _savedInstructions,
   sectionContents: _savedSession?.sectionContents || {},
   sectionImages: _savedSession?.sectionImages || {},
+  sectionLocks: _savedSession?.sectionLocks || {},
+  sectionVariants: _savedSession?.sectionVariants || {},
+  currentSectionVariantIds: _savedSession?.currentSectionVariantIds || {},
+  manualSectionEdits: _savedSession?.manualSectionEdits || {},
   sectionGenerating: {}, // sectionId → 'loading' | 'done' | undefined
-  imageDirectives: JSON.parse(localStorage.getItem('image_directives') || '[]'), // [{id, text, active}]
+  imageDirectives: loadImageDirectives(), // [{id, text, active}]
   imageDirectivesOpen: false,
+  brandPresets: _savedBrandPresets,
+  activeBrandPresetId: _savedBrandPresets.some(p => p.id === _savedActiveBrandPresetId) ? _savedActiveBrandPresetId : '',
+  brandPresetDraft: createEmptyBrandPreset(),
+  layoutTemplate: _savedLayoutTemplate,
+  qaReport: null,
+  contentVersion: _savedSession?.contentVersion || 0,
+  qaVersion: _savedSession?.qaVersion || 0,
   // ── Agent Chat ──
   agentOpen: false,
   agentMessages: [], // [{role:'user'|'assistant', content, actions, done}]
@@ -1750,6 +1993,557 @@ const state = {
   }
 })();
 
+function getBrandPresetById(id) {
+  return (state.brandPresets || []).find(p => p.id === id) || null;
+}
+
+function getActiveBrandPreset() {
+  return getBrandPresetById(state.activeBrandPresetId);
+}
+
+function getInitialBrandPresetDraft(id) {
+  const found = getBrandPresetById(id);
+  return found ? cloneData(found) : createEmptyBrandPreset();
+}
+
+function getPresetImageDirectives() {
+  const preset = getActiveBrandPreset();
+  if (!preset?.imageDirectives) return [];
+  return preset.imageDirectives
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+function getEffectiveImageDirectives() {
+  const activeManual = (state.imageDirectives || [])
+    .filter(d => d.active)
+    .map(d => String(d.text || '').trim())
+    .filter(Boolean);
+  return [...new Set([...getPresetImageDirectives(), ...activeManual])];
+}
+
+function buildBrandPromptBlock() {
+  const preset = getActiveBrandPreset();
+  if (!preset) return '';
+  const parts = [];
+  if (preset.tone) parts.push(`Brand tone: ${preset.tone}`);
+  if (preset.requiredKeywords) parts.push(`Required keywords or themes: ${preset.requiredKeywords}`);
+  if (preset.bannedPhrases) parts.push(`Banned phrases: ${preset.bannedPhrases}`);
+  if (preset.headlineFont || preset.bodyFont) parts.push(`Preferred fonts: headline=${preset.headlineFont || 'auto'}, body=${preset.bodyFont || preset.headlineFont || 'auto'}`);
+  if (preset.accentColor) parts.push(`Preferred accent color: ${preset.accentColor}`);
+  if (preset.backgroundColor) parts.push(`Preferred background color: ${preset.backgroundColor}`);
+  if (preset.globalInstruction) parts.push(`Global instruction: ${preset.globalInstruction}`);
+  if (!parts.length) return '';
+  return `\nBRAND PRESET (keep the result consistent with this brand system):\n${parts.map((item, idx) => `${idx + 1}. ${item}`).join('\n')}\n`;
+}
+
+function buildLayoutPromptBlock() {
+  const template = LAYOUT_TEMPLATES.find(t => t.id === state.layoutTemplate);
+  if (!template) return '';
+  return `\nPREFERRED PAGE TEMPLATE:\n- ${template.label}: ${template.desc}\n`;
+}
+
+function applyBrandPresetToContent(content) {
+  const preset = getActiveBrandPreset();
+  const next = cloneData(content) || {};
+  next.color_scheme = { ...(next.color_scheme || {}) };
+  next.font_suggestion = { ...(next.font_suggestion || {}) };
+  if (preset?.headlineFont) next.font_suggestion.headline_font = preset.headlineFont;
+  if (preset?.bodyFont) next.font_suggestion.body_font = preset.bodyFont;
+  if (preset?.accentColor && !next.color_scheme.accent) next.color_scheme.accent = preset.accentColor;
+  if (preset?.backgroundColor && !next.color_scheme.background) next.color_scheme.background = preset.backgroundColor;
+  return next;
+}
+
+function markContentChanged(shouldPersist = true) {
+  state.contentVersion = (state.contentVersion || 0) + 1;
+  state.qaReport = null;
+  if (shouldPersist) savePersistentState();
+}
+
+function deriveProjectName() {
+  return String(
+    state.currentProjectName ||
+    state.productName ||
+    state.analysis?.product_name ||
+    state.analysis?.product_name_en ||
+    '상세페이지 프로젝트'
+  ).trim();
+}
+
+function buildWorkspacePayload() {
+  return {
+    name: deriveProjectName(),
+    step: state.step,
+    productName: state.productName,
+    imagePreview: state.imagePreview,
+    imageBase64: state.imageBase64,
+    imageMime: state.imageMime,
+    analysis: cloneData(state.analysis),
+    competitorData: cloneData(state.competitorData),
+    analysisTimestamp: state.analysisTimestamp,
+    sectionInstructions: cloneData(state.sectionInstructions),
+    sectionContents: cloneData(state.sectionContents),
+    sectionImages: cloneData(state.sectionImages),
+    sectionLocks: cloneData(state.sectionLocks),
+    sectionVariants: cloneData(state.sectionVariants),
+    currentSectionVariantIds: cloneData(state.currentSectionVariantIds),
+    manualSectionEdits: cloneData(state.manualSectionEdits),
+    imageDirectives: cloneData(state.imageDirectives),
+    modelConfig: cloneData(state.modelConfig),
+    layoutTemplate: state.layoutTemplate,
+    activeBrandPresetId: state.activeBrandPresetId,
+    contentVersion: state.contentVersion || 0,
+    qaVersion: state.qaVersion || 0,
+    compPage: {
+      analysisResult: cloneData(state.compPage.analysisResult),
+      sectionPlan: cloneData(state.compPage.sectionPlan),
+      planEdits: cloneData(state.compPage.planEdits),
+    },
+    savedAt: Date.now(),
+  };
+}
+
+function applyWorkspacePayload(payload, options = {}) {
+  if (!payload) return;
+  const next = cloneData(payload);
+  state.currentProjectId = options.projectId !== undefined ? options.projectId : (state.currentProjectId || '');
+  state.currentProjectName = next.name || '';
+  state.currentProjectCreatedAt = options.createdAt || state.currentProjectCreatedAt || Date.now();
+  state.step = next.step === 'generating' ? 'preview' : (next.step || (next.sectionContents ? 'preview' : 'upload'));
+  state.productName = next.productName || '';
+  state.imagePreview = next.imagePreview || null;
+  state.imageBase64 = next.imageBase64 || null;
+  state.imageMime = next.imageMime || null;
+  state.analysis = next.analysis || null;
+  state.competitorData = next.competitorData || null;
+  state.analysisTimestamp = next.analysisTimestamp || null;
+  state.sectionInstructions = next.sectionInstructions || {};
+  state.sectionContents = next.sectionContents || {};
+  state.sectionImages = next.sectionImages || {};
+  state.sectionLocks = next.sectionLocks || {};
+  state.sectionVariants = next.sectionVariants || {};
+  state.currentSectionVariantIds = next.currentSectionVariantIds || {};
+  state.manualSectionEdits = next.manualSectionEdits || {};
+  state.imageDirectives = Array.isArray(next.imageDirectives) ? next.imageDirectives : [];
+  state.modelConfig = normalizeModelConfig(next.modelConfig || state.modelConfig);
+  state.layoutTemplate = LAYOUT_TEMPLATES.some(t => t.id === next.layoutTemplate) ? next.layoutTemplate : state.layoutTemplate;
+  state.activeBrandPresetId = typeof next.activeBrandPresetId === 'string' ? next.activeBrandPresetId : state.activeBrandPresetId;
+  state.brandPresetDraft = getInitialBrandPresetDraft(state.activeBrandPresetId);
+  state.contentVersion = Number.isFinite(next.contentVersion) ? next.contentVersion : (state.contentVersion || 0);
+  state.qaVersion = Number.isFinite(next.qaVersion) ? next.qaVersion : 0;
+  state.qaReport = null;
+  state.sectionGenerating = {};
+  state.progress = 0;
+  state.progressMsg = '';
+  if (next.compPage) {
+    state.compPage.analysisResult = next.compPage.analysisResult || null;
+    state.compPage.sectionPlan = next.compPage.sectionPlan || null;
+    state.compPage.planEdits = next.compPage.planEdits || {};
+    saveCompAnalysis(state.compPage.analysisResult, state.compPage.sectionPlan, state.compPage.planEdits);
+  }
+  saveSectionInstructions(state.sectionInstructions);
+  saveImageDirectives();
+  saveModelConfig(state.modelConfig);
+  saveLayoutTemplate(state.layoutTemplate);
+  saveActiveBrandPresetId(state.activeBrandPresetId);
+  savePersistentState();
+}
+
+async function refreshWorkspaceLists(renderAfter = true) {
+  try {
+    const [projects, snapshots] = await Promise.all([
+      workspaceGetAll(WORKSPACE_DB.projects),
+      workspaceGetAll(WORKSPACE_DB.snapshots),
+    ]);
+    const counts = {};
+    for (const snap of snapshots) counts[snap.projectId] = (counts[snap.projectId] || 0) + 1;
+    state.projects = projects
+      .map(project => ({ ...project, snapshotCount: counts[project.id] || 0 }))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    state.snapshots = snapshots
+      .filter(snap => snap.projectId === state.currentProjectId)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    state.projectsLoaded = true;
+  } catch (e) {
+    state.projectsLoaded = true;
+    console.warn('Workspace list load failed:', e);
+  }
+  if (renderAfter) render();
+}
+
+async function saveCurrentProject() {
+  state.projectBusy = true;
+  render();
+  try {
+    const id = state.currentProjectId || uid('project');
+    const existing = state.currentProjectId ? await workspaceGet(WORKSPACE_DB.projects, id) : null;
+    const name = deriveProjectName();
+    const record = {
+      id,
+      name,
+      createdAt: existing?.createdAt || state.currentProjectCreatedAt || Date.now(),
+      updatedAt: Date.now(),
+      payload: buildWorkspacePayload(),
+    };
+    await workspacePut(WORKSPACE_DB.projects, record);
+    state.currentProjectId = id;
+    state.currentProjectName = name;
+    state.currentProjectCreatedAt = record.createdAt;
+    await refreshWorkspaceLists(false);
+    savePersistentState();
+  } catch (e) {
+    state.error = `프로젝트 저장 실패: ${e.message}`;
+  } finally {
+    state.projectBusy = false;
+    render();
+  }
+}
+
+async function saveCurrentSnapshot() {
+  if (!state.analysis && !Object.keys(state.sectionContents || {}).length) {
+    state.error = '스냅샷을 만들려면 먼저 작업물이 있어야 합니다.';
+    render();
+    return;
+  }
+  if (!state.currentProjectId) await saveCurrentProject();
+  if (!state.currentProjectId) return;
+  state.projectBusy = true;
+  render();
+  try {
+    await workspacePut(WORKSPACE_DB.snapshots, {
+      id: uid('snapshot'),
+      projectId: state.currentProjectId,
+      projectName: deriveProjectName(),
+      createdAt: Date.now(),
+      label: new Date().toLocaleString('ko-KR'),
+      payload: buildWorkspacePayload(),
+    });
+    await refreshWorkspaceLists(false);
+  } catch (e) {
+    state.error = `스냅샷 저장 실패: ${e.message}`;
+  } finally {
+    state.projectBusy = false;
+    render();
+  }
+}
+
+async function loadProjectRecord(projectId) {
+  try {
+    const project = await workspaceGet(WORKSPACE_DB.projects, projectId);
+    if (!project) throw new Error('저장된 프로젝트를 찾을 수 없습니다.');
+    applyWorkspacePayload(project.payload, { projectId: project.id, createdAt: project.createdAt });
+    await refreshWorkspaceLists(false);
+    render();
+  } catch (e) {
+    state.error = `프로젝트 불러오기 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function loadSnapshotRecord(snapshotId) {
+  try {
+    const snapshot = await workspaceGet(WORKSPACE_DB.snapshots, snapshotId);
+    if (!snapshot) throw new Error('저장된 스냅샷을 찾을 수 없습니다.');
+    applyWorkspacePayload(snapshot.payload, { projectId: snapshot.projectId });
+    state.currentProjectName = snapshot.projectName || state.currentProjectName;
+    await refreshWorkspaceLists(false);
+    render();
+  } catch (e) {
+    state.error = `스냅샷 복원 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function deleteProjectRecord(projectId) {
+  try {
+    const snapshots = await workspaceGetAll(WORKSPACE_DB.snapshots);
+    const linked = snapshots.filter(s => s.projectId === projectId);
+    for (const snap of linked) await workspaceDelete(WORKSPACE_DB.snapshots, snap.id);
+    await workspaceDelete(WORKSPACE_DB.projects, projectId);
+    if (state.currentProjectId === projectId) {
+      state.currentProjectId = '';
+      state.currentProjectName = '';
+      state.currentProjectCreatedAt = null;
+      state.snapshots = [];
+      savePersistentState();
+    }
+    await refreshWorkspaceLists(false);
+    render();
+  } catch (e) {
+    state.error = `프로젝트 삭제 실패: ${e.message}`;
+    render();
+  }
+}
+
+async function deleteSnapshotRecord(snapshotId) {
+  try {
+    await workspaceDelete(WORKSPACE_DB.snapshots, snapshotId);
+    await refreshWorkspaceLists(false);
+    render();
+  } catch (e) {
+    state.error = `스냅샷 삭제 실패: ${e.message}`;
+    render();
+  }
+}
+
+function startNewProjectDraft() {
+  state.currentProjectId = '';
+  state.currentProjectName = '';
+  state.currentProjectCreatedAt = null;
+  state.snapshots = [];
+  savePersistentState();
+  render();
+}
+
+function sectionContentFingerprint(content, imageData) {
+  return JSON.stringify({
+    headline: content?.headline || '',
+    subheadline: content?.subheadline || '',
+    body_text: content?.body_text || '',
+    cta_text: content?.cta_text || '',
+    extra_elements: content?.extra_elements || [],
+    image: imageData ? `img:${String(imageData).slice(0, 32)}` : '',
+  });
+}
+
+function nextVariantLabel(sectionId, source = 'variant') {
+  const list = state.sectionVariants[sectionId] || [];
+  const count = list.length + 1;
+  if (source === 'manual') return `수정안 ${count}`;
+  if (source === 'baseline') return `기준안 ${count}`;
+  return `시안 ${count}`;
+}
+
+function rememberSectionVariant(sectionId, content, imageData, source = 'variant', explicitLabel = '') {
+  if (!content) return null;
+  const list = state.sectionVariants[sectionId] || [];
+  const fingerprint = sectionContentFingerprint(content, imageData);
+  if (list.some(item => item.fingerprint === fingerprint)) return list.find(item => item.fingerprint === fingerprint);
+  const variant = {
+    id: uid(`variant_${sectionId}`),
+    label: explicitLabel || nextVariantLabel(sectionId, source),
+    source,
+    createdAt: Date.now(),
+    fingerprint,
+    content: cloneData(content),
+    image: imageData || null,
+  };
+  state.sectionVariants[sectionId] = [variant, ...list].slice(0, 8);
+  return variant;
+}
+
+function captureCurrentSectionVariant(sectionId, source = 'baseline', label = '') {
+  return rememberSectionVariant(sectionId, state.sectionContents[sectionId], state.sectionImages[sectionId] || null, source, label);
+}
+
+function applySectionContent(sectionId, content, imageData, source = 'variant', label = '') {
+  const effectiveImage = imageData === undefined ? (state.sectionImages[sectionId] || null) : imageData;
+  state.sectionContents[sectionId] = cloneData(content);
+  if (imageData === null) delete state.sectionImages[sectionId];
+  else if (imageData !== undefined) state.sectionImages[sectionId] = imageData;
+  const variant = rememberSectionVariant(sectionId, state.sectionContents[sectionId], effectiveImage, source, label);
+  if (variant) state.currentSectionVariantIds[sectionId] = variant.id;
+  markContentChanged();
+}
+
+function applySectionVariant(sectionId, variantId) {
+  const variant = (state.sectionVariants[sectionId] || []).find(item => item.id === variantId);
+  if (!variant) return;
+  state.sectionContents[sectionId] = cloneData(variant.content);
+  if (variant.image) state.sectionImages[sectionId] = variant.image;
+  else delete state.sectionImages[sectionId];
+  state.currentSectionVariantIds[sectionId] = variant.id;
+  markContentChanged();
+  render();
+}
+
+function saveManualSectionContent(sectionId, patch) {
+  const current = cloneData(state.sectionContents[sectionId] || {});
+  current.headline = patch.headline;
+  current.subheadline = patch.subheadline;
+  current.body_text = patch.body_text;
+  current.cta_text = patch.cta_text;
+  current.extra_elements = (patch.extra_elements || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  current.layout_suggestion = patch.layout_suggestion || current.layout_suggestion || '';
+  applySectionContent(sectionId, current, undefined, 'manual');
+  state.manualSectionEdits[sectionId] = true;
+  savePersistentState();
+}
+
+function setSectionLock(sectionId, locked) {
+  if (locked) state.sectionLocks[sectionId] = true;
+  else delete state.sectionLocks[sectionId];
+  savePersistentState();
+  render();
+}
+
+function normalizeText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function hexToRgb(hex) {
+  const raw = String(hex || '').trim().replace('#', '');
+  if (!/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(raw)) return null;
+  const normalized = raw.length === 3 ? raw.split('').map(c => c + c).join('') : raw;
+  const num = parseInt(normalized, 16);
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255,
+  };
+}
+
+function contrastRatio(fg, bg) {
+  const a = hexToRgb(fg);
+  const b = hexToRgb(bg);
+  if (!a || !b) return null;
+  const toLum = ({ r, g, b }) => {
+    const chan = [r, g, b].map(v => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * chan[0] + 0.7152 * chan[1] + 0.0722 * chan[2];
+  };
+  const l1 = toLum(a);
+  const l2 = toLum(b);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function runQaCheck({ renderAfter = true } = {}) {
+  const findings = [];
+  const preset = getActiveBrandPreset();
+  const headlineSeen = new Map();
+  const ctaSeen = new Map();
+  const banned = String(preset?.bannedPhrases || '')
+    .split(/[,\n]/)
+    .map(item => item.trim())
+    .filter(Boolean);
+
+  for (const section of SECTIONS) {
+    const content = state.sectionContents[section.id];
+    if (!content) {
+      findings.push({ severity: 'warning', sectionId: section.id, title: `${section.name} 미생성`, detail: '이 섹션은 아직 생성되지 않았습니다.' });
+      continue;
+    }
+    const headline = String(content.headline || '').trim();
+    const body = String(content.body_text || '').trim();
+    const cta = String(content.cta_text || '').trim();
+    const contrast = contrastRatio(content.color_scheme?.text_primary, content.color_scheme?.background);
+
+    if (!headline) findings.push({ severity: 'critical', sectionId: section.id, title: `${section.name} 헤드라인 누락`, detail: '헤드라인이 비어 있습니다.' });
+    if (!body) findings.push({ severity: 'critical', sectionId: section.id, title: `${section.name} 본문 누락`, detail: '본문 카피가 비어 있습니다.' });
+    if (body && body.length < 28) findings.push({ severity: 'warning', sectionId: section.id, title: `${section.name} 본문이 너무 짧음`, detail: '본문 설명이 짧아서 설득력이 약할 수 있습니다.' });
+    if ((section.id === 'header' || section.id === 'features') && !state.sectionImages[section.id]) {
+      findings.push({ severity: 'warning', sectionId: section.id, title: `${section.name} 이미지 없음`, detail: '핵심 섹션인데 전용 이미지가 없습니다.' });
+    }
+    if (contrast && contrast < 3.5) {
+      findings.push({ severity: 'warning', sectionId: section.id, title: `${section.name} 대비 부족`, detail: `텍스트 대비가 낮습니다 (${contrast.toFixed(2)}:1).` });
+    }
+    if (headline) {
+      const key = normalizeText(headline);
+      if (headlineSeen.has(key)) findings.push({ severity: 'warning', sectionId: section.id, title: `${section.name} 헤드라인 중복`, detail: `"${headline}" 문구가 다른 섹션과 겹칩니다.` });
+      headlineSeen.set(key, section.id);
+    }
+    if (cta) {
+      const key = normalizeText(cta);
+      if (ctaSeen.has(key)) findings.push({ severity: 'info', sectionId: section.id, title: `${section.name} CTA 반복`, detail: `"${cta}" CTA가 반복됩니다.` });
+      ctaSeen.set(key, section.id);
+    }
+    for (const phrase of banned) {
+      if (!phrase) continue;
+      const allText = `${headline} ${content.subheadline || ''} ${body} ${(content.extra_elements || []).join(' ')}`.toLowerCase();
+      if (allText.includes(phrase.toLowerCase())) {
+        findings.push({ severity: 'critical', sectionId: section.id, title: `${section.name} 금지 표현 포함`, detail: `"${phrase}" 금지 표현이 들어 있습니다.` });
+      }
+    }
+  }
+
+  if (Object.keys(state.sectionContents || {}).length < 6) {
+    findings.push({ severity: 'warning', sectionId: '', title: '전체 섹션 수 부족', detail: '생성된 섹션 수가 적어서 완성도가 낮아 보일 수 있습니다.' });
+  }
+
+  state.qaReport = {
+    generatedAt: Date.now(),
+    version: state.contentVersion || 0,
+    totalSections: Object.keys(state.sectionContents || {}).length,
+    findings,
+    summary: {
+      critical: findings.filter(f => f.severity === 'critical').length,
+      warning: findings.filter(f => f.severity === 'warning').length,
+      info: findings.filter(f => f.severity === 'info').length,
+    },
+  };
+  state.qaVersion = state.contentVersion || 0;
+  if (renderAfter) render();
+  return state.qaReport;
+}
+
+function updateBrandPresetDraftFromInputs() {
+  const read = id => {
+    const el = document.getElementById(id);
+    return el ? el.value : undefined;
+  };
+  state.brandPresetDraft = normalizeBrandPreset({
+    ...state.brandPresetDraft,
+    name: read('brandPresetName') ?? state.brandPresetDraft?.name,
+    tone: read('brandPresetTone') ?? state.brandPresetDraft?.tone,
+    requiredKeywords: read('brandPresetKeywords') ?? state.brandPresetDraft?.requiredKeywords,
+    bannedPhrases: read('brandPresetBanned') ?? state.brandPresetDraft?.bannedPhrases,
+    headlineFont: read('brandPresetHeadlineFont') ?? state.brandPresetDraft?.headlineFont,
+    bodyFont: read('brandPresetBodyFont') ?? state.brandPresetDraft?.bodyFont,
+    accentColor: read('brandPresetAccent') ?? state.brandPresetDraft?.accentColor,
+    backgroundColor: read('brandPresetBackground') ?? state.brandPresetDraft?.backgroundColor,
+    imageDirectives: read('brandPresetImageDirectives') ?? state.brandPresetDraft?.imageDirectives,
+    globalInstruction: read('brandPresetGlobalInstruction') ?? state.brandPresetDraft?.globalInstruction,
+  });
+}
+
+function saveBrandPresetFromDraft() {
+  updateBrandPresetDraftFromInputs();
+  const draft = normalizeBrandPreset(state.brandPresetDraft);
+  if (!draft.name) {
+    state.error = '프리셋 이름을 입력하세요.';
+    render();
+    return;
+  }
+  if (!draft.id) draft.id = uid('preset');
+  const rest = (state.brandPresets || []).filter(item => item.id !== draft.id);
+  state.brandPresets = [draft, ...rest].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  state.activeBrandPresetId = draft.id;
+  state.brandPresetDraft = cloneData(draft);
+  saveBrandPresets(state.brandPresets);
+  saveActiveBrandPresetId(state.activeBrandPresetId);
+  markContentChanged();
+  render();
+}
+
+function deleteActiveBrandPreset() {
+  if (!state.activeBrandPresetId) return;
+  state.brandPresets = (state.brandPresets || []).filter(item => item.id !== state.activeBrandPresetId);
+  state.activeBrandPresetId = '';
+  state.brandPresetDraft = createEmptyBrandPreset();
+  saveBrandPresets(state.brandPresets);
+  saveActiveBrandPresetId('');
+  markContentChanged();
+  render();
+}
+
+if (state.activeBrandPresetId) {
+  state.brandPresetDraft = getInitialBrandPresetDraft(state.activeBrandPresetId);
+}
+if (_savedSession?.compPage) {
+  if (_savedSession.compPage.analysisResult) state.compPage.analysisResult = _savedSession.compPage.analysisResult;
+  if (_savedSession.compPage.sectionPlan) state.compPage.sectionPlan = _savedSession.compPage.sectionPlan;
+  if (_savedSession.compPage.planEdits) state.compPage.planEdits = _savedSession.compPage.planEdits;
+}
+
 let gemini = null;
 
 // ════════════════════════════════════════════════════════════════
@@ -1799,7 +2593,7 @@ function renderApiModal() {
           <span class="material-icons-outlined" id="toggleKeyVis" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
         </div>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-primary" id="saveApiKey">
           <span class="material-icons-outlined" style="font-size:18px">save</span>
           저장 후 시작
@@ -1862,10 +2656,335 @@ function renderError() {
   </div>`;
 }
 
+function renderWorkspacePanel() {
+  const projectName = deriveProjectName();
+  const projectOptions = state.projects.map(project => `
+    <option value="${project.id}" ${project.id === state.currentProjectId ? 'selected' : ''}>
+      ${escapeHtml(project.name)} (${project.snapshotCount || 0})
+    </option>
+  `).join('');
+  const snapshots = state.snapshots.slice(0, 8);
+  return `<div class="analysis-box" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div>
+        <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">작업공간</div>
+        <div style="font-size:18px;font-weight:700">${escapeHtml(projectName || '새 프로젝트')}</div>
+      </div>
+      <div style="font-size:12px;color:${state.currentProjectId ? 'var(--ok)' : 'var(--warn)'}">
+        ${state.currentProjectId ? '저장된 프로젝트' : '아직 저장 전 초안'}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+      <div>
+        <label class="label">프로젝트 이름</label>
+        <input class="input" id="workspaceProjectName" value="${escapeHtml(state.currentProjectName || projectName)}" placeholder="예: 휴대용 선풍기 2026 봄 배너안">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn-sm" id="saveProjectBtn">${state.projectBusy ? '저장 중...' : '프로젝트 저장'}</button>
+          <button class="btn-sm" id="newProjectBtn">새 프로젝트</button>
+          <button class="btn-sm" id="saveSnapshotBtn">스냅샷 저장</button>
+        </div>
+      </div>
+      <div>
+        <label class="label">저장된 프로젝트</label>
+        <select class="input" id="workspaceProjectSelect" ${!state.projectsLoaded ? 'disabled' : ''}>
+          <option value="">프로젝트 선택</option>
+          ${projectOptions}
+        </select>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn-sm" id="loadProjectBtn">불러오기</button>
+          <button class="btn-sm" id="deleteProjectBtn" ${!state.currentProjectId ? 'disabled' : ''}>삭제</button>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:600">스냅샷</div>
+        <div style="font-size:12px;color:var(--text-m)">${state.currentProjectId ? `${snapshots.length}개 표시 / 총 ${state.snapshots.length}개` : '프로젝트를 저장하면 스냅샷을 만들 수 있습니다.'}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+        ${snapshots.length ? snapshots.map(snapshot => `
+          <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--bg)">
+            <div style="font-size:12px;color:var(--text-m);margin-bottom:4px">${escapeHtml(snapshot.label || '')}</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:10px">${escapeHtml(snapshot.projectName || projectName)}</div>
+            <div style="display:flex;gap:8px">
+              <button class="btn-sm" data-load-snapshot="${snapshot.id}">복원</button>
+              <button class="btn-sm" data-delete-snapshot="${snapshot.id}">삭제</button>
+            </div>
+          </div>
+        `).join('') : `<div style="font-size:12px;color:var(--text-m)">아직 저장된 스냅샷이 없습니다.</div>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderBrandStudioPanel() {
+  const draft = normalizeBrandPreset(state.brandPresetDraft || createEmptyBrandPreset());
+  return `<div class="analysis-box" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div>
+        <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">브랜드 스튜디오</div>
+        <div style="font-size:18px;font-weight:700">${escapeHtml(draft.name || '새 프리셋')}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select class="input" id="brandPresetSelect" style="min-width:180px">
+          <option value="">프리셋 선택</option>
+          ${state.brandPresets.map(p => `<option value="${p.id}" ${p.id === state.activeBrandPresetId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+        </select>
+        <select class="input" id="layoutTemplateSelect" style="min-width:180px">
+          ${LAYOUT_TEMPLATES.map(t => `<option value="${t.id}" ${t.id === state.layoutTemplate ? 'selected' : ''}>${t.label} 템플릿</option>`).join('')}
+        </select>
+        <button class="btn-sm" id="newBrandPresetBtn">새 프리셋</button>
+        <button class="btn-sm" id="saveBrandPresetBtn">프리셋 저장</button>
+        <button class="btn-sm" id="deleteBrandPresetBtn" ${!state.activeBrandPresetId ? 'disabled' : ''}>삭제</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      <div>
+        <label class="label">프리셋 이름</label>
+        <input class="input" id="brandPresetName" value="${escapeHtml(draft.name)}" placeholder="예: 프리미엄 홈리빙">
+      </div>
+      <div>
+        <label class="label">톤앤매너</label>
+        <input class="input" id="brandPresetTone" value="${escapeHtml(draft.tone)}" placeholder="차분한 프리미엄 / 설득형 / 밝은 생활감">
+      </div>
+      <div>
+        <label class="label">필수 키워드</label>
+        <input class="input" id="brandPresetKeywords" value="${escapeHtml(draft.requiredKeywords)}" placeholder="예: 안심, 프리미엄, 정돈감">
+      </div>
+      <div>
+        <label class="label">금지 표현</label>
+        <input class="input" id="brandPresetBanned" value="${escapeHtml(draft.bannedPhrases)}" placeholder="예: 최저가, 무조건, 대박">
+      </div>
+      <div>
+        <label class="label">헤드라인 폰트</label>
+        <input class="input" id="brandPresetHeadlineFont" value="${escapeHtml(draft.headlineFont)}" placeholder="Pretendard">
+      </div>
+      <div>
+        <label class="label">본문 폰트</label>
+        <input class="input" id="brandPresetBodyFont" value="${escapeHtml(draft.bodyFont)}" placeholder="Pretendard">
+      </div>
+      <div>
+        <label class="label">강조 컬러</label>
+        <input class="input" id="brandPresetAccent" value="${escapeHtml(draft.accentColor)}" placeholder="#b56d3a">
+      </div>
+      <div>
+        <label class="label">기본 배경 컬러</label>
+        <input class="input" id="brandPresetBackground" value="${escapeHtml(draft.backgroundColor)}" placeholder="#f7f2ed">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:10px">
+      <div>
+        <label class="label">이미지 디렉션 (한 줄에 하나씩)</label>
+        <textarea class="textarea" id="brandPresetImageDirectives" rows="5" placeholder="예: Avoid floating text overlay&#10;Use soft natural shadow">${escapeHtml(draft.imageDirectives)}</textarea>
+      </div>
+      <div>
+        <label class="label">전체 지시문</label>
+        <textarea class="textarea" id="brandPresetGlobalInstruction" rows="5" placeholder="예: 숫자 중심보다 감각과 안정감을 우선하고, 카피는 과장 없이 차분하게.">${escapeHtml(draft.globalInstruction)}</textarea>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderQaPanel() {
+  const stale = !state.qaReport || state.qaVersion !== state.contentVersion;
+  if (!state.qaReport) {
+    return `<div class="analysis-box" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">출고 전 QA</div>
+          <div style="font-size:16px;font-weight:700">아직 검사 전</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-m)">섹션 누락, 중복 카피, 대비 부족, 금지 표현을 확인합니다.</div>
+      </div>
+    </div>`;
+  }
+  const summary = state.qaReport.summary || { critical: 0, warning: 0, info: 0 };
+  return `<div class="analysis-box" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+      <div>
+        <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">출고 전 QA ${stale ? '<span style="color:var(--warn)">새 결과 필요</span>' : ''}</div>
+        <div style="font-size:16px;font-weight:700">중요 ${summary.critical}건 / 경고 ${summary.warning}건 / 참고 ${summary.info}건</div>
+      </div>
+      <div style="font-size:12px;color:var(--text-m)">${new Date(state.qaReport.generatedAt).toLocaleString('ko-KR')}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
+      ${(state.qaReport.findings || []).slice(0, 12).map(item => `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:${item.severity === 'critical' ? 'rgba(239,68,68,.08)' : item.severity === 'warning' ? 'rgba(245,158,11,.08)' : 'rgba(99,102,241,.08)'}">
+          <div style="font-size:11px;color:var(--text-m);margin-bottom:4px">${item.sectionId ? escapeHtml(item.sectionId) : 'overall'} · ${item.severity}</div>
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">${escapeHtml(item.title)}</div>
+          <div style="font-size:12px;color:var(--text-d)">${escapeHtml(item.detail)}</div>
+        </div>
+      `).join('') || '<div style="font-size:12px;color:var(--ok)">현재 감지된 문제가 없습니다.</div>'}
+    </div>
+  </div>`;
+}
+
+function renderSectionVariantsPanel(sectionId) {
+  const variants = state.sectionVariants[sectionId] || [];
+  if (!variants.length) return '';
+  const currentId = state.currentSectionVariantIds[sectionId];
+  return `<div style="margin-top:12px">
+    <div style="font-size:12px;color:var(--text-m);margin-bottom:8px">시안 비교</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+      ${variants.map(variant => `
+        <div style="border:1px solid ${variant.id === currentId ? 'var(--primary-h)' : 'var(--border)'};border-radius:10px;padding:10px;background:${variant.id === currentId ? 'var(--primary-dim)' : 'var(--bg)'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+            <div style="font-size:12px;font-weight:700">${escapeHtml(variant.label || '시안')}</div>
+            <div style="font-size:10px;color:var(--text-m)">${variant.source === 'manual' ? '직접수정' : variant.source === 'baseline' ? '기준안' : '생성안'}</div>
+          </div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:4px">${escapeHtml(summarizeText(variant.content?.headline, 32) || '제목 없음')}</div>
+          <div style="font-size:11px;color:var(--text-d);line-height:1.5;min-height:32px">${escapeHtml(summarizeText(variant.content?.body_text, 70) || '본문 없음')}</div>
+          <div style="margin-top:8px">
+            ${variant.id === currentId
+              ? `<span style="font-size:11px;color:var(--ok)">현재 적용중</span>`
+              : `<button class="btn-sm" data-apply-variant="${sectionId}:${variant.id}">이 안 적용</button>`
+            }
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
+function renderPreviewEditPanel(section, content) {
+  return `<div class="edit-panel" onclick="event.stopPropagation()">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      <div>
+        <label class="label">헤드라인</label>
+        <input class="input" data-manual-headline="${section.id}" value="${escapeHtml(content.headline || '')}">
+      </div>
+      <div>
+        <label class="label">서브헤드라인</label>
+        <input class="input" data-manual-subheadline="${section.id}" value="${escapeHtml(content.subheadline || '')}">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px">
+      <div>
+        <label class="label">본문</label>
+        <textarea class="textarea" data-manual-body="${section.id}" rows="4">${escapeHtml(content.body_text || '')}</textarea>
+      </div>
+      <div>
+        <label class="label">추가 포인트 (한 줄에 하나씩)</label>
+        <textarea class="textarea" data-manual-extra="${section.id}" rows="4">${escapeHtml((content.extra_elements || []).join('\n'))}</textarea>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px">
+      <div>
+        <label class="label">CTA</label>
+        <input class="input" data-manual-cta="${section.id}" value="${escapeHtml(content.cta_text || '')}">
+      </div>
+      <div>
+        <label class="label">재생성 지시문</label>
+        <textarea class="textarea" data-edit-input="${section.id}" rows="2" placeholder="이 섹션에 대한 수정 지시사항...">${escapeHtml(state.sectionInstructions[section.id] || '')}</textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn-sm" data-save-manual="${section.id}">직접 수정 저장</button>
+      <button class="btn-sm" data-apply-edit="${section.id}">지시문 반영 재생성</button>
+      <button class="btn-sm" data-lock-preview="${section.id}">${state.sectionLocks[section.id] ? '잠금 해제' : '이 섹션 잠금'}</button>
+    </div>
+    ${renderSectionVariantsPanel(section.id)}
+  </div>`;
+}
+
+function renderExtraElements(content, color, bodyFont) {
+  if (!content.extra_elements?.length) return '';
+  return `<div style="margin-top:20px;text-align:left;max-width:640px;margin-left:auto;margin-right:auto">
+    ${content.extra_elements.map(item => `
+      <div style="padding:8px 0;color:${color.text_secondary || '#555'};font-size:14px;font-family:${bodyFont};border-bottom:1px solid rgba(0,0,0,.08)">• ${escapeHtml(item)}</div>
+    `).join('')}
+  </div>`;
+}
+
+function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
+  const content = applyBrandPresetToContent(rawContent);
+  const color = content.color_scheme || {};
+  const font = content.font_suggestion || {};
+  const headlineFont = cssFontFamily(font.headline_font);
+  const bodyFont = cssFontFamily(font.body_font || font.headline_font);
+  const headline = escapeHtml(content.headline || `[${section.name}]`);
+  const subheadline = escapeHtml(content.subheadline || '');
+  const bodyHtml = nl2br(content.body_text || '');
+  const ctaHtml = content.cta_text
+    ? (mode === 'export'
+      ? `<a href="#" style="display:inline-block;margin-top:22px;padding:14px 36px;background:${color.accent || '#6366f1'};color:#fff;border-radius:999px;text-decoration:none;font-size:16px;font-weight:600;font-family:${bodyFont}">${escapeHtml(content.cta_text)}</a>`
+      : `<div style="display:inline-block;margin-top:22px;padding:14px 36px;background:${color.accent || '#6366f1'};color:#fff;border-radius:999px;font-size:16px;font-weight:600;font-family:${bodyFont}">${escapeHtml(content.cta_text)}</div>`)
+    : '';
+  const imageHtml = img ? `<img src="${img}" alt="${escapeHtml(section.name)}" style="width:100%;max-width:100%;border-radius:18px;display:block;box-shadow:0 18px 40px rgba(0,0,0,.08)">` : '';
+  const template = state.layoutTemplate || 'classic';
+
+  if (template === 'split') {
+    const mediaFirst = section.n % 2 === 0;
+    const mediaBlock = `<div style="min-width:0">${imageHtml || `<div style="height:280px;border:1px dashed var(--border);border-radius:18px;background:rgba(255,255,255,.45)"></div>`}</div>`;
+    const textBlock = `<div style="min-width:0">
+      <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:${color.accent || '#6366f1'};margin-bottom:12px">${String(section.n).padStart(2, '0')} / ${escapeHtml(section.name)}</div>
+      <h2 style="font-size:${font.headline_size || '40px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '800'};font-family:${headlineFont};margin-bottom:12px;line-height:1.15">${headline}</h2>
+      <h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>
+      <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
+      ${renderExtraElements(content, color, bodyFont)}
+      ${ctaHtml}
+    </div>`;
+    return `<div style="background:${color.background || '#fff'};padding:54px 20px">
+      <div style="max-width:1120px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:32px;align-items:center">
+        ${mediaFirst ? `${mediaBlock}${textBlock}` : `${textBlock}${mediaBlock}`}
+      </div>
+    </div>`;
+  }
+
+  if (template === 'spotlight') {
+    return `<div style="background:${color.background || 'linear-gradient(135deg,#f7f3ee 0%,#ffffff 100%)'};padding:60px 20px">
+      <div style="max-width:1120px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px;align-items:stretch">
+        <div style="padding:34px;border-radius:28px;background:rgba(255,255,255,.82);backdrop-filter:blur(8px);box-shadow:0 24px 60px rgba(0,0,0,.08)">
+          <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:${color.accent || '#6366f1'};margin-bottom:12px">${escapeHtml(section.name)}</div>
+          <h2 style="font-size:${font.headline_size || '46px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '900'};font-family:${headlineFont};margin-bottom:14px;line-height:1.08">${headline}</h2>
+          <h3 style="font-size:19px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>
+          <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
+          ${renderExtraElements(content, color, bodyFont)}
+          ${ctaHtml}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;padding:18px;border-radius:28px;background:rgba(255,255,255,.35)">
+          ${imageHtml || `<div style="height:320px;width:100%;border:1px dashed rgba(0,0,0,.15);border-radius:18px"></div>`}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  if (template === 'minimal') {
+    return `<div style="background:${color.background || '#fff'};padding:52px 20px;border-top:1px solid rgba(0,0,0,.05)">
+      <div style="max-width:880px;margin:0 auto">
+        <div style="font-size:12px;color:${color.accent || '#6366f1'};margin-bottom:10px">${String(section.n).padStart(2, '0')} · ${escapeHtml(section.name)}</div>
+        <h2 style="font-size:${font.headline_size || '34px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.2">${headline}</h2>
+        <h3 style="font-size:17px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.6">${subheadline}</h3>
+        ${imageHtml ? `<div style="margin:0 0 20px">${imageHtml}</div>` : ''}
+        <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
+        ${renderExtraElements(content, color, bodyFont)}
+        ${ctaHtml}
+      </div>
+    </div>`;
+  }
+
+  return `<div style="background:${color.background || '#FFFFFF'};padding:48px 20px;text-align:center">
+    <div style="max-width:860px;margin:0 auto">
+      <h2 style="font-size:${font.headline_size || '36px'};color:${color.text_primary || '#333'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.15">
+        ${headline}
+      </h2>
+      <h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:20px;line-height:1.55">
+        ${subheadline}
+      </h3>
+      ${imageHtml ? `<div style="margin-bottom:20px">${imageHtml}</div>` : ''}
+      <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.8;font-family:${bodyFont};max-width:680px;margin:0 auto">${bodyHtml}</p>
+      ${renderExtraElements(content, color, bodyFont)}
+      ${ctaHtml}
+    </div>
+  </div>`;
+}
+
 function renderUpload() {
   return `<div class="fade-in">
     <h1 class="page-title">상세페이지 자동 생성</h1>
     <p class="page-desc">제품 이미지를 업로드하면 AI가 분석하여 15개 섹션의 상세페이지를 자동으로 생성합니다.</p>
+
+    ${renderWorkspacePanel()}
 
     <div class="upload-area ${state.imagePreview?'has-image':''}" id="uploadArea">
       ${state.imagePreview
@@ -2079,6 +3198,9 @@ function renderSections() {
       </button>
     </div>
 
+    ${renderWorkspacePanel()}
+    ${renderBrandStudioPanel()}
+
     ${a ? `<div class="analysis-box">
       <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
         ${state.imagePreview ? `<img src="${state.imagePreview}" style="width:80px;height:80px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">` : ''}
@@ -2138,6 +3260,7 @@ function renderSections() {
               : ''
             }
             <button class="btn-sm" title="이 섹션만 생성" onclick="event.stopPropagation();generateSingleSection('${s.id}')" style="flex-shrink:0;padding:4px 10px;font-size:12px;line-height:1.4">생성</button>
+            <button class="btn-sm" data-lock-section="${s.id}" onclick="event.stopPropagation()" style="flex-shrink:0;padding:4px 10px;font-size:12px;line-height:1.4">${state.sectionLocks[s.id] ? '잠금' : '열림'}</button>
             <span class="material-icons-outlined" style="color:var(--text-m);font-size:20px">${state.activeSectionEdit===s.id?'expand_less':'expand_more'}</span>
           </div>
           ${state.activeSectionEdit===s.id ? `<div style="margin-top:12px" onclick="event.stopPropagation()">
@@ -2180,12 +3303,17 @@ function renderPreview() {
         <p class="page-desc">생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.</p>
       </div>
       <div style="display:flex;gap:8px">
+        <button class="btn-sm" id="runQaBtn">${(!state.qaReport || state.qaVersion !== state.contentVersion) ? 'QA 검사' : 'QA 다시 검사'}</button>
         <button class="btn-primary" id="exportHTML">
           <span class="material-icons-outlined" style="font-size:18px">download</span>
           HTML 내보내기
         </button>
       </div>
     </div>
+
+    ${renderWorkspacePanel()}
+    ${renderBrandStudioPanel()}
+    ${renderQaPanel()}
 
     <div class="preview-wrap">
       ${SECTIONS.map(s => {
@@ -2214,11 +3342,13 @@ function renderPreview() {
                 <span class="material-icons-outlined" style="font-size:16px">refresh</span> 재생성
               </button>
             </div>
-            ${isEditing ? `<div class="edit-panel" onclick="event.stopPropagation()">
+            ${isEditing ? `<div class="edit-panel" onclick="event.stopPropagation()" style="display:none">
               <textarea class="textarea" data-edit-input="${s.id}" rows="2" placeholder="이 섹션에 대한 수정 지시사항...">${state.sectionInstructions[s.id]||''}</textarea>
               <button class="btn-sm" style="margin-top:8px" data-apply-edit="${s.id}">지시사항 적용 후 재생성</button>
             </div>` : ''}
-            <div style="background:${c.background||'#FFFFFF'};padding:48px 20px;text-align:center">
+            ${isEditing ? renderPreviewEditPanel(s, content) : ''}
+            ${renderSectionTemplate(s, content, img, 'preview')}
+            <div style="display:none;background:${c.background||'#FFFFFF'};padding:48px 20px;text-align:center">
               <div style="max-width:860px;margin:0 auto">
                 <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};font-weight:${f.headline_weight||'700'};font-family:${headlineFont};margin-bottom:10px">
                   ${content.headline || `[${s.name}]`}
@@ -2814,6 +3944,80 @@ function bindEvents() {
   const rawJsonBtn = document.getElementById('toggleRawJson');
   if (rawJsonBtn) rawJsonBtn.onclick = () => { state.showRawJson = !state.showRawJson; render(); };
 
+  const workspaceProjectName = document.getElementById('workspaceProjectName');
+  if (workspaceProjectName) {
+    workspaceProjectName.oninput = e => {
+      state.currentProjectName = e.target.value;
+      savePersistentState();
+    };
+  }
+  const saveProjectBtn = document.getElementById('saveProjectBtn');
+  if (saveProjectBtn) saveProjectBtn.onclick = saveCurrentProject;
+  const newProjectBtn = document.getElementById('newProjectBtn');
+  if (newProjectBtn) newProjectBtn.onclick = startNewProjectDraft;
+  const saveSnapshotBtn = document.getElementById('saveSnapshotBtn');
+  if (saveSnapshotBtn) saveSnapshotBtn.onclick = saveCurrentSnapshot;
+  const loadProjectBtn = document.getElementById('loadProjectBtn');
+  if (loadProjectBtn) {
+    loadProjectBtn.onclick = () => {
+      const id = document.getElementById('workspaceProjectSelect')?.value;
+      if (id) loadProjectRecord(id);
+    };
+  }
+  const deleteProjectBtn = document.getElementById('deleteProjectBtn');
+  if (deleteProjectBtn) {
+    deleteProjectBtn.onclick = () => {
+      if (state.currentProjectId) deleteProjectRecord(state.currentProjectId);
+    };
+  }
+  document.querySelectorAll('[data-load-snapshot]').forEach(btn => {
+    btn.onclick = () => loadSnapshotRecord(btn.dataset.loadSnapshot);
+  });
+  document.querySelectorAll('[data-delete-snapshot]').forEach(btn => {
+    btn.onclick = () => deleteSnapshotRecord(btn.dataset.deleteSnapshot);
+  });
+
+  const brandPresetSelect = document.getElementById('brandPresetSelect');
+  if (brandPresetSelect) {
+    brandPresetSelect.onchange = e => {
+      state.activeBrandPresetId = e.target.value || '';
+      state.brandPresetDraft = getInitialBrandPresetDraft(state.activeBrandPresetId);
+      saveActiveBrandPresetId(state.activeBrandPresetId);
+      markContentChanged();
+      render();
+    };
+  }
+  const layoutTemplateSelect = document.getElementById('layoutTemplateSelect');
+  if (layoutTemplateSelect) {
+    layoutTemplateSelect.onchange = e => {
+      state.layoutTemplate = e.target.value;
+      saveLayoutTemplate(state.layoutTemplate);
+      markContentChanged();
+      render();
+    };
+  }
+  const newBrandPresetBtn = document.getElementById('newBrandPresetBtn');
+  if (newBrandPresetBtn) newBrandPresetBtn.onclick = () => { state.activeBrandPresetId = ''; state.brandPresetDraft = createEmptyBrandPreset(); render(); };
+  const saveBrandPresetBtn = document.getElementById('saveBrandPresetBtn');
+  if (saveBrandPresetBtn) saveBrandPresetBtn.onclick = saveBrandPresetFromDraft;
+  const deleteBrandPresetBtn = document.getElementById('deleteBrandPresetBtn');
+  if (deleteBrandPresetBtn) deleteBrandPresetBtn.onclick = deleteActiveBrandPreset;
+  [
+    'brandPresetName',
+    'brandPresetTone',
+    'brandPresetKeywords',
+    'brandPresetBanned',
+    'brandPresetHeadlineFont',
+    'brandPresetBodyFont',
+    'brandPresetAccent',
+    'brandPresetBackground',
+    'brandPresetImageDirectives',
+    'brandPresetGlobalInstruction',
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.oninput = updateBrandPresetDraftFromInputs;
+  });
+
   // Generate all
   const genAll = document.getElementById('generateAll');
   const genAll2 = document.getElementById('generateAll2');
@@ -2878,7 +4082,8 @@ function bindEvents() {
   document.querySelectorAll('[data-apply-edit]').forEach(btn => {
     btn.onclick = () => {
       const id = btn.dataset.applyEdit;
-      const textarea = document.querySelector(`[data-edit-input="${id}"]`);
+      const editInputs = [...document.querySelectorAll(`[data-edit-input="${id}"]`)];
+      const textarea = editInputs[editInputs.length - 1];
       if (textarea) state.sectionInstructions[id] = textarea.value;
       saveSectionInstructions(state.sectionInstructions);
       state.editingPreviewSection = null;
@@ -2891,7 +4096,43 @@ function bindEvents() {
     el.oninput = (e) => { state.sectionInstructions[el.dataset.editInput] = e.target.value; saveSectionInstructions(state.sectionInstructions); };
   });
 
+  document.querySelectorAll('[data-lock-section]').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const id = btn.dataset.lockSection;
+      setSectionLock(id, !state.sectionLocks[id]);
+    };
+  });
+  document.querySelectorAll('[data-lock-preview]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.lockPreview;
+      setSectionLock(id, !state.sectionLocks[id]);
+    };
+  });
+  document.querySelectorAll('[data-save-manual]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.saveManual;
+      saveManualSectionContent(id, {
+        headline: document.querySelector(`[data-manual-headline="${id}"]`)?.value || '',
+        subheadline: document.querySelector(`[data-manual-subheadline="${id}"]`)?.value || '',
+        body_text: document.querySelector(`[data-manual-body="${id}"]`)?.value || '',
+        cta_text: document.querySelector(`[data-manual-cta="${id}"]`)?.value || '',
+        extra_elements: document.querySelector(`[data-manual-extra="${id}"]`)?.value || '',
+        layout_suggestion: state.sectionContents[id]?.layout_suggestion || '',
+      });
+      render();
+    };
+  });
+  document.querySelectorAll('[data-apply-variant]').forEach(btn => {
+    btn.onclick = () => {
+      const [sectionId, variantId] = (btn.dataset.applyVariant || '').split(':');
+      if (sectionId && variantId) applySectionVariant(sectionId, variantId);
+    };
+  });
+
   // Export
+  const runQaBtn = document.getElementById('runQaBtn');
+  if (runQaBtn) runQaBtn.onclick = () => runQaCheck();
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
 }
@@ -3076,6 +4317,12 @@ async function generateCompSection(sectionId) {
   if (!state.analysis) { state.error = '먼저 AI 분석 탭에서 제품 이미지를 분석해주세요.'; render(); return; }
   const s = SECTIONS.find(x => x.id === sectionId);
   if (!s) return;
+  if (state.sectionLocks[sectionId]) {
+    state.error = `${s.name} 섹션이 잠겨 있어 재생성하지 않았습니다. 먼저 잠금을 해제해주세요.`;
+    render();
+    return;
+  }
+  captureCurrentSectionVariant(sectionId, 'baseline');
 
   // 현재 planEdits 지시사항을 sectionInstructions에 반영
   const ed = state.compPage.planEdits[sectionId];
@@ -3090,16 +4337,18 @@ async function generateCompSection(sectionId) {
   try {
     const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
     const content = await llm.generateSectionContent(s, state.analysis, state.sectionInstructions[sectionId] || '', compRef);
-    state.sectionContents[sectionId] = content;
+    let generatedImage;
 
     if (hasGeminiConnection()) {
       try {
         const g = createGeminiClient();
         const img = await g.generateImage(content.image_description || content.design_notes || s.purpose, state.imageBase64, state.imageMime);
-        if (img) state.sectionImages[sectionId] = img;
+        if (img) generatedImage = img;
       } catch(e) {}
     }
 
+    applySectionContent(sectionId, content, generatedImage, 'generated');
+    savePersistentState();
     state.compPage.sectionStatus[sectionId] = 'done';
     render();
   } catch(e) {
@@ -3132,6 +4381,12 @@ async function startAnalysis() {
   state.competitorData = null;
   state.sectionContents = {};
   state.sectionImages = {};
+  state.sectionVariants = {};
+  state.currentSectionVariantIds = {};
+  state.manualSectionEdits = {};
+  state.sectionLocks = {};
+  state.qaReport = null;
+  state.qaVersion = 0;
   state.sectionGenerating = {};
   clearPersistentSession();
   render();
@@ -3173,8 +4428,16 @@ async function startAnalysis() {
 async function generateAllSections() {
   state.step = 'generating';
   state.progress = 35;
+  const preservedContents = cloneData(state.sectionContents || {});
+  const preservedImages = cloneData(state.sectionImages || {});
   state.sectionContents = {};
   state.sectionImages = {};
+  SECTIONS.forEach(section => {
+    if (state.sectionLocks[section.id] && preservedContents[section.id]) {
+      state.sectionContents[section.id] = preservedContents[section.id];
+      if (preservedImages[section.id]) state.sectionImages[section.id] = preservedImages[section.id];
+    }
+  });
   render();
 
   let llm;
@@ -3187,6 +4450,11 @@ async function generateAllSections() {
 
   for (let i = 0; i < total; i++) {
     const s = SECTIONS[i];
+    if (state.sectionLocks[s.id] && state.sectionContents[s.id]) {
+      state.progressMsg = `[${i+1}/${total}] ${s.name} 잠금 유지`;
+      render();
+      continue;
+    }
     const pct = Math.round(35 + ((i / total) * 60));
     state.progress = pct;
     state.progressMsg = `[${i+1}/${total}] ${s.name} 콘텐츠 생성 중...`;
@@ -3218,6 +4486,8 @@ async function generateAllSections() {
         }
       }
 
+      applySectionContent(s.id, content, state.sectionImages[s.id] || undefined, 'generated');
+
     } catch (e) {
       console.error(`Section ${s.id} failed:`, e);
       state.sectionContents[s.id] = {
@@ -3243,6 +4513,11 @@ async function generateAllSections() {
 async function regenerateSection(sectionId) {
   const s = SECTIONS.find(x => x.id === sectionId);
   if (!s) return;
+  if (state.sectionLocks[sectionId]) {
+    state.error = `${s.name} 섹션이 잠겨 있습니다.`;
+    render();
+    return;
+  }
 
   state.progressMsg = `${s.name} 재생성 중...`;
   const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
@@ -3251,6 +4526,7 @@ async function regenerateSection(sectionId) {
   try { llm = getLLMClient(); } catch(e) { state.error = e.message; render(); return; }
 
   try {
+    captureCurrentSectionVariant(sectionId, 'baseline');
     const content = await llm.generateSectionContent(
       s, state.analysis, state.sectionInstructions[sectionId] || '', compRef
     );
@@ -3265,6 +4541,8 @@ async function regenerateSection(sectionId) {
       } catch (e) {}
     }
 
+    delete state.manualSectionEdits[sectionId];
+    applySectionContent(sectionId, content, state.sectionImages[sectionId] || undefined, 'generated');
     render();
   } catch (e) {
     state.error = `재생성 실패: ${e.message}`;
@@ -3275,6 +4553,11 @@ async function regenerateSection(sectionId) {
 async function generateSingleSection(sectionId) {
   const s = SECTIONS.find(x => x.id === sectionId);
   if (!s) return;
+  if (state.sectionLocks[sectionId]) {
+    state.error = `${s.name} 섹션이 잠겨 있습니다.`;
+    render();
+    return;
+  }
 
   state.sectionGenerating[sectionId] = 'loading';
   render();
@@ -3289,6 +4572,7 @@ async function generateSingleSection(sectionId) {
   const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
 
   try {
+    captureCurrentSectionVariant(sectionId, 'baseline');
     const content = await llm.generateSectionContent(
       s, state.analysis, state.sectionInstructions[sectionId] || '', compRef
     );
@@ -3309,6 +4593,8 @@ async function generateSingleSection(sectionId) {
       } catch(e) { console.warn(`Image gen failed for ${s.id}:`, e); }
     }
 
+    delete state.manualSectionEdits[sectionId];
+    applySectionContent(sectionId, content, state.sectionImages[sectionId] || undefined, 'generated');
     state.sectionGenerating[sectionId] = 'done';
     savePersistentState();
   } catch(e) {
@@ -3321,6 +4607,7 @@ async function generateSingleSection(sectionId) {
 
 function exportHTML() {
   const product = state.analysis || {};
+  runQaCheck({ renderAfter: false });
   let sectionsHtml = '';
 
   for (const s of SECTIONS) {
@@ -3331,6 +4618,8 @@ function exportHTML() {
     const headlineFont = cssFontFamily(f.headline_font);
     const bodyFont = cssFontFamily(f.body_font || f.headline_font);
     const img = state.sectionImages[s.id];
+    sectionsHtml += renderSectionTemplate(s, content, img, 'export');
+    continue;
 
     sectionsHtml += `
     <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
@@ -3898,7 +5187,8 @@ function scrollAgentToBottom() {
 }
 
 function saveImageDirectives() {
-  try { localStorage.setItem('image_directives', JSON.stringify(state.imageDirectives)); } catch(e) {}
+  saveJson(STORAGE_KEYS.imageDirectives, state.imageDirectives);
+  savePersistentState();
 }
 
 async function addImageDirective(rawText) {
@@ -5625,6 +6915,8 @@ function buildExportHtml(analysis, sectionContents, sectionImages) {
     const headlineFont = cssFontFamily(f.headline_font);
     const bodyFont = cssFontFamily(f.body_font || f.headline_font);
     const img = sectionImages[s.id];
+    sectionsHtml += renderSectionTemplate(s, content, img, 'export');
+    continue;
     sectionsHtml += `
     <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
       <div style="max-width:860px;margin:0 auto;">
@@ -5886,6 +7178,7 @@ if (hasGeminiConnection()) {
 // Try init Google auth if client ID exists
 setTimeout(() => { try { initGoogleAuth(); } catch(e) {} }, 1000);
 render();
+refreshWorkspaceLists().catch(() => {});
 </script>
 </body>
 </html>
