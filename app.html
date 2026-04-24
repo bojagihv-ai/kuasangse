@@ -2094,12 +2094,25 @@ function stripVariantImages(sectionVariants = {}) {
   return result;
 }
 
+function stripAiRepairUndoImages(undoStack = {}) {
+  const result = {};
+  for (const [sectionId, stack] of Object.entries(undoStack || {})) {
+    result[sectionId] = (Array.isArray(stack) ? stack : []).map(item => ({
+      ...item,
+      hasImage: !!item.image || !!item.hasImage,
+      image: null,
+    }));
+  }
+  return result;
+}
+
 function buildLightweightSessionPayload(payload) {
   return {
     ...payload,
     imagePreview: payload.imagePreview ? '__stored_in_indexeddb__' : null,
     sectionVariants: stripVariantImages(payload.sectionVariants),
     detailImageBlocks: stripDetailBlockImages(payload.detailImageBlocks),
+    aiRepairUndoStack: stripAiRepairUndoImages(payload.aiRepairUndoStack),
   };
 }
 
@@ -2111,6 +2124,7 @@ function currentSessionAssetsPayload() {
     sectionImages: cloneData(state.sectionImages || {}),
     detailImageBlocks: cloneData(state.detailImageBlocks || []),
     sectionVariants: cloneData(state.sectionVariants || {}),
+    aiRepairUndoStack: cloneData(state.aiRepairUndoStack || {}),
     savedAt: Date.now(),
   };
 }
@@ -2180,6 +2194,10 @@ async function hydratePersistentSessionAssets() {
     }
     if (assets.sectionVariants && typeof assets.sectionVariants === 'object') {
       state.sectionVariants = assets.sectionVariants;
+      changed = true;
+    }
+    if (assets.aiRepairUndoStack && typeof assets.aiRepairUndoStack === 'object') {
+      state.aiRepairUndoStack = assets.aiRepairUndoStack;
       changed = true;
     }
     if (changed) render();
@@ -2343,6 +2361,7 @@ function savePersistentState() {
       sectionLocks: state.sectionLocks,
       sectionVariants: state.sectionVariants,
       currentSectionVariantIds: state.currentSectionVariantIds,
+      aiRepairUndoStack: state.aiRepairUndoStack,
       manualSectionEdits: state.manualSectionEdits,
       previewLayerEdits: state.previewLayerEdits,
       detailImageBlocks: state.detailImageBlocks,
@@ -2382,6 +2401,7 @@ function loadPersistentSession() {
     s.sectionLocks = s.sectionLocks || {};
     s.sectionVariants = s.sectionVariants || {};
     s.currentSectionVariantIds = s.currentSectionVariantIds || {};
+    s.aiRepairUndoStack = s.aiRepairUndoStack || {};
     s.manualSectionEdits = s.manualSectionEdits || {};
     s.previewLayerEdits = s.previewLayerEdits || {};
     try { s.detailImageBlocks = JSON.parse(localStorage.getItem('pdp_detail_image_blocks') || JSON.stringify(s.detailImageBlocks || [])); } catch(e) { s.detailImageBlocks = []; }
@@ -2442,6 +2462,7 @@ const state = {
   sectionLocks: _savedSession?.sectionLocks || {},
   sectionVariants: _savedSession?.sectionVariants || {},
   currentSectionVariantIds: _savedSession?.currentSectionVariantIds || {},
+  aiRepairUndoStack: _savedSession?.aiRepairUndoStack || {},
   manualSectionEdits: _savedSession?.manualSectionEdits || {},
   previewLayerEdits: _savedSession?.previewLayerEdits || {},
   detailImageBlocks: Array.isArray(_savedSession?.detailImageBlocks) ? _savedSession.detailImageBlocks : [],
@@ -2659,6 +2680,7 @@ function buildWorkspacePayload() {
     sectionLocks: cloneData(state.sectionLocks),
     sectionVariants: cloneData(state.sectionVariants),
     currentSectionVariantIds: cloneData(state.currentSectionVariantIds),
+    aiRepairUndoStack: cloneData(state.aiRepairUndoStack),
     manualSectionEdits: cloneData(state.manualSectionEdits),
     detailImageBlocks: cloneData(state.detailImageBlocks),
     imageDirectives: cloneData(state.imageDirectives),
@@ -2696,6 +2718,7 @@ function applyWorkspacePayload(payload, options = {}) {
   state.sectionLocks = next.sectionLocks || {};
   state.sectionVariants = next.sectionVariants || {};
   state.currentSectionVariantIds = next.currentSectionVariantIds || {};
+  state.aiRepairUndoStack = next.aiRepairUndoStack || {};
   state.manualSectionEdits = next.manualSectionEdits || {};
   state.detailImageBlocks = Array.isArray(next.detailImageBlocks) ? next.detailImageBlocks : [];
   state.imageDirectives = Array.isArray(next.imageDirectives) ? next.imageDirectives : [];
@@ -2928,6 +2951,59 @@ function applySectionVariant(sectionId, variantId) {
   else delete state.sectionImages[sectionId];
   state.currentSectionVariantIds[sectionId] = variant.id;
   markContentChanged();
+  render();
+}
+
+function getAiRepairUndoStack(sectionId, create = true) {
+  if (!sectionId) return [];
+  if (!state.aiRepairUndoStack || typeof state.aiRepairUndoStack !== 'object') {
+    if (!create) return [];
+    state.aiRepairUndoStack = {};
+  }
+  if (!Array.isArray(state.aiRepairUndoStack[sectionId])) {
+    if (!create) return [];
+    state.aiRepairUndoStack[sectionId] = [];
+  }
+  return state.aiRepairUndoStack[sectionId];
+}
+
+function canUndoAiRepair(sectionId) {
+  return getAiRepairUndoStack(sectionId, false).some(item => item?.image);
+}
+
+function pushAiRepairUndo(sectionId, imageData, content, mode = 'spot') {
+  if (!sectionId || !imageData) return;
+  const stack = getAiRepairUndoStack(sectionId);
+  const entry = {
+    id: uid(`repair_undo_${sectionId}`),
+    label: mode === 'replace' ? 'AI 부분 교체 전' : 'AI 스팟 복구 전',
+    mode,
+    image: imageData,
+    content: cloneData(content || state.sectionContents[sectionId] || {}),
+    createdAt: Date.now(),
+  };
+  state.aiRepairUndoStack[sectionId] = [entry, ...stack].slice(0, 5);
+}
+
+function undoAiRepair(sectionId) {
+  const stack = getAiRepairUndoStack(sectionId);
+  const entryIndex = stack.findIndex(item => item?.image);
+  if (entryIndex < 0) {
+    state.error = '되돌릴 AI 수정 기록이 없습니다.';
+    render();
+    return;
+  }
+  const [entry] = stack.splice(entryIndex, 1);
+  state.aiRepairUndoStack[sectionId] = stack;
+  if (state.sectionContents[sectionId] || state.sectionImages[sectionId]) {
+    rememberSectionVariant(sectionId, state.sectionContents[sectionId], state.sectionImages[sectionId] || null, 'variant', 'AI 되돌리기 전');
+  }
+  state.sectionContents[sectionId] = cloneData(entry.content || state.sectionContents[sectionId] || {});
+  state.sectionImages[sectionId] = entry.image;
+  const variant = rememberSectionVariant(sectionId, state.sectionContents[sectionId], entry.image, 'baseline', entry.label || 'AI 수정 전');
+  if (variant) state.currentSectionVariantIds[sectionId] = variant.id;
+  markContentChanged();
+  savePersistentState();
   render();
 }
 
@@ -3223,8 +3299,9 @@ function renderAiRepairModal() {
           </div>
 
           <div class="repair-actions">
-            <button class="btn-sm" id="repairUndoMask" ${repair.busy ? 'disabled' : ''}>되돌리기</button>
+            <button class="btn-sm" id="repairUndoMask" ${repair.busy ? 'disabled' : ''}>마스크 되돌리기</button>
             <button class="btn-sm" id="repairClearMask" ${repair.busy ? 'disabled' : ''}>마스크 지우기</button>
+            ${canUndoAiRepair(repair.sectionId) ? `<button class="btn-sm" id="repairUndoLastEdit" style="color:var(--warn)" ${repair.busy ? 'disabled' : ''}>수정 결과 되돌리기</button>` : ''}
           </div>
 
           ${!hasOpenAIKey ? `<div class="repair-error">OpenAI API 키가 있어야 부분 수정이 가능합니다. 모델 설정에서 OpenAI 키를 먼저 저장해주세요.</div>` : ''}
@@ -3235,7 +3312,7 @@ function renderAiRepairModal() {
             선택 영역만 AI로 수정
           </button>
           <div class="repair-mini">
-            <span>원본은 히스토리에 보존됩니다.</span>
+            <span>수정 전 이미지는 되돌리기 기록에 보존됩니다.</span>
             <span>mask edit</span>
           </div>
         </aside>
@@ -4262,6 +4339,7 @@ function renderPreview() {
         const bodyFont = cssFontFamily(f.body_font || f.headline_font);
         const img = state.sectionImages[s.id];
         const isEditing = state.editingPreviewSection === s.id;
+        const hasRepairUndo = canUndoAiRepair(s.id);
 
         return `
           <div style="position:relative">
@@ -4278,7 +4356,11 @@ function renderPreview() {
                 </button>
                 <button class="btn-sm" data-ai-repair="${s.id}">
                   <span class="material-icons-outlined" style="font-size:16px">auto_fix_high</span> 2. AI 스팟
+                </button>
+                ${hasRepairUndo ? `<button class="btn-sm" data-undo-ai-repair="${s.id}" style="color:var(--warn)">
+                  <span class="material-icons-outlined" style="font-size:16px">undo</span> 스팟 되돌리기
                 </button>` : ''}
+                ` : ''}
                 <button class="btn-sm" data-open-image-insert="${s.id}:replace">
                   <span class="material-icons-outlined" style="font-size:16px">image</span> ${img ? '교체' : '이미지 추가'}
                 </button>
@@ -5047,6 +5129,9 @@ function bindEvents() {
   document.querySelectorAll('[data-ai-repair]').forEach(btn => {
     btn.onclick = () => openAiRepair(btn.dataset.aiRepair);
   });
+  document.querySelectorAll('[data-undo-ai-repair]').forEach(btn => {
+    btn.onclick = () => undoAiRepair(btn.dataset.undoAiRepair);
+  });
   bindAiRepairEvents();
   bindImageInsertEvents();
   bindDetailImageManagementEvents();
@@ -5227,6 +5312,7 @@ function deleteSectionImage(sectionId) {
   if (!sectionId || !state.sectionImages[sectionId]) return;
   if (!confirm('이 섹션의 상세 이미지를 삭제할까요? 텍스트와 섹션 구성은 유지됩니다.')) return;
   captureCurrentSectionVariant(sectionId, 'baseline', '이미지 삭제 전');
+  delete state.aiRepairUndoStack[sectionId];
   applySectionContent(sectionId, state.sectionContents[sectionId], null, 'manual', '이미지 삭제');
   savePersistentState();
   render();
@@ -5252,6 +5338,7 @@ function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = '
     const sectionId = insert.targetSectionId;
     if (!state.sectionContents[sectionId]) return;
     captureCurrentSectionVariant(sectionId, 'baseline', '이미지 교체 전');
+    delete state.aiRepairUndoStack[sectionId];
     applySectionContent(sectionId, state.sectionContents[sectionId], dataUrl, 'manual', '이미지 교체');
   } else {
     const afterSectionId = insert.afterSectionId || SECTIONS[SECTIONS.length - 1]?.id;
@@ -5480,6 +5567,8 @@ function bindAiRepairEvents() {
     restoreRepairMask(canvas, aiRepairMaskHistory.pop() || '');
     setTimeout(cacheRepairMaskFromCanvas, 30);
   };
+  const undoLastEditBtn = document.getElementById('repairUndoLastEdit');
+  if (undoLastEditBtn) undoLastEditBtn.onclick = () => undoAiRepair(repair.sectionId);
   const runBtn = document.getElementById('runAiRepair');
   if (runBtn) runBtn.onclick = runAiRepair;
 
@@ -5616,6 +5705,7 @@ async function runAiRepair() {
     );
     if (!result) throw new Error('AI가 수정 이미지를 반환하지 않았습니다.');
 
+    pushAiRepairUndo(sectionId, source, state.sectionContents[sectionId], repair.mode);
     captureCurrentSectionVariant(sectionId, 'baseline', 'AI 수정 전');
     applySectionContent(
       sectionId,
@@ -6042,12 +6132,15 @@ async function generateAllSections() {
   state.progress = 35;
   const preservedContents = cloneData(state.sectionContents || {});
   const preservedImages = cloneData(state.sectionImages || {});
+  const preservedRepairUndoStack = cloneData(state.aiRepairUndoStack || {});
   state.sectionContents = {};
   state.sectionImages = {};
+  state.aiRepairUndoStack = {};
   SECTIONS.forEach(section => {
     if (state.sectionLocks[section.id] && preservedContents[section.id]) {
       state.sectionContents[section.id] = preservedContents[section.id];
       if (preservedImages[section.id]) state.sectionImages[section.id] = preservedImages[section.id];
+      if (preservedRepairUndoStack[section.id]) state.aiRepairUndoStack[section.id] = preservedRepairUndoStack[section.id];
     }
   });
   render();
@@ -6153,6 +6246,7 @@ async function regenerateSection(sectionId) {
     }
 
     delete state.manualSectionEdits[sectionId];
+    delete state.aiRepairUndoStack[sectionId];
     applySectionContent(sectionId, content, state.sectionImages[sectionId] || undefined, 'generated');
     render();
   } catch (e) {
@@ -6204,6 +6298,7 @@ async function generateSingleSection(sectionId) {
     }
 
     delete state.manualSectionEdits[sectionId];
+    delete state.aiRepairUndoStack[sectionId];
     applySectionContent(sectionId, content, state.sectionImages[sectionId] || undefined, 'generated');
     state.sectionGenerating[sectionId] = 'done';
     savePersistentState();
