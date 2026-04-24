@@ -146,6 +146,25 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .range-row label{display:flex;justify-content:space-between;font-size:11px;color:var(--text-m);margin-bottom:4px}
 .range-row input[type=range]{width:100%;accent-color:var(--primary)}
 
+/* AI local image repair */
+.repair-overlay{z-index:1200;align-items:flex-start;overflow:auto;padding:28px 16px}
+.repair-modal{max-width:1120px;width:min(1120px,96vw);padding:0;overflow:hidden}
+.repair-head{display:flex;align-items:flex-start;gap:14px;padding:20px 22px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,rgba(16,163,127,.14),rgba(99,102,241,.10))}
+.repair-title{font-size:18px;font-weight:800;margin-bottom:4px}
+.repair-sub{font-size:12px;color:var(--text-d);line-height:1.6}
+.repair-body{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:0;min-height:560px}
+.repair-canvas-panel{padding:18px;background:#111827;display:flex;align-items:center;justify-content:center}
+.repair-stage{position:relative;max-width:100%;max-height:70vh;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px rgba(0,0,0,.36);background:#0b1020}
+.repair-stage img{display:block;max-width:100%;max-height:70vh;object-fit:contain}
+.repair-stage canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+.repair-side{padding:18px;border-left:1px solid var(--border);background:var(--bg-card);display:flex;flex-direction:column;gap:14px}
+.repair-tip{padding:10px 12px;border:1px solid rgba(16,163,127,.32);background:rgba(16,163,127,.10);border-radius:10px;color:var(--text-d);font-size:12px;line-height:1.55}
+.repair-actions{display:flex;gap:8px;flex-wrap:wrap}
+.repair-mini{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text-m)}
+.repair-error{padding:10px 12px;border:1px solid rgba(239,68,68,.32);background:rgba(239,68,68,.10);border-radius:10px;color:var(--err);font-size:12px;line-height:1.5}
+.repair-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.62);backdrop-filter:blur(4px);color:#fff;font-size:13px;font-weight:700}
+@media (max-width:900px){.repair-body{grid-template-columns:1fr}.repair-side{border-left:0;border-top:1px solid var(--border)}}
+
 /* Error */
 .error-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:var(--err);font-size:13px;margin-bottom:16px}
 
@@ -478,6 +497,55 @@ function dataUrlToBlob(dataUrl) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mime });
+}
+
+function imageSourceToPngDataUrl(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (!String(src || '').startsWith('data:')) img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/png'));
+      } catch(e) {
+        reject(new Error('이미지를 편집용 PNG로 변환하지 못했습니다. 원본이 외부 URL이면 CORS 제한일 수 있습니다.'));
+      }
+    };
+    img.onerror = () => reject(new Error('편집할 이미지를 불러오지 못했습니다.'));
+    img.src = src;
+  });
+}
+
+function maskCanvasHasPaint(canvas) {
+  if (!canvas) return false;
+  const data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] > 8) return true;
+  }
+  return false;
+}
+
+function buildTransparentEditMaskDataUrl(maskCanvas) {
+  const out = document.createElement('canvas');
+  out.width = maskCanvas.width;
+  out.height = maskCanvas.height;
+  const outCtx = out.getContext('2d', { willReadFrequently: true });
+  outCtx.fillStyle = 'rgba(255,255,255,1)';
+  outCtx.fillRect(0, 0, out.width, out.height);
+  const source = maskCanvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, maskCanvas.width, maskCanvas.height).data;
+  const img = outCtx.getImageData(0, 0, out.width, out.height);
+  for (let i = 0; i < source.length; i += 4) {
+    img.data[i] = 255;
+    img.data[i + 1] = 255;
+    img.data[i + 2] = 255;
+    img.data[i + 3] = source[i + 3] > 8 ? 0 : 255;
+  }
+  outCtx.putImageData(img, 0, 0);
+  return out.toDataURL('image/png');
 }
 
 function calcOpenAIImageCost(modelId, usage) {
@@ -1331,6 +1399,45 @@ class OpenAIAPI {
     return null;
   }
 
+  async editImageWithMask(imageDataUrl, maskDataUrl, prompt, imageModel) {
+    const imgModel = imageModel || getImageModel();
+    const outputFormat = 'png';
+    const form = new FormData();
+    form.append('model', imgModel);
+    form.append('prompt', prompt);
+    form.append('image', dataUrlToBlob(imageDataUrl), 'source.png');
+    form.append('mask', dataUrlToBlob(maskDataUrl), 'mask.png');
+    form.append('size', 'auto');
+    form.append('quality', 'auto');
+    form.append('output_format', outputFormat);
+    form.append('moderation', 'auto');
+    form.append('n', '1');
+
+    const res = await fetch(`${this.baseUrl}/images/edits`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      body: form
+    });
+    const data = await res.json().catch(() => ({ error: { message: `OpenAI image edit failed (${res.status})` } }));
+    if (!res.ok || data.error) throw new Error(data.error?.message || `OpenAI image edit failed (${res.status})`);
+
+    const usage = data.usage || null;
+    tokenTracker.record(
+      imgModel,
+      usage?.input_tokens,
+      usage?.output_tokens,
+      true,
+      'AI부분수정',
+      usage ? { costUSD: calcOpenAIImageCost(imgModel, usage) } : null
+    );
+
+    const first = data.data?.[0];
+    if (!first) return null;
+    if (first.b64_json) return `data:image/${data.output_format || outputFormat};base64,${first.b64_json}`;
+    if (first.url) return first.url;
+    return null;
+  }
+
   async analyzeImage(imageBase64, mimeType) {
     const prompt = `You are a professional e-commerce product analyst. Analyze this product image in extreme detail.
 Return a JSON object with the following fields:
@@ -2097,6 +2204,17 @@ const state = {
   previewLayerEdits: _savedSession?.previewLayerEdits || {},
   previewLayerMode: false,
   activePreviewLayer: null, // { sectionId, layerId }
+  aiRepair: {
+    open: false,
+    sectionId: null,
+    mode: 'spot',
+    prompt: '',
+    brushSize: 48,
+    model: '',
+    maskDataUrl: '',
+    busy: false,
+    error: '',
+  },
   sectionGenerating: {}, // sectionId → 'loading' | 'done' | undefined
   imageDirectives: loadImageDirectives(), // [{id, text, active}]
   imageDirectivesOpen: false,
@@ -2752,6 +2870,7 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = `
     ${state.showApiModal ? renderApiModal() : ''}
+    ${state.aiRepair?.open ? renderAiRepairModal() : ''}
     <div class="app">
       ${renderSidebar()}
       <main class="main">
@@ -2772,6 +2891,99 @@ function render() {
     ${renderAgentChat()}
   `;
   bindEvents();
+}
+
+function getAiRepairDefaultModel() {
+  const current = getImageModel();
+  if (isAiRepairModel(current)) return current;
+  return IMAGE_MODELS.find(m => m.id === 'gpt-image-1.5')?.id
+    || IMAGE_MODELS.find(m => isAiRepairModel(m.id))?.id
+    || 'gpt-image-1.5';
+}
+
+function isAiRepairModel(modelId) {
+  return ['gpt-image-1.5', 'gpt-image-1-mini', 'gpt-image-1'].includes(modelId);
+}
+
+function renderAiRepairModal() {
+  const repair = state.aiRepair || {};
+  const section = SECTIONS.find(s => s.id === repair.sectionId);
+  const img = repair.sectionId ? state.sectionImages[repair.sectionId] : null;
+  const models = IMAGE_MODELS.filter(m => isAiRepairModel(m.id));
+  const selectedModel = repair.model || getAiRepairDefaultModel();
+  const mode = repair.mode || 'spot';
+  if (!section || !img) return '';
+
+  return `<div class="modal-overlay repair-overlay" id="aiRepairOverlay">
+    <div class="modal repair-modal" onclick="event.stopPropagation()">
+      <div class="repair-head">
+        <span class="material-icons-outlined" style="font-size:26px;color:var(--ok)">auto_fix_high</span>
+        <div style="flex:1">
+          <div class="repair-title">2. AI 스팟 / 부분 수정</div>
+          <div class="repair-sub">${section.n}. ${escapeHtml(section.name)} 이미지에서 고치고 싶은 영역만 칠한 뒤, 복구하거나 원하는 장식/소품으로 바꿉니다.</div>
+        </div>
+        <button class="btn-sm" id="closeAiRepair" ${repair.busy ? 'disabled' : ''}>닫기</button>
+      </div>
+      <div class="repair-body">
+        <div class="repair-canvas-panel">
+          <div class="repair-stage" id="repairStage">
+            <img id="repairSourceImage" src="${escapeHtml(img)}" alt="repair source">
+            <canvas id="repairMaskCanvas"></canvas>
+            ${repair.busy ? `<div class="repair-loading"><span class="spinner" style="width:18px;height:18px;margin-right:8px"></span>선택 영역만 자연스럽게 수정 중...</div>` : ''}
+          </div>
+        </div>
+        <aside class="repair-side">
+          <div class="repair-tip">
+            <strong style="color:var(--text)">사용법</strong><br>
+            사진 위에서 바꾸고 싶은 부분만 칠하세요. 예: 나비 장식만 칠하고 “꽃 장식으로 바꿔줘”라고 입력하면, 나머지 영역은 최대한 그대로 보존합니다.
+          </div>
+
+          <div class="input-group" style="margin-bottom:0">
+            <label class="label">수정 방식</label>
+            <select class="select" id="repairMode" ${repair.busy ? 'disabled' : ''}>
+              <option value="spot" ${mode === 'spot' ? 'selected' : ''}>스팟 복구: 지우고 자연스럽게 메우기</option>
+              <option value="replace" ${mode === 'replace' ? 'selected' : ''}>부분 교체: 코멘트대로 바꾸기</option>
+            </select>
+          </div>
+
+          <div class="input-group" style="margin-bottom:0">
+            <label class="label">수정 코멘트</label>
+            <textarea class="textarea" id="repairPrompt" rows="4" ${repair.busy ? 'disabled' : ''} placeholder="예: 나비 장식을 작은 흰색 꽃 장식으로 자연스럽게 바꿔줘">${escapeHtml(repair.prompt || '')}</textarea>
+          </div>
+
+          <div class="input-group" style="margin-bottom:0">
+            <label class="label">AI 편집 모델</label>
+            <select class="select" id="repairModel" ${repair.busy ? 'disabled' : ''}>
+              ${models.map(m => `<option value="${escapeHtml(m.id)}" ${selectedModel === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
+            </select>
+            <div style="font-size:11px;color:var(--text-m);margin-top:6px">정밀 마스크 편집은 OpenAI 이미지 편집 API로 처리합니다. 기존 Vertex 전체 이미지 생성 설정은 그대로 둡니다.</div>
+          </div>
+
+          <div class="range-row">
+            <label><span>브러시 크기</span><b>${repair.brushSize || 48}px</b></label>
+            <input type="range" id="repairBrushSize" min="8" max="180" value="${repair.brushSize || 48}" ${repair.busy ? 'disabled' : ''}>
+          </div>
+
+          <div class="repair-actions">
+            <button class="btn-sm" id="repairUndoMask" ${repair.busy ? 'disabled' : ''}>되돌리기</button>
+            <button class="btn-sm" id="repairClearMask" ${repair.busy ? 'disabled' : ''}>마스크 지우기</button>
+          </div>
+
+          ${!state.openaiKey ? `<div class="repair-error">OpenAI API 키가 있어야 부분 수정이 가능합니다. 모델 설정에서 OpenAI 키를 먼저 저장해주세요.</div>` : ''}
+          ${repair.error ? `<div class="repair-error">${escapeHtml(repair.error)}</div>` : ''}
+
+          <button class="btn-primary" id="runAiRepair" style="margin-top:auto" ${repair.busy || !state.openaiKey ? 'disabled' : ''}>
+            <span class="material-icons-outlined" style="font-size:18px">auto_fix_high</span>
+            선택 영역만 AI로 수정
+          </button>
+          <div class="repair-mini">
+            <span>원본은 히스토리에 보존됩니다.</span>
+            <span>mask edit</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>`;
 }
 
 function renderApiModal() {
@@ -3681,6 +3893,9 @@ function renderPreview() {
               <button class="btn-sm" data-edit-preview="${s.id}">
                 <span class="material-icons-outlined" style="font-size:16px">edit</span> 수정
               </button>
+              ${img ? `<button class="btn-sm" data-ai-repair="${s.id}">
+                <span class="material-icons-outlined" style="font-size:16px">auto_fix_high</span> 2. AI 스팟
+              </button>` : ''}
               <button class="btn-sm" data-regen="${s.id}">
                 <span class="material-icons-outlined" style="font-size:16px">refresh</span> 재생성
               </button>
@@ -4415,6 +4630,10 @@ function bindEvents() {
       render();
     };
   });
+  document.querySelectorAll('[data-ai-repair]').forEach(btn => {
+    btn.onclick = () => openAiRepair(btn.dataset.aiRepair);
+  });
+  bindAiRepairEvents();
   bindPreviewLayerEvents();
 
   // Regenerate section
@@ -4501,6 +4720,245 @@ function bindEvents() {
   if (exportPhotoshopBtn) exportPhotoshopBtn.onclick = exportPhotoshopPackage;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
+}
+
+let aiRepairMaskHistory = [];
+
+function openAiRepair(sectionId) {
+  if (!sectionId || !state.sectionImages[sectionId]) return;
+  aiRepairMaskHistory = [];
+  state.aiRepair = {
+    open: true,
+    sectionId,
+    mode: 'spot',
+    prompt: '',
+    brushSize: state.aiRepair?.brushSize || 48,
+    model: state.aiRepair?.model || getAiRepairDefaultModel(),
+    maskDataUrl: '',
+    busy: false,
+    error: '',
+  };
+  render();
+}
+
+function closeAiRepair() {
+  if (state.aiRepair?.busy) return;
+  state.aiRepair.open = false;
+  state.aiRepair.error = '';
+  state.aiRepair.maskDataUrl = '';
+  aiRepairMaskHistory = [];
+  render();
+}
+
+function cacheRepairMaskFromCanvas() {
+  const canvas = document.getElementById('repairMaskCanvas');
+  if (canvas && canvas.width && canvas.height) state.aiRepair.maskDataUrl = canvas.toDataURL('image/png');
+}
+
+function restoreRepairMask(canvas, dataUrl) {
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!dataUrl) return;
+  const img = new Image();
+  img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  img.src = dataUrl;
+}
+
+function bindAiRepairEvents() {
+  const repair = state.aiRepair;
+  if (!repair?.open) return;
+
+  const overlay = document.getElementById('aiRepairOverlay');
+  if (overlay) overlay.onclick = closeAiRepair;
+  const closeBtn = document.getElementById('closeAiRepair');
+  if (closeBtn) closeBtn.onclick = closeAiRepair;
+
+  const mode = document.getElementById('repairMode');
+  if (mode) mode.onchange = e => { state.aiRepair.mode = e.target.value; };
+  const prompt = document.getElementById('repairPrompt');
+  if (prompt) prompt.oninput = e => { state.aiRepair.prompt = e.target.value; };
+  const model = document.getElementById('repairModel');
+  if (model) model.onchange = e => { state.aiRepair.model = e.target.value; };
+  const brush = document.getElementById('repairBrushSize');
+  if (brush) brush.oninput = e => {
+    state.aiRepair.brushSize = Number(e.target.value || 48);
+    const label = brush.closest('.range-row')?.querySelector('b');
+    if (label) label.textContent = `${state.aiRepair.brushSize}px`;
+  };
+
+  const clearBtn = document.getElementById('repairClearMask');
+  if (clearBtn) clearBtn.onclick = () => {
+    const canvas = document.getElementById('repairMaskCanvas');
+    if (!canvas) return;
+    aiRepairMaskHistory.push(canvas.toDataURL('image/png'));
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    state.aiRepair.maskDataUrl = '';
+  };
+  const undoBtn = document.getElementById('repairUndoMask');
+  if (undoBtn) undoBtn.onclick = () => {
+    const canvas = document.getElementById('repairMaskCanvas');
+    if (!canvas) return;
+    restoreRepairMask(canvas, aiRepairMaskHistory.pop() || '');
+    setTimeout(cacheRepairMaskFromCanvas, 30);
+  };
+  const runBtn = document.getElementById('runAiRepair');
+  if (runBtn) runBtn.onclick = runAiRepair;
+
+  initAiRepairCanvas();
+}
+
+function initAiRepairCanvas() {
+  const canvas = document.getElementById('repairMaskCanvas');
+  const img = document.getElementById('repairSourceImage');
+  if (!canvas || !img) return;
+
+  const setup = () => {
+    const w = img.naturalWidth || img.clientWidth || 1024;
+    const h = img.naturalHeight || img.clientHeight || 1024;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      restoreRepairMask(canvas, state.aiRepair.maskDataUrl);
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
+  if (img.complete && img.naturalWidth) setup();
+  else img.onload = setup;
+
+  let drawing = false;
+  let last = null;
+  const point = event => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+      scale: canvas.width / rect.width,
+    };
+  };
+  const draw = event => {
+    if (!drawing) return;
+    const p = point(event);
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = 'rgba(255,70,70,.72)';
+    ctx.lineWidth = Math.max(2, (state.aiRepair.brushSize || 48) * p.scale);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  };
+  const paintDot = p => {
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(255,70,70,.72)';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(2, ((state.aiRepair.brushSize || 48) * p.scale) / 2), 0, Math.PI * 2);
+    ctx.fill();
+  };
+  canvas.onpointerdown = event => {
+    if (state.aiRepair.busy || event.button !== 0) return;
+    event.preventDefault();
+    setup();
+    aiRepairMaskHistory = [...aiRepairMaskHistory.slice(-12), canvas.toDataURL('image/png')];
+    drawing = true;
+    last = point(event);
+    canvas.setPointerCapture?.(event.pointerId);
+    paintDot(last);
+    draw(event);
+  };
+  canvas.onpointermove = event => draw(event);
+  canvas.onpointerup = event => {
+    if (!drawing) return;
+    drawing = false;
+    canvas.releasePointerCapture?.(event.pointerId);
+    cacheRepairMaskFromCanvas();
+  };
+  canvas.onpointercancel = () => { drawing = false; cacheRepairMaskFromCanvas(); };
+}
+
+function buildAiRepairPrompt(mode, userInstruction) {
+  const instruction = String(userInstruction || '').trim();
+  const task = mode === 'replace'
+    ? `Inside the masked area, apply this user request exactly: "${instruction}".`
+    : `Remove the selected blemish, artifact, unwanted object, or distracting detail in the masked area and reconstruct the background or product surface naturally. ${instruction ? `Additional user note: "${instruction}".` : ''}`;
+  return `Edit this Korean ecommerce detail-page image with high fidelity.
+Use the mask as the target edit area. Edit only the transparent masked area.
+Preserve every unmasked pixel as much as possible: product shape, text, lighting, shadows, colors, camera angle, texture, and layout must remain unchanged.
+Blend the edit seamlessly so it looks like the original photo/design, not a pasted object.
+${task}`;
+}
+
+async function runAiRepair() {
+  const repair = state.aiRepair || {};
+  const sectionId = repair.sectionId;
+  const source = sectionId ? state.sectionImages[sectionId] : null;
+  const canvas = document.getElementById('repairMaskCanvas');
+  if (!sectionId || !source || !canvas) return;
+
+  repair.mode = document.getElementById('repairMode')?.value || repair.mode || 'spot';
+  repair.prompt = document.getElementById('repairPrompt')?.value || '';
+  repair.model = document.getElementById('repairModel')?.value || repair.model || getAiRepairDefaultModel();
+  repair.error = '';
+
+  if (!state.openaiKey) {
+    repair.error = 'OpenAI API 키가 필요합니다. 모델 설정에서 OpenAI 키를 저장해주세요.';
+    render();
+    return;
+  }
+  if (!maskCanvasHasPaint(canvas)) {
+    repair.error = '수정할 영역을 먼저 사진 위에 칠해주세요.';
+    render();
+    return;
+  }
+  if (repair.mode === 'replace' && !repair.prompt.trim()) {
+    repair.error = '부분 교체 모드에서는 “꽃 장식으로 바꿔줘”처럼 수정 코멘트를 입력해주세요.';
+    render();
+    return;
+  }
+
+  const visualMask = canvas.toDataURL('image/png');
+  const editMask = buildTransparentEditMaskDataUrl(canvas);
+  repair.maskDataUrl = visualMask;
+  repair.busy = true;
+  render();
+
+  try {
+    const sourcePng = await imageSourceToPngDataUrl(source);
+    const client = new OpenAIAPI(state.openaiKey, state.modelConfig.llmModel);
+    const result = await client.editImageWithMask(
+      sourcePng,
+      editMask,
+      buildAiRepairPrompt(repair.mode, repair.prompt),
+      repair.model
+    );
+    if (!result) throw new Error('AI가 수정 이미지를 반환하지 않았습니다.');
+
+    captureCurrentSectionVariant(sectionId, 'baseline', 'AI 수정 전');
+    applySectionContent(
+      sectionId,
+      state.sectionContents[sectionId],
+      result,
+      'generated',
+      repair.mode === 'replace' ? 'AI 부분 교체' : 'AI 스팟 복구'
+    );
+    state.aiRepair = {
+      ...state.aiRepair,
+      open: false,
+      busy: false,
+      error: '',
+      maskDataUrl: '',
+    };
+    aiRepairMaskHistory = [];
+    savePersistentState();
+    render();
+  } catch(e) {
+    state.aiRepair.busy = false;
+    state.aiRepair.error = e.message || 'AI 부분 수정에 실패했습니다.';
+    render();
+  }
 }
 
 function bindPreviewLayerEvents() {
