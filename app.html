@@ -1560,6 +1560,8 @@ Respond ONLY with the JSON object, no other text.`;
     const directiveBlock = activeDirectives.length > 0
       ? `\nSTRICT USER CONSTRAINTS (must be followed — override defaults):\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n`
       : '';
+    const brandBlock = buildBrandPromptBlock();
+    const layoutBlock = buildLayoutPromptBlock();
     const prompt = `You are a Korean e-commerce detail page content creator.
 
 Product Analysis:
@@ -1989,25 +1991,51 @@ function idbDone(tx) {
   });
 }
 
+function ensureWorkspaceDbStores(db) {
+  if (!db.objectStoreNames.contains(WORKSPACE_DB.projects)) {
+    db.createObjectStore(WORKSPACE_DB.projects, { keyPath: 'id' });
+  }
+  if (!db.objectStoreNames.contains(WORKSPACE_DB.snapshots)) {
+    const store = db.createObjectStore(WORKSPACE_DB.snapshots, { keyPath: 'id' });
+    store.createIndex('projectId', 'projectId', { unique: false });
+    store.createIndex('createdAt', 'createdAt', { unique: false });
+  }
+  if (!db.objectStoreNames.contains(WORKSPACE_DB.sessionAssets)) {
+    db.createObjectStore(WORKSPACE_DB.sessionAssets, { keyPath: 'id' });
+  }
+}
+
+function workspaceDbHasRequiredStores(db) {
+  return [WORKSPACE_DB.projects, WORKSPACE_DB.snapshots, WORKSPACE_DB.sessionAssets]
+    .every(storeName => db.objectStoreNames.contains(storeName));
+}
+
 async function openWorkspaceDb() {
   if (!('indexedDB' in window)) throw new Error('IndexedDB unavailable');
-  if (openWorkspaceDb._db) return openWorkspaceDb._db;
+  if (openWorkspaceDb._db && workspaceDbHasRequiredStores(openWorkspaceDb._db)) return openWorkspaceDb._db;
+  if (openWorkspaceDb._db) {
+    openWorkspaceDb._db.close();
+    openWorkspaceDb._db = null;
+  }
   const request = indexedDB.open(WORKSPACE_DB.name, WORKSPACE_DB.version);
   request.onupgradeneeded = () => {
-    const db = request.result;
-    if (!db.objectStoreNames.contains(WORKSPACE_DB.projects)) {
-      db.createObjectStore(WORKSPACE_DB.projects, { keyPath: 'id' });
-    }
-    if (!db.objectStoreNames.contains(WORKSPACE_DB.snapshots)) {
-      const store = db.createObjectStore(WORKSPACE_DB.snapshots, { keyPath: 'id' });
-      store.createIndex('projectId', 'projectId', { unique: false });
-      store.createIndex('createdAt', 'createdAt', { unique: false });
-    }
-    if (!db.objectStoreNames.contains(WORKSPACE_DB.sessionAssets)) {
-      db.createObjectStore(WORKSPACE_DB.sessionAssets, { keyPath: 'id' });
-    }
+    ensureWorkspaceDbStores(request.result);
   };
-  openWorkspaceDb._db = await idbRequest(request);
+  let db = await idbRequest(request);
+  if (!workspaceDbHasRequiredStores(db)) {
+    const nextVersion = db.version + 1;
+    db.close();
+    const repairRequest = indexedDB.open(WORKSPACE_DB.name, nextVersion);
+    repairRequest.onupgradeneeded = () => {
+      ensureWorkspaceDbStores(repairRequest.result);
+    };
+    db = await idbRequest(repairRequest);
+  }
+  db.onversionchange = () => {
+    db.close();
+    openWorkspaceDb._db = null;
+  };
+  openWorkspaceDb._db = db;
   return openWorkspaceDb._db;
 }
 
