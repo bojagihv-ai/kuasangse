@@ -132,6 +132,19 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .section-ctrl{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg-card);border-bottom:1px solid var(--border)}
 .section-ctrl .name{font-weight:600;font-size:13px}
 .edit-panel{padding:12px 16px;background:var(--bg);border-bottom:1px solid var(--border)}
+.preview-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.layer-mode-banner{display:flex;align-items:center;gap:10px;padding:12px 14px;margin-bottom:14px;border:1px solid rgba(99,102,241,.35);background:rgba(99,102,241,.10);border-radius:12px;color:var(--text-d);font-size:13px}
+.preview-layer{position:relative;transition:box-shadow .12s ease, outline-color .12s ease, transform .04s linear}
+.preview-layer.layer-editable{cursor:grab;outline:1px dashed transparent;outline-offset:5px;border-radius:10px}
+.preview-layer.layer-editable:hover{outline-color:rgba(99,102,241,.55);box-shadow:0 0 0 6px rgba(99,102,241,.08)}
+.preview-layer.layer-selected{outline-color:var(--primary)!important;box-shadow:0 0 0 8px rgba(99,102,241,.14)}
+.layer-editor{margin-top:12px;padding:14px;border:1px solid var(--border);border-radius:12px;background:rgba(255,255,255,.03)}
+.layer-pills{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+.layer-pill{border:1px solid var(--border);background:var(--bg-card);color:var(--text-d);border-radius:999px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit}
+.layer-pill.active{border-color:var(--primary);color:var(--primary-h);background:var(--primary-dim)}
+.layer-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.range-row label{display:flex;justify-content:space-between;font-size:11px;color:var(--text-m);margin-bottom:4px}
+.range-row input[type=range]{width:100%;accent-color:var(--primary)}
 
 /* Error */
 .error-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:var(--err);font-size:13px;margin-bottom:16px}
@@ -327,8 +340,11 @@ const LLM_PROVIDERS = {
   },
 };
 
-// 이미지 생성 모델 목록 (Gemini 전용)
+// 이미지 생성 모델 목록 (OpenAI + Gemini)
 const IMAGE_MODELS = [
+  { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', desc: 'OpenAI latest image generation/editing model', inputPerM: 5.00, imageInputPerM: 8.00, outputPerM: 30.00, imageOut: 0, provider: 'openai' },
+  { id: 'gpt-image-1.5', label: 'OpenAI GPT Image 1.5', desc: 'High-quality OpenAI image model', inputPerM: 5.00, imageInputPerM: 8.00, outputPerM: 32.00, textOutputPerM: 10.00, imageOut: 0, provider: 'openai' },
+  { id: 'gpt-image-1-mini', label: 'OpenAI GPT Image 1 mini', desc: 'Cost-efficient OpenAI image model', inputPerM: 2.00, imageInputPerM: 2.50, outputPerM: 8.00, imageOut: 0, provider: 'openai' },
   { id: 'gemini-3.1-flash-image-preview',       label: '나노바나나2 (Gemini 3.1 Flash Image)', desc: '빠름 · 기본값',  inputPerM: 0.10,  outputPerM: 0.40,  imageOut: 0.02  },
   { id: 'gemini-3-pro-image-preview',       label: 'Gemini 3 Pro Image Preview', desc: '최고품질',  inputPerM: 3.50,  outputPerM: 10.50, imageOut: 0.039 },
   { id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image', desc: 'Vertex 권장 대안', inputPerM: 0.10,  outputPerM: 0.40,  imageOut: 0.02  },
@@ -401,6 +417,86 @@ function buildModelPricing() {
 }
 const MODEL_PRICING = buildModelPricing();
 
+function getImageModelMeta(modelId = null) {
+  const id = modelId || getImageModel();
+  return IMAGE_MODELS.find(m => m.id === id) || null;
+}
+
+function getImageProvider(modelId = null) {
+  const meta = getImageModelMeta(modelId);
+  if (meta?.provider) return meta.provider;
+  return (modelId || getImageModel()).startsWith('gpt-image') ? 'openai' : 'gemini';
+}
+
+function isOpenAIImageModel(modelId = null) {
+  return getImageProvider(modelId) === 'openai';
+}
+
+function hasImageConnection(modelId = null) {
+  return isOpenAIImageModel(modelId) ? !!state.openaiKey : hasGeminiConnection();
+}
+
+function createImageClient(modelId = null) {
+  const imgModel = modelId || getImageModel();
+  if (isOpenAIImageModel(imgModel)) {
+    if (!state.openaiKey) throw new Error('OpenAI image API 키가 설정되지 않았습니다.');
+    return new OpenAIAPI(state.openaiKey, state.modelConfig.llmModel);
+  }
+  return createGeminiClient(state.modelConfig.llmModel);
+}
+
+function clampOpenAIImageSize(modelId, width, height) {
+  if (!width) return 'auto';
+  if (modelId === 'gpt-image-2') {
+    const w = Math.max(256, Math.min(3840, width));
+    const h = Math.max(256, Math.min(3840, height || width));
+    return `${w}x${h}`;
+  }
+  const presets = [
+    { id: '1024x1024', w: 1024, h: 1024 },
+    { id: '1536x1024', w: 1536, h: 1024 },
+    { id: '1024x1536', w: 1024, h: 1536 },
+  ];
+  const targetW = width;
+  const targetH = height || width;
+  const targetRatio = targetW / targetH;
+  return presets
+    .map(p => ({ ...p, score: Math.abs((p.w / p.h) - targetRatio) + Math.abs(p.w - targetW) / 2048 + Math.abs(p.h - targetH) / 2048 }))
+    .sort((a, b) => a.score - b.score)[0].id;
+}
+
+function getRequestedImageSize(modelId = null) {
+  const cfg = state.modelConfig || {};
+  if (cfg.imageSizeMode !== 'custom' || !cfg.imageWidth) return 'auto';
+  return clampOpenAIImageSize(modelId || getImageModel(), cfg.imageWidth, cfg.imageHeight || null);
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [header, base64] = String(dataUrl || '').split(',');
+  const mime = /data:([^;]+)/.exec(header || '')?.[1] || 'application/octet-stream';
+  const binary = atob(base64 || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function calcOpenAIImageCost(modelId, usage) {
+  const meta = getImageModelMeta(modelId);
+  if (!meta || !usage) return null;
+  const rawInputTokens = usage.input_tokens || usage.prompt_tokens || 0;
+  const rawOutputTokens = usage.output_tokens || usage.image_tokens || 0;
+  const inputTextTokens = usage.input_tokens_details?.text_tokens || usage.prompt_tokens_details?.text_tokens || usage.input_text_tokens || rawInputTokens;
+  const inputImageTokens = usage.input_tokens_details?.image_tokens || usage.prompt_tokens_details?.image_tokens || usage.input_image_tokens || 0;
+  const outputImageTokens = usage.output_tokens_details?.image_tokens || usage.output_image_tokens || rawOutputTokens;
+  const outputTextTokens = usage.output_tokens_details?.text_tokens || usage.output_text_tokens || 0;
+  let cost = 0;
+  cost += (inputTextTokens / 1_000_000) * (meta.inputPerM || 0);
+  cost += (inputImageTokens / 1_000_000) * (meta.imageInputPerM || meta.inputPerM || 0);
+  cost += (outputImageTokens / 1_000_000) * (meta.outputPerM || 0);
+  cost += (outputTextTokens / 1_000_000) * (meta.textOutputPerM || 0);
+  return cost;
+}
+
 const tokenTracker = {
   sessions: {},      // modelId → { inputTokens, outputTokens, calls, imageCount, costUSD }
   callHistory: [],   // [{ts, model, label, provider, inputTokens, outputTokens, costUSD, op}]
@@ -408,7 +504,7 @@ const tokenTracker = {
   activeTab: 'stats',
   showDetail: false,
 
-  record(modelId, inputTokens, outputTokens, isImage = false, op = '') {
+  record(modelId, inputTokens, outputTokens, isImage = false, op = '', meta = null) {
     if (!this.sessions[modelId]) {
       this.sessions[modelId] = { inputTokens: 0, outputTokens: 0, calls: 0, imageCount: 0, costUSD: 0 };
     }
@@ -432,6 +528,18 @@ const tokenTracker = {
       callCost  = ((inputTokens  || 0) / 1_000_000) * p.inputPerM;
       callCost += ((outputTokens || 0) / 1_000_000) * p.outputPerM;
       if (isImage && p.imageOut) callCost += p.imageOut;
+    }
+
+    if (meta && Number.isFinite(meta.costUSD)) {
+      if (p) {
+        let defaultCallCost = ((inputTokens || 0) / 1_000_000) * p.inputPerM;
+        defaultCallCost += ((outputTokens || 0) / 1_000_000) * p.outputPerM;
+        if (isImage && p.imageOut) defaultCallCost += p.imageOut;
+        s.costUSD += (meta.costUSD - defaultCallCost);
+      } else {
+        s.costUSD += meta.costUSD;
+      }
+      callCost = meta.costUSD;
     }
 
     const provider = modelId.startsWith('gemini') ? 'Gemini' : 'OpenAI';
@@ -840,7 +948,7 @@ Respond ONLY with the JSON object.`;
     return JSON.parse(text);
   }
 
-  async generateImage(prompt, productImageBase64, mimeType, imageModel) {
+  async generateImage(prompt, productImageBase64, mimeType, imageModel, extraImages = []) {
     const imgMod = imageModel || getImageModel();
     const cfg = state.modelConfig;
     const sizeHint = (cfg.imageSizeMode === 'custom' && cfg.imageWidth)
@@ -857,6 +965,9 @@ Respond ONLY with the JSON object.`;
     ];
     if (productImageBase64) {
       parts.push({ inline_data: { mime_type: mimeType, data: productImageBase64 } });
+    }
+    for (const img of extraImages || []) {
+      if (img?.base64) parts.push({ inline_data: { mime_type: img.mime || 'image/png', data: img.base64 } });
     }
 
     const body = {
@@ -1142,6 +1253,82 @@ class OpenAIAPI {
   _parseJSON(text) {
     text = text.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
     return JSON.parse(text);
+  }
+
+  async generateImage(prompt, productImageBase64, mimeType, imageModel, extraImages = []) {
+    const imgModel = imageModel || getImageModel();
+    const requestedSize = getRequestedImageSize(imgModel);
+    const outputFormat = 'png';
+    const activeDirectives = getEffectiveImageDirectives();
+    const directiveStr = activeDirectives.length > 0
+      ? `\n\nCRITICAL CONSTRAINTS - follow exactly:\n${activeDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')}`
+      : '';
+    const brandBlock = buildBrandPromptBlock();
+    const layoutBlock = buildLayoutPromptBlock();
+    const fullPrompt = `Create a professional Korean e-commerce product detail page section image. ${prompt}${directiveStr}\n${brandBlock}\n${layoutBlock}`;
+    const refs = [];
+    if (productImageBase64) refs.push({ base64: productImageBase64, mime: mimeType || 'image/png' });
+    for (const img of extraImages || []) {
+      if (img?.base64) refs.push({ base64: img.base64, mime: img.mime || 'image/png' });
+    }
+
+    let data;
+    if (refs.length > 0) {
+      const form = new FormData();
+      form.append('model', imgModel);
+      form.append('prompt', fullPrompt);
+      form.append('size', requestedSize);
+      form.append('quality', 'auto');
+      form.append('output_format', outputFormat);
+      form.append('moderation', 'auto');
+      refs.forEach((img, idx) => {
+        const blob = dataUrlToBlob(`data:${img.mime};base64,${img.base64}`);
+        form.append('image[]', blob, `reference-${idx + 1}.png`);
+      });
+      const res = await fetch(`${this.baseUrl}/images/edits`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        body: form
+      });
+      data = await res.json();
+    } else {
+      const res = await fetch(`${this.baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+          model: imgModel,
+          prompt: fullPrompt,
+          size: requestedSize,
+          quality: 'auto',
+          output_format: outputFormat,
+          moderation: 'auto',
+          n: 1,
+        })
+      });
+      data = await res.json();
+    }
+
+    if (data.error) throw new Error(data.error.message);
+    const usage = data.usage || null;
+    tokenTracker.record(
+      imgModel,
+      usage?.input_tokens,
+      usage?.output_tokens,
+      true,
+      '이미지생성',
+      usage ? { costUSD: calcOpenAIImageCost(imgModel, usage) } : null
+    );
+
+    const first = data.data?.[0];
+    if (!first) return null;
+    if (first.b64_json) {
+      return await applyImageSizeConfig(`data:image/${data.output_format || outputFormat};base64,${first.b64_json}`);
+    }
+    if (first.url) return first.url;
+    return null;
   }
 
   async analyzeImage(imageBase64, mimeType) {
@@ -1460,6 +1647,13 @@ function createGeminiClient(model) {
 
 function getImageModel() {
   return state.modelConfig.imageModel || 'gemini-3.1-flash-image-preview';
+}
+
+async function generateWithSelectedImageModel(prompt, productImageBase64, mimeType, extraImages = []) {
+  const imageModel = getImageModel();
+  if (!hasImageConnection(imageModel)) return null;
+  const client = createImageClient(imageModel);
+  return client.generateImage(prompt, productImageBase64, mimeType, imageModel, extraImages);
 }
 
 function cssFontFamily(value, fallback = "'Pretendard','Noto Sans KR',sans-serif") {
@@ -1805,6 +1999,7 @@ function savePersistentState() {
       sectionVariants: state.sectionVariants,
       currentSectionVariantIds: state.currentSectionVariantIds,
       manualSectionEdits: state.manualSectionEdits,
+      previewLayerEdits: state.previewLayerEdits,
       layoutTemplate: state.layoutTemplate,
       activeBrandPresetId: state.activeBrandPresetId,
       contentVersion: state.contentVersion,
@@ -1842,6 +2037,7 @@ function loadPersistentSession() {
     s.sectionVariants = s.sectionVariants || {};
     s.currentSectionVariantIds = s.currentSectionVariantIds || {};
     s.manualSectionEdits = s.manualSectionEdits || {};
+    s.previewLayerEdits = s.previewLayerEdits || {};
     s.layoutTemplate = LAYOUT_TEMPLATES.some(t => t.id === s.layoutTemplate) ? s.layoutTemplate : loadLayoutTemplate();
     s.activeBrandPresetId = typeof s.activeBrandPresetId === 'string' ? s.activeBrandPresetId : loadActiveBrandPresetId();
     s.contentVersion = Number.isFinite(s.contentVersion) ? s.contentVersion : 0;
@@ -1898,6 +2094,9 @@ const state = {
   sectionVariants: _savedSession?.sectionVariants || {},
   currentSectionVariantIds: _savedSession?.currentSectionVariantIds || {},
   manualSectionEdits: _savedSession?.manualSectionEdits || {},
+  previewLayerEdits: _savedSession?.previewLayerEdits || {},
+  previewLayerMode: false,
+  activePreviewLayer: null, // { sectionId, layerId }
   sectionGenerating: {}, // sectionId → 'loading' | 'done' | undefined
   imageDirectives: loadImageDirectives(), // [{id, text, active}]
   imageDirectivesOpen: false,
@@ -2846,6 +3045,127 @@ function renderSectionVariantsPanel(sectionId) {
   </div>`;
 }
 
+const PREVIEW_LAYER_DEFS = [
+  { id: 'headline', label: '헤드라인', icon: 'title' },
+  { id: 'subheadline', label: '서브', icon: 'short_text' },
+  { id: 'image', label: '이미지', icon: 'image' },
+  { id: 'body', label: '본문', icon: 'notes' },
+  { id: 'extra', label: '포인트', icon: 'format_list_bulleted' },
+  { id: 'cta', label: 'CTA', icon: 'ads_click' },
+];
+
+function normalizeLayerEdit(edit = {}) {
+  const n = (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+  return {
+    x: Math.round(n(edit.x, 0)),
+    y: Math.round(n(edit.y, 0)),
+    scale: Math.max(0.55, Math.min(1.8, n(edit.scale, 1))),
+    opacity: Math.max(0.15, Math.min(1, n(edit.opacity, 1))),
+    width: Math.max(0, Math.min(1280, n(edit.width, 0))),
+    z: Math.max(0, Math.min(20, Math.round(n(edit.z, 1)))),
+    align: ['left', 'center', 'right'].includes(edit.align) ? edit.align : '',
+  };
+}
+
+function getLayerEdit(sectionId, layerId) {
+  if (!state.previewLayerEdits[sectionId]) state.previewLayerEdits[sectionId] = {};
+  state.previewLayerEdits[sectionId][layerId] = normalizeLayerEdit(state.previewLayerEdits[sectionId][layerId]);
+  return state.previewLayerEdits[sectionId][layerId];
+}
+
+function setLayerEdit(sectionId, layerId, patch) {
+  const current = getLayerEdit(sectionId, layerId);
+  state.previewLayerEdits[sectionId][layerId] = normalizeLayerEdit({ ...current, ...patch });
+  savePersistentState();
+}
+
+function resetLayerEdit(sectionId, layerId = null) {
+  if (!state.previewLayerEdits[sectionId]) return;
+  if (layerId) delete state.previewLayerEdits[sectionId][layerId];
+  else delete state.previewLayerEdits[sectionId];
+  savePersistentState();
+}
+
+function layerStyle(sectionId, layerId) {
+  const e = getLayerEdit(sectionId, layerId);
+  const width = e.width ? `width:${e.width}px;max-width:100%;` : '';
+  const align = e.align ? `text-align:${e.align};` : '';
+  return `position:relative;display:block;z-index:${e.z};opacity:${e.opacity};transform:translate(${e.x}px,${e.y}px) scale(${e.scale});transform-origin:center;${width}${align}`;
+}
+
+function renderPreviewLayer(sectionId, layerId, html, mode = 'preview') {
+  if (!html) return '';
+  const selected = state.activePreviewLayer?.sectionId === sectionId && state.activePreviewLayer?.layerId === layerId;
+  const editable = mode === 'preview' && state.previewLayerMode;
+  const attrs = mode === 'preview'
+    ? `data-layer-section="${escAttr(sectionId)}" data-layer-id="${escAttr(layerId)}"`
+    : '';
+  return `<div class="preview-layer ${editable ? 'layer-editable' : ''} ${selected ? 'layer-selected' : ''}" ${attrs} style="${layerStyle(sectionId, layerId)}">${html}</div>`;
+}
+
+function renderPreviewLayerEditor(section, content) {
+  const activeId = state.activePreviewLayer?.sectionId === section.id ? state.activePreviewLayer.layerId : 'headline';
+  const layerId = PREVIEW_LAYER_DEFS.some(l => l.id === activeId) ? activeId : 'headline';
+  const edit = getLayerEdit(section.id, layerId);
+  const layerLabel = PREVIEW_LAYER_DEFS.find(l => l.id === layerId)?.label || layerId;
+  return `<div class="layer-editor">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)">레이어 편집</div>
+        <div style="font-size:12px;color:var(--text-m);margin-top:3px">상단의 레이어 모드를 켜면 미리보기에서 직접 드래그할 수 있습니다. 방향키는 1px, Shift+방향키는 10px 이동합니다.</div>
+      </div>
+      <button class="btn-sm" data-layer-reset-section="${section.id}">섹션 레이어 초기화</button>
+    </div>
+    <div class="layer-pills">
+      ${PREVIEW_LAYER_DEFS.map(layer => `<button class="layer-pill ${layer.id === layerId ? 'active' : ''}" data-layer-select="${section.id}:${layer.id}">
+        <span class="material-icons-outlined" style="font-size:14px;vertical-align:-2px">${layer.icon}</span> ${layer.label}
+      </button>`).join('')}
+    </div>
+    <div style="font-size:12px;color:var(--primary-h);margin-bottom:8px">선택됨: ${escapeHtml(layerLabel)}</div>
+    <div class="layer-controls">
+      <div class="range-row">
+        <label><span>X 이동</span><b>${edit.x}px</b></label>
+        <input type="range" min="-260" max="260" step="1" value="${edit.x}" data-layer-prop="${section.id}:${layerId}:x">
+      </div>
+      <div class="range-row">
+        <label><span>Y 이동</span><b>${edit.y}px</b></label>
+        <input type="range" min="-260" max="260" step="1" value="${edit.y}" data-layer-prop="${section.id}:${layerId}:y">
+      </div>
+      <div class="range-row">
+        <label><span>크기</span><b>${Math.round(edit.scale * 100)}%</b></label>
+        <input type="range" min="0.55" max="1.8" step="0.01" value="${edit.scale}" data-layer-prop="${section.id}:${layerId}:scale">
+      </div>
+      <div class="range-row">
+        <label><span>투명도</span><b>${Math.round(edit.opacity * 100)}%</b></label>
+        <input type="range" min="0.15" max="1" step="0.01" value="${edit.opacity}" data-layer-prop="${section.id}:${layerId}:opacity">
+      </div>
+      <div class="range-row">
+        <label><span>폭</span><b>${edit.width ? edit.width + 'px' : 'auto'}</b></label>
+        <input type="range" min="0" max="1120" step="10" value="${edit.width}" data-layer-prop="${section.id}:${layerId}:width">
+      </div>
+      <div>
+        <label class="label">정렬 / 깊이</label>
+        <div style="display:grid;grid-template-columns:1fr 88px;gap:8px">
+          <select class="input" data-layer-prop="${section.id}:${layerId}:align">
+            <option value="" ${!edit.align ? 'selected' : ''}>템플릿 기본</option>
+            <option value="left" ${edit.align === 'left' ? 'selected' : ''}>왼쪽</option>
+            <option value="center" ${edit.align === 'center' ? 'selected' : ''}>가운데</option>
+            <option value="right" ${edit.align === 'right' ? 'selected' : ''}>오른쪽</option>
+          </select>
+          <input class="input" type="number" min="0" max="20" value="${edit.z}" data-layer-prop="${section.id}:${layerId}:z" title="z-index">
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn-sm" data-layer-reset="${section.id}:${layerId}">선택 레이어 초기화</button>
+      <button class="btn-sm" data-layer-nudge="${section.id}:${layerId}:0:-10">위로 10px</button>
+      <button class="btn-sm" data-layer-nudge="${section.id}:${layerId}:0:10">아래로 10px</button>
+      <button class="btn-sm" data-layer-nudge="${section.id}:${layerId}:-10:0">왼쪽 10px</button>
+      <button class="btn-sm" data-layer-nudge="${section.id}:${layerId}:10:0">오른쪽 10px</button>
+    </div>
+  </div>`;
+}
+
 function renderPreviewEditPanel(section, content) {
   return `<div class="edit-panel" onclick="event.stopPropagation()">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
@@ -2883,6 +3203,7 @@ function renderPreviewEditPanel(section, content) {
       <button class="btn-sm" data-apply-edit="${section.id}">지시문 반영 재생성</button>
       <button class="btn-sm" data-lock-preview="${section.id}">${state.sectionLocks[section.id] ? '잠금 해제' : '이 섹션 잠금'}</button>
     </div>
+    ${renderPreviewLayerEditor(section, content)}
     ${renderSectionVariantsPanel(section.id)}
   </div>`;
 }
@@ -2902,15 +3223,20 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
   const font = content.font_suggestion || {};
   const headlineFont = cssFontFamily(font.headline_font);
   const bodyFont = cssFontFamily(font.body_font || font.headline_font);
+  const wrapLayer = (layerId, html) => renderPreviewLayer(section.id, layerId, html, mode);
   const headline = escapeHtml(content.headline || `[${section.name}]`);
   const subheadline = escapeHtml(content.subheadline || '');
   const bodyHtml = nl2br(content.body_text || '');
-  const ctaHtml = content.cta_text
+  const ctaCoreHtml = content.cta_text
     ? (mode === 'export'
       ? `<a href="#" style="display:inline-block;margin-top:22px;padding:14px 36px;background:${color.accent || '#6366f1'};color:#fff;border-radius:999px;text-decoration:none;font-size:16px;font-weight:600;font-family:${bodyFont}">${escapeHtml(content.cta_text)}</a>`
       : `<div style="display:inline-block;margin-top:22px;padding:14px 36px;background:${color.accent || '#6366f1'};color:#fff;border-radius:999px;font-size:16px;font-weight:600;font-family:${bodyFont}">${escapeHtml(content.cta_text)}</div>`)
     : '';
-  const imageHtml = img ? `<img src="${img}" alt="${escapeHtml(section.name)}" style="width:100%;max-width:100%;border-radius:18px;display:block;box-shadow:0 18px 40px rgba(0,0,0,.08)">` : '';
+  const ctaHtml = ctaCoreHtml ? wrapLayer('cta', ctaCoreHtml) : '';
+  const imageCoreHtml = img ? `<img src="${img}" alt="${escapeHtml(section.name)}" style="width:100%;max-width:100%;border-radius:18px;display:block;box-shadow:0 18px 40px rgba(0,0,0,.08)">` : '';
+  const imageHtml = imageCoreHtml ? wrapLayer('image', imageCoreHtml) : '';
+  const extraCoreHtml = renderExtraElements(content, color, bodyFont);
+  const extraHtml = extraCoreHtml ? wrapLayer('extra', extraCoreHtml) : '';
   const template = state.layoutTemplate || 'classic';
 
   if (template === 'split') {
@@ -2918,10 +3244,10 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
     const mediaBlock = `<div style="min-width:0">${imageHtml || `<div style="height:280px;border:1px dashed var(--border);border-radius:18px;background:rgba(255,255,255,.45)"></div>`}</div>`;
     const textBlock = `<div style="min-width:0">
       <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:${color.accent || '#6366f1'};margin-bottom:12px">${String(section.n).padStart(2, '0')} / ${escapeHtml(section.name)}</div>
-      <h2 style="font-size:${font.headline_size || '40px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '800'};font-family:${headlineFont};margin-bottom:12px;line-height:1.15">${headline}</h2>
-      <h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>
-      <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
-      ${renderExtraElements(content, color, bodyFont)}
+      ${wrapLayer('headline', `<h2 style="font-size:${font.headline_size || '40px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '800'};font-family:${headlineFont};margin-bottom:12px;line-height:1.15">${headline}</h2>`)}
+      ${wrapLayer('subheadline', `<h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>`)}
+      ${wrapLayer('body', `<p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>`)}
+      ${extraHtml}
       ${ctaHtml}
     </div>`;
     return `<div style="background:${color.background || '#fff'};padding:54px 20px">
@@ -2936,10 +3262,10 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
       <div style="max-width:1120px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:28px;align-items:stretch">
         <div style="padding:34px;border-radius:28px;background:rgba(255,255,255,.82);backdrop-filter:blur(8px);box-shadow:0 24px 60px rgba(0,0,0,.08)">
           <div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:${color.accent || '#6366f1'};margin-bottom:12px">${escapeHtml(section.name)}</div>
-          <h2 style="font-size:${font.headline_size || '46px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '900'};font-family:${headlineFont};margin-bottom:14px;line-height:1.08">${headline}</h2>
-          <h3 style="font-size:19px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>
-          <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
-          ${renderExtraElements(content, color, bodyFont)}
+          ${wrapLayer('headline', `<h2 style="font-size:${font.headline_size || '46px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '900'};font-family:${headlineFont};margin-bottom:14px;line-height:1.08">${headline}</h2>`)}
+          ${wrapLayer('subheadline', `<h3 style="font-size:19px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.5">${subheadline}</h3>`)}
+          ${wrapLayer('body', `<p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>`)}
+          ${extraHtml}
           ${ctaHtml}
         </div>
         <div style="display:flex;align-items:center;justify-content:center;padding:18px;border-radius:28px;background:rgba(255,255,255,.35)">
@@ -2953,11 +3279,11 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
     return `<div style="background:${color.background || '#fff'};padding:52px 20px;border-top:1px solid rgba(0,0,0,.05)">
       <div style="max-width:880px;margin:0 auto">
         <div style="font-size:12px;color:${color.accent || '#6366f1'};margin-bottom:10px">${String(section.n).padStart(2, '0')} · ${escapeHtml(section.name)}</div>
-        <h2 style="font-size:${font.headline_size || '34px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.2">${headline}</h2>
-        <h3 style="font-size:17px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.6">${subheadline}</h3>
+        ${wrapLayer('headline', `<h2 style="font-size:${font.headline_size || '34px'};color:${color.text_primary || '#222'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.2">${headline}</h2>`)}
+        ${wrapLayer('subheadline', `<h3 style="font-size:17px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:18px;line-height:1.6">${subheadline}</h3>`)}
         ${imageHtml ? `<div style="margin:0 0 20px">${imageHtml}</div>` : ''}
-        <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>
-        ${renderExtraElements(content, color, bodyFont)}
+        ${wrapLayer('body', `<p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.9;font-family:${bodyFont}">${bodyHtml}</p>`)}
+        ${extraHtml}
         ${ctaHtml}
       </div>
     </div>`;
@@ -2965,15 +3291,15 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
 
   return `<div style="background:${color.background || '#FFFFFF'};padding:48px 20px;text-align:center">
     <div style="max-width:860px;margin:0 auto">
-      <h2 style="font-size:${font.headline_size || '36px'};color:${color.text_primary || '#333'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.15">
+      ${wrapLayer('headline', `<h2 style="font-size:${font.headline_size || '36px'};color:${color.text_primary || '#333'};font-weight:${font.headline_weight || '700'};font-family:${headlineFont};margin-bottom:10px;line-height:1.15">
         ${headline}
-      </h2>
-      <h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:20px;line-height:1.55">
+      </h2>`)}
+      ${wrapLayer('subheadline', `<h3 style="font-size:18px;color:${color.text_secondary || '#666'};font-weight:400;font-family:${bodyFont};margin-bottom:20px;line-height:1.55">
         ${subheadline}
-      </h3>
+      </h3>`)}
       ${imageHtml ? `<div style="margin-bottom:20px">${imageHtml}</div>` : ''}
-      <p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.8;font-family:${bodyFont};max-width:680px;margin:0 auto">${bodyHtml}</p>
-      ${renderExtraElements(content, color, bodyFont)}
+      ${wrapLayer('body', `<p style="font-size:${font.body_size || '16px'};color:${color.text_secondary || '#666'};line-height:1.8;font-family:${bodyFont};max-width:680px;margin:0 auto">${bodyHtml}</p>`)}
+      ${extraHtml}
       ${ctaHtml}
     </div>
   </div>`;
@@ -3302,8 +3628,16 @@ function renderPreview() {
         <h1 class="page-title">상세페이지 미리보기</h1>
         <p class="page-desc">생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.</p>
       </div>
-      <div style="display:flex;gap:8px">
+      <div class="preview-toolbar">
+        <button class="btn-sm" id="toggleLayerMode" style="${state.previewLayerMode ? 'border-color:var(--primary);color:var(--primary-h);background:var(--primary-dim)' : ''}">
+          <span class="material-icons-outlined" style="font-size:16px">open_with</span>
+          ${state.previewLayerMode ? '레이어 모드 켜짐' : '레이어 모드'}
+        </button>
         <button class="btn-sm" id="runQaBtn">${(!state.qaReport || state.qaVersion !== state.contentVersion) ? 'QA 검사' : 'QA 다시 검사'}</button>
+        <button class="btn-sm" id="exportLayeredSVG">
+          <span class="material-icons-outlined" style="font-size:16px">layers</span>
+          레이어 SVG
+        </button>
         <button class="btn-primary" id="exportHTML">
           <span class="material-icons-outlined" style="font-size:18px">download</span>
           HTML 내보내기
@@ -3314,6 +3648,11 @@ function renderPreview() {
     ${renderWorkspacePanel()}
     ${renderBrandStudioPanel()}
     ${renderQaPanel()}
+    ${state.previewLayerMode ? `<div class="layer-mode-banner">
+      <span class="material-icons-outlined" style="color:var(--primary-h)">touch_app</span>
+      <div><strong style="color:var(--text)">직접 조작 모드</strong> · 텍스트/이미지를 클릭해 선택하고 드래그하세요. 섹션의 <strong>수정</strong> 버튼을 열면 정밀 슬라이더가 나옵니다.</div>
+      <button class="btn-sm" id="resetAllLayers" style="margin-left:auto">전체 레이어 초기화</button>
+    </div>` : ''}
 
     <div class="preview-wrap">
       ${SECTIONS.map(s => {
@@ -4072,6 +4411,7 @@ function bindEvents() {
       render();
     };
   });
+  bindPreviewLayerEvents();
 
   // Regenerate section
   document.querySelectorAll('[data-regen]').forEach(btn => {
@@ -4133,8 +4473,132 @@ function bindEvents() {
   // Export
   const runQaBtn = document.getElementById('runQaBtn');
   if (runQaBtn) runQaBtn.onclick = () => runQaCheck();
+  const toggleLayerMode = document.getElementById('toggleLayerMode');
+  if (toggleLayerMode) {
+    toggleLayerMode.onclick = () => {
+      state.previewLayerMode = !state.previewLayerMode;
+      render();
+    };
+  }
+  const resetAllLayers = document.getElementById('resetAllLayers');
+  if (resetAllLayers) {
+    resetAllLayers.onclick = () => {
+      if (confirm('모든 섹션의 레이어 위치/크기 조정을 초기화할까요?')) {
+        state.previewLayerEdits = {};
+        state.activePreviewLayer = null;
+        savePersistentState();
+        render();
+      }
+    };
+  }
+  const exportLayeredBtn = document.getElementById('exportLayeredSVG');
+  if (exportLayeredBtn) exportLayeredBtn.onclick = exportLayeredSVG;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
+}
+
+function bindPreviewLayerEvents() {
+  document.querySelectorAll('[data-layer-select]').forEach(btn => {
+    btn.onclick = () => {
+      const [sectionId, layerId] = (btn.dataset.layerSelect || '').split(':');
+      if (!sectionId || !layerId) return;
+      state.activePreviewLayer = { sectionId, layerId };
+      state.previewLayerMode = true;
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-layer-prop]').forEach(input => {
+    input.oninput = () => {
+      const [sectionId, layerId, prop] = (input.dataset.layerProp || '').split(':');
+      if (!sectionId || !layerId || !prop) return;
+      const value = prop === 'align' ? input.value : Number(input.value);
+      setLayerEdit(sectionId, layerId, { [prop]: value });
+      state.activePreviewLayer = { sectionId, layerId };
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-layer-reset]').forEach(btn => {
+    btn.onclick = () => {
+      const [sectionId, layerId] = (btn.dataset.layerReset || '').split(':');
+      resetLayerEdit(sectionId, layerId);
+      state.activePreviewLayer = { sectionId, layerId };
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-layer-reset-section]').forEach(btn => {
+    btn.onclick = () => {
+      resetLayerEdit(btn.dataset.layerResetSection);
+      state.activePreviewLayer = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-layer-nudge]').forEach(btn => {
+    btn.onclick = () => {
+      const [sectionId, layerId, dx, dy] = (btn.dataset.layerNudge || '').split(':');
+      const e = getLayerEdit(sectionId, layerId);
+      setLayerEdit(sectionId, layerId, { x: e.x + Number(dx || 0), y: e.y + Number(dy || 0) });
+      state.activePreviewLayer = { sectionId, layerId };
+      render();
+    };
+  });
+
+  document.querySelectorAll('[data-layer-section][data-layer-id]').forEach(el => {
+    const sectionId = el.dataset.layerSection;
+    const layerId = el.dataset.layerId;
+    el.onclick = (event) => {
+      if (!state.previewLayerMode) return;
+      event.stopPropagation();
+      state.activePreviewLayer = { sectionId, layerId };
+      render();
+    };
+    el.onpointerdown = (event) => {
+      if (!state.previewLayerMode || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.activePreviewLayer = { sectionId, layerId };
+      const start = getLayerEdit(sectionId, layerId);
+      const drag = { x: event.clientX, y: event.clientY, startX: start.x, startY: start.y };
+      el.setPointerCapture?.(event.pointerId);
+      el.style.cursor = 'grabbing';
+      el.onpointermove = moveEvent => {
+        const nextX = Math.round(drag.startX + moveEvent.clientX - drag.x);
+        const nextY = Math.round(drag.startY + moveEvent.clientY - drag.y);
+        state.previewLayerEdits[sectionId][layerId] = normalizeLayerEdit({ ...getLayerEdit(sectionId, layerId), x: nextX, y: nextY });
+        el.style.transform = `translate(${nextX}px,${nextY}px) scale(${state.previewLayerEdits[sectionId][layerId].scale})`;
+      };
+      el.onpointerup = () => {
+        el.onpointermove = null;
+        el.onpointerup = null;
+        el.style.cursor = '';
+        savePersistentState();
+        render();
+      };
+    };
+  });
+
+  document.onkeydown = event => {
+    if (!state.previewLayerMode || !state.activePreviewLayer) return;
+    const tag = document.activeElement?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    const keyMap = {
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+    };
+    const dir = keyMap[event.key];
+    if (!dir) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 10 : 1;
+    const { sectionId, layerId } = state.activePreviewLayer;
+    const e = getLayerEdit(sectionId, layerId);
+    setLayerEdit(sectionId, layerId, { x: e.x + dir[0] * step, y: e.y + dir[1] * step });
+    render();
+  };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -4339,10 +4803,13 @@ async function generateCompSection(sectionId) {
     const content = await llm.generateSectionContent(s, state.analysis, state.sectionInstructions[sectionId] || '', compRef);
     let generatedImage;
 
-    if (hasGeminiConnection()) {
+    if (hasImageConnection()) {
       try {
-        const g = createGeminiClient();
-        const img = await g.generateImage(content.image_description || content.design_notes || s.purpose, state.imageBase64, state.imageMime);
+        const img = await generateWithSelectedImageModel(
+          content.image_description || content.design_notes || s.purpose,
+          state.imageBase64,
+          state.imageMime
+        );
         if (img) generatedImage = img;
       } catch(e) {}
     }
@@ -4443,7 +4910,7 @@ async function generateAllSections() {
   let llm;
   try { llm = getLLMClient(); } catch(e) { state.error = e.message; state.step = 'sections'; render(); return; }
   // gemini 인스턴스도 이미지 생성용으로 유지
-  const geminiForImage = hasGeminiConnection() ? createGeminiClient() : null;
+  const imageClientReady = hasImageConnection();
 
   const total = SECTIONS.length;
   const compRef = state.competitorData ? JSON.stringify(state.competitorData).substring(0, 1000) : '';
@@ -4467,13 +4934,13 @@ async function generateAllSections() {
       );
       state.sectionContents[s.id] = content;
 
-      // Try to generate image (항상 Gemini 이미지 모델 사용)
-      if (geminiForImage) {
+      // Try to generate image with the selected image model
+      if (imageClientReady) {
         state.progressMsg = `[${i+1}/${total}] ${s.name} 이미지 생성 중...`;
         render();
         try {
           const imgPrompt = content.image_description || content.design_notes || s.purpose;
-          const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
+          const img = await generateWithSelectedImageModel(imgPrompt, state.imageBase64, state.imageMime);
           if (img) {
             state.sectionImages[s.id] = img;
             // Drive 자동 업로드
@@ -4532,11 +4999,10 @@ async function regenerateSection(sectionId) {
     );
     state.sectionContents[sectionId] = content;
 
-    if (hasGeminiConnection()) {
+    if (hasImageConnection()) {
       try {
-        const geminiForImage = createGeminiClient();
         const imgPrompt = content.image_description || content.design_notes || s.purpose;
-        const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
+        const img = await generateWithSelectedImageModel(imgPrompt, state.imageBase64, state.imageMime);
         if (img) state.sectionImages[sectionId] = img;
       } catch (e) {}
     }
@@ -4578,11 +5044,10 @@ async function generateSingleSection(sectionId) {
     );
     state.sectionContents[sectionId] = content;
 
-    if (hasGeminiConnection()) {
+    if (hasImageConnection()) {
       try {
-        const geminiForImage = createGeminiClient();
         const imgPrompt = content.image_description || content.design_notes || s.purpose;
-        const img = await geminiForImage.generateImage(imgPrompt, state.imageBase64, state.imageMime);
+        const img = await generateWithSelectedImageModel(imgPrompt, state.imageBase64, state.imageMime);
         if (img) {
           state.sectionImages[sectionId] = img;
           // Drive 자동 업로드
@@ -4605,6 +5070,174 @@ async function generateSingleSection(sectionId) {
   render();
 }
 
+function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function svgEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function solidSvgFill(value, fallback = '#ffffff') {
+  const v = String(value || '').trim();
+  if (/^#[0-9a-f]{3,8}$/i.test(v)) return v;
+  if (/^rgb/i.test(v)) return v;
+  return fallback;
+}
+
+function wrapSvgLines(text, maxChars = 22) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [];
+  const words = raw.split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    if ((line + ' ' + word).trim().length > maxChars && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = (line + ' ' + word).trim();
+    }
+  }
+  if (line) lines.push(line);
+  return lines.flatMap(l => {
+    if (l.length <= maxChars * 1.4) return [l];
+    const chunks = [];
+    for (let i = 0; i < l.length; i += maxChars) chunks.push(l.slice(i, i + maxChars));
+    return chunks;
+  });
+}
+
+function svgTextBlock(text, opts) {
+  const fontSize = opts.fontSize || 32;
+  const width = opts.width || 760;
+  const maxChars = Math.max(8, Math.floor(width / (fontSize * 0.52)));
+  const lines = wrapSvgLines(text, maxChars).slice(0, opts.maxLines || 8);
+  const anchor = opts.align === 'right' ? 'end' : (opts.align === 'center' ? 'middle' : 'start');
+  const x = opts.align === 'right' ? width : (opts.align === 'center' ? width / 2 : 0);
+  return `<text x="${x}" y="0" font-family="${svgEscape(opts.font || 'Pretendard, Noto Sans KR, sans-serif')}" font-size="${fontSize}" font-weight="${svgEscape(opts.weight || '400')}" fill="${svgEscape(opts.fill || '#333')}" text-anchor="${anchor}">
+    ${lines.map((line, i) => `<tspan x="${x}" dy="${i === 0 ? fontSize : fontSize * (opts.lineHeight || 1.25)}">${svgEscape(line)}</tspan>`).join('\n')}
+  </text>`;
+}
+
+function svgLayerGroup(sectionId, layerId, baseX, baseY, inner) {
+  const e = getLayerEdit(sectionId, layerId);
+  return `<g id="${svgEscape(sectionId + '_' + layerId)}" data-layer="${svgEscape(layerId)}" opacity="${e.opacity}" transform="translate(${baseX + e.x} ${baseY + e.y}) scale(${e.scale})">${inner}</g>`;
+}
+
+function exportLayeredSVG() {
+  const product = state.analysis || {};
+  const width = 1080;
+  const sectionHeight = 900;
+  const generatedSections = SECTIONS.filter(s => state.sectionContents[s.id]);
+  const height = Math.max(sectionHeight, generatedSections.length * sectionHeight);
+  let body = '';
+
+  generatedSections.forEach((s, idx) => {
+    const y = idx * sectionHeight;
+    const content = applyBrandPresetToContent(state.sectionContents[s.id] || {});
+    const color = content.color_scheme || {};
+    const font = content.font_suggestion || {};
+    const headlineFont = cssFontFamily(font.headline_font).replace(/["']/g, '');
+    const bodyFont = cssFontFamily(font.body_font || font.headline_font).replace(/["']/g, '');
+    const bg = solidSvgFill(color.background, idx % 2 ? '#fbfaf7' : '#ffffff');
+    const accent = solidSvgFill(color.accent, '#6366f1');
+    const headlineColor = solidSvgFill(color.text_primary, '#222222');
+    const bodyColor = solidSvgFill(color.text_secondary, '#555555');
+    const img = state.sectionImages[s.id];
+
+    body += `<g id="${svgEscape(String(s.n).padStart(2, '0') + '_' + s.id)}" data-section="${svgEscape(s.name)}" transform="translate(0 ${y})">
+      <rect id="${svgEscape(s.id + '_background')}" x="0" y="0" width="${width}" height="${sectionHeight}" fill="${svgEscape(bg)}"/>
+      <text x="54" y="58" font-family="Pretendard, Noto Sans KR, sans-serif" font-size="18" font-weight="700" fill="${svgEscape(accent)}">${String(s.n).padStart(2, '0')} · ${svgEscape(s.name)}</text>`;
+
+    const headlineEdit = getLayerEdit(s.id, 'headline');
+    body += svgLayerGroup(s.id, 'headline', 80, 110, svgTextBlock(content.headline || s.name, {
+      font: headlineFont,
+      fontSize: parseInt(font.headline_size || '46', 10) || 46,
+      weight: font.headline_weight || '800',
+      fill: headlineColor,
+      width: headlineEdit.width || 920,
+      align: headlineEdit.align || 'center',
+      maxLines: 3,
+      lineHeight: 1.16,
+    }));
+
+    const subEdit = getLayerEdit(s.id, 'subheadline');
+    body += svgLayerGroup(s.id, 'subheadline', 120, 240, svgTextBlock(content.subheadline || '', {
+      font: bodyFont,
+      fontSize: 26,
+      weight: '400',
+      fill: bodyColor,
+      width: subEdit.width || 840,
+      align: subEdit.align || 'center',
+      maxLines: 3,
+      lineHeight: 1.25,
+    }));
+
+    if (img) {
+      const imageEdit = getLayerEdit(s.id, 'image');
+      const imageW = imageEdit.width || 820;
+      body += svgLayerGroup(s.id, 'image', Math.round((width - imageW) / 2), 320, `
+        <image href="${svgEscape(img)}" x="0" y="0" width="${imageW}" height="330" preserveAspectRatio="xMidYMid meet"/>
+      `);
+    }
+
+    const bodyEdit = getLayerEdit(s.id, 'body');
+    body += svgLayerGroup(s.id, 'body', 150, img ? 690 : 355, svgTextBlock(content.body_text || '', {
+      font: bodyFont,
+      fontSize: parseInt(font.body_size || '24', 10) || 24,
+      weight: '400',
+      fill: bodyColor,
+      width: bodyEdit.width || 780,
+      align: bodyEdit.align || 'center',
+      maxLines: 5,
+      lineHeight: 1.35,
+    }));
+
+    if (content.extra_elements?.length) {
+      const extraEdit = getLayerEdit(s.id, 'extra');
+      body += svgLayerGroup(s.id, 'extra', 170, img ? 785 : 560, svgTextBlock(content.extra_elements.map(v => `• ${v}`).join('   '), {
+        font: bodyFont,
+        fontSize: 20,
+        weight: '500',
+        fill: bodyColor,
+        width: extraEdit.width || 740,
+        align: extraEdit.align || 'center',
+        maxLines: 4,
+        lineHeight: 1.35,
+      }));
+    }
+
+    if (content.cta_text) {
+      const ctaEdit = getLayerEdit(s.id, 'cta');
+      const ctaW = ctaEdit.width || 300;
+      const ctaInner = `<rect x="0" y="0" width="${ctaW}" height="58" rx="29" fill="${svgEscape(accent)}"/>
+        <text x="${ctaW / 2}" y="37" text-anchor="middle" font-family="${svgEscape(bodyFont)}" font-size="22" font-weight="700" fill="#ffffff">${svgEscape(content.cta_text)}</text>`;
+      body += svgLayerGroup(s.id, 'cta', Math.round((width - ctaW) / 2), 825, ctaInner);
+    }
+
+    body += `</g>`;
+  });
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <title>${svgEscape(product.product_name || '상세페이지 레이어')}</title>
+  <desc>Photoshop/Illustrator 편집을 위해 섹션, 텍스트, 이미지가 개별 그룹으로 분리된 SVG입니다. PSD가 아니라 SVG이므로 앱 안의 레이어 조정값을 보존하는 포토샵 친화 내보내기 형식입니다.</desc>
+  ${body}
+</svg>`;
+  downloadTextFile(`${product.product_name || 'detail-page'}_layered.svg`, svg, 'image/svg+xml;charset=utf-8');
+}
+
 function exportHTML() {
   const product = state.analysis || {};
   runQaCheck({ renderAfter: false });
@@ -4613,33 +5246,8 @@ function exportHTML() {
   for (const s of SECTIONS) {
     const content = state.sectionContents[s.id];
     if (!content) continue;
-    const c = content.color_scheme || {};
-    const f = content.font_suggestion || {};
-    const headlineFont = cssFontFamily(f.headline_font);
-    const bodyFont = cssFontFamily(f.body_font || f.headline_font);
     const img = state.sectionImages[s.id];
     sectionsHtml += renderSectionTemplate(s, content, img, 'export');
-    continue;
-
-    sectionsHtml += `
-    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
-      <div style="max-width:860px;margin:0 auto;">
-        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};font-family:${headlineFont};">
-          ${content.headline||''}
-        </h2>
-        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;font-family:${bodyFont};">
-          ${content.subheadline||''}
-        </h3>
-        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
-        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;font-family:${bodyFont};max-width:680px;margin:0 auto;">
-          ${content.body_text||''}
-        </p>
-        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">
-          ${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;font-family:${bodyFont};border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}
-        </div>` : ''}
-        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;font-family:${bodyFont};">${content.cta_text}</a>` : ''}
-      </div>
-    </section>`;
   }
 
   const html = `<!DOCTYPE html>
@@ -4660,13 +5268,7 @@ function exportHTML() {
 <body>${sectionsHtml}</body>
 </html>`;
 
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${product.product_name||'detail-page'}_상세페이지.html`;
-  a.click();
-  URL.revokeObjectURL(url);
+  downloadTextFile(`${product.product_name||'detail-page'}_상세페이지.html`, html, 'text/html;charset=utf-8');
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -5648,6 +6250,9 @@ function renderModelSettings() {
   const cfg = state.modelConfig;
   const geminiProv = LLM_PROVIDERS.gemini;
   const openaiProv = LLM_PROVIDERS.openai;
+  const imageProvider = getImageProvider(cfg.imageModel);
+  const needsOpenAIImageCreds = imageProvider === 'openai' && cfg.llmProvider !== 'openai';
+  const needsGeminiImageCreds = imageProvider === 'gemini' && cfg.llmProvider !== 'gemini';
 
   const renderModelCard = (m, selectedId, colorClass) => {
     const sel = m.id === selectedId;
@@ -5662,18 +6267,22 @@ function renderModelSettings() {
 
   const renderImgModelCard = (m) => {
     const sel = m.id === cfg.imageModel;
+    const provider = (m.provider || (m.id.startsWith('gpt-image') ? 'openai' : 'gemini')) === 'openai' ? 'OpenAI' : 'Gemini';
+    const priceLine = m.imageOut
+      ? `text in $${m.inputPerM}/M · text out $${m.outputPerM}/M · image out $${m.imageOut}/image`
+      : `text in $${m.inputPerM}/M · image in $${m.imageInputPerM || m.inputPerM}/M · image out $${m.outputPerM}/M`;
     return `<div class="model-card ${sel ? 'selected' : ''}" data-pick-imgmodel="${m.id}">
       <div class="mc-label">${m.label}</div>
-      <div class="mc-id">${m.id}</div>
+      <div class="mc-id">${provider} · ${m.id}</div>
       <div class="mc-desc">${m.desc}</div>
-      <div class="mc-price">in $${m.inputPerM}/M · out $${m.outputPerM}/M · img $${m.imageOut}/장</div>
+      <div class="mc-price">${priceLine}</div>
       ${sel ? '<div style="margin-top:6px;font-size:11px;color:var(--ok);font-weight:700">✔ 선택됨</div>' : ''}
     </div>`;
   };
 
   return `<div class="fade-in">
     <h1 class="page-title">⚙️ 모델 설정</h1>
-    <p class="page-desc">권장 조합: LLM은 OpenAI, 이미지 생성은 Gemini(Vertex Backend URL)로 사용하세요.</p>
+    <p class="page-desc">텍스트와 이미지는 서로 다른 공급자를 섞어 쓸 수 있습니다. LLM은 OpenAI/Gemini, 이미지는 OpenAI GPT Image/Gemini 중에서 선택하세요.</p>
 
     <!-- ── LLM 프로바이더 선택 ── -->
     <div class="settings-section">
@@ -5723,12 +6332,12 @@ function renderModelSettings() {
 
     <!-- ── 이미지 생성 모델 ── -->
     <div class="settings-section">
-      <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--orange)">image</span> 이미지 생성 모델 (Gemini 전용)</h3>
-      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지 및 이미지컷 생성 시 사용됩니다. Gemini API Key 또는 Vertex Backend URL이 필요합니다.</p>
+      <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--orange)">image</span> 이미지 생성 모델</h3>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지와 이미지컷 생성에 사용됩니다. OpenAI 모델은 OpenAI API Key, Gemini 모델은 Vertex Backend URL 또는 Gemini API Key가 필요합니다.</p>
       <div class="model-list">
         ${IMAGE_MODELS.map(m => renderImgModelCard(m)).join('')}
       </div>
-      ${cfg.llmProvider === 'openai' ? `
+      ${needsGeminiImageCreds ? `
       <div class="input-group" style="margin-top:4px">
         <label class="label">이미지 생성용 Vertex Backend URL (권장)</label>
         <input type="text" class="input" id="geminiBackendInput" value="${state.backendBaseUrl || ''}" placeholder="http://localhost:5000" style="font-family:monospace;font-size:13px;margin-bottom:8px">
@@ -5737,6 +6346,20 @@ function renderModelSettings() {
           <input type="password" class="input" id="geminiKeyInput" value="${state.apiKey}" placeholder="AIza..." style="font-family:monospace;font-size:13px;padding-right:40px">
           <span class="material-icons-outlined" id="toggleGeminiKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
         </div>
+      </div>
+      ` : ''}
+      ${needsOpenAIImageCreds ? `
+      <div class="input-group" style="margin-top:4px">
+        <label class="label">이미지 생성용 OpenAI API Key</label>
+        <div style="position:relative">
+          <input type="password" class="input" id="openaiKeyInput" value="${state.openaiKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <span class="material-icons-outlined" id="toggleOpenAIKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
+        </div>
+      </div>
+      ` : ''}
+      ${!needsGeminiImageCreds && !needsOpenAIImageCreds ? `
+      <div style="font-size:11px;color:var(--text-m);margin-top:8px">
+        현재 선택된 이미지 모델은 위의 LLM 설정과 같은 공급자 인증 정보를 그대로 사용합니다.
       </div>
       ` : ''}
     </div>
@@ -5878,7 +6501,7 @@ function renderAutomation() {
     <div class="auto-card" style="border-color:var(--primary);margin-bottom:14px">
       <h3><span class="material-icons-outlined" style="font-size:20px;color:var(--primary)">hub</span> 서버 Drive 자동화 연결 (권장)</h3>
       <p style="font-size:12px;color:var(--text-d);margin-bottom:10px">
-        GitHub Pages에서도 로컬 자동화 API(기본: <code>http://127.0.0.1:4000/v1</code>)를 직접 호출해 image-cuts/detail-page를 제어합니다.
+        로컬 앱 실행 시 자동화 API(기본: <code>http://127.0.0.1:4000/v1</code>)를 호출해 image-cuts/detail-page를 제어합니다. GitHub Pages 같은 HTTPS 배포에서는 HTTPS API 엔드포인트가 필요합니다.
       </p>
       <div class="input-group" style="margin-bottom:8px">
         <label class="label">자동화 API Base</label>
@@ -6069,7 +6692,7 @@ async function autoProcessOne() {
 
   let autoLLM;
   try { autoLLM = getLLMClient(); } catch(e) { autoLog('err', e.message); return; }
-  const autoGeminiImage = hasGeminiConnection() ? createGeminiClient() : null;
+  const autoImageReady = hasImageConnection();
 
   // 1. List images in input folder
   autoLog('info', '입력 폴더 스캔 중...');
@@ -6161,11 +6784,11 @@ async function autoProcessOne() {
         const content = await autoLLM.generateSectionContent(s, analysis, instructions[s.id] || '', compRef);
         sectionContents[s.id] = content;
 
-        // Image (항상 Gemini 이미지 모델)
-        if (autoGeminiImage) {
+        // Image generation follows the selected image model
+        if (autoImageReady) {
           try {
             const imgPrompt = content.image_description || content.design_notes || s.purpose;
-            const img = await autoGeminiImage.generateImage(imgPrompt, imgData.base64, imgData.mime);
+            const img = await generateWithSelectedImageModel(imgPrompt, imgData.base64, imgData.mime);
             if (img) sectionImages[s.id] = img;
           } catch(e) {}
         }
@@ -6375,12 +6998,11 @@ async function generateCut(idx, workImgOverride) {
     return;
   }
 
-  if (!hasGeminiConnection()) {
-    state.error = 'Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.';
+  if (!hasImageConnection()) {
+    state.error = '선택된 이미지 모델에 필요한 연결 정보가 없습니다.';
     render();
     return;
   }
-  gemini = gemini || createGeminiClient();
   p.generating = true;
   render();
 
@@ -6393,7 +7015,7 @@ async function generateCut(idx, workImgOverride) {
       ? `Exact output size: ${cfg.imageWidth}px wide${cfg.imageHeight ? ' × ' + cfg.imageHeight + 'px tall' : ''}.`
       : 'Aspect ratio 4:3.';
 
-    let fullPrompt, parts;
+    let fullPrompt;
     if (workImg) {
       // Two-image mode: sample as style reference, work as the product to process
       fullPrompt = `You are given TWO images:
@@ -6404,52 +7026,24 @@ Task: Apply the following creative direction using the WORK IMAGE product, match
 ${p.prompt}
 Requirements: High quality, clean, professional Korean e-commerce style.
 Use the WORK IMAGE product as the subject. Match the SAMPLE IMAGE background/composition. ${sizeHint}`;
-      parts = [
-        { text: fullPrompt },
-        { text: '[SAMPLE IMAGE — style reference:]' },
-        { inline_data: { mime_type: c.sourceMime, data: c.sourceBase64 } },
-        { text: '[WORK IMAGE — product to use:]' },
-        { inline_data: { mime_type: workImg.mime, data: workImg.base64 } }
-      ];
     } else {
       fullPrompt = `Create a professional Korean e-commerce product detail page image cut.
 Product image is provided. Apply the following creative direction:
 ${p.prompt}
 Requirements: High quality, clean, professional Korean e-commerce style.
 Maintain the product as the focal point. ${sizeHint}`;
-      parts = [
-        { text: fullPrompt },
-        { inline_data: { mime_type: c.sourceMime, data: c.sourceBase64 } }
-      ];
     }
-    const body = {
-      contents: [{ parts }],
-      generationConfig: { temperature: 0.8, responseModalities: ['TEXT', 'IMAGE'] }
-    };
+    const primaryImage = workImg || { base64: c.sourceBase64, mime: c.sourceMime };
+    const extraImages = workImg ? [{ base64: c.sourceBase64, mime: c.sourceMime }] : [];
+    const cutImage = await generateWithSelectedImageModel(
+      fullPrompt,
+      primaryImage.base64,
+      primaryImage.mime,
+      extraImages
+    );
+    if (!cutImage) throw new Error('이미지가 반환되지 않았습니다');
 
-    // 선택된 이미지 모델 사용
-    const cutImgModel = getImageModel();
-    const data = await gemini._generateContent(cutImgModel, body);
-    tokenTracker.record(cutImgModel, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, true, '컷생성');
-
-    let imgResult = null;
-    for (const part of data.candidates[0].content.parts) {
-      const id = part.inlineData || part.inline_data;
-      if (id && id.mime_type?.startsWith('image/')) {
-        imgResult = `data:${id.mime_type};base64,${id.data}`;
-        break;
-      }
-      if (id && id.mimeType?.startsWith('image/')) {
-        imgResult = `data:${id.mimeType};base64,${id.data}`;
-        break;
-      }
-    }
-    if (!imgResult) throw new Error('이미지가 반환되지 않았습니다');
-
-    // 픽셀 설정이 custom이면 Canvas로 정확히 리사이즈
-    imgResult = await applyImageSizeConfig(imgResult);
-
-    p.result = imgResult;
+    p.result = cutImage;
     p.generating = false;
     savePrompts();
     render();
@@ -6910,24 +7504,8 @@ function buildExportHtml(analysis, sectionContents, sectionImages) {
   for (const s of SECTIONS) {
     const content = sectionContents[s.id];
     if (!content) continue;
-    const c = content.color_scheme || {};
-    const f = content.font_suggestion || {};
-    const headlineFont = cssFontFamily(f.headline_font);
-    const bodyFont = cssFontFamily(f.body_font || f.headline_font);
     const img = sectionImages[s.id];
     sectionsHtml += renderSectionTemplate(s, content, img, 'export');
-    continue;
-    sectionsHtml += `
-    <section style="background:${c.background||'#FFFFFF'};padding:60px 20px;text-align:center;">
-      <div style="max-width:860px;margin:0 auto;">
-        <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};margin-bottom:12px;font-weight:${f.headline_weight||'700'};font-family:${headlineFont};">${content.headline||''}</h2>
-        <h3 style="font-size:20px;color:${c.text_secondary||'#666'};margin-bottom:24px;font-weight:400;font-family:${bodyFont};">${content.subheadline||''}</h3>
-        ${img ? `<img src="${img}" alt="${s.name}" style="max-width:100%;border-radius:12px;margin:20px 0;">` : ''}
-        <p style="font-size:${f.body_size||'16px'};color:${c.text_secondary||'#666'};line-height:1.8;font-family:${bodyFont};max-width:680px;margin:0 auto;">${content.body_text||''}</p>
-        ${content.extra_elements?.length ? `<div style="margin-top:20px;text-align:left;max-width:600px;margin:0 auto;">${content.extra_elements.map(e=>`<div style="padding:8px 0;color:${c.text_secondary||'#555'};font-size:14px;font-family:${bodyFont};border-bottom:1px solid rgba(0,0,0,.05);">• ${e}</div>`).join('')}</div>` : ''}
-        ${content.cta_text ? `<a href="#" style="display:inline-block;margin-top:24px;padding:14px 40px;background:${c.accent||'#6366f1'};color:#fff;border-radius:8px;text-decoration:none;font-size:18px;font-weight:600;font-family:${bodyFont};">${content.cta_text}</a>` : ''}
-      </div>
-    </section>`;
   }
   return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${analysis.product_name||'상세페이지'}</title><link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Pretendard','Noto Sans KR',sans-serif;color:#333}img{max-width:100%;height:auto}section{width:100%}</style></head><body>${sectionsHtml}</body></html>`;
 }
