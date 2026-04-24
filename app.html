@@ -3638,6 +3638,10 @@ function renderPreview() {
           <span class="material-icons-outlined" style="font-size:16px">layers</span>
           레이어 SVG
         </button>
+        <button class="btn-sm" id="exportPhotoshopPackage">
+          <span class="material-icons-outlined" style="font-size:16px">filter_none</span>
+          Photoshop 패키지
+        </button>
         <button class="btn-primary" id="exportHTML">
           <span class="material-icons-outlined" style="font-size:18px">download</span>
           HTML 내보내기
@@ -4493,6 +4497,8 @@ function bindEvents() {
   }
   const exportLayeredBtn = document.getElementById('exportLayeredSVG');
   if (exportLayeredBtn) exportLayeredBtn.onclick = exportLayeredSVG;
+  const exportPhotoshopBtn = document.getElementById('exportPhotoshopPackage');
+  if (exportPhotoshopBtn) exportPhotoshopBtn.onclick = exportPhotoshopPackage;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
 }
@@ -5135,7 +5141,7 @@ function svgLayerGroup(sectionId, layerId, baseX, baseY, inner) {
   return `<g id="${svgEscape(sectionId + '_' + layerId)}" data-layer="${svgEscape(layerId)}" opacity="${e.opacity}" transform="translate(${baseX + e.x} ${baseY + e.y}) scale(${e.scale})">${inner}</g>`;
 }
 
-function exportLayeredSVG() {
+function buildLayeredSvgContent() {
   const product = state.analysis || {};
   const width = 1080;
   const sectionHeight = 900;
@@ -5235,7 +5241,425 @@ function exportLayeredSVG() {
   <desc>Photoshop/Illustrator 편집을 위해 섹션, 텍스트, 이미지가 개별 그룹으로 분리된 SVG입니다. PSD가 아니라 SVG이므로 앱 안의 레이어 조정값을 보존하는 포토샵 친화 내보내기 형식입니다.</desc>
   ${body}
 </svg>`;
-  downloadTextFile(`${product.product_name || 'detail-page'}_layered.svg`, svg, 'image/svg+xml;charset=utf-8');
+  return { svg, filename: `${product.product_name || 'detail-page'}_layered.svg` };
+}
+
+function exportLayeredSVG() {
+  const { svg, filename } = buildLayeredSvgContent();
+  downloadTextFile(filename, svg, 'image/svg+xml;charset=utf-8');
+}
+
+function downloadBytesFile(filename, bytes, type = 'application/octet-stream') {
+  const blob = new Blob([bytes], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function utf8Bytes(text) {
+  return new TextEncoder().encode(String(text ?? ''));
+}
+
+function concatBytes(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+let ZIP_CRC_TABLE = null;
+function crc32(bytes) {
+  if (!ZIP_CRC_TABLE) {
+    ZIP_CRC_TABLE = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      ZIP_CRC_TABLE[i] = c >>> 0;
+    }
+  }
+  let crc = 0 ^ -1;
+  for (const b of bytes) crc = (crc >>> 8) ^ ZIP_CRC_TABLE[(crc ^ b) & 0xFF];
+  return (crc ^ -1) >>> 0;
+}
+
+function zipDosTime(date = new Date()) {
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { time, date: dosDate };
+}
+
+function u16(value) {
+  const b = new Uint8Array(2);
+  new DataView(b.buffer).setUint16(0, value, true);
+  return b;
+}
+
+function u32(value) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, value >>> 0, true);
+  return b;
+}
+
+function createZip(files) {
+  const now = zipDosTime();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = utf8Bytes(file.name.replace(/\\/g, '/'));
+    const data = file.data instanceof Uint8Array ? file.data : utf8Bytes(file.data);
+    const crc = crc32(data);
+    const localHeader = concatBytes([
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(now.time), u16(now.date),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes
+    ]);
+    localParts.push(localHeader, data);
+
+    const centralHeader = concatBytes([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(now.time), u16(now.date),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ]);
+    centralParts.push(centralHeader);
+    offset += localHeader.length + data.length;
+  }
+
+  const central = concatBytes(centralParts);
+  const end = concatBytes([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(central.length), u32(offset), u16(0)
+  ]);
+  return concatBytes([...localParts, central, end]);
+}
+
+function safeAssetName(value) {
+  return String(value || 'asset')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+}
+
+function bytesFromDataUrl(dataUrl) {
+  const match = String(dataUrl || '').match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+  if (!match) return null;
+  const mime = match[1] || 'application/octet-stream';
+  const isBase64 = !!match[2];
+  const payload = match[3] || '';
+  if (!isBase64) return { mime, bytes: utf8Bytes(decodeURIComponent(payload)) };
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { mime, bytes };
+}
+
+function imageExtFromMime(mime) {
+  if (/jpe?g/i.test(mime)) return 'jpg';
+  if (/webp/i.test(mime)) return 'webp';
+  if (/gif/i.test(mime)) return 'gif';
+  return 'png';
+}
+
+function hexOnly(value, fallback = '#ffffff') {
+  const v = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+}
+
+function makePsdText(text, width, fontSize, maxLines = 5) {
+  const maxChars = Math.max(8, Math.floor(width / (fontSize * 0.52)));
+  return wrapSvgLines(text, maxChars).slice(0, maxLines).join('\r');
+}
+
+function buildPhotoshopPackageModel() {
+  const product = state.analysis || {};
+  const width = 1080;
+  const sectionHeight = 900;
+  const generatedSections = SECTIONS.filter(s => state.sectionContents[s.id]);
+  const files = [];
+  const manifest = {
+    title: product.product_name || 'detail-page',
+    width,
+    height: Math.max(sectionHeight, generatedSections.length * sectionHeight),
+    resolution: 72,
+    createdAt: new Date().toISOString(),
+    note: 'Generated by kuasangse. Run photoshop-import.jsx in Photoshop after extracting this zip.',
+    sections: [],
+  };
+
+  generatedSections.forEach((s, idx) => {
+    const y = idx * sectionHeight;
+    const content = applyBrandPresetToContent(state.sectionContents[s.id] || {});
+    const color = content.color_scheme || {};
+    const font = content.font_suggestion || {};
+    const headlineFont = cssFontFamily(font.headline_font).replace(/["']/g, '').split(',')[0].trim() || 'Pretendard';
+    const bodyFont = cssFontFamily(font.body_font || font.headline_font).replace(/["']/g, '').split(',')[0].trim() || 'Pretendard';
+    const bg = hexOnly(solidSvgFill(color.background, idx % 2 ? '#fbfaf7' : '#ffffff'), idx % 2 ? '#fbfaf7' : '#ffffff');
+    const accent = hexOnly(solidSvgFill(color.accent, '#6366f1'), '#6366f1');
+    const headlineColor = hexOnly(solidSvgFill(color.text_primary, '#222222'), '#222222');
+    const bodyColor = hexOnly(solidSvgFill(color.text_secondary, '#555555'), '#555555');
+    const img = state.sectionImages[s.id];
+    const section = {
+      id: s.id,
+      name: s.name,
+      index: s.n,
+      y,
+      layers: [
+        { type: 'fill', id: 'background', name: `${s.n}. ${s.name} / background`, x: 0, y, width, height: sectionHeight, color: bg, opacity: 100 },
+      ],
+    };
+
+    const headlineEdit = getLayerEdit(s.id, 'headline');
+    const headlineWidth = headlineEdit.width || 920;
+    section.layers.push({
+      type: 'text', id: 'headline', name: `${s.n}. ${s.name} / headline`,
+      text: makePsdText(content.headline || s.name, headlineWidth, parseInt(font.headline_size || '46', 10) || 46, 3),
+      x: 80 + headlineEdit.x, y: y + 110 + headlineEdit.y,
+      width: headlineWidth, fontSize: Math.round((parseInt(font.headline_size || '46', 10) || 46) * headlineEdit.scale),
+      fontFamily: headlineFont, fontWeight: font.headline_weight || '800', color: headlineColor,
+      align: headlineEdit.align || 'center', opacity: Math.round(headlineEdit.opacity * 100),
+    });
+
+    const subEdit = getLayerEdit(s.id, 'subheadline');
+    const subWidth = subEdit.width || 840;
+    section.layers.push({
+      type: 'text', id: 'subheadline', name: `${s.n}. ${s.name} / subheadline`,
+      text: makePsdText(content.subheadline || '', subWidth, 26, 3),
+      x: 120 + subEdit.x, y: y + 240 + subEdit.y,
+      width: subWidth, fontSize: Math.round(26 * subEdit.scale), fontFamily: bodyFont,
+      fontWeight: '400', color: bodyColor, align: subEdit.align || 'center',
+      opacity: Math.round(subEdit.opacity * 100),
+    });
+
+    if (img) {
+      const imageEdit = getLayerEdit(s.id, 'image');
+      const imageW = imageEdit.width || 820;
+      const asset = bytesFromDataUrl(img);
+      let assetPath = null;
+      if (asset) {
+        assetPath = `assets/${safeAssetName(s.id)}_image.${imageExtFromMime(asset.mime)}`;
+        files.push({ name: assetPath, data: asset.bytes });
+      }
+      section.layers.push({
+        type: 'image', id: 'image', name: `${s.n}. ${s.name} / image`,
+        x: Math.round((width - imageW) / 2) + imageEdit.x,
+        y: y + 320 + imageEdit.y,
+        width: Math.round(imageW * imageEdit.scale),
+        height: Math.round(330 * imageEdit.scale),
+        opacity: Math.round(imageEdit.opacity * 100),
+        asset: assetPath,
+        sourceUrl: assetPath ? '' : img,
+      });
+    }
+
+    const bodyEdit = getLayerEdit(s.id, 'body');
+    const bodyWidth = bodyEdit.width || 780;
+    const bodyFontSize = parseInt(font.body_size || '24', 10) || 24;
+    section.layers.push({
+      type: 'text', id: 'body', name: `${s.n}. ${s.name} / body`,
+      text: makePsdText(content.body_text || '', bodyWidth, bodyFontSize, 5),
+      x: 150 + bodyEdit.x, y: y + (img ? 690 : 355) + bodyEdit.y,
+      width: bodyWidth, fontSize: Math.round(bodyFontSize * bodyEdit.scale), fontFamily: bodyFont,
+      fontWeight: '400', color: bodyColor, align: bodyEdit.align || 'center',
+      opacity: Math.round(bodyEdit.opacity * 100),
+    });
+
+    if (content.extra_elements?.length) {
+      const extraEdit = getLayerEdit(s.id, 'extra');
+      const extraWidth = extraEdit.width || 740;
+      section.layers.push({
+        type: 'text', id: 'extra', name: `${s.n}. ${s.name} / points`,
+        text: makePsdText(content.extra_elements.map(v => `• ${v}`).join('   '), extraWidth, 20, 4),
+        x: 170 + extraEdit.x, y: y + (img ? 785 : 560) + extraEdit.y,
+        width: extraWidth, fontSize: Math.round(20 * extraEdit.scale), fontFamily: bodyFont,
+        fontWeight: '500', color: bodyColor, align: extraEdit.align || 'center',
+        opacity: Math.round(extraEdit.opacity * 100),
+      });
+    }
+
+    if (content.cta_text) {
+      const ctaEdit = getLayerEdit(s.id, 'cta');
+      const ctaW = ctaEdit.width || 300;
+      const ctaX = Math.round((width - ctaW) / 2) + ctaEdit.x;
+      const ctaY = y + 825 + ctaEdit.y;
+      section.layers.push({
+        type: 'fill', id: 'cta_bg', name: `${s.n}. ${s.name} / cta background`,
+        x: ctaX, y: ctaY, width: ctaW, height: 58, color: accent, opacity: Math.round(ctaEdit.opacity * 100),
+      });
+      section.layers.push({
+        type: 'text', id: 'cta', name: `${s.n}. ${s.name} / cta text`,
+        text: content.cta_text, x: ctaX, y: ctaY + 18, width: ctaW,
+        fontSize: Math.round(22 * ctaEdit.scale), fontFamily: bodyFont, fontWeight: '700',
+        color: '#ffffff', align: 'center', opacity: Math.round(ctaEdit.opacity * 100),
+      });
+    }
+
+    manifest.sections.push(section);
+  });
+
+  return { manifest, files };
+}
+
+function buildPhotoshopImportJsx(manifest) {
+  const payload = JSON.stringify(manifest, null, 2);
+  return `#target photoshop
+app.bringToFront();
+app.preferences.rulerUnits = Units.PIXELS;
+
+var PDP = ${payload};
+
+function hexColor(hex) {
+  hex = String(hex || '#000000').replace('#', '').substring(0, 6);
+  var c = new SolidColor();
+  c.rgb.hexValue = hex;
+  return c;
+}
+
+function setJustification(textItem, align) {
+  try {
+    if (align === 'right') textItem.justification = Justification.RIGHT;
+    else if (align === 'center') textItem.justification = Justification.CENTER;
+    else textItem.justification = Justification.LEFT;
+  } catch (e) {}
+}
+
+function fillLayer(doc, group, layerInfo) {
+  var layer = group.artLayers.add();
+  layer.name = layerInfo.name;
+  doc.activeLayer = layer;
+  doc.selection.select([
+    [layerInfo.x, layerInfo.y],
+    [layerInfo.x + layerInfo.width, layerInfo.y],
+    [layerInfo.x + layerInfo.width, layerInfo.y + layerInfo.height],
+    [layerInfo.x, layerInfo.y + layerInfo.height]
+  ]);
+  doc.selection.fill(hexColor(layerInfo.color), ColorBlendMode.NORMAL, layerInfo.opacity || 100, false);
+  doc.selection.deselect();
+  layer.opacity = layerInfo.opacity || 100;
+  return layer;
+}
+
+function textLayer(group, layerInfo) {
+  var layer = group.artLayers.add();
+  layer.kind = LayerKind.TEXT;
+  layer.name = layerInfo.name;
+  layer.opacity = layerInfo.opacity || 100;
+  var t = layer.textItem;
+  t.contents = layerInfo.text || '';
+  t.position = [UnitValue(layerInfo.x, 'px'), UnitValue(layerInfo.y, 'px')];
+  t.size = UnitValue(layerInfo.fontSize || 24, 'px');
+  try { t.width = UnitValue(layerInfo.width || 800, 'px'); } catch (e) {}
+  try { t.font = layerInfo.fontFamily || 'ArialMT'; } catch (e) {}
+  t.color = hexColor(layerInfo.color || '#333333');
+  setJustification(t, layerInfo.align || 'left');
+  return layer;
+}
+
+function placeEmbedded(file) {
+  var desc = new ActionDescriptor();
+  desc.putPath(charIDToTypeID('null'), file);
+  desc.putEnumerated(charIDToTypeID('FTcs'), charIDToTypeID('QCSt'), charIDToTypeID('Qcsa'));
+  var offset = new ActionDescriptor();
+  offset.putUnitDouble(charIDToTypeID('Hrzn'), charIDToTypeID('#Pxl'), 0);
+  offset.putUnitDouble(charIDToTypeID('Vrtc'), charIDToTypeID('#Pxl'), 0);
+  desc.putObject(charIDToTypeID('Ofst'), charIDToTypeID('Ofst'), offset);
+  executeAction(charIDToTypeID('Plc '), desc, DialogModes.NO);
+  return app.activeDocument.activeLayer;
+}
+
+function fitLayerToBox(layer, x, y, width, height) {
+  try {
+    var b = layer.bounds;
+    var currentW = b[2].value - b[0].value;
+    var currentH = b[3].value - b[1].value;
+    if (currentW > 0 && currentH > 0) {
+      var scale = Math.min(width / currentW, height / currentH) * 100;
+      layer.resize(scale, scale, AnchorPosition.TOPLEFT);
+      b = layer.bounds;
+      layer.translate(UnitValue(x - b[0].value, 'px'), UnitValue(y - b[1].value, 'px'));
+    }
+  } catch (e) {}
+}
+
+function imageLayer(doc, group, layerInfo, rootFolder) {
+  if (!layerInfo.asset) return null;
+  var file = new File(rootFolder.fsName + '/' + layerInfo.asset);
+  if (!file.exists) return null;
+  var layer = placeEmbedded(file);
+  layer.name = layerInfo.name;
+  layer.opacity = layerInfo.opacity || 100;
+  fitLayerToBox(layer, layerInfo.x, layerInfo.y, layerInfo.width, layerInfo.height);
+  try { layer.move(group, ElementPlacement.INSIDE); } catch (e) {}
+  return layer;
+}
+
+function main() {
+  var root = Folder.selectDialog('Select the extracted Photoshop package folder');
+  if (!root) return;
+  var doc = app.documents.add(PDP.width, PDP.height, PDP.resolution || 72, PDP.title || 'detail-page', NewDocumentMode.RGB, DocumentFill.TRANSPARENT);
+  for (var i = 0; i < PDP.sections.length; i++) {
+    var section = PDP.sections[i];
+    var group = doc.layerSets.add();
+    group.name = ('0' + section.index).slice(-2) + ' ' + section.name;
+    for (var j = 0; j < section.layers.length; j++) {
+      var layer = section.layers[j];
+      if (layer.type === 'fill') fillLayer(doc, group, layer);
+      else if (layer.type === 'text') textLayer(group, layer);
+      else if (layer.type === 'image') imageLayer(doc, group, layer, root);
+    }
+  }
+  alert('PSD layer document created. Save it as a .psd file from Photoshop.');
+}
+
+main();
+`;
+}
+
+function exportPhotoshopPackage() {
+  const product = state.analysis || {};
+  const model = buildPhotoshopPackageModel();
+  if (!model.manifest.sections.length) {
+    state.error = '내보낼 생성 섹션이 없습니다. 먼저 섹션을 생성해 주세요.';
+    render();
+    return;
+  }
+  const { svg } = buildLayeredSvgContent();
+  const manifestJson = JSON.stringify(model.manifest, null, 2);
+  const jsx = buildPhotoshopImportJsx(model.manifest);
+  const readme = `상세페이지 생성기 Photoshop 패키지
+
+1. 이 ZIP 파일을 압축 해제합니다.
+2. Photoshop 실행 > File > Scripts > Browse... 를 선택합니다.
+3. 압축 해제한 폴더 안의 photoshop-import.jsx 를 실행합니다.
+4. 스크립트가 폴더를 물어보면, 압축 해제한 패키지 폴더를 선택합니다.
+5. Photoshop 문서가 열리면 File > Save As... 로 PSD를 저장합니다.
+
+포함 파일
+- photoshop-import.jsx: Photoshop에서 레이어 문서를 생성하는 스크립트
+- manifest.json: 섹션/레이어 좌표/텍스트/색상 데이터
+- detail-page-layered.svg: Illustrator/Photoshop에서 바로 열 수 있는 레이어형 SVG 백업
+- assets/: 생성 이미지가 data URL일 때 포함되는 이미지 자산
+
+주의
+- Photoshop 설치 폰트가 앱의 웹폰트와 다르면 글자폭이 조금 달라질 수 있습니다.
+- 웹/원격 이미지 URL은 Photoshop 스크립트가 자동 다운로드하지 않습니다. 이 경우 SVG 백업을 함께 사용하세요.
+`;
+
+  const files = [
+    { name: 'README_KO.txt', data: readme },
+    { name: 'manifest.json', data: manifestJson },
+    { name: 'photoshop-import.jsx', data: jsx },
+    { name: 'detail-page-layered.svg', data: svg },
+    ...model.files,
+  ];
+  const zip = createZip(files);
+  downloadBytesFile(`${product.product_name || 'detail-page'}_photoshop_package.zip`, zip, 'application/zip');
 }
 
 function exportHTML() {
