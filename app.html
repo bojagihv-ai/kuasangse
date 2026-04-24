@@ -131,6 +131,27 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .preview-wrap{background:#fff;border-radius:12px;overflow:hidden;border:1px solid var(--border)}
 .section-ctrl{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--bg-card);border-bottom:1px solid var(--border)}
 .section-ctrl .name{font-weight:600;font-size:13px}
+.section-ctrl .image-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.inserted-image-block{background:#fff;border-top:1px solid rgba(15,23,42,.08);border-bottom:1px solid rgba(15,23,42,.08);padding:22px 20px;position:relative}
+.inserted-image-inner{max-width:1120px;margin:0 auto}
+.inserted-image-ctrl{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.inserted-image-card{position:relative;border-radius:22px;overflow:hidden;background:#f8fafc;box-shadow:0 18px 46px rgba(15,23,42,.10)}
+.inserted-image-card img{display:block;width:100%;height:auto;max-height:820px;object-fit:contain;margin:0 auto}
+.inserted-image-caption{font-size:11px;color:#64748b;margin-top:8px;text-align:right}
+.image-insert-overlay{z-index:1250;align-items:flex-start;overflow:auto;padding:28px 16px}
+.image-insert-modal{max-width:920px;width:min(920px,96vw);padding:0;overflow:hidden}
+.image-insert-head{display:flex;align-items:flex-start;gap:12px;padding:18px 20px;border-bottom:1px solid var(--border);background:linear-gradient(135deg,rgba(245,158,11,.14),rgba(99,102,241,.10))}
+.image-insert-title{font-size:18px;font-weight:800;margin-bottom:4px}
+.image-insert-sub{font-size:12px;color:var(--text-d);line-height:1.55}
+.image-insert-body{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:18px}
+.image-source-panel{border:1px solid var(--border);border-radius:12px;background:var(--bg);padding:14px;min-width:0}
+.image-source-panel h3{font-size:13px;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.image-source-panel p{font-size:12px;color:var(--text-d);line-height:1.5;margin-bottom:12px}
+.image-source-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px}
+.image-source-card{border:1px solid var(--border);border-radius:10px;background:var(--bg-card);padding:8px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.image-source-card img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:8px;background:var(--bg-input)}
+.image-source-card .src-name{font-size:11px;color:var(--text-d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.image-insert-error{grid-column:1/-1;padding:10px 12px;border:1px solid rgba(239,68,68,.32);background:rgba(239,68,68,.10);border-radius:10px;color:var(--err);font-size:12px}
 .edit-panel{padding:12px 16px;background:var(--bg);border-bottom:1px solid var(--border)}
 .preview-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .layer-mode-banner{display:flex;align-items:center;gap:10px;padding:12px 14px;margin-bottom:14px;border:1px solid rgba(99,102,241,.35);background:rgba(99,102,241,.10);border-radius:12px;color:var(--text-d);font-size:13px}
@@ -164,6 +185,7 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .repair-error{padding:10px 12px;border:1px solid rgba(239,68,68,.32);background:rgba(239,68,68,.10);border-radius:10px;color:var(--err);font-size:12px;line-height:1.5}
 .repair-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(15,23,42,.62);backdrop-filter:blur(4px);color:#fff;font-size:13px;font-weight:700}
 @media (max-width:900px){.repair-body{grid-template-columns:1fr}.repair-side{border-left:0;border-top:1px solid var(--border)}}
+@media (max-width:900px){.image-insert-body{grid-template-columns:1fr}.section-ctrl{align-items:flex-start;flex-wrap:wrap}.section-ctrl .image-tools{width:100%}}
 
 .color-field{display:flex;align-items:center;gap:8px}
 .color-field .input{flex:1;font-family:monospace;font-weight:700}
@@ -2160,6 +2182,7 @@ function savePersistentState() {
       currentSectionVariantIds: state.currentSectionVariantIds,
       manualSectionEdits: state.manualSectionEdits,
       previewLayerEdits: state.previewLayerEdits,
+      detailImageBlocks: state.detailImageBlocks,
       layoutTemplate: state.layoutTemplate,
       activeBrandPresetId: state.activeBrandPresetId,
       contentVersion: state.contentVersion,
@@ -2178,6 +2201,11 @@ function savePersistentState() {
   try {
     if (Object.keys(state.sectionImages).length > 0)
       localStorage.setItem('pdp_session_imgs', JSON.stringify(state.sectionImages));
+    else
+      localStorage.removeItem('pdp_session_imgs');
+  } catch(e) {}
+  try {
+    localStorage.setItem('pdp_detail_image_blocks', JSON.stringify(state.detailImageBlocks || []));
   } catch(e) {}
 }
 function loadPersistentSession() {
@@ -2198,6 +2226,7 @@ function loadPersistentSession() {
     s.currentSectionVariantIds = s.currentSectionVariantIds || {};
     s.manualSectionEdits = s.manualSectionEdits || {};
     s.previewLayerEdits = s.previewLayerEdits || {};
+    try { s.detailImageBlocks = JSON.parse(localStorage.getItem('pdp_detail_image_blocks') || JSON.stringify(s.detailImageBlocks || [])); } catch(e) { s.detailImageBlocks = []; }
     s.layoutTemplate = LAYOUT_TEMPLATES.some(t => t.id === s.layoutTemplate) ? s.layoutTemplate : loadLayoutTemplate();
     s.activeBrandPresetId = typeof s.activeBrandPresetId === 'string' ? s.activeBrandPresetId : loadActiveBrandPresetId();
     s.contentVersion = Number.isFinite(s.contentVersion) ? s.contentVersion : 0;
@@ -2210,6 +2239,7 @@ function clearPersistentSession() {
   localStorage.removeItem('pdp_session');
   localStorage.removeItem('pdp_session_img');
   localStorage.removeItem('pdp_session_imgs');
+  localStorage.removeItem('pdp_detail_image_blocks');
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2255,8 +2285,18 @@ const state = {
   currentSectionVariantIds: _savedSession?.currentSectionVariantIds || {},
   manualSectionEdits: _savedSession?.manualSectionEdits || {},
   previewLayerEdits: _savedSession?.previewLayerEdits || {},
+  detailImageBlocks: Array.isArray(_savedSession?.detailImageBlocks) ? _savedSession.detailImageBlocks : [],
   previewLayerMode: false,
   activePreviewLayer: null, // { sectionId, layerId }
+  imageInsert: {
+    open: false,
+    afterSectionId: null,
+    targetSectionId: null,
+    driveFolderId: localStorage.getItem('detail_insert_drive_folder_id') || '',
+    driveLoading: false,
+    driveFiles: [],
+    error: '',
+  },
   aiRepair: {
     open: false,
     sectionId: null,
@@ -2460,6 +2500,7 @@ function buildWorkspacePayload() {
     sectionVariants: cloneData(state.sectionVariants),
     currentSectionVariantIds: cloneData(state.currentSectionVariantIds),
     manualSectionEdits: cloneData(state.manualSectionEdits),
+    detailImageBlocks: cloneData(state.detailImageBlocks),
     imageDirectives: cloneData(state.imageDirectives),
     modelConfig: cloneData(state.modelConfig),
     layoutTemplate: state.layoutTemplate,
@@ -2496,6 +2537,7 @@ function applyWorkspacePayload(payload, options = {}) {
   state.sectionVariants = next.sectionVariants || {};
   state.currentSectionVariantIds = next.currentSectionVariantIds || {};
   state.manualSectionEdits = next.manualSectionEdits || {};
+  state.detailImageBlocks = Array.isArray(next.detailImageBlocks) ? next.detailImageBlocks : [];
   state.imageDirectives = Array.isArray(next.imageDirectives) ? next.imageDirectives : [];
   state.modelConfig = normalizeModelConfig(next.modelConfig || state.modelConfig);
   state.layoutTemplate = LAYOUT_TEMPLATES.some(t => t.id === next.layoutTemplate) ? next.layoutTemplate : state.layoutTemplate;
@@ -2924,6 +2966,7 @@ function render() {
   app.innerHTML = `
     ${state.showApiModal ? renderApiModal() : ''}
     ${state.aiRepair?.open ? renderAiRepairModal() : ''}
+    ${state.imageInsert?.open ? renderImageInsertModal() : ''}
     <div class="app">
       ${renderSidebar()}
       <main class="main">
@@ -3482,6 +3525,111 @@ function renderPreviewEditPanel(section, content) {
   </div>`;
 }
 
+function getCutImageSources() {
+  return (state.cuts?.prompts || [])
+    .map((cut, index) => ({ ...cut, index }))
+    .filter(cut => !!cut.result);
+}
+
+function getDetailImageBlocksAfter(sectionId, blocks = state.detailImageBlocks || []) {
+  return blocks.filter(block => block.afterSectionId === sectionId);
+}
+
+function renderInsertedDetailImageBlock(block, mode = 'preview') {
+  if (!block?.dataUrl) return '';
+  const label = block.label || '추가 상세 이미지';
+  const controls = mode === 'preview'
+    ? `<div class="inserted-image-ctrl">
+        <button class="btn-sm" data-move-detail-image="${escAttr(block.id)}:up">
+          <span class="material-icons-outlined" style="font-size:15px">arrow_upward</span> 위로
+        </button>
+        <button class="btn-sm" data-move-detail-image="${escAttr(block.id)}:down">
+          <span class="material-icons-outlined" style="font-size:15px">arrow_downward</span> 아래로
+        </button>
+        <button class="btn-sm" data-delete-detail-image="${escAttr(block.id)}" style="color:var(--err)">
+          <span class="material-icons-outlined" style="font-size:15px">delete</span> 삭제
+        </button>
+      </div>`
+    : '';
+  return `<div class="inserted-image-block" data-detail-image-block="${escAttr(block.id)}">
+    <div class="inserted-image-inner">
+      ${controls}
+      <div class="inserted-image-card">
+        <img src="${escAttr(block.dataUrl)}" alt="${escAttr(label)}">
+      </div>
+      ${mode === 'preview' ? `<div class="inserted-image-caption">${escapeHtml(label)}${block.source ? ` · ${escapeHtml(block.source)}` : ''}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderDetailImageBlocksAfter(sectionId, mode = 'preview', blocks = state.detailImageBlocks || []) {
+  return getDetailImageBlocksAfter(sectionId, blocks)
+    .map(block => renderInsertedDetailImageBlock(block, mode))
+    .join('');
+}
+
+function renderImageInsertModal() {
+  const insert = state.imageInsert || {};
+  const isReplace = !!insert.targetSectionId;
+  const targetSection = SECTIONS.find(s => s.id === (insert.targetSectionId || insert.afterSectionId));
+  const cutSources = getCutImageSources();
+  const driveFiles = Array.isArray(insert.driveFiles) ? insert.driveFiles : [];
+  const folderValue = escapeHtml(insert.driveFolderId || '');
+  return `<div class="modal-overlay image-insert-overlay" id="imageInsertOverlay">
+    <div class="modal image-insert-modal" onclick="event.stopPropagation()">
+      <div class="image-insert-head">
+        <span class="material-icons-outlined" style="font-size:26px;color:var(--warn)">add_photo_alternate</span>
+        <div style="flex:1">
+          <div class="image-insert-title">${isReplace ? '섹션 이미지 교체' : '섹션 사이 사진 추가'}</div>
+          <div class="image-insert-sub">${targetSection ? `${targetSection.n}. ${escapeHtml(targetSection.name)} ${isReplace ? '이미지를 새 이미지로 바꿉니다.' : '아래에 독립 상세 이미지를 삽입합니다.'}` : '원하는 위치에 이미지를 삽입합니다.'}</div>
+        </div>
+        <button class="btn-sm" id="closeImageInsert">닫기</button>
+      </div>
+      <div class="image-insert-body">
+        ${insert.error ? `<div class="image-insert-error">${escapeHtml(insert.error)}</div>` : ''}
+        <div class="image-source-panel">
+          <h3><span class="material-icons-outlined" style="font-size:17px">upload_file</span> 내 파일</h3>
+          <p>PC에 있는 JPG, PNG, WEBP 이미지를 바로 ${isReplace ? '교체 이미지로 사용합니다.' : '현재 섹션 아래에 삽입합니다.'}</p>
+          <button class="btn-primary" id="pickDetailImageFile" style="width:100%;justify-content:center">
+            <span class="material-icons-outlined" style="font-size:18px">folder_open</span>
+            내 파일에서 불러오기
+          </button>
+          <input type="file" id="detailImageInsertFileInput" accept="image/*" style="display:none">
+        </div>
+
+        <div class="image-source-panel">
+          <h3><span class="material-icons-outlined" style="font-size:17px">cloud</span> Google Drive / Cloud</h3>
+          <p>이미 연결된 Google Drive 토큰을 사용합니다. 폴더 URL 또는 폴더 ID를 넣으면 이미지 파일을 불러옵니다.</p>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input class="input" id="detailImageDriveFolderInput" value="${folderValue}" placeholder="Drive 폴더 URL 또는 ID" style="font-size:12px">
+            <button class="btn-sm" id="loadDetailDriveImages" ${insert.driveLoading ? 'disabled' : ''}>${insert.driveLoading ? '불러오는 중' : '불러오기'}</button>
+          </div>
+          ${!driveService ? `<button class="btn-sm" id="connectImageInsertDrive" style="width:100%;justify-content:center;margin-bottom:10px">Google Drive 연결</button>` : ''}
+          ${driveFiles.length ? `<div class="image-source-grid">
+            ${driveFiles.map(file => `<div class="image-source-card">
+              ${file.thumbnailLink ? `<img src="${escAttr(file.thumbnailLink)}" alt="${escAttr(file.name)}">` : ''}
+              <div class="src-name" title="${escAttr(file.name)}">${escapeHtml(file.name)}</div>
+              <button class="btn-sm" data-use-drive-detail-image="${escAttr(file.id)}" style="justify-content:center">${isReplace ? '교체' : '삽입'}</button>
+            </div>`).join('')}
+          </div>` : `<div style="font-size:12px;color:var(--text-m);padding:10px;border:1px dashed var(--border);border-radius:10px;text-align:center">폴더를 불러오면 이미지 목록이 표시됩니다.</div>`}
+        </div>
+
+        <div class="image-source-panel" style="grid-column:1/-1">
+          <h3><span class="material-icons-outlined" style="font-size:17px">auto_awesome</span> 이미지컷 생성 결과</h3>
+          <p>이미지컷 생성 탭에서 만든 결과를 바로 상세페이지에 넣습니다. 마음에 드는 컷을 임시 보관소처럼 재사용할 수 있습니다.</p>
+          ${cutSources.length ? `<div class="image-source-grid">
+            ${cutSources.map(cut => `<div class="image-source-card">
+              <img src="${escAttr(cut.result)}" alt="${escAttr(cut.label || `cut ${cut.index + 1}`)}">
+              <div class="src-name">${escapeHtml(cut.label || `컷 ${cut.index + 1}`)}</div>
+              <button class="btn-sm" data-use-cut-detail-image="${cut.index}" style="justify-content:center">${isReplace ? '교체' : '삽입'}</button>
+            </div>`).join('')}
+          </div>` : `<div style="font-size:12px;color:var(--text-m);padding:12px;border:1px dashed var(--border);border-radius:10px;text-align:center">아직 생성된 이미지컷이 없습니다. 이미지컷 생성 탭에서 결과를 만들면 여기에 뜹니다.</div>`}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderExtraElements(content, color, bodyFont) {
   if (!content.extra_elements?.length) return '';
   return `<div style="margin-top:20px;text-align:left;max-width:640px;margin-left:auto;margin-right:auto">
@@ -3955,9 +4103,23 @@ function renderPreview() {
               <button class="btn-sm" data-edit-preview="${s.id}">
                 <span class="material-icons-outlined" style="font-size:16px">edit</span> 수정
               </button>
-              ${img ? `<button class="btn-sm" data-ai-repair="${s.id}">
-                <span class="material-icons-outlined" style="font-size:16px">auto_fix_high</span> 2. AI 스팟
-              </button>` : ''}
+              <div class="image-tools">
+                ${img ? `<button class="btn-sm" data-focus-section-image="${s.id}">
+                  <span class="material-icons-outlined" style="font-size:16px">open_with</span> 위치
+                </button>
+                <button class="btn-sm" data-ai-repair="${s.id}">
+                  <span class="material-icons-outlined" style="font-size:16px">auto_fix_high</span> 2. AI 스팟
+                </button>` : ''}
+                <button class="btn-sm" data-open-image-insert="${s.id}:replace">
+                  <span class="material-icons-outlined" style="font-size:16px">image</span> ${img ? '교체' : '이미지 추가'}
+                </button>
+                ${img ? `<button class="btn-sm" data-delete-section-image="${s.id}" style="color:var(--err)">
+                  <span class="material-icons-outlined" style="font-size:16px">delete</span> 삭제
+                </button>` : ''}
+                <button class="btn-sm" data-open-image-insert="${s.id}:after">
+                  <span class="material-icons-outlined" style="font-size:16px">add_photo_alternate</span> 아래 사진 추가
+                </button>
+              </div>
               <button class="btn-sm" data-regen="${s.id}">
                 <span class="material-icons-outlined" style="font-size:16px">refresh</span> 재생성
               </button>
@@ -3968,6 +4130,7 @@ function renderPreview() {
             </div>` : ''}
             ${isEditing ? renderPreviewEditPanel(s, content) : ''}
             ${renderSectionTemplate(s, content, img, 'preview')}
+            ${renderDetailImageBlocksAfter(s.id, 'preview')}
             <div style="display:none;background:${c.background||'#FFFFFF'};padding:48px 20px;text-align:center">
               <div style="max-width:860px;margin:0 auto">
                 <h2 style="font-size:${f.headline_size||'36px'};color:${c.text_primary||'#333'};font-weight:${f.headline_weight||'700'};font-family:${headlineFont};margin-bottom:10px">
@@ -4698,6 +4861,8 @@ function bindEvents() {
     btn.onclick = () => openAiRepair(btn.dataset.aiRepair);
   });
   bindAiRepairEvents();
+  bindImageInsertEvents();
+  bindDetailImageManagementEvents();
   bindPreviewLayerEvents();
 
   // Regenerate section
@@ -4836,6 +5001,244 @@ function closeAiRepair() {
   state.aiRepair.maskDataUrl = '';
   aiRepairMaskHistory = [];
   render();
+}
+
+function openImageInsert(sectionId, mode = 'after') {
+  const safeMode = mode === 'replace' ? 'replace' : 'after';
+  state.imageInsert = {
+    open: true,
+    afterSectionId: safeMode === 'after' ? sectionId : null,
+    targetSectionId: safeMode === 'replace' ? sectionId : null,
+    driveFolderId: state.imageInsert?.driveFolderId || localStorage.getItem('detail_insert_drive_folder_id') || '',
+    driveLoading: false,
+    driveFiles: state.imageInsert?.driveFiles || [],
+    error: '',
+  };
+  render();
+}
+
+function closeImageInsert() {
+  state.imageInsert.open = false;
+  state.imageInsert.error = '';
+  state.imageInsert.driveLoading = false;
+  render();
+}
+
+function focusSectionImageLayer(sectionId) {
+  if (!sectionId || !state.sectionImages[sectionId]) return;
+  state.previewLayerMode = true;
+  state.editingPreviewSection = sectionId;
+  state.activePreviewLayer = { sectionId, layerId: 'image' };
+  render();
+  setTimeout(() => {
+    document.querySelector(`[data-layer-section="${sectionId}"][data-layer-id="image"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 60);
+}
+
+function deleteSectionImage(sectionId) {
+  if (!sectionId || !state.sectionImages[sectionId]) return;
+  if (!confirm('이 섹션의 상세 이미지를 삭제할까요? 텍스트와 섹션 구성은 유지됩니다.')) return;
+  captureCurrentSectionVariant(sectionId, 'baseline', '이미지 삭제 전');
+  applySectionContent(sectionId, state.sectionContents[sectionId], null, 'manual', '이미지 삭제');
+  savePersistentState();
+  render();
+}
+
+function readImageFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type?.startsWith('image/')) {
+      reject(new Error('이미지 파일만 불러올 수 있습니다.'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('파일을 읽지 못했습니다.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = 'local') {
+  const insert = state.imageInsert || {};
+  if (!dataUrl) return;
+  if (insert.targetSectionId) {
+    const sectionId = insert.targetSectionId;
+    if (!state.sectionContents[sectionId]) return;
+    captureCurrentSectionVariant(sectionId, 'baseline', '이미지 교체 전');
+    applySectionContent(sectionId, state.sectionContents[sectionId], dataUrl, 'manual', '이미지 교체');
+  } else {
+    const afterSectionId = insert.afterSectionId || SECTIONS[SECTIONS.length - 1]?.id;
+    const block = {
+      id: uid('detail_img'),
+      afterSectionId,
+      dataUrl,
+      label: String(label || '추가 상세 이미지').slice(0, 80),
+      source,
+      createdAt: Date.now(),
+    };
+    state.detailImageBlocks = [...(state.detailImageBlocks || []), block];
+    markContentChanged();
+  }
+  state.imageInsert.open = false;
+  state.imageInsert.error = '';
+  savePersistentState();
+  render();
+}
+
+function deleteDetailImageBlock(blockId) {
+  if (!blockId) return;
+  if (!confirm('추가한 상세 이미지를 삭제할까요?')) return;
+  state.detailImageBlocks = (state.detailImageBlocks || []).filter(block => block.id !== blockId);
+  markContentChanged();
+  savePersistentState();
+  render();
+}
+
+function moveDetailImageBlock(blockId, direction) {
+  const blocks = [...(state.detailImageBlocks || [])];
+  const index = blocks.findIndex(block => block.id === blockId);
+  if (index < 0) return;
+  const block = blocks[index];
+  const sectionIndex = SECTIONS.findIndex(section => section.id === block.afterSectionId);
+  const sameSlotIndexes = blocks
+    .map((item, itemIndex) => ({ item, itemIndex }))
+    .filter(entry => entry.item.afterSectionId === block.afterSectionId)
+    .map(entry => entry.itemIndex);
+  const slotPosition = sameSlotIndexes.indexOf(index);
+
+  if (direction === 'up') {
+    if (slotPosition > 0) {
+      const swapIndex = sameSlotIndexes[slotPosition - 1];
+      [blocks[index], blocks[swapIndex]] = [blocks[swapIndex], blocks[index]];
+    } else if (sectionIndex > 0) {
+      block.afterSectionId = SECTIONS[sectionIndex - 1].id;
+    }
+  } else {
+    if (slotPosition >= 0 && slotPosition < sameSlotIndexes.length - 1) {
+      const swapIndex = sameSlotIndexes[slotPosition + 1];
+      [blocks[index], blocks[swapIndex]] = [blocks[swapIndex], blocks[index]];
+    } else if (sectionIndex >= 0 && sectionIndex < SECTIONS.length - 1) {
+      block.afterSectionId = SECTIONS[sectionIndex + 1].id;
+    }
+  }
+
+  state.detailImageBlocks = blocks;
+  markContentChanged();
+  savePersistentState();
+  render();
+}
+
+async function loadDetailDriveImages() {
+  const folderRaw = document.getElementById('detailImageDriveFolderInput')?.value || state.imageInsert?.driveFolderId || '';
+  const folderId = extractFolderId(folderRaw);
+  if (!folderId) {
+    state.imageInsert.error = 'Google Drive 폴더 URL 또는 ID를 입력해주세요.';
+    render();
+    return;
+  }
+  if (!driveService) {
+    state.imageInsert.error = 'Google Drive가 아직 연결되지 않았습니다. 먼저 연결해주세요.';
+    render();
+    return;
+  }
+  state.imageInsert.driveFolderId = folderId;
+  state.imageInsert.driveLoading = true;
+  state.imageInsert.error = '';
+  localStorage.setItem('detail_insert_drive_folder_id', folderId);
+  render();
+  try {
+    const files = await driveService.listImages(folderId);
+    state.imageInsert.driveFiles = files;
+    state.imageInsert.driveLoading = false;
+    state.imageInsert.error = files.length ? '' : '이 폴더에서 이미지 파일을 찾지 못했습니다.';
+    render();
+  } catch(e) {
+    state.imageInsert.driveLoading = false;
+    state.imageInsert.error = e.message || 'Google Drive 이미지를 불러오지 못했습니다.';
+    render();
+  }
+}
+
+async function useDriveDetailImage(fileId) {
+  const file = (state.imageInsert?.driveFiles || []).find(item => item.id === fileId);
+  if (!driveService || !fileId) return;
+  state.imageInsert.driveLoading = true;
+  state.imageInsert.error = '';
+  render();
+  try {
+    const imgData = await driveService.downloadFile(fileId);
+    applyImageInsert(imgData.dataUrl, file?.name || 'Google Drive 이미지', 'Google Drive');
+  } catch(e) {
+    state.imageInsert.driveLoading = false;
+    state.imageInsert.error = e.message || 'Drive 이미지 다운로드에 실패했습니다.';
+    render();
+  }
+}
+
+function useCutDetailImage(index) {
+  const cut = state.cuts?.prompts?.[Number(index)];
+  if (!cut?.result) return;
+  applyImageInsert(cut.result, cut.label || `이미지컷 ${Number(index) + 1}`, '이미지컷');
+}
+
+function bindImageInsertEvents() {
+  const insert = state.imageInsert;
+  if (!insert?.open) return;
+  const overlay = document.getElementById('imageInsertOverlay');
+  if (overlay) overlay.onclick = closeImageInsert;
+  const closeBtn = document.getElementById('closeImageInsert');
+  if (closeBtn) closeBtn.onclick = closeImageInsert;
+  const pickBtn = document.getElementById('pickDetailImageFile');
+  const fileInput = document.getElementById('detailImageInsertFileInput');
+  if (pickBtn) pickBtn.onclick = () => fileInput?.click();
+  if (fileInput) {
+    fileInput.onchange = async e => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await readImageFileAsDataUrl(file);
+        applyImageInsert(dataUrl, file.name, '내 파일');
+      } catch(err) {
+        state.imageInsert.error = err.message || '이미지를 불러오지 못했습니다.';
+        render();
+      }
+    };
+  }
+  const driveInput = document.getElementById('detailImageDriveFolderInput');
+  if (driveInput) driveInput.oninput = e => { state.imageInsert.driveFolderId = e.target.value; };
+  const loadDriveBtn = document.getElementById('loadDetailDriveImages');
+  if (loadDriveBtn) loadDriveBtn.onclick = loadDetailDriveImages;
+  const connectDriveBtn = document.getElementById('connectImageInsertDrive');
+  if (connectDriveBtn) connectDriveBtn.onclick = connectDrive;
+  document.querySelectorAll('[data-use-drive-detail-image]').forEach(btn => {
+    btn.onclick = () => useDriveDetailImage(btn.dataset.useDriveDetailImage);
+  });
+  document.querySelectorAll('[data-use-cut-detail-image]').forEach(btn => {
+    btn.onclick = () => useCutDetailImage(btn.dataset.useCutDetailImage);
+  });
+}
+
+function bindDetailImageManagementEvents() {
+  document.querySelectorAll('[data-focus-section-image]').forEach(btn => {
+    btn.onclick = () => focusSectionImageLayer(btn.dataset.focusSectionImage);
+  });
+  document.querySelectorAll('[data-delete-section-image]').forEach(btn => {
+    btn.onclick = () => deleteSectionImage(btn.dataset.deleteSectionImage);
+  });
+  document.querySelectorAll('[data-open-image-insert]').forEach(btn => {
+    btn.onclick = () => {
+      const [sectionId, mode] = (btn.dataset.openImageInsert || '').split(':');
+      if (sectionId) openImageInsert(sectionId, mode);
+    };
+  });
+  document.querySelectorAll('[data-delete-detail-image]').forEach(btn => {
+    btn.onclick = () => deleteDetailImageBlock(btn.dataset.deleteDetailImage);
+  });
+  document.querySelectorAll('[data-move-detail-image]').forEach(btn => {
+    btn.onclick = () => {
+      const [blockId, direction] = (btn.dataset.moveDetailImage || '').split(':');
+      moveDetailImageBlock(blockId, direction);
+    };
+  });
 }
 
 function cacheRepairMaskFromCanvas() {
@@ -5401,6 +5804,7 @@ async function startAnalysis() {
   state.competitorData = null;
   state.sectionContents = {};
   state.sectionImages = {};
+  state.detailImageBlocks = [];
   state.sectionVariants = {};
   state.currentSectionVariantIds = {};
   state.manualSectionEdits = {};
@@ -6250,6 +6654,7 @@ function exportHTML() {
     if (!content) continue;
     const img = state.sectionImages[s.id];
     sectionsHtml += renderSectionTemplate(s, content, img, 'export');
+    sectionsHtml += renderDetailImageBlocksAfter(s.id, 'export');
   }
 
   const html = `<!DOCTYPE html>
@@ -6330,7 +6735,7 @@ class DriveService {
 
   async listImages(folderId) {
     const q = encodeURIComponent(`'${folderId}' in parents and mimeType contains 'image/' and trashed=false`);
-    const res = await this.fetchWithRetry(`${DRIVE_API}/files?q=${q}&fields=files(id,name,mimeType,createdTime,size)&orderBy=createdTime&pageSize=100`);
+    const res = await this.fetchWithRetry(`${DRIVE_API}/files?q=${q}&fields=files(id,name,mimeType,createdTime,size,thumbnailLink,imageMediaMetadata)&orderBy=createdTime&pageSize=100`);
     const data = await res.json();
     if (data.error) throw new Error(data.error.message);
     return data.files || [];
@@ -8115,6 +8520,8 @@ function applyPlacement() {
     }
   }
   savePlacement();
+  markContentChanged();
+  savePersistentState();
   state.step = 'preview';
   render();
 }
@@ -8502,13 +8909,14 @@ async function convertToJpegBlob(blob) {
   });
 }
 
-function buildExportHtml(analysis, sectionContents, sectionImages) {
+function buildExportHtml(analysis, sectionContents, sectionImages, detailImageBlocks = []) {
   let sectionsHtml = '';
   for (const s of SECTIONS) {
     const content = sectionContents[s.id];
     if (!content) continue;
     const img = sectionImages[s.id];
     sectionsHtml += renderSectionTemplate(s, content, img, 'export');
+    sectionsHtml += renderDetailImageBlocksAfter(s.id, 'export', detailImageBlocks);
   }
   return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${analysis.product_name||'상세페이지'}</title><link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap" rel="stylesheet"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Pretendard','Noto Sans KR',sans-serif;color:#333}img{max-width:100%;height:auto}section{width:100%}</style></head><body>${sectionsHtml}</body></html>`;
 }
