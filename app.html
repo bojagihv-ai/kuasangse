@@ -397,6 +397,7 @@ function normalizeModelConfig(cfg) {
     const h = Number.parseInt(c.imageHeight, 10);
     c.imageHeight = Number.isFinite(h) ? Math.max(64, Math.min(4096, h)) : null;
   }
+  c.openaiKey = String(c.openaiKey || '').trim();
   return c;
 }
 
@@ -418,11 +419,41 @@ function loadModelConfig() {
     imageHeight: null,        // px or null (null = 비율 자동 유지)
   });
 }
+const OPENAI_KEY_STORAGE_KEYS = ['openai_api_key', 'openaiKey', 'OPENAI_API_KEY', 'pdp_openai_api_key'];
+
 function saveOpenAIKey(key) {
-  try { localStorage.setItem('openai_api_key', key); } catch(e) {}
+  const value = String(key || '').trim();
+  if (!value) return;
+  try {
+    OPENAI_KEY_STORAGE_KEYS.forEach(storageKey => localStorage.setItem(storageKey, value));
+    const cfg = normalizeModelConfig(JSON.parse(localStorage.getItem('model_config') || '{}'));
+    cfg.openaiKey = value;
+    localStorage.setItem('model_config', JSON.stringify(cfg));
+  } catch(e) {}
 }
+
 function loadOpenAIKey() {
-  try { return localStorage.getItem('openai_api_key') || ''; } catch(e) { return ''; }
+  try {
+    for (const storageKey of OPENAI_KEY_STORAGE_KEYS) {
+      const value = String(localStorage.getItem(storageKey) || '').trim();
+      if (value) return value;
+    }
+    const cfg = JSON.parse(localStorage.getItem('model_config') || '{}');
+    return String(cfg.openaiKey || cfg.openaiApiKey || '').trim();
+  } catch(e) {
+    return '';
+  }
+}
+
+function getRuntimeOpenAIKey() {
+  try {
+    if (state?.openaiKey) return state.openaiKey;
+    const stored = loadOpenAIKey();
+    if (stored && state) state.openaiKey = stored;
+    return stored;
+  } catch(e) {
+    return loadOpenAIKey();
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -459,14 +490,15 @@ function isOpenAIImageModel(modelId = null) {
 }
 
 function hasImageConnection(modelId = null) {
-  return isOpenAIImageModel(modelId) ? !!state.openaiKey : hasGeminiConnection();
+  return isOpenAIImageModel(modelId) ? !!getRuntimeOpenAIKey() : hasGeminiConnection();
 }
 
 function createImageClient(modelId = null) {
   const imgModel = modelId || getImageModel();
   if (isOpenAIImageModel(imgModel)) {
-    if (!state.openaiKey) throw new Error('OpenAI image API 키가 설정되지 않았습니다.');
-    return new OpenAIAPI(state.openaiKey, state.modelConfig.llmModel);
+    const openaiKey = getRuntimeOpenAIKey();
+    if (!openaiKey) throw new Error('OpenAI image API 키가 설정되지 않았습니다.');
+    return new OpenAIAPI(openaiKey, state.modelConfig.llmModel);
   }
   return createGeminiClient(state.modelConfig.llmModel);
 }
@@ -1740,8 +1772,9 @@ function getLLMClient() {
   const cfg = normalizeModelConfig(state.modelConfig);
   state.modelConfig = cfg;
   if (cfg.llmProvider === 'openai') {
-    if (!state.openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. 모델 설정에서 입력해주세요.');
-    return new OpenAIAPI(state.openaiKey, cfg.llmModel);
+    const openaiKey = getRuntimeOpenAIKey();
+    if (!openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. 모델 설정에서 입력해주세요.');
+    return new OpenAIAPI(openaiKey, cfg.llmModel);
   }
   if (!hasGeminiConnection()) throw new Error('Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.');
   return createGeminiClient(cfg.llmModel);
@@ -2931,6 +2964,7 @@ function renderAiRepairModal() {
   const img = repair.sectionId ? state.sectionImages[repair.sectionId] : null;
   const models = IMAGE_MODELS.filter(m => isAiRepairModel(m.id));
   const selectedModel = repair.model || getAiRepairDefaultModel();
+  const hasOpenAIKey = !!getRuntimeOpenAIKey();
   const mode = repair.mode || 'spot';
   if (!section || !img) return '';
 
@@ -2989,10 +3023,10 @@ function renderAiRepairModal() {
             <button class="btn-sm" id="repairClearMask" ${repair.busy ? 'disabled' : ''}>마스크 지우기</button>
           </div>
 
-          ${!state.openaiKey ? `<div class="repair-error">OpenAI API 키가 있어야 부분 수정이 가능합니다. 모델 설정에서 OpenAI 키를 먼저 저장해주세요.</div>` : ''}
+          ${!hasOpenAIKey ? `<div class="repair-error">OpenAI API 키가 있어야 부분 수정이 가능합니다. 모델 설정에서 OpenAI 키를 먼저 저장해주세요.</div>` : ''}
           ${repair.error ? `<div class="repair-error">${escapeHtml(repair.error)}</div>` : ''}
 
-          <button class="btn-primary" id="runAiRepair" style="margin-top:auto" ${repair.busy || !state.openaiKey ? 'disabled' : ''}>
+          <button class="btn-primary" id="runAiRepair" style="margin-top:auto" ${repair.busy || !hasOpenAIKey ? 'disabled' : ''}>
             <span class="material-icons-outlined" style="font-size:18px">auto_fix_high</span>
             선택 영역만 AI로 수정
           </button>
@@ -4956,8 +4990,9 @@ async function runAiRepair() {
   repair.prompt = document.getElementById('repairPrompt')?.value || '';
   repair.model = document.getElementById('repairModel')?.value || repair.model || getAiRepairDefaultModel();
   repair.error = '';
+  const openaiKey = getRuntimeOpenAIKey();
 
-  if (!state.openaiKey) {
+  if (!openaiKey) {
     repair.error = 'OpenAI API 키가 필요합니다. 모델 설정에서 OpenAI 키를 저장해주세요.';
     render();
     return;
@@ -4981,7 +5016,7 @@ async function runAiRepair() {
 
   try {
     const sourcePng = await imageSourceToPngDataUrl(source);
-    const client = new OpenAIAPI(state.openaiKey, state.modelConfig.llmModel);
+    const client = new OpenAIAPI(openaiKey, state.modelConfig.llmModel);
     const result = await client.editImageWithMask(
       sourcePng,
       editMask,
@@ -7215,6 +7250,7 @@ function renderServerAutomationModeEditor(mode, title, profile, status) {
 function renderModelSettings() {
   state.modelConfig = normalizeModelConfig(state.modelConfig);
   const cfg = state.modelConfig;
+  const runtimeOpenAIKey = getRuntimeOpenAIKey();
   const geminiProv = LLM_PROVIDERS.gemini;
   const openaiProv = LLM_PROVIDERS.openai;
   const imageProvider = getImageProvider(cfg.imageModel);
@@ -7290,7 +7326,7 @@ function renderModelSettings() {
       <div class="input-group">
         <label class="label">OpenAI API Key</label>
         <div style="position:relative">
-          <input type="password" class="input" id="openaiKeyInput" value="${state.openaiKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <input type="password" class="input" id="openaiKeyInput" value="${runtimeOpenAIKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
           <span class="material-icons-outlined" id="toggleOpenAIKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
         </div>
       </div>
@@ -7319,7 +7355,7 @@ function renderModelSettings() {
       <div class="input-group" style="margin-top:4px">
         <label class="label">이미지 생성용 OpenAI API Key</label>
         <div style="position:relative">
-          <input type="password" class="input" id="openaiKeyInput" value="${state.openaiKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
+          <input type="password" class="input" id="openaiKeyInput" value="${runtimeOpenAIKey}" placeholder="sk-..." style="font-family:monospace;font-size:13px;padding-right:40px">
           <span class="material-icons-outlined" id="toggleOpenAIKey" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:18px;color:var(--text-m)">visibility</span>
         </div>
       </div>
@@ -7427,7 +7463,7 @@ function renderModelSettings() {
       <div>이미지 모델: <code style="background:var(--bg);padding:1px 6px;border-radius:4px;font-size:11px">${cfg.imageModel}</code></div>
       <div>이미지 크기: <b style="color:var(--cyan)">${cfg.imageSizeMode === 'custom' ? (cfg.imageWidth + 'px × ' + (cfg.imageHeight ? cfg.imageHeight+'px' : '비율유지')) : 'auto'}</b></div>
       <div>Vertex Backend: <span style="color:${state.backendBaseUrl?'var(--ok)':'var(--text-m)'}">${state.backendBaseUrl ? state.backendBaseUrl : '— 미설정'}</span></div>
-      <div>OpenAI Key: <span style="color:${state.openaiKey?'var(--ok)':'var(--text-m)'}">${state.openaiKey ? '✅ 설정됨' : '— 미설정'}</span></div>
+      <div>OpenAI Key: <span style="color:${runtimeOpenAIKey?'var(--ok)':'var(--text-m)'}">${runtimeOpenAIKey ? '✅ 설정됨' : '— 미설정'}</span></div>
     </div>
   </div>`;
 }
@@ -8308,7 +8344,7 @@ bindEvents = function() {
         state.modelConfig.imageHeight = (hInp.value.trim() === '' || isNaN(h)) ? null : Math.max(64, Math.min(4096, h));
       }
       state.modelConfig = normalizeModelConfig(state.modelConfig);
-      // 모델 설정 저장
+      state.modelConfig.openaiKey = state.openaiKey || state.modelConfig.openaiKey || '';
       saveModelConfig(state.modelConfig);
       // 저장 완료 메시지
       const msg = document.getElementById('modelSaveMsg');
