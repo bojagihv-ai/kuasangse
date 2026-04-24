@@ -424,7 +424,12 @@ function normalizeModelConfig(cfg) {
 }
 
 function saveModelConfig(cfg) {
-  try { localStorage.setItem('model_config', JSON.stringify(normalizeModelConfig(cfg))); } catch(e) {}
+  try {
+    const normalized = normalizeModelConfig(cfg);
+    normalized.openaiKey = '';
+    delete normalized.openaiApiKey;
+    localStorage.setItem('model_config', JSON.stringify(normalized));
+  } catch(e) {}
 }
 function loadModelConfig() {
   try {
@@ -441,27 +446,37 @@ function loadModelConfig() {
     imageHeight: null,        // px or null (null = 비율 자동 유지)
   });
 }
-const OPENAI_KEY_STORAGE_KEYS = ['openai_api_key', 'openaiKey', 'OPENAI_API_KEY', 'pdp_openai_api_key'];
+const OPENAI_KEY_STORAGE_KEY = 'pdp_openai_api_key';
+const OPENAI_KEY_LEGACY_STORAGE_KEYS = ['openai_api_key', 'openaiKey', 'OPENAI_API_KEY'];
 
 function saveOpenAIKey(key) {
   const value = String(key || '').trim();
   if (!value) return;
   try {
-    OPENAI_KEY_STORAGE_KEYS.forEach(storageKey => localStorage.setItem(storageKey, value));
+    localStorage.setItem(OPENAI_KEY_STORAGE_KEY, value);
+    OPENAI_KEY_LEGACY_STORAGE_KEYS.forEach(storageKey => localStorage.removeItem(storageKey));
     const cfg = normalizeModelConfig(JSON.parse(localStorage.getItem('model_config') || '{}'));
-    cfg.openaiKey = value;
+    cfg.openaiKey = '';
+    delete cfg.openaiApiKey;
     localStorage.setItem('model_config', JSON.stringify(cfg));
   } catch(e) {}
 }
 
 function loadOpenAIKey() {
   try {
-    for (const storageKey of OPENAI_KEY_STORAGE_KEYS) {
+    const current = String(localStorage.getItem(OPENAI_KEY_STORAGE_KEY) || '').trim();
+    if (current) return current;
+    for (const storageKey of OPENAI_KEY_LEGACY_STORAGE_KEYS) {
       const value = String(localStorage.getItem(storageKey) || '').trim();
-      if (value) return value;
+      if (value) {
+        saveOpenAIKey(value);
+        return value;
+      }
     }
     const cfg = JSON.parse(localStorage.getItem('model_config') || '{}');
-    return String(cfg.openaiKey || cfg.openaiApiKey || '').trim();
+    const migrated = String(cfg.openaiKey || cfg.openaiApiKey || '').trim();
+    if (migrated) saveOpenAIKey(migrated);
+    return migrated;
   } catch(e) {
     return '';
   }
@@ -644,32 +659,16 @@ const tokenTracker = {
     if (isImage) s.imageCount++;
 
     const p = MODEL_PRICING[modelId];
-    if (p) {
-      const inCost  = (s.inputTokens  / 1_000_000) * p.inputPerM;
-      const outCost = (s.outputTokens / 1_000_000) * p.outputPerM;
-      const imgCost = p.imageOut ? s.imageCount * p.imageOut : 0;
-      s.costUSD = inCost + outCost + imgCost;
-    }
-
     // 이번 호출 단건 비용
     let callCost = 0;
-    if (p) {
+    if (meta && Number.isFinite(meta.costUSD)) {
+      callCost = meta.costUSD;
+    } else if (p) {
       callCost  = ((inputTokens  || 0) / 1_000_000) * p.inputPerM;
       callCost += ((outputTokens || 0) / 1_000_000) * p.outputPerM;
       if (isImage && p.imageOut) callCost += p.imageOut;
     }
-
-    if (meta && Number.isFinite(meta.costUSD)) {
-      if (p) {
-        let defaultCallCost = ((inputTokens || 0) / 1_000_000) * p.inputPerM;
-        defaultCallCost += ((outputTokens || 0) / 1_000_000) * p.outputPerM;
-        if (isImage && p.imageOut) defaultCallCost += p.imageOut;
-        s.costUSD += (meta.costUSD - defaultCallCost);
-      } else {
-        s.costUSD += meta.costUSD;
-      }
-      callCost = meta.costUSD;
-    }
+    s.costUSD = (s.costUSD || 0) + callCost;
 
     const provider = modelId.startsWith('gemini') ? 'Gemini' : 'OpenAI';
     this.callHistory.push({
@@ -1852,9 +1851,10 @@ const LAYOUT_TEMPLATES = [
 
 const WORKSPACE_DB = {
   name: 'pdp_workspace_v1',
-  version: 1,
+  version: 2,
   projects: 'projects',
   snapshots: 'snapshots',
+  sessionAssets: 'sessionAssets',
 };
 
 function loadJson(key, fallback) {
@@ -2003,6 +2003,9 @@ async function openWorkspaceDb() {
       store.createIndex('projectId', 'projectId', { unique: false });
       store.createIndex('createdAt', 'createdAt', { unique: false });
     }
+    if (!db.objectStoreNames.contains(WORKSPACE_DB.sessionAssets)) {
+      db.createObjectStore(WORKSPACE_DB.sessionAssets, { keyPath: 'id' });
+    }
   };
   openWorkspaceDb._db = await idbRequest(request);
   return openWorkspaceDb._db;
@@ -2038,12 +2041,139 @@ async function workspaceDelete(storeName, key) {
   await idbDone(tx);
 }
 
+const SESSION_ASSET_ID = 'current';
+let sessionAssetSaveTimer = null;
+let lastLightweightSessionPayload = null;
+
+function stripDetailBlockImages(blocks) {
+  return (Array.isArray(blocks) ? blocks : []).map(block => {
+    const copy = { ...block };
+    if (copy.dataUrl) copy.hasDataUrl = true;
+    delete copy.dataUrl;
+    return copy;
+  });
+}
+
+function stripVariantImages(sectionVariants = {}) {
+  const result = {};
+  for (const [sectionId, variants] of Object.entries(sectionVariants || {})) {
+    result[sectionId] = (Array.isArray(variants) ? variants : []).map(variant => ({
+      ...variant,
+      hasImage: !!variant.image || !!variant.hasImage,
+      image: null,
+    }));
+  }
+  return result;
+}
+
+function buildLightweightSessionPayload(payload) {
+  return {
+    ...payload,
+    imagePreview: payload.imagePreview ? '__stored_in_indexeddb__' : null,
+    sectionVariants: stripVariantImages(payload.sectionVariants),
+    detailImageBlocks: stripDetailBlockImages(payload.detailImageBlocks),
+  };
+}
+
+function currentSessionAssetsPayload() {
+  return {
+    id: SESSION_ASSET_ID,
+    imagePreview: state.imagePreview || null,
+    imageBase64: state.imageBase64 || null,
+    sectionImages: cloneData(state.sectionImages || {}),
+    detailImageBlocks: cloneData(state.detailImageBlocks || []),
+    sectionVariants: cloneData(state.sectionVariants || {}),
+    savedAt: Date.now(),
+  };
+}
+
+async function saveSessionAssetsToDb() {
+  let clearedWarning = false;
+  try {
+    await workspacePut(WORKSPACE_DB.sessionAssets, currentSessionAssetsPayload());
+    localStorage.removeItem('pdp_session_img');
+    localStorage.removeItem('pdp_session_imgs');
+    localStorage.removeItem('pdp_detail_image_blocks');
+    if (lastLightweightSessionPayload) {
+      try {
+        localStorage.setItem('pdp_session', JSON.stringify(lastLightweightSessionPayload));
+      } catch(e) {
+        console.warn('Session metadata retry failed:', e);
+        state.storageWarning = '이미지는 IndexedDB에 저장됐지만 세션 정보 저장 공간이 부족합니다. 프로젝트 저장을 눌러 안전하게 보존해주세요.';
+        if (typeof render === 'function') render();
+        return;
+      }
+    }
+    if (state.storageWarning && state.storageWarning.includes('이미지 저장')) {
+      state.storageWarning = '';
+      clearedWarning = true;
+    }
+    if (state.storageWarning && state.storageWarning.includes('세션 저장')) {
+      state.storageWarning = '';
+      clearedWarning = true;
+    }
+  } catch(e) {
+    console.warn('Session asset save failed:', e);
+    state.storageWarning = '이미지 저장소 저장에 실패했습니다. 현재 화면은 유지되지만, 새로고침 전에 프로젝트 저장을 한 번 눌러주세요.';
+    if (typeof render === 'function') render();
+    return;
+  }
+  if (clearedWarning && typeof render === 'function') render();
+}
+
+function scheduleSessionAssetSave() {
+  if (sessionAssetSaveTimer) clearTimeout(sessionAssetSaveTimer);
+  sessionAssetSaveTimer = setTimeout(() => {
+    sessionAssetSaveTimer = null;
+    saveSessionAssetsToDb().catch(() => {});
+  }, 250);
+}
+
+async function hydratePersistentSessionAssets() {
+  try {
+    const assets = await workspaceGet(WORKSPACE_DB.sessionAssets, SESSION_ASSET_ID);
+    if (!assets) return;
+    let changed = false;
+    if (assets.imagePreview && state.imagePreview !== assets.imagePreview) {
+      state.imagePreview = assets.imagePreview;
+      changed = true;
+    }
+    if (assets.imageBase64 && state.imageBase64 !== assets.imageBase64) {
+      state.imageBase64 = assets.imageBase64;
+      changed = true;
+    }
+    if (assets.sectionImages && typeof assets.sectionImages === 'object') {
+      state.sectionImages = assets.sectionImages;
+      changed = true;
+    }
+    if (Array.isArray(assets.detailImageBlocks)) {
+      state.detailImageBlocks = assets.detailImageBlocks;
+      changed = true;
+    }
+    if (assets.sectionVariants && typeof assets.sectionVariants === 'object') {
+      state.sectionVariants = assets.sectionVariants;
+      changed = true;
+    }
+    if (changed) render();
+  } catch(e) {
+    console.warn('Session asset hydrate failed:', e);
+    if (state.step !== 'upload') {
+      state.storageWarning = '저장된 이미지 복원에 실패했습니다. 프로젝트 저장본이 있다면 작업공간에서 다시 불러올 수 있습니다.';
+      render();
+    }
+  }
+}
+
 // ════════════════════════════════════════════════════════════════
 // PERSISTENT STORAGE (works on file:// too)
 // ════════════════════════════════════════════════════════════════
+function expireCookie(name) {
+  try { document.cookie = `${name}=;max-age=0;path=/;SameSite=Lax`; } catch(e) {}
+}
+
 function saveKey(key) {
   try { localStorage.setItem('gemini_api_key', key); } catch(e) {}
-  try { document.cookie = `gemini_api_key=${encodeURIComponent(key)};max-age=31536000;path=/;SameSite=Lax`; } catch(e) {}
+  expireCookie('gemini_api_key');
 }
 function loadKey() {
   let k = '';
@@ -2051,7 +2181,11 @@ function loadKey() {
   if (!k) {
     try {
       const m = document.cookie.match(/gemini_api_key=([^;]+)/);
-      if (m) k = decodeURIComponent(m[1]);
+      if (m) {
+        k = decodeURIComponent(m[1]);
+        if (k) localStorage.setItem('gemini_api_key', k);
+        expireCookie('gemini_api_key');
+      }
     } catch(e) {}
   }
   return k;
@@ -2164,8 +2298,9 @@ function loadSectionInstructions() {
 // SESSION PERSISTENCE (analysis + generated content)
 // ════════════════════════════════════════════════════════════════
 function savePersistentState() {
+  let payload = null;
   try {
-    const payload = {
+    payload = {
       step: state.step,
       analysis: state.analysis,
       competitorData: state.competitorData,
@@ -2193,20 +2328,14 @@ function savePersistentState() {
         planEdits: state.compPage.planEdits,
       },
     };
-    localStorage.setItem('pdp_session', JSON.stringify(payload));
-  } catch(e) {}
-  // imageBase64 별도 저장 (크기가 클 수 있어 분리)
-  try { if (state.imageBase64) localStorage.setItem('pdp_session_img', state.imageBase64); } catch(e) {}
-  // sectionImages 별도 저장
-  try {
-    if (Object.keys(state.sectionImages).length > 0)
-      localStorage.setItem('pdp_session_imgs', JSON.stringify(state.sectionImages));
-    else
-      localStorage.removeItem('pdp_session_imgs');
-  } catch(e) {}
-  try {
-    localStorage.setItem('pdp_detail_image_blocks', JSON.stringify(state.detailImageBlocks || []));
-  } catch(e) {}
+    lastLightweightSessionPayload = buildLightweightSessionPayload(payload);
+    localStorage.setItem('pdp_session', JSON.stringify(lastLightweightSessionPayload));
+    if (state.storageWarning && state.storageWarning.includes('세션 저장')) state.storageWarning = '';
+  } catch(e) {
+    console.warn('Session metadata save failed:', e);
+    state.storageWarning = '세션 저장 공간이 부족합니다. 큰 이미지는 IndexedDB에 저장을 시도 중이지만, 프로젝트 저장도 함께 눌러두는 편이 안전합니다.';
+  }
+  scheduleSessionAssetSave();
 }
 function loadPersistentSession() {
   try {
@@ -2216,6 +2345,7 @@ function loadPersistentSession() {
     // 과도기 step → 안전한 step으로 정규화
     if (s.step === 'analyzing') s.step = 'sections';
     if (s.step === 'generating') s.step = Object.keys(s.sectionContents||{}).length > 0 ? 'preview' : 'sections';
+    if (s.imagePreview === '__stored_in_indexeddb__') s.imagePreview = null;
     s.imageBase64 = localStorage.getItem('pdp_session_img') || null;
     try { s.sectionImages = JSON.parse(localStorage.getItem('pdp_session_imgs') || '{}'); } catch(e) { s.sectionImages = {}; }
     s.currentProjectId = s.currentProjectId || '';
@@ -2240,6 +2370,7 @@ function clearPersistentSession() {
   localStorage.removeItem('pdp_session_img');
   localStorage.removeItem('pdp_session_imgs');
   localStorage.removeItem('pdp_detail_image_blocks');
+  workspaceDelete(WORKSPACE_DB.sessionAssets, SESSION_ASSET_ID).catch(() => {});
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2329,6 +2460,7 @@ const state = {
   progress: 0,
   progressMsg: '',
   error: '',
+  storageWarning: '',
   activeSectionEdit: null,
   editingPreviewSection: null,
   // ── Image Cuts ──
@@ -2972,6 +3104,7 @@ function render() {
       <main class="main">
         <div class="container">
           ${state.error ? renderError() : ''}
+          ${state.storageWarning ? renderStorageWarning() : ''}
           ${state.step === 'upload' ? renderUpload() : ''}
           ${state.step === 'analyzing' ? renderAnalyzing() : ''}
           ${state.step === 'sections' ? renderSections() : ''}
@@ -3161,6 +3294,14 @@ function renderError() {
     <span class="material-icons-outlined" style="font-size:18px">error_outline</span>
     <span style="flex:1">${state.error}</span>
     <span class="material-icons-outlined" style="font-size:18px;cursor:pointer" id="closeError">close</span>
+  </div>`;
+}
+
+function renderStorageWarning() {
+  return `<div class="error-bar" style="background:rgba(245,158,11,.10);border-color:rgba(245,158,11,.34);color:var(--warn)">
+    <span class="material-icons-outlined" style="font-size:18px">sd_storage</span>
+    <span style="flex:1">${escapeHtml(state.storageWarning)}</span>
+    <span class="material-icons-outlined" style="font-size:18px;cursor:pointer" id="closeStorageWarning">close</span>
   </div>`;
 }
 
@@ -4468,6 +4609,22 @@ ${instructions}</textarea>
 // ════════════════════════════════════════════════════════════════
 // EVENT BINDING
 // ════════════════════════════════════════════════════════════════
+const bindEventExtensions = [];
+
+function registerBindEventExtension(fn) {
+  if (typeof fn === 'function') bindEventExtensions.push(fn);
+}
+
+function runBindEventExtensions() {
+  for (const fn of bindEventExtensions) {
+    try {
+      fn();
+    } catch(e) {
+      console.warn('bindEvents extension failed:', e);
+    }
+  }
+}
+
 function bindEvents() {
   // API Key modal
   const saveBtn = document.getElementById('saveApiKey');
@@ -4667,6 +4824,8 @@ function bindEvents() {
   // Error close
   const closeErr = document.getElementById('closeError');
   if (closeErr) closeErr.onclick = () => { state.error = ''; render(); };
+  const closeStorageWarning = document.getElementById('closeStorageWarning');
+  if (closeStorageWarning) closeStorageWarning.onclick = () => { state.storageWarning = ''; render(); };
 
   // File upload
   const uploadArea = document.getElementById('uploadArea');
@@ -4949,6 +5108,7 @@ function bindEvents() {
   if (exportPhotoshopBtn) exportPhotoshopBtn.onclick = exportPhotoshopPackage;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
+  runBindEventExtensions();
 }
 
 function bindColorPickerPair(textInputId, pickerInputId) {
@@ -5135,7 +5295,7 @@ async function loadDetailDriveImages() {
     render();
     return;
   }
-  if (!driveService) {
+  if (!driveService && !(await ensureDriveServiceReady())) {
     state.imageInsert.error = 'Google Drive가 아직 연결되지 않았습니다. 먼저 연결해주세요.';
     render();
     return;
@@ -5160,7 +5320,7 @@ async function loadDetailDriveImages() {
 
 async function useDriveDetailImage(fileId) {
   const file = (state.imageInsert?.driveFiles || []).find(item => item.id === fileId);
-  if (!driveService || !fileId) return;
+  if ((!driveService && !(await ensureDriveServiceReady())) || !fileId) return;
   state.imageInsert.driveLoading = true;
   state.imageInsert.error = '';
   render();
@@ -7246,15 +7406,23 @@ let tokenClient = null;
 function refreshDriveToken() {
   return new Promise((resolve, reject) => {
     const clientId = state.auto.gdClientId || localStorage.getItem('gd_client_id') || '';
-    if (!clientId || !google?.accounts?.oauth2) {
+    const oauth = window.google?.accounts?.oauth2;
+    if (!clientId || !oauth) {
       reject(new Error('Google OAuth 초기화 안 됨'));
       return;
     }
-    const client = google.accounts.oauth2.initTokenClient({
+    const client = oauth.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
       prompt: '',  // silent 갱신 시도
       callback: (resp) => {
+        if (resp.error) {
+          autoLog('err', '토큰 갱신 실패 — Google Drive 재연결 필요');
+          state.auto.driveConnected = false;
+          render();
+          reject(new Error(resp.error));
+          return;
+        }
         if (resp.access_token) {
           state.auto.accessToken = resp.access_token;
           state.auto.driveConnected = true;
@@ -7281,11 +7449,17 @@ function refreshDriveToken() {
 function initGoogleAuth() {
   const clientId = state.auto.gdClientId || GD_CLIENT_ID;
   if (!clientId) return;
+  const oauth = window.google?.accounts?.oauth2;
+  if (!oauth) return;
   try {
-    tokenClient = google.accounts.oauth2.initTokenClient({
+    tokenClient = oauth.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
       callback: (resp) => {
+        if (resp.error) {
+          autoLog('info', 'Google Drive 자동 재연결 대기 중: ' + resp.error);
+          return;
+        }
         if (resp.access_token) {
           state.auto.accessToken = resp.access_token;
           state.auto.driveConnected = true;
@@ -7295,7 +7469,27 @@ function initGoogleAuth() {
         }
       },
     });
+    if (!state.auto.driveConnected && !initGoogleAuth._silentAttempted) {
+      initGoogleAuth._silentAttempted = true;
+      setTimeout(() => {
+        try {
+          tokenClient?.requestAccessToken({ prompt: '' });
+        } catch(e) {
+          autoLog('info', 'Google Drive 자동 재연결 대기 중');
+        }
+      }, 200);
+    }
   } catch(e) { console.warn('Google auth init failed:', e); }
+}
+
+async function ensureDriveServiceReady() {
+  if (driveService) return true;
+  try {
+    await refreshDriveToken();
+    return !!driveService;
+  } catch(e) {
+    return false;
+  }
 }
 
 function connectDrive() {
@@ -7308,7 +7502,9 @@ function connectDrive() {
   localStorage.setItem('gd_client_id', clientId);
   state.auto.gdClientId = clientId;
   try {
-    tokenClient = google.accounts.oauth2.initTokenClient({
+    const oauth = window.google?.accounts?.oauth2;
+    if (!oauth) throw new Error('Google OAuth 스크립트가 아직 로드되지 않았습니다.');
+    tokenClient = oauth.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
       callback: (resp) => {
@@ -8527,10 +8723,7 @@ function applyPlacement() {
 }
 
 // ── bindEvents 확장 (이미지컷) ──
-const _origBind2 = bindEvents;
-bindEvents = function() {
-  _origBind2();
-
+registerBindEventExtension(function bindImageCutsEvents() {
   // 소스 이미지 업로드
   const cutsArea = document.getElementById('cutsUploadArea');
   const cutsInput = document.getElementById('cutsFileInput');
@@ -8751,7 +8944,7 @@ bindEvents = function() {
         state.modelConfig.imageHeight = (hInp.value.trim() === '' || isNaN(h)) ? null : Math.max(64, Math.min(4096, h));
       }
       state.modelConfig = normalizeModelConfig(state.modelConfig);
-      state.modelConfig.openaiKey = state.openaiKey || state.modelConfig.openaiKey || '';
+      state.modelConfig.openaiKey = '';
       saveModelConfig(state.modelConfig);
       // 저장 완료 메시지
       const msg = document.getElementById('modelSaveMsg');
@@ -8802,7 +8995,7 @@ bindEvents = function() {
       }
     };
   }
-};
+});
 
 function loadCutSource(file) {
   state.cuts.sourceMime = file.type;
@@ -8834,7 +9027,7 @@ function clearWorkImage() {
 }
 
 async function runCutsWorkDriveAutomation() {
-  if (!driveService) { state.error = 'Drive가 연결되어 있지 않습니다. 자동화 탭에서 연결하세요.'; render(); return; }
+  if (!driveService && !(await ensureDriveServiceReady())) { state.error = 'Drive가 연결되어 있지 않습니다. 자동화 탭에서 연결하세요.'; render(); return; }
   const folderId = state.cuts.workDriveFolderId;
   if (!folderId) { state.error = '작업 이미지 Drive 폴더 ID를 입력하세요.'; render(); return; }
   if (!state.cuts.sourceBase64) { state.error = '샘플 이미지를 먼저 업로드하세요.'; render(); return; }
@@ -8984,10 +9177,7 @@ function startAutoTabPolling() {
   }, 5000);
 }
 
-const _origBind = bindEvents;
-bindEvents = function() {
-  _origBind();
-
+registerBindEventExtension(function bindAutomationEvents() {
   if (state.step === 'automation') {
     if (!state.auto.serverFetchedOnce && !state.auto.serverLoading) {
       state.auto.serverFetchedOnce = true;
@@ -9091,6 +9281,7 @@ bindEvents = function() {
     localStorage.setItem('auto_input_folder_id', id);
     autoLog('info', `입력 폴더 ID 추출: ${id}`);
     try {
+      if (!driveService) await ensureDriveServiceReady();
       const name = await driveService.getFolderName(id);
       state.auto.inputFolderName = name;
       localStorage.setItem('auto_input_folder_name', name);
@@ -9111,6 +9302,7 @@ bindEvents = function() {
     localStorage.setItem('auto_output_folder_id', id);
     autoLog('info', `출력 폴더 ID 추출: ${id}`);
     try {
+      if (!driveService) await ensureDriveServiceReady();
       const name = await driveService.getFolderName(id);
       state.auto.outputFolderName = name;
       localStorage.setItem('auto_output_folder_name', name);
@@ -9156,7 +9348,7 @@ bindEvents = function() {
     autoLog('info', '처리 기록 초기화됨');
     render();
   };
-};
+});
 
 // ════════════════════════════════════════════════════════════════
 // INIT
@@ -9167,6 +9359,7 @@ if (hasGeminiConnection()) {
 // Try init Google auth if client ID exists
 setTimeout(() => { try { initGoogleAuth(); } catch(e) {} }, 1000);
 render();
+hydratePersistentSessionAssets().catch(() => {});
 refreshWorkspaceLists().catch(() => {});
 </script>
 </body>
