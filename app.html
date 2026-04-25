@@ -1012,7 +1012,7 @@ Respond ONLY with the JSON object, no other text.`;
     tokenTracker.record(this.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, '제품분석');
     let text = data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
-    return applyBrandPresetToContent(JSON.parse(text));
+    return JSON.parse(text);
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
@@ -1552,7 +1552,7 @@ Respond ONLY with the JSON object, no other text.`;
     const data = await res.json();
     if (data.error) throw new Error(data.error.message);
     tokenTracker.record(this.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, '제품분석');
-    return applyBrandPresetToContent(this._parseJSON(data.choices[0].message.content));
+    return this._parseJSON(data.choices[0].message.content);
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
@@ -8035,11 +8035,8 @@ function buildResolutionOptions(current) {
   ).join('');
 }
 
-const AUTO_IMAGE_MODELS = [
-  { id: 'gemini-3.1-flash-image-preview', label: '나노바나나2 (Gemini 3.1 Flash Image)', desc: '빠름 · 기본값' },
-  { id: 'gemini-3-pro-image-preview',     label: 'Gemini 3 Pro Image Preview',         desc: '최고품질' },
-  { id: 'gemini-2.5-flash-image',         label: 'Gemini 2.5 Flash Image',             desc: '신형 Flash' }
-];
+// IMAGE_MODELS와 동일한 목록 사용 (중복 제거)
+const AUTO_IMAGE_MODELS = IMAGE_MODELS;
 
 function renderServerAutomationModeEditor(mode, title, profile, status) {
   if (!profile) return '';
