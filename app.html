@@ -24,6 +24,7 @@
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://apis.google.com/js/api.js" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -243,6 +244,29 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .log-line.info{color:var(--cyan)}
 .interval-slider{width:100%;accent-color:var(--primary)}
 
+/* ── Feature: Preview Viewport Toggle ── */
+.preview-viewport-pc .preview-wrap{max-width:1100px;margin:0 auto}
+.preview-viewport-mobile .preview-wrap{max-width:430px;margin:0 auto;border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.viewport-btn{display:flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--text-m);font-size:11px;font-family:inherit;cursor:pointer;transition:.15s}
+.viewport-btn.active{background:var(--primary-dim);color:var(--primary-h);border-color:var(--primary)}
+/* ── Feature: Drag & Drop Sections ── */
+.drag-handle{cursor:grab;color:var(--text-d);padding:0 6px;flex-shrink:0;font-size:18px;line-height:1;transition:color .15s}
+.drag-handle:hover{color:var(--text)}
+.section-card.sortable-ghost{opacity:.35;background:var(--primary-dim)!important}
+.section-card.sortable-chosen{box-shadow:0 0 0 2px var(--primary)!important}
+/* ── Feature: Multi-image upload ── */
+.analysis-imgs-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.analysis-img-thumb{position:relative;width:72px;height:72px;border-radius:8px;overflow:hidden;border:2px solid var(--border);cursor:pointer;flex-shrink:0}
+.analysis-img-thumb img{width:100%;height:100%;object-fit:cover}
+.analysis-img-thumb .remove-img{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.65);border:none;border-radius:50%;width:18px;height:18px;font-size:11px;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+.analysis-img-thumb.primary{border-color:var(--primary)}
+.upload-area-mini{border:2px dashed var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;transition:.15s;font-size:13px;color:var(--text-m)}
+.upload-area-mini:hover{border-color:var(--primary);color:var(--primary-h)}
+/* ── Feature: AI QA ── */
+.qa-ai-badge{display:inline-block;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;margin-left:6px}
+.qa-ai-badge.pass{background:rgba(52,211,153,.2);color:#34d399}
+.qa-ai-badge.fail{background:rgba(239,68,68,.2);color:#f87171}
+.qa-ai-score{font-size:28px;font-weight:900;color:var(--ok)}
 /* Token Tracker */
 .token-bar{position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:6px 16px;display:flex;align-items:center;gap:10px;font-size:11px;z-index:500;flex-wrap:wrap}
 .token-bar .tb-label{color:var(--text-m);white-space:nowrap}
@@ -998,13 +1022,14 @@ Return a JSON object with the following fields:
 }
 Respond ONLY with the JSON object, no other text.`;
 
+    const parts = [
+      { text: prompt },
+      { inline_data: { mime_type: mimeType, data: imageBase64 } },
+      // 추가 이미지 (멀티 이미지 분석)
+      ...(extraImages || []).map(img => ({ inline_data: { mime_type: img.mime, data: img.base64 } }))
+    ];
     const body = {
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: mimeType, data: imageBase64 } }
-        ]
-      }],
+      contents: [{ parts }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
     };
 
@@ -1537,7 +1562,9 @@ Respond ONLY with the JSON object, no other text.`;
         role: 'user',
         content: [
           { type: 'text', text: prompt },
-          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } }
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } },
+          // 추가 이미지 (멀티 이미지 분석)
+          ...(extraImages || []).map(img => ({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'high' } }))
         ]
       }],
       max_completion_tokens: 4096,
@@ -2341,6 +2368,21 @@ function loadSectionInstructions() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// SECTION ORDER HELPER
+// ════════════════════════════════════════════════════════════════
+function orderedSections() {
+  const order = state.sectionOrder;
+  if (!order || order.length === 0) return SECTIONS;
+  const indexed = new Map(SECTIONS.map(s => [s.id, s]));
+  const result = order.map(id => indexed.get(id)).filter(Boolean);
+  // 혹시 sectionOrder에 없는 섹션이 SECTIONS에 있으면 뒤에 추가
+  for (const s of SECTIONS) {
+    if (!order.includes(s.id)) result.push(s);
+  }
+  return result;
+}
+
 // SESSION PERSISTENCE (analysis + generated content)
 // ════════════════════════════════════════════════════════════════
 function savePersistentState() {
@@ -2369,6 +2411,7 @@ function savePersistentState() {
       activeBrandPresetId: state.activeBrandPresetId,
       contentVersion: state.contentVersion,
       qaVersion: state.qaVersion,
+      sectionOrder: state.sectionOrder,
       compPage: {
         analysisResult: state.compPage.analysisResult,
         sectionPlan: state.compPage.sectionPlan,
@@ -2409,6 +2452,7 @@ function loadPersistentSession() {
     s.activeBrandPresetId = typeof s.activeBrandPresetId === 'string' ? s.activeBrandPresetId : loadActiveBrandPresetId();
     s.contentVersion = Number.isFinite(s.contentVersion) ? s.contentVersion : 0;
     s.qaVersion = Number.isFinite(s.qaVersion) ? s.qaVersion : 0;
+    s.sectionOrder = Array.isArray(s.sectionOrder) && s.sectionOrder.length > 0 ? s.sectionOrder : null;
     s.compPage = s.compPage || null;
     return s;
   } catch(e) { return null; }
@@ -2513,6 +2557,12 @@ const state = {
   activeSectionEdit: null,
   editingPreviewSection: null,
   jpgExportBusy: '',
+  // ── Feature: Preview viewport toggle ──
+  previewViewport: 'pc',  // 'pc' | 'mobile'
+  // ── Feature: Section drag-drop order ──
+  sectionOrder: _savedSession?.sectionOrder || SECTIONS.map(s => s.id),
+  // ── Feature: Multi-image analysis ──
+  analysisImages: [],  // [{base64, mime, preview}]  (primary = [0])
   // ── Image Cuts ──
   cuts: {
     sourceBase64: null,
@@ -3134,6 +3184,88 @@ function runQaCheck({ renderAfter = true } = {}) {
   return state.qaReport;
 }
 
+// ── AI QA 체크 (LLM 기반 10개 항목 채점) ─────────────────────
+async function runAiQaCheck() {
+  const sections = Object.entries(state.sectionContents || {});
+  if (sections.length === 0) { state.error = '먼저 섹션을 생성해주세요.'; render(); return; }
+
+  let llm;
+  try { llm = getLLMClient(); } catch(e) { state.error = e.message; render(); return; }
+
+  state.progressMsg = '🤖 AI QA 분석 중...';
+  state.progress = 10;
+  render();
+
+  const sectionSummary = sections.map(([id, c]) => {
+    const s = SECTIONS.find(x => x.id === id);
+    return `[${s?.name || id}] 헤드라인: "${c.headline || '없음'}" | 본문: "${(c.body_text || '').slice(0, 80)}" | CTA: "${c.cta_text || '없음'}"`;
+  }).join('\n');
+
+  const prompt = `당신은 한국 이커머스 상세페이지 전문 QA 컨설턴트입니다.
+아래는 상세페이지를 구성하는 섹션들의 내용입니다.
+
+=== 제품 정보 ===
+${state.analysis ? `${state.analysis.product_name} / ${state.analysis.category}` : '(미분석)'}
+
+=== 섹션 내용 ===
+${sectionSummary}
+
+다음 10개 항목을 100점 만점으로 채점하고, 각 항목별 개선 제안을 1-2문장으로 작성하세요.
+반드시 JSON만 반환하세요:
+{
+  "total_score": 75,
+  "grade": "B",
+  "summary": "전체 총평 2-3문장",
+  "items": [
+    {"id":"korean","name":"한국어 자연스러움","score":80,"feedback":"구체적 개선 제안"},
+    {"id":"cta","name":"CTA 설득력","score":70,"feedback":"..."},
+    {"id":"uniqueness","name":"차별화 포인트 명확성","score":65,"feedback":"..."},
+    {"id":"tone","name":"브랜드 톤 일관성","score":75,"feedback":"..."},
+    {"id":"info_density","name":"정보 충실도","score":80,"feedback":"..."},
+    {"id":"duplicate","name":"중복 문구 없음","score":90,"feedback":"..."},
+    {"id":"emotion","name":"감성적 호소력","score":70,"feedback":"..."},
+    {"id":"seo","name":"키워드 최적화","score":60,"feedback":"..."},
+    {"id":"flow","name":"섹션 간 흐름","score":75,"feedback":"..."},
+    {"id":"conversion","name":"구매 전환 가능성","score":70,"feedback":"..."}
+  ]
+}`;
+
+  try {
+    let result;
+    if (llm instanceof GeminiAPI) {
+      const body = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2048 } };
+      const data = await llm._generateContent(llm.model, body);
+      tokenTracker.record(llm.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, 'AI QA');
+      let txt = data.candidates[0].content.parts[0].text.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+      result = JSON.parse(txt);
+    } else {
+      const body = { model: llm.model, messages: [{ role: 'user', content: prompt }], max_completion_tokens: 2048, temperature: 0.3 };
+      const res = await fetch(`${llm.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llm.apiKey}` }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      tokenTracker.record(llm.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, 'AI QA');
+      result = llm._parseJSON(data.choices[0].message.content);
+    }
+
+    // 기존 rule-based findings와 병합
+    const ruleReport = runQaCheck({ renderAfter: false });
+    state.qaReport = {
+      ...ruleReport,
+      aiScore: result,
+      generatedAt: Date.now(),
+    };
+    state.qaVersion = state.contentVersion || 0;
+    state.progressMsg = '';
+    state.progress = 0;
+    render();
+  } catch(e) {
+    state.error = `AI QA 실패: ${e.message}`;
+    state.progressMsg = '';
+    state.progress = 0;
+    render();
+  }
+}
+
 function updateBrandPresetDraftFromInputs() {
   const read = id => {
     const el = document.getElementById(id);
@@ -3562,14 +3694,40 @@ function renderQaPanel() {
     </div>`;
   }
   const summary = state.qaReport.summary || { critical: 0, warning: 0, info: 0 };
+  const ai = state.qaReport.aiScore;
+  const scoreColor = (s) => s >= 80 ? 'var(--ok)' : s >= 60 ? 'var(--warn)' : 'var(--err)';
   return `<div class="analysis-box" style="margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
         <div style="font-size:13px;color:var(--text-m);margin-bottom:4px">출고 전 QA ${stale ? '<span style="color:var(--warn)">새 결과 필요</span>' : ''}</div>
-        <div style="font-size:16px;font-weight:700">중요 ${summary.critical}건 / 경고 ${summary.warning}건 / 참고 ${summary.info}건</div>
+        <div style="font-size:16px;font-weight:700">중요 ${summary.critical}건 / 경고 ${summary.warning}건 / 참고 ${summary.info}건${ai ? ` · <span style="color:${scoreColor(ai.total_score)}">AI ${ai.total_score}점 (${ai.grade})</span>` : ''}</div>
       </div>
       <div style="font-size:12px;color:var(--text-m)">${new Date(state.qaReport.generatedAt).toLocaleString('ko-KR')}</div>
     </div>
+    ${ai ? `
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap">
+        <div class="qa-ai-score" style="color:${scoreColor(ai.total_score)}">${ai.total_score}<span style="font-size:16px;font-weight:400">/100</span></div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">등급 ${ai.grade}</div>
+          <div style="font-size:12px;color:var(--text-d);line-height:1.6">${escapeHtml(ai.summary || '')}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+        ${(ai.items || []).map(item => `
+          <div style="border:1px solid var(--border);border-radius:8px;padding:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-size:12px;font-weight:600">${escapeHtml(item.name)}</span>
+              <span style="font-size:14px;font-weight:800;color:${scoreColor(item.score)}">${item.score}</span>
+            </div>
+            <div style="height:4px;background:var(--border);border-radius:2px;margin-bottom:6px">
+              <div style="height:100%;width:${item.score}%;background:${scoreColor(item.score)};border-radius:2px"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-d);line-height:1.5">${escapeHtml(item.feedback || '')}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px">
       ${(state.qaReport.findings || []).slice(0, 12).map(item => `
         <div style="border:1px solid var(--border);border-radius:10px;padding:10px;background:${item.severity === 'critical' ? 'rgba(239,68,68,.08)' : item.severity === 'warning' ? 'rgba(245,158,11,.08)' : 'rgba(99,102,241,.08)'}">
@@ -3981,27 +4139,44 @@ function renderUpload() {
 
     ${renderWorkspacePanel()}
 
+    ${state.analysisImages.length > 0 ? `
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:13px;font-weight:600">분석 이미지 (${state.analysisImages.length}/5) <span style="color:var(--text-d);font-weight:400">— 첫 번째가 대표 이미지</span></span>
+        <button class="btn-sm" id="clearAnalysisImages" style="color:var(--err)">전체 삭제</button>
+      </div>
+      <div class="analysis-imgs-row" id="analysisImgsRow">
+        ${state.analysisImages.map((img, i) => `
+          <div class="analysis-img-thumb ${i===0?'primary':''}">
+            <img src="${img.preview}" alt="제품 이미지 ${i+1}">
+            <button class="remove-img" data-remove-analysis-img="${i}" title="삭제">✕</button>
+          </div>`).join('')}
+        ${state.analysisImages.length < 5 ? `
+          <div class="analysis-img-thumb" id="addMoreImgBtn" style="border-style:dashed;display:flex;align-items:center;justify-content:center;color:var(--text-d);font-size:24px;cursor:pointer" title="이미지 추가">
+            +<input type="file" id="addMoreFileInput" accept="image/*" multiple style="display:none">
+          </div>` : ''}
+      </div>
+    </div>` : `
     <div class="upload-area ${state.imagePreview?'has-image':''}" id="uploadArea">
       ${state.imagePreview
         ? `<img src="${state.imagePreview}" class="preview-img" alt="preview">`
         : `<div style="display:flex;flex-direction:column;align-items:center">
             <span class="material-icons-outlined" style="font-size:48px;color:var(--primary);margin-bottom:12px">cloud_upload</span>
             <p style="font-size:16px;font-weight:500">클릭 또는 드래그하여 이미지 업로드</p>
-            <p style="font-size:13px;color:var(--text-m);margin-top:6px">JPG, PNG, WEBP 지원 (최대 50MB)</p>
+            <p style="font-size:13px;color:var(--text-m);margin-top:6px">JPG, PNG, WEBP 지원 · 최대 5장 동시 분석 가능</p>
           </div>`
       }
-      <input type="file" id="fileInput" accept="image/*" style="display:none">
-    </div>
+      <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
+    </div>`}
+    <button class="btn-primary" id="startAnalysis" style="margin-bottom:8px" ${(!state.imagePreview && state.analysisImages.length===0)?'disabled':''}>
+      <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
+      AI 분석 시작 ${state.analysisImages.length > 1 ? `(${state.analysisImages.length}장)` : ''}
+    </button>
 
     <div class="input-group">
       <label class="label">제품명 (선택사항)</label>
       <input type="text" class="input" id="productNameInput" value="${state.productName}" placeholder="AI가 자동 감지하지만, 직접 입력하면 더 정확합니다">
     </div>
-
-    <button class="btn-primary" id="startAnalysis" ${!state.imagePreview?'disabled':''}>
-      <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
-      AI 분석 시작
-    </button>
 
     <div class="feature-grid">
       <div class="feature-card"><div class="mi material-icons-outlined">visibility</div><h4>이미지 분석</h4><p>Gemini AI가 제품 특징을 자동 분석</p></div>
@@ -4232,12 +4407,13 @@ function renderSections() {
       ${state.sectionDriveFolderId ? `<span style="font-size:11px;color:var(--text-m);flex-shrink:0">이미지 생성 시 자동 업로드</span>` : ''}
     </div>
 
-    <div class="section-grid">
-      ${SECTIONS.map(s => {
+    <div class="section-grid" id="sectionSortable">
+      ${orderedSections().map(s => {
         const driveStatus = state.sectionDriveUploadStatus[s.id];
         return `
-        <div class="section-card" data-section-toggle="${s.id}">
+        <div class="section-card" data-section-toggle="${s.id}" data-section-id="${s.id}">
           <div class="head">
+            <span class="drag-handle" title="드래그하여 순서 변경">⠿</span>
             <span class="icon">${s.icon}</span>
             <div class="info">
               <h4>${s.n}. ${s.name}</h4>
@@ -4299,11 +4475,20 @@ function renderPreview() {
         <p class="page-desc">생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.</p>
       </div>
       <div class="preview-toolbar">
+        <div style="display:flex;gap:4px;border:1px solid var(--border);border-radius:8px;padding:2px">
+          <button class="viewport-btn ${state.previewViewport==='pc'?'active':''}" id="viewportPc" title="PC 뷰 (1100px)">
+            <span class="material-icons-outlined" style="font-size:14px">computer</span>PC
+          </button>
+          <button class="viewport-btn ${state.previewViewport==='mobile'?'active':''}" id="viewportMobile" title="모바일 뷰 (430px)">
+            <span class="material-icons-outlined" style="font-size:14px">smartphone</span>모바일
+          </button>
+        </div>
         <button class="btn-sm" id="toggleLayerMode" style="${state.previewLayerMode ? 'border-color:var(--primary);color:var(--primary-h);background:var(--primary-dim)' : ''}">
           <span class="material-icons-outlined" style="font-size:16px">open_with</span>
           ${state.previewLayerMode ? '레이어 모드 켜짐' : '레이어 모드'}
         </button>
         <button class="btn-sm" id="runQaBtn">${(!state.qaReport || state.qaVersion !== state.contentVersion) ? 'QA 검사' : 'QA 다시 검사'}</button>
+        <button class="btn-sm" id="runAiQaBtn">🤖 AI QA</button>
         <button class="btn-sm" id="exportLayeredSVG">
           <span class="material-icons-outlined" style="font-size:16px">layers</span>
           레이어 SVG
@@ -4336,8 +4521,9 @@ function renderPreview() {
       <button class="btn-sm" id="resetAllLayers" style="margin-left:auto">전체 레이어 초기화</button>
     </div>` : ''}
 
+    <div class="preview-viewport-${state.previewViewport}">
     <div class="preview-wrap">
-      ${SECTIONS.map(s => {
+      ${orderedSections().map(s => {
         const content = state.sectionContents[s.id];
         if (!content) return `<div style="padding:20px;text-align:center;color:var(--text-m);border-bottom:1px solid var(--border)">
           <span>${s.icon} ${s.n}. ${s.name} - 미생성</span>
@@ -4412,6 +4598,7 @@ function renderPreview() {
             </div>
           </div>`;
       }).join('')}
+    </div>
     </div>
   </div>`;
 }
@@ -4947,20 +5134,20 @@ function bindEvents() {
   const closeStorageWarning = document.getElementById('closeStorageWarning');
   if (closeStorageWarning) closeStorageWarning.onclick = () => { state.storageWarning = ''; render(); };
 
-  // File upload
+  // File upload (multi-image support)
   const uploadArea = document.getElementById('uploadArea');
   const fileInput = document.getElementById('fileInput');
   if (uploadArea) {
-    uploadArea.onclick = () => fileInput.click();
+    uploadArea.onclick = () => fileInput?.click();
     uploadArea.ondragover = (e) => e.preventDefault();
     uploadArea.ondrop = (e) => {
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file && file.type.startsWith('image/')) handleFile(file);
+      handleMultipleFiles(e.dataTransfer.files);
     };
   }
   if (fileInput) {
-    fileInput.onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+    fileInput.setAttribute('multiple', '');
+    fileInput.onchange = (e) => { if (e.target.files.length) handleMultipleFiles(e.target.files); };
   }
 
   // Product name
@@ -5235,6 +5422,65 @@ function bindEvents() {
   if (exportJpgSectionsBtn) exportJpgSectionsBtn.onclick = exportJpgSections;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
+
+  // ── Feature 5: Preview Viewport Toggle ─────────────────────────
+  const viewportPc = document.getElementById('viewportPc');
+  if (viewportPc) viewportPc.onclick = () => { state.previewViewport = 'pc'; render(); };
+  const viewportMobile = document.getElementById('viewportMobile');
+  if (viewportMobile) viewportMobile.onclick = () => { state.previewViewport = 'mobile'; render(); };
+
+  // ── Feature 3: AI QA Button ─────────────────────────────────────
+  const runAiQaBtn = document.getElementById('runAiQaBtn');
+  if (runAiQaBtn) runAiQaBtn.onclick = runAiQaCheck;
+
+  // ── Feature 4: Multi-image Analysis ────────────────────────────
+  const clearAnalysisImagesBtn = document.getElementById('clearAnalysisImages');
+  if (clearAnalysisImagesBtn) clearAnalysisImagesBtn.onclick = () => {
+    state.analysisImages = [];
+    state.imagePreview = null;
+    state.imageBase64 = null;
+    render();
+  };
+  document.querySelectorAll('[data-remove-analysis-img]').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const idx = +btn.dataset.removeAnalysisImg;
+      state.analysisImages.splice(idx, 1);
+      if (state.analysisImages.length > 0) {
+        state.imagePreview = state.analysisImages[0].preview;
+        state.imageBase64 = state.analysisImages[0].base64;
+        state.imageMime = state.analysisImages[0].mime;
+      } else {
+        state.imagePreview = null;
+        state.imageBase64 = null;
+      }
+      render();
+    };
+  });
+  const addMoreImgBtn = document.getElementById('addMoreImgBtn');
+  const addMoreFileInput = document.getElementById('addMoreFileInput');
+  if (addMoreImgBtn && addMoreFileInput) {
+    addMoreImgBtn.onclick = e => { if (e.target === addMoreImgBtn || e.target.tagName !== 'INPUT') addMoreFileInput.click(); };
+  }
+  if (addMoreFileInput) addMoreFileInput.onchange = e => { handleMultipleFiles(e.target.files); };
+
+  // ── Feature 1: SortableJS Drag & Drop ──────────────────────────
+  const sortableEl = document.getElementById('sectionSortable');
+  if (sortableEl && window.Sortable) {
+    Sortable.create(sortableEl, {
+      handle: '.drag-handle',
+      animation: 150,
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      onEnd(evt) {
+        const items = [...sortableEl.querySelectorAll('[data-section-id]')];
+        state.sectionOrder = items.map(el => el.dataset.sectionId);
+        savePersistentState();
+        render();
+      }
+    });
+  }
+
   runBindEventExtensions();
 }
 
@@ -5856,11 +6102,28 @@ function handleFile(file) {
   state.imageMime = file.type;
   const reader = new FileReader();
   reader.onload = (e) => {
-    state.imagePreview = e.target.result;
-    state.imageBase64 = e.target.result.split(',')[1];
+    const preview = e.target.result;
+    const base64 = preview.split(',')[1];
+    // 멀티 이미지 모드: analysisImages 배열로 관리
+    if (state.analysisImages.length < 5) {
+      state.analysisImages.push({ base64, mime: file.type, preview });
+    }
+    // 기존 단일 이미지 상태도 유지 (호환성)
+    if (state.analysisImages.length === 1) {
+      state.imagePreview = preview;
+      state.imageBase64 = base64;
+      state.imageMime = file.type;
+    }
     render();
   };
   reader.readAsDataURL(file);
+}
+
+function handleMultipleFiles(files) {
+  const remaining = 5 - state.analysisImages.length;
+  Array.from(files).slice(0, remaining).forEach(file => {
+    if (file.type.startsWith('image/')) handleFile(file);
+  });
 }
 
 function handleCompImages(files) {
@@ -6108,8 +6371,10 @@ async function startAnalysis() {
   render();
 
   try {
-    // 1. Analyze image
-    const analysis = await llm.analyzeImage(state.imageBase64, state.imageMime);
+    // 1. Analyze image (멀티 이미지 지원: 첫 번째가 기본, 나머지는 extraImages)
+    const primaryImg = state.analysisImages[0] || { base64: state.imageBase64, mime: state.imageMime };
+    const extraImgs  = state.analysisImages.slice(1);
+    const analysis = await llm.analyzeImage(primaryImg.base64, primaryImg.mime, extraImgs);
     if (state.productName) analysis.product_name = state.productName;
     state.analysis = analysis;
     state.progress = 25;
@@ -7603,6 +7868,7 @@ async function agentCallGemini(llm, systemPrompt, history) {
   ];
   const body = { contents, generationConfig: { temperature: 0.3, maxOutputTokens: 1024 } };
   const data = await llm._generateContent(llm.model, body);
+  tokenTracker.record(llm.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, 'AI어시스턴트');
   return data.candidates[0].content.parts[0].text.trim();
 }
 
@@ -7619,6 +7885,7 @@ async function agentCallOpenAI(llm, systemPrompt, history) {
   });
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
+  tokenTracker.record(llm.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, 'AI어시스턴트');
   return data.choices[0].message.content.trim();
 }
 
