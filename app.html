@@ -268,31 +268,44 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .qa-ai-badge.fail{background:rgba(239,68,68,.2);color:#f87171}
 .qa-ai-score{font-size:28px;font-weight:900;color:var(--ok)}
 /* ── Feature: Option Image Sorter ── */
-.opt-tag{display:inline-flex;align-items:center;gap:5px;padding:4px 12px 4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:20px;font-size:12px;font-weight:500;transition:.15s}
-.opt-tag .opt-num{display:inline-flex;width:18px;height:18px;border-radius:50%;background:var(--primary-dim);color:var(--primary-h);font-size:10px;font-weight:700;align-items:center;justify-content:center;flex-shrink:0}
-.opt-tag .remove-opt{cursor:pointer;color:var(--text-m);font-size:13px;line-height:1;padding:1px;border-radius:50%;border:none;background:none;display:flex;align-items:center;justify-content:center;width:16px;height:16px}
-.opt-tag .remove-opt:hover{background:rgba(239,68,68,.2);color:var(--err)}
-.opt-tags-wrap{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;min-height:36px}
-.opt-group{border:1px solid var(--border);border-radius:12px;background:var(--bg-card);padding:14px;margin-bottom:12px;transition:.15s}
-.opt-group.unclassified{border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.04)}
-.opt-group-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-.opt-group-num{width:26px;height:26px;border-radius:50%;background:var(--primary-dim);color:var(--primary-h);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.opt-img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px}
-.opt-img-card{position:relative;border-radius:8px;overflow:visible;border:2px solid var(--border);aspect-ratio:1;transition:.15s;background:var(--bg)}
-.opt-img-card img{width:100%;height:100%;object-fit:cover;display:block;border-radius:6px}
-.opt-img-card .opt-conf{position:absolute;bottom:-1px;left:-1px;right:-1px;background:rgba(0,0,0,.72);font-size:9px;color:#fff;padding:3px 4px;text-align:center;border-radius:0 0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.opt-img-card .opt-reassign{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.7);border:none;border-radius:50%;width:20px;height:20px;font-size:11px;color:#fff;cursor:pointer;display:none;align-items:center;justify-content:center;padding:0}
-.opt-img-card:hover .opt-reassign{display:flex}
-.opt-reassign-menu{position:absolute;top:26px;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:4px 0;z-index:100;min-width:100px;box-shadow:0 4px 16px rgba(0,0,0,.3)}
-.opt-reassign-menu button{display:block;width:100%;text-align:left;padding:6px 12px;font-size:12px;background:none;border:none;color:var(--text);cursor:pointer;font-family:inherit;white-space:nowrap}
-.opt-reassign-menu button:hover{background:var(--primary-dim);color:var(--primary-h)}
 .opt-upload-zone{border:2px dashed var(--border);border-radius:12px;padding:28px 20px;text-align:center;cursor:pointer;transition:.15s}
-.opt-upload-zone:hover{border-color:var(--primary);background:var(--primary-dim)}
-.opt-upload-zone.dragover{border-color:var(--primary);background:var(--primary-dim)}
+.opt-upload-zone:hover,.opt-upload-zone.dragover{border-color:var(--primary);background:var(--primary-dim)}
 .opt-img-preview-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-.opt-img-thumb{position:relative;width:64px;height:64px;border-radius:7px;overflow:hidden;border:2px solid var(--border);flex-shrink:0}
+.opt-img-thumb{position:relative;width:62px;height:62px;border-radius:7px;overflow:hidden;border:2px solid var(--border);flex-shrink:0}
 .opt-img-thumb img{width:100%;height:100%;object-fit:cover}
 .opt-img-thumb .rm{position:absolute;top:1px;right:1px;background:rgba(0,0,0,.65);border:none;border-radius:50%;width:16px;height:16px;font-size:10px;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+/* drag card — used in both pool and slots */
+.opt-dc{position:relative;border-radius:7px;overflow:hidden;cursor:grab;border:2px solid var(--border);background:var(--bg);transition:border-color .1s,box-shadow .1s;aspect-ratio:1}
+.opt-dc:hover{border-color:var(--primary-h)}
+.opt-dc img{width:100%;height:100%;object-fit:cover;pointer-events:none;display:block}
+.opt-dc .opt-dc-tip{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.75);font-size:9px;color:#fff;padding:2px 3px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;transition:opacity .15s}
+.opt-dc:hover .opt-dc-tip{opacity:1}
+.opt-dc.sortable-ghost{opacity:.3;background:var(--primary-dim)!important}
+.opt-dc.sortable-chosen{border-color:var(--primary);box-shadow:0 0 0 2px rgba(99,102,241,.25)}
+/* pool */
+.opt-pool-wrap{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:16px}
+.opt-pool-list{display:flex;flex-wrap:wrap;gap:7px;min-height:56px;border-radius:8px;padding:3px;transition:background .15s}
+.opt-pool-list .opt-dc{width:64px;height:64px;flex-shrink:0}
+/* slot grid */
+.opt-slot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.opt-slot-card{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px;transition:border-color .15s}
+.opt-slot-card.sortable-ghost{opacity:.35;background:var(--primary-dim)!important;border-color:var(--primary)!important}
+.opt-slot-card.sortable-chosen{box-shadow:0 0 0 2px var(--primary)!important}
+.opt-slot-head{display:flex;align-items:center;gap:5px;min-height:26px}
+.opt-slot-handle{cursor:grab;color:var(--text-m);font-size:17px;line-height:1;flex-shrink:0;padding:1px 2px;user-select:none}
+.opt-slot-handle:active{cursor:grabbing}
+.opt-slot-num{width:20px;height:20px;border-radius:50%;background:var(--primary-dim);color:var(--primary-h);font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.opt-slot-name-inp{flex:1;min-width:0;background:none;border:none;border-bottom:1px solid transparent;color:var(--text);font-size:12px;font-weight:600;font-family:inherit;padding:1px 3px;border-radius:3px 3px 0 0;outline:none;transition:.15s}
+.opt-slot-name-inp:hover{border-bottom-color:var(--border-h)}
+.opt-slot-name-inp:focus{border-bottom-color:var(--primary);background:rgba(99,102,241,.07)}
+.opt-slot-cnt{font-size:10px;color:var(--text-m);white-space:nowrap;flex-shrink:0}
+.opt-slot-del{background:none;border:none;color:var(--text-m);cursor:pointer;font-size:13px;padding:1px 3px;border-radius:4px;flex-shrink:0;line-height:1}
+.opt-slot-del:hover{color:var(--err);background:rgba(239,68,68,.12)}
+/* slot image list — 2-col grid */
+.opt-slot-list{display:grid;grid-template-columns:repeat(2,1fr);gap:3px;min-height:60px;border-radius:8px;padding:2px;align-content:start;transition:background .15s;border:1.5px solid transparent}
+.opt-slot-list.drag-over{background:var(--primary-dim);border-color:var(--primary)}
+.opt-slot-list.is-empty{border:1.5px dashed var(--border)}
+.opt-slot-list.is-empty::before{content:"드롭";display:flex;align-items:center;justify-content:center;color:var(--text-m);font-size:11px;min-height:52px;grid-column:1/-1;pointer-events:none}
 /* Token Tracker */
 .token-bar{position:fixed;bottom:0;left:0;right:0;background:var(--bg-card);border-top:1px solid var(--border);padding:6px 16px;display:flex;align-items:center;gap:10px;font-size:11px;z-index:500;flex-wrap:wrap}
 .token-bar .tb-label{color:var(--text-m);white-space:nowrap}
@@ -2651,17 +2664,15 @@ const state = {
   },
   // ── 옵션 이미지 분류기 ──
   optionSorter: {
-    options: [],      // [{id: string, name: string}]
-    images: [],       // [{id, name, base64, mime, preview, assignedOption, confidence}]
-    subStep: 'input', // 'input' | 'analyzing' | 'result'
-    analyzeProgress: 0,
-    analyzeTotal: 0,
-    analyzeError: '',
-    groups: {},       // {optionName: [imageId, ...]}
-    unclassified: [], // [imageId, ...]
-    reassignOpen: null, // imageId — 재분류 드롭다운 열린 이미지
-    optionDraft: '',  // add-option 인풋 값
-    bulkDraft: '',    // 한꺼번에 붙여넣기 textarea 값
+    // 기본 10개 슬롯
+    slots: Array.from({length: 10}, (_, i) => ({
+      id: 'slot_' + (i + 1),
+      name: (i + 1) + '번',
+      imgIds: [],
+    })),
+    pool: [],    // [imageId] — 미배정 이미지
+    images: [],  // [{id, name, base64, mime, preview}]
+    subStep: 'input', // 'input' | 'sort'
   },
 };
 
@@ -5507,74 +5518,6 @@ function bindEvents() {
   if (addMoreFileInput) addMoreFileInput.onchange = e => { handleMultipleFiles(e.target.files); };
 
   // ── 옵션 분류기 이벤트 ────────────────────────────────────────
-  const optBulkInput = document.getElementById('optBulkInput');
-  if (optBulkInput) optBulkInput.oninput = e => { state.optionSorter.bulkDraft = e.target.value; };
-
-  const optBulkApply = document.getElementById('optBulkApply');
-  if (optBulkApply) optBulkApply.onclick = () => {
-    const os = state.optionSorter;
-    const lines = (os.bulkDraft || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    lines.forEach(name => {
-      if (!os.options.some(o => o.name === name)) {
-        os.options.push({ id: 'opt_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), name });
-      }
-    });
-    os.bulkDraft = '';
-    render();
-  };
-
-  const optNameInput = document.getElementById('optNameInput');
-  if (optNameInput) {
-    optNameInput.oninput = e => { state.optionSorter.optionDraft = e.target.value; };
-    optNameInput.onkeydown = e => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        document.getElementById('optAddOption')?.click();
-      }
-    };
-  }
-
-  const optAddBtn = document.getElementById('optAddOption');
-  if (optAddBtn) optAddBtn.onclick = () => {
-    const os = state.optionSorter;
-    const name = (os.optionDraft || '').trim();
-    if (!name) return;
-    if (!os.options.some(o => o.name === name)) {
-      os.options.push({ id: 'opt_' + Date.now() + '_' + Math.random().toString(36).slice(2,5), name });
-    }
-    os.optionDraft = '';
-    render();
-  };
-
-  const optClearAll = document.getElementById('optClearAll');
-  if (optClearAll) optClearAll.onclick = () => { state.optionSorter.options = []; render(); };
-
-  // 옵션 순서 이동 / 삭제
-  document.querySelectorAll('[data-opt-up]').forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      const os = state.optionSorter;
-      const idx = os.options.findIndex(o => o.id === btn.dataset.optUp);
-      if (idx > 0) { [os.options[idx-1], os.options[idx]] = [os.options[idx], os.options[idx-1]]; render(); }
-    };
-  });
-  document.querySelectorAll('[data-opt-down]').forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      const os = state.optionSorter;
-      const idx = os.options.findIndex(o => o.id === btn.dataset.optDown);
-      if (idx < os.options.length - 1) { [os.options[idx+1], os.options[idx]] = [os.options[idx], os.options[idx+1]]; render(); }
-    };
-  });
-  document.querySelectorAll('[data-opt-del]').forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      const os = state.optionSorter;
-      os.options = os.options.filter(o => o.id !== btn.dataset.optDel);
-      render();
-    };
-  });
-
   // 이미지 업로드
   const optUploadZone = document.getElementById('optUploadZone');
   const optFileInput = document.getElementById('optFileInput');
@@ -5587,68 +5530,111 @@ function bindEvents() {
   if (optFileInput) optFileInput.onchange = e => optAddImages(e.target.files);
 
   const optClearImages = document.getElementById('optClearImages');
-  if (optClearImages) optClearImages.onclick = () => { state.optionSorter.images = []; render(); };
-
+  if (optClearImages) optClearImages.onclick = () => {
+    const os = state.optionSorter;
+    os.images = []; os.pool = [];
+    os.slots.forEach(s => { s.imgIds = []; });
+    render();
+  };
   document.querySelectorAll('[data-opt-remove-img]').forEach(btn => {
     btn.onclick = e => {
       e.stopPropagation();
+      const id = btn.dataset.optRemoveImg;
       const os = state.optionSorter;
-      os.images = os.images.filter(i => i.id !== btn.dataset.optRemoveImg);
+      os.images = os.images.filter(i => i.id !== id);
+      os.pool = os.pool.filter(i => i !== id);
+      os.slots.forEach(s => { s.imgIds = s.imgIds.filter(i => i !== id); });
       render();
     };
   });
 
-  // 분석 시작
-  const optStartAnalyze = document.getElementById('optStartAnalyze');
-  if (optStartAnalyze) optStartAnalyze.onclick = analyzeOptionImages;
-
-  // 결과 화면 버튼들
-  const optReClassify = document.getElementById('optReClassify');
-  if (optReClassify) optReClassify.onclick = analyzeOptionImages;
-
-  const optBackToInput = document.getElementById('optBackToInput');
-  if (optBackToInput) optBackToInput.onclick = () => {
-    state.optionSorter.subStep = 'input';
-    state.optionSorter.groups = {};
-    state.optionSorter.unclassified = [];
+  // 슬롯 추가 (입력화면)
+  const optAddSlotInput = document.getElementById('optAddSlotInput');
+  if (optAddSlotInput) optAddSlotInput.onclick = () => {
+    const os = state.optionSorter;
+    const n = os.slots.length + 1;
+    os.slots.push({ id: 'slot_' + Date.now(), name: n + '번', imgIds: [] });
     render();
   };
 
-  const optDownloadAll = document.getElementById('optDownloadAll');
-  if (optDownloadAll) optDownloadAll.onclick = () => optDownloadGroup('__all__');
-
-  // 옵션별 다운로드
-  document.querySelectorAll('[data-opt-dl]').forEach(btn => {
-    btn.onclick = () => optDownloadGroup(btn.dataset.optDl);
-  });
-
-  // 재분류 드롭다운 열기/닫기
-  document.querySelectorAll('[data-opt-reassign-open]').forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      const imgId = btn.dataset.optReassignOpen;
-      state.optionSorter.reassignOpen = state.optionSorter.reassignOpen === imgId ? null : imgId;
-      render();
+  // 입력화면 슬롯 이름 수정
+  document.querySelectorAll('.opt-slot-name-inp').forEach(inp => {
+    inp.oninput = () => {
+      const slot = state.optionSorter.slots.find(s => s.id === inp.dataset.slotName);
+      if (slot) slot.name = inp.value;
     };
+    inp.onblur = () => render();
+    inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); };
+    inp.ondragstart = e => e.stopPropagation();
+    inp.onclick = e => e.stopPropagation();
   });
 
-  // 재분류 선택
-  document.querySelectorAll('[data-opt-reassign]').forEach(btn => {
-    btn.onclick = e => {
-      e.stopPropagation();
-      optReassignImage(btn.dataset.optReassign, btn.dataset.optTarget);
-    };
+  // 입력화면 슬롯 삭제
+  document.querySelectorAll('[data-slot-del-input]').forEach(btn => {
+    btn.onclick = e => { e.stopPropagation(); optDeleteSlot(btn.dataset.slotDelInput); };
   });
 
-  // 바깥 클릭시 재분류 드롭다운 닫기
-  if (state.optionSorter.reassignOpen) {
-    document.addEventListener('click', function closeReassign(e) {
-      if (!e.target.closest('[data-opt-reassign-menu]') && !e.target.closest('[data-opt-reassign-open]')) {
-        state.optionSorter.reassignOpen = null;
-        render();
-        document.removeEventListener('click', closeReassign);
-      }
-    }, { once: true });
+  // 분류 시작 버튼
+  const optGoSort = document.getElementById('optGoSort');
+  if (optGoSort) optGoSort.onclick = () => {
+    const os = state.optionSorter;
+    // 아직 배정 안 된 이미지만 pool에 추가 (기존 슬롯 배정 유지)
+    const assignedIds = new Set(os.slots.flatMap(s => s.imgIds));
+    const newPool = os.images.filter(i => !assignedIds.has(i.id) && !os.pool.includes(i.id)).map(i => i.id);
+    os.pool = [...os.pool, ...newPool].filter(id => os.images.some(im => im.id === id));
+    os.slots.forEach(s => { s.imgIds = s.imgIds.filter(id => os.images.some(im => im.id === id)); });
+    os.subStep = 'sort';
+    render();
+  };
+
+  // 분류 화면: 슬롯 추가
+  const optAddSlot = document.getElementById('optAddSlot');
+  if (optAddSlot) optAddSlot.onclick = () => {
+    const os = state.optionSorter;
+    const n = os.slots.length + 1;
+    os.slots.push({ id: 'slot_' + Date.now(), name: n + '번', imgIds: [] });
+    render();
+  };
+
+  // 분류 화면: 슬롯 삭제
+  document.querySelectorAll('[data-slot-del]').forEach(btn => {
+    btn.onclick = e => { e.stopPropagation(); optDeleteSlot(btn.dataset.slotDel); };
+  });
+
+  // 분류 화면: 이미지 변경 (입력으로 돌아가기)
+  const optBackInput = document.getElementById('optBackInput');
+  if (optBackInput) optBackInput.onclick = () => { state.optionSorter.subStep = 'input'; render(); };
+
+  // 전체 다운로드
+  const optDlAll = document.getElementById('optDlAll');
+  if (optDlAll) optDlAll.onclick = () => optDownloadSlot('__all__');
+
+  // 슬롯별 다운로드
+  document.querySelectorAll('[data-opt-dl-slot]').forEach(btn => {
+    btn.onclick = () => optDownloadSlot(btn.dataset.optDlSlot);
+  });
+
+  // SortableJS — 분류 화면에서만 초기화
+  if (state.step === 'optionsorter' && state.optionSorter.subStep === 'sort' && window.Sortable) {
+    const os = state.optionSorter;
+    const sharedGroup = { name: 'opt-imgs', pull: true, put: true };
+    const onImgEnd = () => { syncOptFromDOM(); render(); };
+
+    // 미배정 풀
+    const poolList = document.getElementById('optPoolList');
+    if (poolList) {
+      Sortable.create(poolList, { group: sharedGroup, animation: 150, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen', onEnd: onImgEnd });
+    }
+    // 각 슬롯 리스트
+    os.slots.forEach(slot => {
+      const el = document.getElementById('optSlotList_' + slot.id);
+      if (el) Sortable.create(el, { group: sharedGroup, animation: 150, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen', onEnd: onImgEnd });
+    });
+    // 슬롯 그리드 자체 재정렬
+    const slotGrid = document.getElementById('optSlotGrid');
+    if (slotGrid) {
+      Sortable.create(slotGrid, { handle: '.opt-slot-handle', animation: 150, ghostClass: 'sortable-ghost', chosenClass: 'sortable-chosen', onEnd() { syncOptSlotsFromDOM(); render(); } });
+    }
   }
 
   // ── Feature 1: SortableJS Drag & Drop ──────────────────────────
@@ -8822,170 +8808,74 @@ function optAddImage(file) {
   reader.onload = e => {
     const preview = e.target.result;
     const base64 = preview.split(',')[1];
-    os.images.push({
-      id: 'oi_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      name: file.name.replace(/\.[^.]+$/, ''), // 확장자 제거
-      base64,
-      mime: file.type,
-      preview,
-      assignedOption: null,
-      confidence: null,
-    });
+    const id = 'oi_' + Date.now() + '_' + Math.random().toString(36).slice(2,6);
+    os.images.push({ id, name: file.name.replace(/\.[^.]+$/, ''), base64, mime: file.type, preview });
+    os.pool.push(id);
     render();
   };
   reader.readAsDataURL(file);
 }
 
 function optAddImages(files) {
+  const remaining = 30 - state.optionSorter.images.length;
+  Array.from(files).slice(0, remaining).forEach(f => { if (f.type.startsWith('image/')) optAddImage(f); });
+}
+
+// DOM → state 동기화 (SortableJS onEnd 후 호출)
+function syncOptFromDOM() {
   const os = state.optionSorter;
-  const remaining = 30 - os.images.length;
-  Array.from(files).slice(0, remaining).forEach(f => {
-    if (f.type.startsWith('image/')) optAddImage(f);
+  const poolEl = document.getElementById('optPoolList');
+  if (poolEl) os.pool = [...poolEl.querySelectorAll('[data-img-id]')].map(el => el.dataset.imgId);
+  os.slots.forEach(slot => {
+    const el = document.getElementById('optSlotList_' + slot.id);
+    if (el) slot.imgIds = [...el.querySelectorAll('[data-img-id]')].map(el => el.dataset.imgId);
   });
 }
 
-// 배치당 최대 이미지 수 (Gemini Vision 안정 한도)
-const OPT_BATCH_SIZE = 10;
-
-async function analyzeOptionImages() {
+// 슬롯 순서 DOM → state 동기화
+function syncOptSlotsFromDOM() {
   const os = state.optionSorter;
-  if (!os.options.length || !os.images.length) return;
+  const gridEl = document.getElementById('optSlotGrid');
+  if (!gridEl) return;
+  const order = [...gridEl.querySelectorAll(':scope > [data-slot-id]')].map(el => el.dataset.slotId);
+  if (order.length) os.slots = order.map(id => os.slots.find(s => s.id === id)).filter(Boolean);
+}
 
-  let llm;
-  try { llm = getLLMClient(); } catch(e) { os.analyzeError = e.message; render(); return; }
-
-  os.subStep = 'analyzing';
-  os.analyzeProgress = 0;
-  os.analyzeTotal = os.images.length;
-  os.analyzeError = '';
-  os.groups = {};
-  os.unclassified = [];
-  os.options.forEach(o => { os.groups[o.name] = []; });
+function optDeleteSlot(slotId) {
+  const os = state.optionSorter;
+  const slot = os.slots.find(s => s.id === slotId);
+  if (slot) { os.pool.unshift(...slot.imgIds); os.slots = os.slots.filter(s => s.id !== slotId); }
   render();
+}
 
-  const optionNames = os.options.map(o => o.name);
-  const assignResult = {}; // imgId → optionName|'unknown'
-
-  // 배치로 나눠서 처리
-  for (let batchStart = 0; batchStart < os.images.length; batchStart += OPT_BATCH_SIZE) {
-    const batch = os.images.slice(batchStart, batchStart + OPT_BATCH_SIZE);
-
-    const systemText = `당신은 이커머스 제품 이미지 분류 전문가입니다.
-아래 이미지들을 주어진 옵션 중 하나로 분류하세요.
-
-옵션 목록 (순서 그대로): ${JSON.stringify(optionNames)}
-
-이미지 ${batch.length}장(인덱스 0~${batch.length-1})을 각각 분류하세요.
-색상, 패턴, 디자인 특징을 보고 가장 근접한 옵션명을 고르세요.
-확실하지 않으면 "unknown"을 사용하세요.
-
-반드시 JSON만 반환하세요 (설명 없이):
-{"results":[{"index":0,"option":"옵션명"},{"index":1,"option":"옵션명"},...]}`;
-
-    try {
-      let results = [];
-      if (llm instanceof GeminiAPI) {
-        const parts = [
-          { text: systemText },
-          ...batch.map((img, i) => [
-            { text: `이미지 ${i}:` },
-            { inline_data: { mime_type: img.mime, data: img.base64 } }
-          ]).flat()
-        ];
-        const body = { contents: [{ parts }], generationConfig: { temperature: 0.1, maxOutputTokens: 512 } };
-        const data = await llm._generateContent(llm.model, body);
-        tokenTracker.record(llm.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, '옵션분류');
-        const txt = data.candidates[0].content.parts[0].text.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
-        results = JSON.parse(txt).results || [];
-      } else {
-        const content = [
-          { type: 'text', text: systemText },
-          ...batch.map((img, i) => [
-            { type: 'text', text: `이미지 ${i}:` },
-            { type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.base64}`, detail: 'low' } }
-          ]).flat()
-        ];
-        const body = { model: llm.model, messages: [{ role: 'user', content }], max_completion_tokens: 512, temperature: 0.1 };
-        const res = await fetch(`${llm.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${llm.apiKey}` },
-          body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error.message);
-        tokenTracker.record(llm.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, '옵션분류');
-        results = llm._parseJSON(data.choices[0].message.content).results || [];
-      }
-
-      // 결과 매핑
-      results.forEach(r => {
-        const img = batch[r.index];
-        if (!img) return;
-        assignResult[img.id] = r.option || 'unknown';
+function optDownloadSlot(slotIdOrAll) {
+  const os = state.optionSorter;
+  const pairs = [];
+  if (slotIdOrAll === '__all__') {
+    os.slots.forEach(slot => {
+      slot.imgIds.forEach((id, i) => {
+        const img = os.images.find(im => im.id === id);
+        if (img) pairs.push({ img, label: slot.name, idx: i + 1 });
       });
-      // 배치에서 응답 없는 이미지 → unknown
-      batch.forEach(img => { if (!(img.id in assignResult)) assignResult[img.id] = 'unknown'; });
-
-    } catch(e) {
-      // 배치 실패 시 모두 unknown으로 처리
-      batch.forEach(img => { assignResult[img.id] = 'unknown'; });
-      os.analyzeError = `배치 처리 오류: ${e.message}`;
-    }
-
-    os.analyzeProgress = Math.min(batchStart + OPT_BATCH_SIZE, os.images.length);
-    render();
-    await new Promise(r => setTimeout(r, 200)); // API 레이트 리밋 방지
+    });
+    // Also pool (unassigned)
+    os.pool.forEach((id, i) => {
+      const img = os.images.find(im => im.id === id);
+      if (img) pairs.push({ img, label: '미배정', idx: i + 1 });
+    });
+  } else {
+    const slot = os.slots.find(s => s.id === slotIdOrAll);
+    if (!slot) return;
+    slot.imgIds.forEach((id, i) => {
+      const img = os.images.find(im => im.id === id);
+      if (img) pairs.push({ img, label: slot.name, idx: i + 1 });
+    });
   }
-
-  // 그룹 구성
-  os.images.forEach(img => {
-    const assigned = assignResult[img.id] || 'unknown';
-    if (assigned === 'unknown' || !os.groups.hasOwnProperty(assigned)) {
-      os.unclassified.push(img.id);
-    } else {
-      os.groups[assigned].push(img.id);
-    }
-    img.assignedOption = assigned === 'unknown' ? null : assigned;
-  });
-
-  os.subStep = 'result';
-  render();
-}
-
-function optReassignImage(imgId, targetOption) {
-  const os = state.optionSorter;
-  // 기존 그룹에서 제거
-  Object.keys(os.groups).forEach(k => {
-    os.groups[k] = os.groups[k].filter(id => id !== imgId);
-  });
-  os.unclassified = os.unclassified.filter(id => id !== imgId);
-  // 새 그룹에 배정
-  if (targetOption === '__unclassified__') {
-    os.unclassified.push(imgId);
-  } else if (os.groups.hasOwnProperty(targetOption)) {
-    os.groups[targetOption].push(imgId);
-  }
-  // 이미지 상태 업데이트
-  const img = os.images.find(i => i.id === imgId);
-  if (img) img.assignedOption = targetOption === '__unclassified__' ? null : targetOption;
-  os.reassignOpen = null;
-  render();
-}
-
-function optDownloadGroup(optionName) {
-  const os = state.optionSorter;
-  const imgIds = optionName === '__all__'
-    ? os.images.map(i => i.id)
-    : (os.groups[optionName] || []);
-  if (imgIds.length === 0) return;
-
-  imgIds.forEach((imgId, idx) => {
-    const img = os.images.find(i => i.id === imgId);
-    if (!img) return;
+  if (!pairs.length) { alert('다운로드할 이미지가 없습니다.'); return; }
+  pairs.forEach(({ img, label, idx }) => {
     const a = document.createElement('a');
     a.href = img.preview;
-    const optLabel = optionName === '__all__' ? (img.assignedOption || '미분류') : optionName;
-    a.download = `${optLabel}_${String(idx + 1).padStart(2, '0')}_${img.name}.jpg`;
+    a.download = `${label}_${String(idx).padStart(2, '0')}_${img.name}.jpg`;
     a.click();
   });
 }
@@ -8993,157 +8883,90 @@ function optDownloadGroup(optionName) {
 // ════════════════════════════════════════════════════════════════
 // OPTION IMAGE SORTER — RENDER
 // ════════════════════════════════════════════════════════════════
+function renderOptCard(imgId, os) {
+  const img = os.images.find(im => im.id === imgId);
+  if (!img) return '';
+  return `<div class="opt-dc" data-img-id="${imgId}" title="${escapeHtml(img.name)}">
+    <img src="${img.preview}" alt="${escapeHtml(img.name)}" loading="lazy">
+    <div class="opt-dc-tip">${escapeHtml(img.name)}</div>
+  </div>`;
+}
+
 function renderOptionSorter() {
   const os = state.optionSorter;
 
-  // ── 서브스텝: 분석 중 ──────────────────────────────────────────
-  if (os.subStep === 'analyzing') {
-    const pct = os.analyzeTotal > 0 ? Math.round((os.analyzeProgress / os.analyzeTotal) * 100) : 0;
+  // ── 정렬 화면 ──────────────────────────────────────────────────
+  if (os.subStep === 'sort') {
+    const assigned = os.slots.reduce((s, sl) => s + sl.imgIds.length, 0);
+    const total = os.images.length;
     return `<div class="fade-in">
-      <h1 class="page-title">옵션 이미지 분류 중…</h1>
-      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:16px;padding:40px 32px;text-align:center;max-width:520px;margin:0 auto">
-        <div style="font-size:48px;margin-bottom:20px">🎨</div>
-        <div style="font-size:16px;font-weight:600;margin-bottom:8px">AI가 이미지를 분류하고 있어요</div>
-        <div style="font-size:13px;color:var(--text-m);margin-bottom:20px">${os.analyzeProgress} / ${os.analyzeTotal}장 처리 완료</div>
-        <div style="background:var(--bg);border-radius:99px;height:8px;overflow:hidden;margin-bottom:12px">
-          <div style="height:100%;width:${pct}%;background:var(--primary);border-radius:99px;transition:width .3s"></div>
-        </div>
-        <div style="font-size:12px;color:var(--text-m)">${pct}%</div>
-        ${os.analyzeError ? `<div style="margin-top:16px;color:var(--err);font-size:13px">${escapeHtml(os.analyzeError)}</div>` : ''}
-      </div>
-    </div>`;
-  }
-
-  // ── 서브스텝: 분류 결과 ───────────────────────────────────────
-  if (os.subStep === 'result') {
-    const totalClassified = os.options.reduce((s,o) => s + (os.groups[o.name]?.length || 0), 0);
-    const unclassCount = os.unclassified?.length || 0;
-    return `<div class="fade-in">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
         <div>
-          <h1 class="page-title" style="margin-bottom:4px">옵션 분류 결과</h1>
-          <p style="font-size:13px;color:var(--text-m)">${os.images.length}장 분류 완료 · 옵션 ${os.options.length}개${unclassCount > 0 ? ` · 미분류 ${unclassCount}장` : ''}</p>
+          <h1 class="page-title" style="margin-bottom:2px">옵션 분류기</h1>
+          <p style="font-size:12px;color:var(--text-m)">이미지를 드래그해서 슬롯에 배정 · ${assigned}/${total}장 배정됨</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-sm" id="optReClassify">🔄 다시 분류</button>
-          <button class="btn-sm" id="optBackToInput">⬅ 처음으로</button>
-          <button class="btn-primary" id="optDownloadAll" style="padding:6px 16px;font-size:13px">
-            <span class="material-icons-outlined" style="font-size:16px">download</span> 전체 다운로드
+          <button class="btn-sm" id="optAddSlot">+ 슬롯 추가</button>
+          <button class="btn-sm" id="optBackInput">← 이미지 변경</button>
+          <button class="btn-primary" id="optDlAll" style="padding:6px 16px;font-size:13px">
+            <span class="material-icons-outlined" style="font-size:15px">download</span> 전체 다운로드
           </button>
         </div>
       </div>
 
-      ${os.options.map((opt, idx) => {
-        const imgIds = os.groups[opt.name] || [];
-        return `<div class="opt-group" id="optGroup_${escapeHtml(opt.name)}">
-          <div class="opt-group-header">
-            <div class="opt-group-num">${idx + 1}</div>
-            <div style="font-size:15px;font-weight:700;flex:1">${escapeHtml(opt.name)}</div>
-            <div style="font-size:12px;color:var(--text-m)">${imgIds.length}장</div>
-            <button class="btn-sm" data-opt-dl="${escapeHtml(opt.name)}" title="이 옵션만 다운로드">
-              <span class="material-icons-outlined" style="font-size:14px">download</span>
-            </button>
-          </div>
-          ${imgIds.length === 0
-            ? `<div style="font-size:12px;color:var(--text-m);padding:12px 0;text-align:center">분류된 이미지 없음</div>`
-            : `<div class="opt-img-grid">
-              ${imgIds.map(imgId => {
-                const img = os.images.find(im => im.id === imgId);
-                if (!img) return '';
-                const isReassignOpen = os.reassignOpen === imgId;
-                return `<div class="opt-img-card" style="position:relative">
-                  <img src="${img.preview}" alt="${escapeHtml(img.name)}" loading="lazy">
-                  <div class="opt-conf" title="${escapeHtml(img.name)}">${escapeHtml(img.name)}</div>
-                  <button class="opt-reassign" data-opt-reassign-open="${imgId}" title="다른 옵션으로 이동">✎</button>
-                  ${isReassignOpen ? `<div class="opt-reassign-menu" data-opt-reassign-menu>
-                    ${os.options.filter(o => o.name !== opt.name).map(o =>
-                      `<button data-opt-reassign="${imgId}" data-opt-target="${escapeHtml(o.name)}">${escapeHtml(o.name)}</button>`
-                    ).join('')}
-                    <button data-opt-reassign="${imgId}" data-opt-target="__unclassified__" style="color:var(--warn)">미분류로 이동</button>
-                  </div>` : ''}
-                </div>`;
-              }).join('')}
-            </div>`
-          }
-        </div>`;
-      }).join('')}
+      <!-- 미배정 풀 -->
+      <div class="opt-pool-wrap" style="opacity:${os.pool.length === 0 ? '.55' : '1'}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:13px;font-weight:600">미배정
+            <span style="color:${os.pool.length > 0 ? 'var(--warn)' : 'var(--ok)'}">
+              ${os.pool.length > 0 ? os.pool.length + '장' : '없음 ✓'}
+            </span>
+          </span>
+          <span style="font-size:11px;color:var(--text-m)">슬롯으로 드래그하세요</span>
+        </div>
+        <div id="optPoolList" class="opt-pool-list">
+          ${os.pool.map(id => renderOptCard(id, os)).join('')}
+        </div>
+      </div>
 
-      ${unclassCount > 0 ? `
-      <div class="opt-group unclassified">
-        <div class="opt-group-header">
-          <div class="opt-group-num" style="background:rgba(245,158,11,.2);color:var(--warn)">?</div>
-          <div style="font-size:15px;font-weight:700;flex:1;color:var(--warn)">미분류</div>
-          <div style="font-size:12px;color:var(--text-m)">${unclassCount}장</div>
-        </div>
-        <div class="opt-img-grid">
-          ${(os.unclassified || []).map(imgId => {
-            const img = os.images.find(im => im.id === imgId);
-            if (!img) return '';
-            const isReassignOpen = os.reassignOpen === imgId;
-            return `<div class="opt-img-card" style="position:relative">
-              <img src="${img.preview}" alt="${escapeHtml(img.name)}" loading="lazy">
-              <div class="opt-conf">${escapeHtml(img.name)}</div>
-              <button class="opt-reassign" data-opt-reassign-open="${imgId}" title="옵션 배정">✎</button>
-              ${isReassignOpen ? `<div class="opt-reassign-menu" data-opt-reassign-menu>
-                ${os.options.map(o =>
-                  `<button data-opt-reassign="${imgId}" data-opt-target="${escapeHtml(o.name)}">${escapeHtml(o.name)}</button>`
-                ).join('')}
-              </div>` : ''}
-            </div>`;
-          }).join('')}
-        </div>
-      </div>` : ''}
+      <!-- 슬롯 그리드 -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:13px;font-weight:600">슬롯 (${os.slots.length}개)</span>
+        <span style="font-size:11px;color:var(--text-m)">슬롯도 ⠿ 드래그로 순서 변경 가능 · 이름 클릭하여 수정</span>
+      </div>
+      <div id="optSlotGrid" class="opt-slot-grid">
+        ${os.slots.map((slot, idx) => `
+          <div class="opt-slot-card" data-slot-id="${slot.id}">
+            <div class="opt-slot-head">
+              <span class="opt-slot-handle" title="드래그하여 슬롯 순서 변경">⠿</span>
+              <span class="opt-slot-num">${idx + 1}</span>
+              <input class="opt-slot-name-inp" data-slot-name="${slot.id}"
+                value="${escapeHtml(slot.name)}" placeholder="이름" title="클릭하여 이름 수정">
+              <span class="opt-slot-cnt">${slot.imgIds.length}장</span>
+              <button class="opt-slot-del" data-slot-del="${slot.id}" title="슬롯 삭제">✕</button>
+            </div>
+            <div id="optSlotList_${slot.id}"
+              class="opt-slot-list${slot.imgIds.length === 0 ? ' is-empty' : ''}"
+              data-slot-id="${slot.id}">
+              ${slot.imgIds.map(id => renderOptCard(id, os)).join('')}
+            </div>
+            <button class="btn-sm" data-opt-dl-slot="${slot.id}"
+              style="font-size:10px;padding:3px 0;width:100%;justify-content:center;gap:3px">
+              <span class="material-icons-outlined" style="font-size:12px">download</span>${escapeHtml(slot.name)}
+            </button>
+          </div>`).join('')}
+      </div>
     </div>`;
   }
 
-  // ── 서브스텝: 입력 (기본) ─────────────────────────────────────
+  // ── 업로드 화면 ────────────────────────────────────────────────
   return `<div class="fade-in">
-    <h1 class="page-title">옵션 이미지 분류기</h1>
-    <p class="page-desc">제품 이미지를 올리면 AI가 내가 정한 옵션 순서대로 자동 분류해 드립니다.</p>
+    <h1 class="page-title">옵션 분류기</h1>
+    <p class="page-desc">이미지를 업로드한 후 슬롯에 마우스로 드래그해서 원하는 옵션에 직접 배정하세요. 슬롯 이름도 자유롭게 변경할 수 있습니다.</p>
 
-    <!-- 옵션 목록 설정 -->
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <h2 style="font-size:15px;font-weight:700">① 옵션 목록 설정</h2>
-        <span style="font-size:12px;color:var(--text-m)">${os.options.length}개</span>
-      </div>
-
-      <!-- 한 줄씩 빠른 붙여넣기 -->
-      <div style="margin-bottom:14px">
-        <label class="label" style="margin-bottom:6px">빠른 입력 (줄바꿈으로 구분)</label>
-        <div style="display:flex;gap:8px">
-          <textarea id="optBulkInput" class="input" rows="3" style="resize:vertical;font-size:13px;flex:1" placeholder="자주&#10;빨강&#10;꽃핑크&#10;네이비&#10;블랙">${escapeHtml(os.bulkDraft)}</textarea>
-          <button class="btn-sm" id="optBulkApply" style="align-self:flex-end;padding:8px 14px">적용</button>
-        </div>
-      </div>
-
-      <!-- 개별 추가 -->
-      <div style="display:flex;gap:8px;margin-bottom:14px">
-        <input type="text" class="input" id="optNameInput" style="flex:1;font-size:13px" placeholder="옵션명 입력 (예: 자주, 빨강 …)" value="${escapeHtml(os.optionDraft)}">
-        <button class="btn-sm" id="optAddOption" style="padding:8px 14px">+ 추가</button>
-      </div>
-
-      <!-- 옵션 태그 목록 -->
-      <div class="opt-tags-wrap" id="optTagsWrap">
-        ${os.options.length === 0
-          ? `<span style="font-size:12px;color:var(--text-m)">아직 옵션이 없습니다</span>`
-          : os.options.map((opt, i) => `
-            <div class="opt-tag">
-              <span class="opt-num">${i + 1}</span>
-              <span>${escapeHtml(opt.name)}</span>
-              ${i > 0 ? `<button class="remove-opt" data-opt-up="${opt.id}" title="위로">▲</button>` : '<span style="width:16px"></span>'}
-              ${i < os.options.length - 1 ? `<button class="remove-opt" data-opt-down="${opt.id}" title="아래로">▼</button>` : '<span style="width:16px"></span>'}
-              <button class="remove-opt" data-opt-del="${opt.id}" title="삭제">✕</button>
-            </div>`).join('')
-        }
-      </div>
-      ${os.options.length > 0 ? `<button class="btn-sm" id="optClearAll" style="color:var(--err);margin-top:4px">전체 삭제</button>` : ''}
-    </div>
-
-    <!-- 이미지 업로드 -->
-    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <h2 style="font-size:15px;font-weight:700">② 제품 이미지 업로드</h2>
+        <h2 style="font-size:15px;font-weight:700">제품 이미지 업로드</h2>
         <span style="font-size:12px;color:var(--text-m)">${os.images.length}장 / 최대 30장</span>
       </div>
 
@@ -9153,7 +8976,7 @@ function renderOptionSorter() {
         <div style="font-size:14px;font-weight:500">클릭 또는 드래그하여 이미지 추가</div>
         <div style="font-size:12px;color:var(--text-m);margin-top:4px">JPG · PNG · WEBP · 최대 30장</div>
         <input type="file" id="optFileInput" accept="image/*" multiple style="display:none">
-      </div>` : ''}
+      </div>` : `<div style="font-size:12px;color:var(--text-m);text-align:center;padding:10px">최대 30장 업로드됨</div>`}
 
       ${os.images.length > 0 ? `
       <div style="margin-top:14px">
@@ -9162,8 +8985,8 @@ function renderOptionSorter() {
           <button class="btn-sm" id="optClearImages" style="color:var(--err)">전체 삭제</button>
         </div>
         <div class="opt-img-preview-row">
-          ${os.images.map((img, i) => `
-            <div class="opt-img-thumb">
+          ${os.images.map(img => `
+            <div class="opt-img-thumb" title="${escapeHtml(img.name)}">
               <img src="${img.preview}" alt="${escapeHtml(img.name)}" loading="lazy">
               <button class="rm" data-opt-remove-img="${img.id}" title="삭제">✕</button>
             </div>`).join('')}
@@ -9171,15 +8994,32 @@ function renderOptionSorter() {
       </div>` : ''}
     </div>
 
-    <!-- 분류 시작 버튼 -->
-    <button class="btn-primary" id="optStartAnalyze"
+    <!-- 슬롯 미리보기 + 이름 변경 -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="font-size:15px;font-weight:700">슬롯 이름 미리 설정 (선택)</h2>
+        <button class="btn-sm" id="optAddSlotInput">+ 슬롯 추가</button>
+      </div>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">기본 ${os.slots.length}개 슬롯 · 이름 클릭하여 수정 · 분류 화면에서도 변경 가능</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${os.slots.map((slot, idx) => `
+          <div style="display:flex;align-items:center;gap:5px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 10px">
+            <span style="font-size:11px;color:var(--text-m)">${idx+1}</span>
+            <input class="opt-slot-name-inp" data-slot-name="${slot.id}"
+              value="${escapeHtml(slot.name)}" placeholder="이름"
+              style="width:64px;font-size:12px;font-weight:600">
+            <button class="opt-slot-del" data-slot-del-input="${slot.id}" title="삭제" style="font-size:11px">✕</button>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <button class="btn-primary" id="optGoSort"
       style="width:100%;padding:14px;font-size:15px;font-weight:700;border-radius:12px;gap:8px"
-      ${os.options.length === 0 || os.images.length === 0 ? 'disabled' : ''}>
-      <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
-      AI 분류 시작 · ${os.options.length}개 옵션 × ${os.images.length}장
+      ${os.images.length === 0 ? 'disabled' : ''}>
+      <span class="material-icons-outlined" style="font-size:20px">style</span>
+      분류 시작 · ${os.images.length}장 / ${os.slots.length}개 슬롯
     </button>
-    ${os.options.length === 0 ? `<p style="text-align:center;font-size:12px;color:var(--text-m);margin-top:8px">옵션을 먼저 추가해주세요</p>` :
-      os.images.length === 0 ? `<p style="text-align:center;font-size:12px;color:var(--text-m);margin-top:8px">이미지를 업로드해주세요</p>` : ''}
+    ${os.images.length === 0 ? `<p style="text-align:center;font-size:12px;color:var(--text-m);margin-top:8px">이미지를 먼저 업로드해주세요</p>` : ''}
   </div>`;
 }
 
