@@ -2512,6 +2512,7 @@ const state = {
   storageWarning: '',
   activeSectionEdit: null,
   editingPreviewSection: null,
+  jpgExportBusy: '',
   // ── Image Cuts ──
   cuts: {
     sourceBase64: null,
@@ -4290,6 +4291,7 @@ function renderGenerating() {
 }
 
 function renderPreview() {
+  const jpgBusy = state.jpgExportBusy;
   return `<div class="fade-in">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
       <div>
@@ -4309,6 +4311,14 @@ function renderPreview() {
         <button class="btn-sm" id="exportPhotoshopPackage">
           <span class="material-icons-outlined" style="font-size:16px">filter_none</span>
           Photoshop 패키지
+        </button>
+        <button class="btn-sm" id="exportJpgAll" ${jpgBusy ? 'disabled' : ''}>
+          <span class="material-icons-outlined" style="font-size:16px">photo_camera</span>
+          ${jpgBusy === 'all' ? 'JPG 저장 중...' : 'JPG 전체'}
+        </button>
+        <button class="btn-sm" id="exportJpgSections" ${jpgBusy ? 'disabled' : ''}>
+          <span class="material-icons-outlined" style="font-size:16px">view_stream</span>
+          ${jpgBusy === 'sections' ? '섹션 저장 중...' : 'JPG 섹션별'}
         </button>
         <button class="btn-primary" id="exportHTML">
           <span class="material-icons-outlined" style="font-size:18px">download</span>
@@ -4342,7 +4352,7 @@ function renderPreview() {
         const hasRepairUndo = canUndoAiRepair(s.id);
 
         return `
-          <div style="position:relative">
+          <div style="position:relative" data-preview-section="${s.id}">
             <div class="section-ctrl">
               <span style="font-size:16px">${s.icon}</span>
               <span class="name">${s.n}. ${s.name}</span>
@@ -5219,6 +5229,10 @@ function bindEvents() {
   if (exportLayeredBtn) exportLayeredBtn.onclick = exportLayeredSVG;
   const exportPhotoshopBtn = document.getElementById('exportPhotoshopPackage');
   if (exportPhotoshopBtn) exportPhotoshopBtn.onclick = exportPhotoshopPackage;
+  const exportJpgAllBtn = document.getElementById('exportJpgAll');
+  if (exportJpgAllBtn) exportJpgAllBtn.onclick = exportJpgAll;
+  const exportJpgSectionsBtn = document.getElementById('exportJpgSections');
+  if (exportJpgSectionsBtn) exportJpgSectionsBtn.onclick = exportJpgSections;
   const exportBtn = document.getElementById('exportHTML');
   if (exportBtn) exportBtn.onclick = exportHTML;
   runBindEventExtensions();
@@ -6318,6 +6332,143 @@ function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') 
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadBlobFile(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function blobToBytes(blob) {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function waitForNextPaint() {
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+let html2CanvasLoader = null;
+function loadHtml2Canvas() {
+  if (window.html2canvas) return Promise.resolve(window.html2canvas);
+  if (html2CanvasLoader) return html2CanvasLoader;
+  html2CanvasLoader = new Promise((resolve, reject) => {
+    const urls = [
+      'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+    ];
+    const tryLoad = index => {
+      const script = document.createElement('script');
+      script.src = urls[index];
+      script.async = true;
+      script.onload = () => window.html2canvas ? resolve(window.html2canvas) : reject(new Error('html2canvas 로드에 실패했습니다.'));
+      script.onerror = () => {
+        script.remove();
+        if (index + 1 < urls.length) tryLoad(index + 1);
+        else {
+          html2CanvasLoader = null;
+          reject(new Error('JPG 내보내기 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해주세요.'));
+        }
+      };
+      document.head.appendChild(script);
+    };
+    tryLoad(0);
+  });
+  return html2CanvasLoader;
+}
+
+function jpgScaleForElement(element) {
+  const rect = element.getBoundingClientRect();
+  const rawScale = Math.min(2, Math.max(1, window.devicePixelRatio || 1.5));
+  const pixels = Math.max(1, rect.width * rect.height);
+  const maxPixels = 32000000;
+  return Math.max(1, Math.min(rawScale, Math.sqrt(maxPixels / pixels)));
+}
+
+function isJpgIgnoredElement(el) {
+  if (!el?.classList) return false;
+  return el.classList.contains('section-ctrl')
+    || el.classList.contains('edit-panel')
+    || el.classList.contains('layer-mode-banner')
+    || el.dataset?.jpgIgnore === 'true';
+}
+
+async function captureElementAsJpegBlob(element, options = {}) {
+  if (!element) throw new Error('캡처할 영역을 찾지 못했습니다.');
+  const html2canvas = await loadHtml2Canvas();
+  try { await document.fonts?.ready; } catch(e) {}
+  const canvas = await html2canvas(element, {
+    backgroundColor: '#ffffff',
+    scale: options.scale || jpgScaleForElement(element),
+    useCORS: true,
+    allowTaint: false,
+    logging: false,
+    imageTimeout: 30000,
+    scrollX: 0,
+    scrollY: -window.scrollY,
+    windowWidth: document.documentElement.scrollWidth,
+    windowHeight: document.documentElement.scrollHeight,
+    ignoreElements: isJpgIgnoredElement,
+  });
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('JPG 변환에 실패했습니다.')), 'image/jpeg', options.quality || 0.94);
+  });
+}
+
+function jpgExportBaseName() {
+  return safeAssetName(state.analysis?.product_name || state.productName || deriveProjectName() || 'detail-page');
+}
+
+async function exportJpgAll() {
+  if (state.jpgExportBusy) return;
+  state.jpgExportBusy = 'all';
+  state.error = '';
+  render();
+  await waitForNextPaint();
+  try {
+    const preview = document.querySelector('.preview-wrap');
+    const blob = await captureElementAsJpegBlob(preview, { quality: 0.94 });
+    downloadBlobFile(`${jpgExportBaseName()}_전체_상세페이지.jpg`, blob);
+  } catch(e) {
+    state.error = `JPG 전체 내보내기 실패: ${e.message}`;
+  } finally {
+    state.jpgExportBusy = '';
+    render();
+  }
+}
+
+async function exportJpgSections() {
+  if (state.jpgExportBusy) return;
+  state.jpgExportBusy = 'sections';
+  state.error = '';
+  render();
+  await waitForNextPaint();
+  try {
+    const sectionNodes = [...document.querySelectorAll('[data-preview-section]')]
+      .filter(node => state.sectionContents[node.dataset.previewSection]);
+    if (!sectionNodes.length) throw new Error('저장할 섹션이 없습니다.');
+    const files = [];
+    for (let i = 0; i < sectionNodes.length; i++) {
+      const node = sectionNodes[i];
+      const section = SECTIONS.find(s => s.id === node.dataset.previewSection);
+      const blob = await captureElementAsJpegBlob(node, { quality: 0.94 });
+      const prefix = String(section?.n || i + 1).padStart(2, '0');
+      files.push({
+        name: `${prefix}_${safeAssetName(section?.name || node.dataset.previewSection)}.jpg`,
+        data: await blobToBytes(blob),
+      });
+    }
+    const zipBytes = createZip(files);
+    downloadBytesFile(`${jpgExportBaseName()}_섹션별_JPG.zip`, zipBytes, 'application/zip');
+  } catch(e) {
+    state.error = `JPG 섹션별 내보내기 실패: ${e.message}`;
+  } finally {
+    state.jpgExportBusy = '';
+    render();
+  }
 }
 
 function svgEscape(value) {
