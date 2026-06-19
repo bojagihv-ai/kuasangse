@@ -821,6 +821,7 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
 .factory-cafe24-verify-card.error{border-color:rgba(248,113,113,.34);background:rgba(248,113,113,.07)}
 .factory-cafe24-verify-title{font-size:11px;font-weight:950;color:var(--text)}
 .factory-cafe24-verify-body{font-size:10px;color:var(--text-m);line-height:1.55}
+.factory-cafe24-verify-actions{display:flex;gap:6px;flex-wrap:wrap}
 .factory-cafe24-sync-result-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:8px;margin-top:10px}
 .factory-cafe24-sync-result-card{border:1px solid rgba(34,197,94,.26);border-radius:10px;background:rgba(34,197,94,.06);padding:9px;display:grid;gap:5px;min-width:0}
 .factory-cafe24-sync-result-card.warn{border-color:rgba(245,158,11,.34);background:rgba(245,158,11,.07)}
@@ -3697,6 +3698,22 @@ function unwrapApiHubBody(data) {
   return data?.response?.body ?? data?.body ?? data;
 }
 
+function formatApiErrorMessage(payload, fallback = 'API 호출 실패') {
+  if (payload === null || payload === undefined) return fallback;
+  if (typeof payload === 'string') return payload || fallback;
+  if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
+  if (typeof payload?.error === 'string' && payload.error.trim()) return payload.error.trim();
+  if (payload?.error) return formatApiErrorMessage(payload.error, fallback);
+  if (payload?.response?.body) return formatApiErrorMessage(payload.response.body, fallback);
+  if (payload?.body) return formatApiErrorMessage(payload.body, fallback);
+  try {
+    const text = JSON.stringify(payload);
+    return text && text !== '{}' ? text.slice(0, 500) : fallback;
+  } catch(_) {
+    return fallback;
+  }
+}
+
 async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 9000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -3706,7 +3723,7 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 9000) {
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch(e) { json = { raw: text }; }
     if (!res.ok) {
-      throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
+      throw new Error(formatApiErrorMessage(json, `HTTP ${res.status}`));
     }
     return json;
   } finally {
@@ -3722,7 +3739,7 @@ async function invokeSinhwaDbEndpoint(endpointId, payload = {}) {
     body: JSON.stringify(payload || {}),
   });
   if (data?.ok === false || Number(data?.status || 200) >= 400) {
-    throw new Error(data?.error || data?.statusText || `API Hub 호출 실패 (${data?.status || 'unknown'})`);
+    throw new Error(formatApiErrorMessage(data, data?.statusText || `API Hub 호출 실패 (${data?.status || 'unknown'})`));
   }
   return unwrapApiHubBody(data);
 }
@@ -3735,7 +3752,7 @@ async function invokeApiHubConnector(connectorId, endpointId, payload = {}, time
     body: JSON.stringify(payload || {}),
   }, timeoutMs);
   if (data?.ok === false || Number(data?.status || 200) >= 400) {
-    throw new Error(data?.error || data?.statusText || `API Hub 호출 실패 (${data?.status || 'unknown'})`);
+    throw new Error(formatApiErrorMessage(data, data?.statusText || `API Hub 호출 실패 (${data?.status || 'unknown'})`));
   }
   return unwrapApiHubBody(data);
 }
@@ -4697,7 +4714,7 @@ function factoryCafe24EndpointProbeDefinitions(productNo = '') {
     { key: 'seo', label: '검색엔진 SEO', method: 'GET', path: no ? productPath('/seo') : '', savePath: no ? `PUT ${productPath('/seo')}` : '등록 후 SEO API', required: false },
     { key: 'tags', label: '상품 태그', method: 'GET', path: no ? productPath('/tags') : '', savePath: no ? `POST/DELETE ${productPath('/tags')}` : '등록 후 태그 API', required: false },
     { key: 'memos', label: '관리 메모', method: 'GET', path: no ? productPath('/memos') : '', savePath: no ? `POST/PUT ${productPath('/memos')}` : '등록 후 메모 API', required: false },
-    { key: 'additionalImages', label: '추가 이미지', method: 'GET', path: no ? productPath('/additionalimages') : '', savePath: no ? `POST ${productPath('/additionalimages')}` : '등록 후 추가이미지 API', required: false, writeReadyOnReadFailure: true },
+    { key: 'additionalImages', label: '추가 이미지', method: 'GET', path: no ? productPath('/additionalimages') : '', savePath: no ? `POST ${productPath('/additionalimages')}` : '등록 후 추가이미지 API', required: false, mustVerifyBeforeWrite: true },
     { key: 'iconCatalog', label: '아이콘 목록', method: 'GET', path: '/api/v2/admin/products/icons', savePath: '아이콘 선택 목록', required: false },
     { key: 'mains', label: '메인 진열 목록', method: 'GET', path: '/api/v2/admin/mains', savePath: 'POST /api/v2/admin/mains/{진열번호}/products', required: false },
   ];
@@ -4706,8 +4723,8 @@ function factoryCafe24EndpointProbeDefinitions(productNo = '') {
 function factoryCafe24EndpointHealthMessage(error) {
   const text = String(error?.message || error || '').replace(/\s+/g, ' ').trim();
   if (!text) return '조회 실패';
+  if (/No API found|404|not found|찾을 수 없음/i.test(text)) return '현재 Cafe24 API 경로 미지원(404 No API found)';
   if (/500|Internal Server Error/i.test(text)) return '현재 Control Tower/Cafe24 응답 500';
-  if (/404|not found|찾을 수 없음/i.test(text)) return '현재 API 경로 미지원 또는 리소스 없음';
   if (/401|403|unauthor/i.test(text)) return '권한 또는 OAuth 확인 필요';
   return text.slice(0, 140);
 }
@@ -4735,18 +4752,6 @@ async function factoryProbeCafe24EndpointHealth(productNo, mallId = CAFE24_CONTR
         checkedAt,
       });
     } catch(e) {
-      if (def.writeReadyOnReadFailure) {
-        rows.push({
-          ...def,
-          ok: true,
-          pending: false,
-          warning: true,
-          status: '저장 경로 우선',
-          message: `${factoryCafe24EndpointHealthMessage(e)} · 조회는 실패했지만 저장 경로는 확인된 전용 업로드 경로라 버튼을 막지 않습니다.`,
-          checkedAt,
-        });
-        continue;
-      }
       rows.push({
         ...def,
         ok: false,
@@ -4765,17 +4770,28 @@ function factoryCafe24EndpointHealthRow(factory = factoryState(), key = '', prod
   if (!rows.length) return null;
   const currentProductNo = String(productNo || factoryCafe24TargetInfo(factory).productNo || '').trim();
   const checkedProductNo = String(factory.product?.cafe24EndpointHealthProductNo || '').trim();
+  if (checkedProductNo && !currentProductNo) return null;
   if (checkedProductNo && currentProductNo && checkedProductNo !== currentProductNo) return null;
   return rows.find(row => String(row?.key || '') === String(key || '')) || null;
 }
 
 function factoryCafe24EndpointKnownBlocked(factory = factoryState(), key = '', productNo = '') {
   const row = factoryCafe24EndpointHealthRow(factory, key, productNo);
+  if (key === 'additionalImages') return !row || !!row.pending || !!row.warning || row.ok !== true;
   return !!row && !row.pending && row.ok === false;
 }
 
 function factoryCafe24EndpointDisabledReason(factory = factoryState(), key = '', label = '전용 API', productNo = '') {
   const row = factoryCafe24EndpointHealthRow(factory, key, productNo);
+  if (key === 'additionalImages') {
+    if (!row) return `${label} 경로는 전용 API 상태 점검에서 연결됨으로 확인된 뒤에만 실제 동기화할 수 있습니다. Cafe24 상품 후보 확정 후 “전용 API 상태 점검”을 먼저 실행해주세요.`;
+    if (row.pending) return `${label} 경로는 아직 대기 상태입니다. Cafe24 상품번호를 확정하고 전용 API 상태 점검을 다시 실행해주세요.`;
+    if (row.warning) return `${label} 경로가 이전 점검에서 경고 상태였습니다: ${row.status || '경고'}${row.message ? ` · ${row.message}` : ''}. 추가 이미지는 경고 상태에서 실제 동기화하지 않습니다.`;
+    if (row.ok === true) return '';
+    const status = row.status || '조회 실패';
+    const message = row.message ? ` · ${row.message}` : '';
+    return `${label} 경로가 상태 점검에서 실패했습니다: ${status}${message}. 추가 이미지는 전용 API 경로가 연결됨으로 확인될 때만 실제 동기화할 수 있습니다.`;
+  }
   if (!row || row.pending || row.ok !== false) return '';
   const status = row.status || '조회 실패';
   const message = row.message ? ` · ${row.message}` : '';
@@ -12313,13 +12329,13 @@ function factoryDedupeOptionValues(values) {
   return out;
 }
 
-function factoryCleanRealOptionValue(value) {
+function factoryCleanRealOptionValue(value, options = {}) {
   const cafe24OptionText = factoryOptionTextFromCafe24String(value);
   const cleaned = factoryCleanOptionValue(cafe24OptionText || value);
   if (!cleaned) return '';
   if (/^(T|F|Y|N|C|S|A|B|O|P|D|R|M)$/i.test(cleaned)) return '';
   if (/^(true|false|null|undefined)$/i.test(cleaned)) return '';
-  if (/^-?\d+(\.\d+)?$/.test(cleaned.replace(/,/g, ''))) return '';
+  if (!options.allowNumeric && /^-?\d+(\.\d+)?$/.test(cleaned.replace(/,/g, ''))) return '';
   if (/^P[0-9A-Z]{6,}$/i.test(cleaned)) return '';
   if (/^[A-Z]\d{6,}$/i.test(cleaned)) return '';
   if (/^[A-Z]0{4,}$/i.test(cleaned)) return '';
@@ -12336,8 +12352,8 @@ function factoryCleanOptionLabel(value) {
   return cleaned.slice(0, 40);
 }
 
-function factoryDedupeRealOptionValues(values) {
-  return factoryDedupeOptionValues(values.map(factoryCleanRealOptionValue).filter(Boolean));
+function factoryDedupeRealOptionValues(values, options = {}) {
+  return factoryDedupeOptionValues(values.map(value => factoryCleanRealOptionValue(value, options)).filter(Boolean));
 }
 
 function factoryCafe24NormalizeVariantOptions(value) {
@@ -12374,7 +12390,7 @@ function factoryExtractCafe24OptionGroupValues(group) {
         ];
       }
       return [item];
-    }));
+    }), { allowNumeric: true });
   }
   if (optionValue && typeof optionValue === 'object') {
     return factoryDedupeRealOptionValues([
@@ -12387,9 +12403,12 @@ function factoryExtractCafe24OptionGroupValues(group) {
       optionValue.valueName,
       optionValue.value,
       optionValue.name,
-    ]);
+    ], { allowNumeric: true });
   }
-  return factoryDedupeRealOptionValues(factoryExtractOptionValuesFromValue(optionValue ?? group.option_text ?? group.optionText ?? group.text ?? group.value));
+  return factoryDedupeRealOptionValues(
+    factoryExtractOptionValuesFromValue(optionValue ?? group.option_text ?? group.optionText ?? group.text ?? group.value, '', 0, { allowNumeric: true }),
+    { allowNumeric: true }
+  );
 }
 
 function factoryExtractCafe24OptionGroups(data, sourceLabel, sourceType = 'cafe24') {
@@ -12429,7 +12448,7 @@ function factoryExtractCafe24OptionGroups(data, sourceLabel, sourceType = 'cafe2
     factoryCafe24NormalizeVariantOptions(variant?.options ?? variant?.option).forEach(opt => {
       if (!opt || typeof opt !== 'object') return;
       const label = factoryCleanOptionLabel(opt.name || opt.option_name || opt.optionName || opt.label || '옵션');
-      const value = factoryCleanRealOptionValue(opt.value || opt.option_text || opt.optionText || opt.text);
+      const value = factoryCleanRealOptionValue(opt.value || opt.option_text || opt.optionText || opt.text, { allowNumeric: true });
       if (!label || !value) return;
       if (!variantMap.has(label)) variantMap.set(label, []);
       variantMap.get(label).push(value);
@@ -12439,18 +12458,18 @@ function factoryExtractCafe24OptionGroups(data, sourceLabel, sourceType = 'cafe2
     sourceLabel,
     sourceType,
     label,
-    values: factoryDedupeRealOptionValues(values),
+    values: factoryDedupeRealOptionValues(values, { allowNumeric: true }),
     cafe24VariantFallback: true,
   })).filter(group => group.values.length);
 }
 
-function factoryExtractOptionValuesFromValue(value, path = '', depth = 0) {
+function factoryExtractOptionValuesFromValue(value, path = '', depth = 0, options = {}) {
   if (value === null || value === undefined || depth > 7) return [];
   if (factoryIsOptionConfigKey(path)) return [];
-  if (typeof value === 'string' || typeof value === 'number') return factoryDedupeRealOptionValues(factorySplitOptionText(value));
+  if (typeof value === 'string' || typeof value === 'number') return factoryDedupeRealOptionValues(factorySplitOptionText(value), options);
   if (typeof value === 'boolean') return [];
   if (Array.isArray(value)) {
-    return factoryDedupeRealOptionValues(value.flatMap((item, index) => factoryExtractOptionValuesFromValue(item, `${path}[${index}]`, depth + 1)));
+    return factoryDedupeRealOptionValues(value.flatMap((item, index) => factoryExtractOptionValuesFromValue(item, `${path}[${index}]`, depth + 1, options)), options);
   }
   if (typeof value !== 'object') return [];
 
@@ -12461,21 +12480,21 @@ function factoryExtractOptionValuesFromValue(value, path = '', depth = 0) {
   const values = [];
 
   preferredKeys.forEach(key => {
-    if (value[key] !== undefined) values.push(...factoryExtractOptionValuesFromValue(value[key], `${path}.${key}`, depth + 1));
+    if (value[key] !== undefined) values.push(...factoryExtractOptionValuesFromValue(value[key], `${path}.${key}`, depth + 1, options));
   });
   if (optionish && !hasExplicitValueKey) {
     ['name','label','title'].forEach(key => {
-      if (value[key] !== undefined) values.push(...factoryExtractOptionValuesFromValue(value[key], `${path}.${key}`, depth + 1));
+      if (value[key] !== undefined) values.push(...factoryExtractOptionValuesFromValue(value[key], `${path}.${key}`, depth + 1, options));
     });
   }
   Object.entries(value).forEach(([key, child]) => {
     const nextPath = path ? `${path}.${key}` : key;
     if (factoryIsOptionConfigKey(nextPath)) return;
     if (factoryIsOptionKey(nextPath) || (optionish && child && typeof child === 'object')) {
-      values.push(...factoryExtractOptionValuesFromValue(child, nextPath, depth + 1));
+      values.push(...factoryExtractOptionValuesFromValue(child, nextPath, depth + 1, options));
     }
   });
-  return factoryDedupeRealOptionValues(values);
+  return factoryDedupeRealOptionValues(values, options);
 }
 
 function factoryOptionGroupLabel(path, value) {
@@ -12714,7 +12733,7 @@ function factoryCafe24DbFieldValue(fieldId, factory = factoryState()) {
   const raw = factoryCafe24RawForForm(factory);
   if (!raw || typeof raw !== 'object' || !Object.keys(raw).length) return '';
   const optionGroups = factoryExtractCafe24OptionGroups(raw, 'Cafe24 API 상품', 'cafe24');
-  const optionValues = factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values || []));
+  const optionValues = factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values || []), { allowNumeric: true });
   const firstOption = optionGroups[0] || null;
   const first = (...values) => values.map(value => {
     if (Array.isArray(value)) return value.filter(v => String(v ?? '').trim()).join(', ');
@@ -12830,7 +12849,7 @@ function factoryExtractOptionGroups(factory = factoryState(), options = {}) {
       ? factoryExtractCafe24OptionGroups(source.data, source.label, source.type)
       : factoryExtractOptionGroupsFromData(source.data, source.label, source.type);
     sourceGroups.forEach(group => {
-      const values = source.type === 'cafe24' ? factoryDedupeRealOptionValues(group.values) : factoryDedupeOptionValues(group.values);
+      const values = source.type === 'cafe24' ? factoryDedupeRealOptionValues(group.values, { allowNumeric: true }) : factoryDedupeOptionValues(group.values);
       if (!values.length) return;
       const key = `${source.type}:${group.label}:${values.join('|')}`;
       if (seen.has(key)) return;
@@ -12852,7 +12871,7 @@ function factoryExtractOptionGroups(factory = factoryState(), options = {}) {
 
 function factoryOptionValuesFromRows(rows, factory = factoryState()) {
   const cafe24Groups = factoryExtractOptionGroups(factory, { types: ['cafe24'], includeManual: false });
-  const cafe24Values = factoryDedupeRealOptionValues(cafe24Groups.flatMap(group => group.values || []));
+  const cafe24Values = factoryDedupeRealOptionValues(cafe24Groups.flatMap(group => group.values || []), { allowNumeric: true });
   if (cafe24Values.length) return cafe24Values.slice(0, 120);
   const rowValues = rows
     .filter(row => row.sourceType !== 'cafe24' && (factoryIsOptionKey(row.key) || row.fieldId === 'option_values'))
@@ -13064,7 +13083,7 @@ function factoryBuildSourcePanelModel(factory, sourceType, sections) {
   const rows = factoryDbSourceRows(factory, { types: [sourceType], includeManual: false });
   const optionGroups = factoryExtractOptionGroups(factory, { types: [sourceType], includeManual: false });
   const optionValues = sourceType === 'cafe24'
-    ? factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values))
+    ? factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values), { allowNumeric: true })
     : factoryDedupeOptionValues(optionGroups.flatMap(group => group.values));
   const raw = sourceType === 'cafe24' ? factoryCafe24RawForForm(factory) : {};
   const modeledSections = sections.map(section => ({
@@ -14207,7 +14226,8 @@ function factoryNormalizeCafe24OptionGroup(group = {}, index = 0) {
   const values = factoryDedupeRealOptionValues(
     Array.isArray(group.values)
       ? group.values
-      : factorySplitOptionText(group.valueText || group.option_values || group.optionValues || group.option_value || '')
+      : factorySplitOptionText(group.valueText || group.option_values || group.optionValues || group.option_value || ''),
+    { allowNumeric: true }
   );
   return {
     key: group.key || `group_${index + 1}`,
@@ -14256,14 +14276,14 @@ function factoryCafe24OptionEditorModel(factory = factoryState(), model = null) 
   const optionValuesSetting = allowManualOptionDraft ? factory.product.dbFieldSettings?.option_values : null;
   const manualNameTouched = !!(optionNameSetting && (optionNameSetting.manualTouched || String(optionNameSetting.manualValue || '').trim()));
   const manualValuesTouched = !!(optionValuesSetting && (optionValuesSetting.manualTouched || String(optionValuesSetting.manualValue || '').trim()));
-  const sourceValues = factoryDedupeRealOptionValues(sourceModel.optionValues || firstGroup?.values || []);
+  const sourceValues = factoryDedupeRealOptionValues(sourceModel.optionValues || firstGroup?.values || [], { allowNumeric: true });
   const optionName = String(
     (manualNameTouched ? optionNameSetting.manualValue : '') ||
     firstGroup?.label ||
     (manualValuesTouched || sourceValues.length ? '색상' : '')
   ).trim();
   const optionValues = manualValuesTouched
-    ? factoryDedupeRealOptionValues(factorySplitOptionText(optionValuesSetting.manualValue))
+    ? factoryDedupeRealOptionValues(factorySplitOptionText(optionValuesSetting.manualValue), { allowNumeric: true })
     : sourceValues;
   let editGroups = factoryCafe24OptionGroupsForEditor(factory, sourceModel);
   if (!editGroups.length && (optionValues.length || manualNameTouched || manualValuesTouched)) {
@@ -15310,17 +15330,37 @@ function renderFactoryCafe24LastSaveVerification(verification) {
   const checked = Number(verification.checked) || 0;
   const matched = Number(verification.matched) || 0;
   const when = verification.savedAt ? new Date(verification.savedAt).toLocaleString() : '';
+  const typeLabel = verification.type === 'single-field-verify'
+    ? '1필드 왕복 검증'
+    : verification.type === 'single-field-rollback'
+    ? '1필드 되돌리기 재조회'
+    : verification.type === 'create'
+    ? '새 상품 등록 재조회'
+    : '마지막 저장 재조회';
+  const rollback = verification.rollback && typeof verification.rollback === 'object' ? verification.rollback : null;
+  const rollbackFieldLabel = rollback?.fieldName ? factoryCafe24FieldLabelByApiField(rollback.fieldName) : '';
+  const rollbackLine = rollback && verification.type === 'single-field-verify'
+    ? `되돌리기 가능: ${rollbackFieldLabel || rollback.fieldName} · 현재 테스트값 "${factoryCafe24HumanValue(rollback.savedValue, 120)}" → 원래값 "${factoryCafe24HumanValue(rollback.originalValue, 120)}"`
+    : '';
+  const rollbackAction = rollback && verification.type === 'single-field-verify' && rollback.fieldName && rollback.hasOriginal !== false
+    ? `<div class="factory-cafe24-verify-actions"><button class="btn-sm danger" id="factoryRollbackCafe24SingleField" type="button"><span class="material-icons-outlined" style="font-size:14px">undo</span>원래값으로 되돌리기</button></div>`
+    : '';
+  const fieldText = Array.isArray(verification.fieldNames) && verification.fieldNames.length
+    ? ` · ${verification.fieldNames.map(factoryCafe24FieldLabelByApiField).slice(0, 4).join(', ')}${verification.fieldNames.length > 4 ? ' 외' : ''}`
+    : '';
   const issues = [
     missing.length ? `응답 누락: ${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ' 외' : ''}` : '',
     mismatches.length ? `값 확인 필요: ${mismatches.slice(0, 6).join(', ')}${mismatches.length > 6 ? ' 외' : ''}` : '',
     verification.message || '',
   ].filter(Boolean).join(' · ');
   return `<div class="factory-cafe24-verify-card ${tone}">
-    <div class="factory-cafe24-verify-title">마지막 저장 재조회 ${ok ? '확인 완료' : '확인 필요'}</div>
+    <div class="factory-cafe24-verify-title">${escapeHtml(typeLabel)} ${ok ? '확인 완료' : '확인 필요'}</div>
     <div class="factory-cafe24-verify-body">
-      ${verification.productNo ? `상품 #${escapeHtml(verification.productNo)} · ` : ''}${matched}/${checked}개 일치${when ? ` · ${escapeHtml(when)}` : ''}
+      ${verification.productNo ? `상품 #${escapeHtml(verification.productNo)} · ` : ''}${matched}/${checked}개 일치${fieldText ? escapeHtml(fieldText) : ''}${when ? ` · ${escapeHtml(when)}` : ''}
       ${issues ? `<br>${escapeHtml(issues)}` : ''}
+      ${rollbackLine ? `<br>${escapeHtml(rollbackLine)}` : ''}
     </div>
+    ${rollbackAction}
   </div>`;
 }
 
@@ -15329,6 +15369,12 @@ function renderFactoryCafe24SavePreview(factory) {
   const importantRows = [...diff.changedRows, ...diff.newRows].slice(0, 12);
   const fallbackRows = !importantRows.length ? diff.rows.slice(0, 6) : [];
   const displayRows = importantRows.length ? importantRows : fallbackRows;
+  const singleVerifyRow = diff.fieldNames.length === 1 ? diff.rows.find(row => row.apiField === diff.fieldNames[0]) : null;
+  const singleVerifyNotice = diff.productNo && diff.fieldNames.length === 1 && singleVerifyRow
+    ? `<div class="factory-cafe24-save-note">1필드 왕복 검증 대상: ${escapeHtml(singleVerifyRow.label)} · 현재값 "${escapeHtml(singleVerifyRow.currentText)}" → 저장값 "${escapeHtml(singleVerifyRow.nextText)}"</div>`
+    : diff.productNo && diff.fieldNames.length > 1
+    ? `<div class="factory-cafe24-save-note">1필드 왕복 검증은 정확히 1개 변경일 때만 실행됩니다. 현재 ${diff.fieldNames.length}개 변경이 있어 기본 저장만 가능합니다.</div>`
+    : '';
   const emptyMessage = diff.productNo
     ? '현재 기존 Cafe24 상품의 기본 입력칸에서 변경된 값이 없습니다. 옵션/품목/재고, 카테고리, 이미지, 태그, SEO는 아래 전용 API 버튼에서 따로 저장합니다.'
     : '저장 대상 Cafe24 상품번호가 없습니다. 먼저 Cafe24 후보를 확정하거나 새 상품 등록 미리보기를 확인해주세요.';
@@ -15346,6 +15392,7 @@ function renderFactoryCafe24SavePreview(factory) {
       <div class="factory-cafe24-save-stat"><b>${diff.counts.same}</b><span>현재값과 동일</span></div>
       <div class="factory-cafe24-save-stat"><b>${diff.counts.dedicated}</b><span>전용 API 제외</span></div>
     </div>
+    ${singleVerifyNotice}
     ${displayRows.length ? `<div class="factory-cafe24-change-list">
       <div class="factory-cafe24-change-row header">
         <span>입력칸</span><span>현재 Cafe24 값</span><span>저장할 값</span><span>상태</span>
@@ -15378,7 +15425,7 @@ function factoryCafe24CreatePreviewModel(factory = factoryState()) {
   if (!String(product.product_name || '').trim()) requiredMissing.push('상품명');
   if (!String(product.price || '').trim()) requiredMissing.push('판매가');
   const categoryRows = Array.isArray(product.category) ? product.category : [];
-  const optionValues = factoryDedupeRealOptionValues(optionPlan.optionValues || []);
+  const optionValues = factoryDedupeRealOptionValues(optionPlan.optionValues || [], { allowNumeric: true });
   const optionSettingSummary = [
     product.has_option ? `사용: ${factoryCafe24SelectLabel({ value: product.has_option, label: CAFE24_FORM_SELECTS.hasOption.find(item => item.value === product.has_option)?.label || product.has_option })}` : '',
     product.option_type ? `구성: ${factoryCafe24SelectLabel({ value: product.option_type, label: CAFE24_FORM_SELECTS.optionType.find(item => item.value === product.option_type)?.label || product.option_type })}` : '',
@@ -15802,6 +15849,7 @@ function factoryCafe24ReadySyncPlan(factory = factoryState()) {
     categoryRows,
     imageSlotCount,
     additionalCount,
+    additionalImagesBlockedReason,
     iconCount,
     seoPlan,
     tagPlan,
@@ -15917,18 +15965,18 @@ function renderFactoryCafe24EndpointHealthPanel(factory = factoryState()) {
       <div class="factory-cafe24-health-head">
         <div>
           <div class="factory-cafe24-health-title">전용 API 연결 상태</div>
-          <div class="factory-cafe24-health-sub">Cafe24 상품정보 다시 불러오기를 누르면 상품수정 화면의 전용 저장 경로를 읽기 점검합니다. 일부 업로드 API는 조회가 막혀도 저장 경로만 사용할 수 있습니다.</div>
+          <div class="factory-cafe24-health-sub">Cafe24 상품정보 다시 불러오기를 누르면 상품수정 화면의 전용 저장 경로를 읽기 점검합니다. 추가 이미지처럼 상태가 불확실한 경로는 연결 확인 전 실제 동기화를 막습니다.</div>
         </div>
         <span class="factory-db-source">${productNo ? `상품 #${escapeHtml(productNo)}` : '상품번호 대기'}</span>
       </div>
     </div>`;
   }
-  const okCount = rows.filter(row => row.ok).length;
+  const okCount = rows.filter(row => row.ok && !row.warning).length;
   return `<div class="factory-cafe24-health" data-factory-cafe24-endpoint-health>
     <div class="factory-cafe24-health-head">
       <div>
         <div class="factory-cafe24-health-title">전용 API 연결 상태 ${okCount}/${rows.length}</div>
-        <div class="factory-cafe24-health-sub">조회는 읽기 전용입니다. 실패한 경로는 저장 버튼과 전체 동기화에서 자동 제외하고, “저장 경로 우선” 경로는 업로드 버튼을 유지합니다.${checkedAt ? ` 마지막 ${escapeHtml(new Date(checkedAt).toLocaleString())}` : ''}</div>
+        <div class="factory-cafe24-health-sub">조회는 읽기 전용입니다. 실패한 경로는 저장 버튼과 전체 동기화에서 자동 제외합니다.${checkedAt ? ` 마지막 ${escapeHtml(new Date(checkedAt).toLocaleString())}` : ''}</div>
       </div>
       <span class="factory-db-source">${productNo ? `상품 #${escapeHtml(productNo)}` : '상품번호 대기'}</span>
     </div>
@@ -15955,6 +16003,7 @@ function renderFactoryCafe24SyncRoutePanel(factory) {
   const categoryRows = plan.categoryRows;
   const imageSlotCount = plan.imageSlotCount;
   const additionalCount = plan.additionalCount;
+  const additionalImagesBlockedReason = plan.additionalImagesBlockedReason;
   const iconCount = plan.iconCount;
   const seoPlan = plan.seoPlan;
   const tagPlan = plan.tagPlan;
@@ -16011,7 +16060,7 @@ function renderFactoryCafe24SyncRoutePanel(factory) {
       ${renderFactoryCafe24RouteCard(
         '추가 이미지 / 아이콘',
         productNo ? `POST|PUT /additionalimages · PUT /icons` : '등록 성공 후 additionalimages/icons 자동 실행',
-        `추가 이미지 ${additionalCount}장 · 아이콘 ${iconCount}개`,
+        `추가 이미지 ${additionalCount}장${additionalImagesBlockedReason ? ' · API 점검 필요' : ''} · 아이콘 ${iconCount}개`,
         productNo ? (readySync('additionalImages') || readySync('icons')) : (postCreateReady('additionalImages') || postCreateReady('icons'))
       )}
       ${renderFactoryCafe24RouteCard(
@@ -16059,10 +16108,16 @@ function renderFactorySourcePanel(factory, sourceType, title, subtitle, sections
   const cafe24SaveFieldCount = cafe24SaveDiff?.fieldNames?.length || 0;
   const cafe24CreateFieldCount = cafe24CreateModel?.fieldNames?.length || 0;
   const canSaveCafe24Product = sourceType === 'cafe24' && !!cafe24SaveDiff?.productNo && cafe24SaveFieldCount > 0;
+  const canVerifyCafe24SingleField = canSaveCafe24Product && cafe24SaveFieldCount === 1;
   const canCreateCafe24Product = sourceType === 'cafe24' && !cafe24CreateModel?.productNo && !cafe24CreateModel?.requiredMissing?.length && cafe24CreateFieldCount > 0;
   const cafe24SaveDisabledReason = !cafe24SaveDiff?.productNo
     ? 'Cafe24 상품번호를 먼저 확정해주세요. 기존 상품 저장은 선택한 Cafe24 상품에만 전송됩니다.'
     : '수정한 상품 기본 입력칸이 없습니다. 옵션/품목/재고, 카테고리, 이미지, 태그, SEO는 전용 동기화 버튼을 사용하세요.';
+  const cafe24SingleVerifyDisabledReason = !cafe24SaveDiff?.productNo
+    ? 'Cafe24 상품번호를 먼저 확정해주세요.'
+    : cafe24SaveFieldCount === 0
+    ? '검증할 변경 필드가 없습니다. 상품 기본 입력칸 하나만 수정하면 활성화됩니다.'
+    : `1필드 왕복 검증은 정확히 1개 변경일 때만 실행합니다. 현재 ${cafe24SaveFieldCount}개 변경이 잡혔습니다.`;
   const cafe24CreateDisabledReason = cafe24CreateModel?.productNo
     ? `현재 기존 Cafe24 상품 #${cafe24CreateModel.productNo}이 선택되어 있습니다. 기존 상품은 'Cafe24 기본 저장'과 전용 동기화 버튼으로 수정하고, 새 상품 등록은 Cafe24 후보가 없는 상태에서 실행하세요.`
     : cafe24CreateModel?.requiredMissing?.length
@@ -16080,6 +16135,7 @@ function renderFactorySourcePanel(factory, sourceType, title, subtitle, sections
         <button class="btn-sm" id="factorySyncCafe24Category" type="button" ${disabledAttr(!canSyncCafe24Category, !cafe24ReadyPlan?.productNo ? 'Cafe24 상품번호를 먼저 확정해주세요.' : '카테고리를 직접 수정한 뒤 연결할 수 있습니다.')}><span class="material-icons-outlined" style="font-size:14px">category</span>카테고리 연결</button>
         <button class="btn-sm" id="factoryCreateCafe24Api" type="button" ${disabledAttr(!canCreateCafe24Product, cafe24CreateDisabledReason)}><span class="material-icons-outlined" style="font-size:14px">add_business</span>${cafe24CreateButtonLabel}</button>
         <button class="btn-sm" id="factorySaveCafe24Api" type="button" ${disabledAttr(!canSaveCafe24Product, cafe24SaveDisabledReason)}><span class="material-icons-outlined" style="font-size:14px">save</span>Cafe24 기본 저장${cafe24SaveFieldCount ? ` (${cafe24SaveFieldCount})` : ''}</button>
+        <button class="btn-sm" id="factoryVerifyCafe24SingleField" type="button" ${disabledAttr(!canVerifyCafe24SingleField, cafe24SingleVerifyDisabledReason)}><span class="material-icons-outlined" style="font-size:14px">rule</span>1필드 왕복 검증</button>
         <button class="btn-sm primary" id="factorySyncCafe24ReadyAll" type="button" ${disabledAttr(!cafe24ReadyPlan.productNo || !cafe24ReadyPlan.readyActions.length, cafe24ReadyPlan.blockers.join(' '))}><span class="material-icons-outlined" style="font-size:14px">sync</span>준비 항목 전체 동기화</button>
       </div>
       <div class="factory-source-sub" style="margin-top:6px">
@@ -22873,7 +22929,7 @@ async function factoryRefreshCafe24ApiSources() {
         current.product.cafe24EndpointHealthProductNo = String(healthProductNo);
       }
     }
-    const endpointOk = (current.product.cafe24EndpointHealth || []).filter(row => row.ok).length;
+    const endpointOk = (current.product.cafe24EndpointHealth || []).filter(row => row.ok && !row.warning).length;
     const endpointTotal = (current.product.cafe24EndpointHealth || []).length;
     current.product.cafe24ApiStatus = `Cafe24 상품 상세 ${incoming.length}건 반영 · 선택목록 ${catalog.length}개${endpointTotal ? ` · 전용 API ${endpointOk}/${endpointTotal} 연결` : ''}`;
     const canReflectCafe24 = !!current.product.selectedCafe24CandidateKey || !!current.product.candidateAutoApply;
@@ -22924,7 +22980,7 @@ async function factoryProbeCafe24EndpointHealthFromCurrent() {
     current.product.cafe24EndpointHealth = rows;
     current.product.cafe24EndpointHealthFetchedAt = Date.now();
     current.product.cafe24EndpointHealthProductNo = String(resolvedProductNo);
-    const okCount = rows.filter(row => row.ok).length;
+    const okCount = rows.filter(row => row.ok && !row.warning).length;
     current.product.cafe24ApiStatus = `전용 API 상태 점검 완료: ${okCount}/${rows.length} 연결`;
     factoryLog(current.product.cafe24ApiStatus, okCount === rows.length ? 'ok' : 'error');
     saveLastWorkNow();
@@ -23400,12 +23456,12 @@ function factoryVerifyCafe24ProductEcho(product = {}, raw = {}) {
   };
 }
 
-function factoryCafe24SaveVerificationRecord({ type = 'update', productNo = '', product = {}, verification = null, message = '', error = '' } = {}) {
+function factoryCafe24SaveVerificationRecord({ type = 'update', productNo = '', product = {}, verification = null, message = '', error = '', rollback = null } = {}) {
   const checked = verification?.checked ?? Object.keys(product || {}).length;
   const matched = verification?.matched ?? 0;
   const missing = Array.isArray(verification?.missing) ? verification.missing : [];
   const mismatches = Array.isArray(verification?.mismatches) ? verification.mismatches : [];
-  return {
+  const record = {
     type,
     productNo: String(productNo || ''),
     savedAt: Date.now(),
@@ -23418,6 +23474,18 @@ function factoryCafe24SaveVerificationRecord({ type = 'update', productNo = '', 
     message: message || '',
     error: error || '',
   };
+  if (rollback && typeof rollback === 'object' && rollback.fieldName) {
+    record.rollback = {
+      productNo: String(rollback.productNo || productNo || ''),
+      mallId: String(rollback.mallId || ''),
+      fieldName: String(rollback.fieldName || ''),
+      originalValue: cloneData(rollback.originalValue),
+      savedValue: cloneData(rollback.savedValue),
+      hasOriginal: rollback.hasOriginal !== false,
+      createdAt: rollback.createdAt || Date.now(),
+    };
+  }
+  return record;
 }
 
 function factoryVerifyCafe24OptionEcho(plan = {}, detail = null) {
@@ -23458,8 +23526,8 @@ function factoryVerifyCafe24OptionEcho(plan = {}, detail = null) {
     .filter(group => group.name && group.values.length);
   const groupChecks = expectedGroups.map(expected => {
     const actual = actualGroups.find(group => factoryDbNormalizeKey(group.name) === factoryDbNormalizeKey(expected.name)) || null;
-    const actualValues = factoryDedupeRealOptionValues(actual?.values || []);
-    const expectedValues = factoryDedupeRealOptionValues(expected.values || []);
+    const actualValues = factoryDedupeRealOptionValues(actual?.values || [], { allowNumeric: true });
+    const expectedValues = factoryDedupeRealOptionValues(expected.values || [], { allowNumeric: true });
     const sameValues = expectedValues.length === actualValues.length && expectedValues.every((value, index) => value === actualValues[index]);
     return { expected, actual, expectedValues, actualValues, sameValues };
   });
@@ -23936,7 +24004,7 @@ function factoryCafe24SkippedUpdateFields(fields = [], finalDb = {}) {
 function factoryCafe24FormSourceContext(factory = factoryState()) {
   const rows = factoryDbSourceRows(factory, { types: ['cafe24'], includeManual: false });
   const optionGroups = factoryExtractOptionGroups(factory, { types: ['cafe24'], includeManual: false });
-  const optionValues = factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values));
+  const optionValues = factoryDedupeRealOptionValues(optionGroups.flatMap(group => group.values), { allowNumeric: true });
   return { rows, optionGroups, optionValues };
 }
 
@@ -24128,7 +24196,7 @@ function factoryBuildCafe24UpdatePayload(finalDb = {}, fields = [], factory = fa
 }
 
 function factoryCafe24OptionValuePayload(values = []) {
-  return factoryDedupeRealOptionValues(values).map(value => ({ option_text: value }));
+  return factoryDedupeRealOptionValues(values, { allowNumeric: true }).map(value => ({ option_text: value }));
 }
 
 function factoryCafe24ExistingOptionRoot(raw = {}) {
@@ -24370,10 +24438,10 @@ function factoryCafe24OptionsPayloadValueItems(values = [], existingGroup = null
   const byText = new Map();
   existingValues.forEach(item => {
     if (!item || typeof item !== 'object') return;
-    const text = factoryCleanRealOptionValue(item.option_text || item.optionText || item.text || item.value || item.name);
+    const text = factoryCleanRealOptionValue(item.option_text || item.optionText || item.text || item.value || item.name, { allowNumeric: true });
     if (text) byText.set(factoryDbNormalizeKey(text), item);
   });
-  return factoryDedupeRealOptionValues(values).map(value => {
+  return factoryDedupeRealOptionValues(values, { allowNumeric: true }).map(value => {
     const existing = byText.get(factoryDbNormalizeKey(value)) || {};
     const payload = {
       option_text: value,
@@ -24400,7 +24468,7 @@ function factoryCafe24CleanOptionGroupsForPayload(groups = [], optionName = '색
     .filter(group => group.name && group.values.length);
   if (normalized.length) return normalized;
   const cleanName = String(optionName || '').trim() || '색상';
-  const cleanValues = factoryDedupeRealOptionValues(values);
+  const cleanValues = factoryDedupeRealOptionValues(values, { allowNumeric: true });
   return cleanValues.length ? [{ key: 'group_1', name: cleanName, values: cleanValues, required_option: 'T', option_display_type: 'S' }] : [];
 }
 
@@ -24555,7 +24623,7 @@ function factoryBuildCafe24OptionSyncPlan(factory = factoryState(), finalDb = fa
   const mallId = target?.mall_id || raw.mall_id || CAFE24_CONTROL_API.defaultMallId;
   const model = optionModel || factoryCafe24OptionEditorModel(factory);
   const optionName = String(model.optionName || optionFinalDb.option_name || '색상').trim() || '색상';
-  const optionValues = factoryDedupeRealOptionValues(model.optionValues || []);
+  const optionValues = factoryDedupeRealOptionValues(model.optionValues || [], { allowNumeric: true });
   const optionGroups = factoryCafe24CleanOptionGroupsForPayload(model.editGroups || [], optionName, optionValues);
   const optionValueTotal = optionGroups.reduce((sum, group) => sum + group.values.length, 0);
   const rows = model.variants || factoryCafe24VariantRows(factory, optionValues);
@@ -26276,6 +26344,7 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
   const target = factoryCafe24TargetCandidate(factory, { allowFallback: !!factory.product.candidateAutoApply });
   const raw = parseCafe24Raw(target);
   const productNo = target?.product_no || raw.product_no || model.finalDb.product_no || model.finalDb.cafe24_product_no || '';
+  const requireSingleField = options.requireSingleField === true;
   if (!productNo) {
     factoryLog('Cafe24 저장 중단: 저장 대상 product_no가 없습니다. 먼저 Cafe24 상품정보를 가져오거나 후보를 확정해주세요.', 'error');
     render();
@@ -26288,16 +26357,40 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
     render();
     return false;
   }
+  if (requireSingleField && fieldNames.length !== 1) {
+    factoryLog(`Cafe24 1필드 왕복 검증 중단: 정확히 1개 필드만 변경되어야 합니다. 현재 ${fieldNames.length}개 변경이 잡혔습니다.`, 'error');
+    render();
+    return false;
+  }
   const skipped = factoryCafe24SkippedUpdateFields(model.fields, model.finalDb);
   if (skipped.length) {
     factoryLog(`Cafe24 상품 기본 저장에서 옵션/품목 또는 읽기전용 필드 ${skipped.slice(0, 6).join(', ')}${skipped.length > 6 ? ' 외' : ''}는 제외했습니다. 옵션은 전용 API 단계로 분리해야 안전합니다.`, 'error');
   }
   const preview = factoryCafe24PayloadSummary(product, 18);
-  if (!options.skipConfirm) {
-    const ok = confirm(`Cafe24 상품 #${productNo}에 ${fieldNames.length}개 필드를 실제 저장합니다.\n\n${preview}${fieldNames.length > 18 ? ' ...' : ''}\n\n계속할까요?`);
+  const singleFieldName = requireSingleField ? fieldNames[0] : '';
+  const singleFieldHasOriginal = singleFieldName ? Object.prototype.hasOwnProperty.call(raw || {}, singleFieldName) : false;
+  const singleFieldRollback = singleFieldName ? {
+    productNo,
+    mallId: target?.mall_id || CAFE24_CONTROL_API.defaultMallId,
+    fieldName: singleFieldName,
+    originalValue: singleFieldHasOriginal ? raw?.[singleFieldName] : '',
+    savedValue: product[singleFieldName],
+    hasOriginal: singleFieldHasOriginal,
+    createdAt: Date.now(),
+  } : null;
+  const singleFieldDetail = singleFieldName
+    ? [
+      `필드: ${factoryCafe24FieldLabelByApiField(singleFieldName)} (${singleFieldName})`,
+      `현재값: ${singleFieldHasOriginal ? factoryCafe24HumanValue(raw?.[singleFieldName], 160) : 'Cafe24 원본에 해당 필드가 없어 자동 되돌리기 불가'}`,
+      `저장값: ${factoryCafe24HumanValue(product[singleFieldName], 160)}`,
+    ].join('\n')
+    : '';
+  const confirmTitle = requireSingleField ? 'Cafe24 1필드 왕복 검증' : 'Cafe24 상품 기본 저장';
+  if (!options.skipConfirm || requireSingleField) {
+    const ok = confirm(`${confirmTitle}: 상품 #${productNo}에 ${fieldNames.length}개 필드를 실제 저장하고 재조회로 반영 여부를 확인합니다.\n\n${singleFieldDetail || preview}${fieldNames.length > 18 ? ' ...' : ''}\n\n외부 Cafe24 데이터가 실제로 변경됩니다. 계속할까요?`);
     if (!ok) return false;
   }
-  factory.product.cafe24ApiStatus = `Cafe24 저장 중: #${productNo} ${fieldNames.length}개 필드`;
+  factory.product.cafe24ApiStatus = `${requireSingleField ? 'Cafe24 1필드 왕복 검증 중' : 'Cafe24 저장 중'}: #${productNo} ${fieldNames.length}개 필드`;
   factoryLog(factory.product.cafe24ApiStatus, 'ok');
   saveLastWorkNow();
   render();
@@ -26308,13 +26401,14 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
       body: { product },
     }, `Update Cafe24 product ${productNo}`);
     const current = factoryState();
-    current.product.cafe24ApiStatus = `Cafe24 저장 완료: #${productNo} ${fieldNames.length}개 필드`;
+    current.product.cafe24ApiStatus = `${requireSingleField ? 'Cafe24 1필드 저장 완료, 재조회 확인 중' : 'Cafe24 저장 완료'}: #${productNo} ${fieldNames.length}개 필드`;
     current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
-      type: 'update',
+      type: requireSingleField ? 'single-field-verify' : 'update',
       productNo,
       product,
       verification: { checked: fieldNames.length, matched: 0, missing: [], mismatches: [] },
       message: '저장 응답 완료, 상세 재조회 확인 중',
+      rollback: requireSingleField ? singleFieldRollback : null,
     });
     factoryLog(current.product.cafe24ApiStatus, 'ok');
     try {
@@ -26322,9 +26416,9 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
       if (detail) {
         current.product.cafe24Candidates = factoryMergeCafe24Candidates(current.product.cafe24Candidates, [normalizeCafe24ProductCandidate(detail, `saved:${productNo}`, 999, 0)]);
         const verification = factoryVerifyCafe24ProductEcho(product, parseCafe24Raw(detail) || detail.raw || detail);
-        current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({ type: 'update', productNo, product, verification });
+        current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({ type: requireSingleField ? 'single-field-verify' : 'update', productNo, product, verification, rollback: requireSingleField ? singleFieldRollback : null });
         if (!verification.missing.length && !verification.mismatches.length) {
-          factoryLog(`Cafe24 저장 재조회 확인 완료: ${verification.matched}/${verification.checked}개 필드 일치`, 'ok');
+          factoryLog(`${requireSingleField ? 'Cafe24 1필드 왕복 검증 완료' : 'Cafe24 저장 재조회 확인 완료'}: ${verification.matched}/${verification.checked}개 필드 일치`, 'ok');
         } else {
           const issues = [
             verification.missing.length ? `응답 누락 ${verification.missing.slice(0, 5).join(', ')}` : '',
@@ -26334,20 +26428,22 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
         }
       } else {
         current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
-          type: 'update',
+          type: requireSingleField ? 'single-field-verify' : 'update',
           productNo,
           product,
           verification: { checked: fieldNames.length, matched: 0, missing: [], mismatches: [] },
           message: '저장 후 상세 재조회 결과가 비어 있습니다.',
+          rollback: requireSingleField ? singleFieldRollback : null,
         });
       }
     } catch(e) {
       current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
-        type: 'update',
+        type: requireSingleField ? 'single-field-verify' : 'update',
         productNo,
         product,
         verification: { checked: fieldNames.length, matched: 0, missing: [], mismatches: [] },
         error: e.message || String(e),
+        rollback: requireSingleField ? singleFieldRollback : null,
       });
       factoryLog(`저장 후 Cafe24 상세 재조회 보류: ${e.message || e}`, 'error');
     }
@@ -26358,10 +26454,107 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
     const current = factoryState();
     current.product.cafe24ApiStatus = `Cafe24 저장 실패: ${e.message || e}`;
     current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
-      type: 'update',
+      type: requireSingleField ? 'single-field-verify' : 'update',
       productNo,
       product,
       verification: { checked: fieldNames.length, matched: 0, missing: [], mismatches: [] },
+      error: e.message || String(e),
+    });
+    factoryLog(current.product.cafe24ApiStatus, 'error');
+    saveLastWorkNow();
+    render();
+    return false;
+  }
+}
+
+async function factoryVerifyCafe24SingleFieldRoundTrip() {
+  return factorySaveCafe24ProductFromFinalDb({ requireSingleField: true });
+}
+
+async function factoryRollbackLastCafe24SingleFieldVerification() {
+  const factory = factoryState();
+  const record = factory.product?.cafe24LastSaveVerification || null;
+  const rollback = record?.rollback && typeof record.rollback === 'object' ? record.rollback : null;
+  const productNo = String(rollback?.productNo || record?.productNo || '').trim();
+  const fieldName = String(rollback?.fieldName || '').trim();
+  if (!record || record.type !== 'single-field-verify' || !rollback || !productNo || !fieldName) {
+    factoryLog('Cafe24 되돌리기 중단: 되돌릴 수 있는 1필드 왕복 검증 기록이 없습니다.', 'error');
+    render();
+    return false;
+  }
+  if (rollback.hasOriginal === false) {
+    factoryLog('Cafe24 되돌리기 중단: 원래 Cafe24 값이 기록되지 않아 자동 복구할 수 없습니다.', 'error');
+    render();
+    return false;
+  }
+  const label = factoryCafe24FieldLabelByApiField(fieldName);
+  const product = { [fieldName]: cloneData(rollback.originalValue) };
+  const ok = confirm(`Cafe24 1필드 검증 되돌리기: 상품 #${productNo}의 ${label} (${fieldName}) 값을 원래값으로 다시 저장합니다.\n\n현재 테스트값: ${factoryCafe24HumanValue(rollback.savedValue, 160)}\n되돌릴 원래값: ${factoryCafe24HumanValue(rollback.originalValue, 160)}\n\n외부 Cafe24 데이터가 실제로 변경됩니다. 계속할까요?`);
+  if (!ok) return false;
+  factory.product.cafe24ApiStatus = `Cafe24 1필드 되돌리기 중: #${productNo} ${label}`;
+  factoryLog(factory.product.cafe24ApiStatus, 'ok');
+  saveLastWorkNow();
+  render();
+  try {
+    const body = await callCafe24Console('PUT', `/api/v2/admin/products/${encodeURIComponent(productNo)}`, {
+      mallId: rollback.mallId || CAFE24_CONTROL_API.defaultMallId,
+      body: { product },
+    }, `Rollback Cafe24 product ${productNo} ${fieldName}`);
+    const current = factoryState();
+    current.product.cafe24ApiStatus = `Cafe24 1필드 되돌리기 저장 완료, 재조회 확인 중: #${productNo} ${label}`;
+    current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
+      type: 'single-field-rollback',
+      productNo,
+      product,
+      verification: { checked: 1, matched: 0, missing: [], mismatches: [] },
+      message: '되돌리기 응답 완료, 상세 재조회 확인 중',
+    });
+    factoryLog(current.product.cafe24ApiStatus, 'ok');
+    try {
+      const detail = await fetchCafe24ProductFullByNo(productNo, rollback.mallId || CAFE24_CONTROL_API.defaultMallId);
+      if (detail) {
+        current.product.cafe24Candidates = factoryMergeCafe24Candidates(current.product.cafe24Candidates, [normalizeCafe24ProductCandidate(detail, `rollback:${productNo}`, 999, 0)]);
+        const verification = factoryVerifyCafe24ProductEcho(product, parseCafe24Raw(detail) || detail.raw || detail);
+        current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({ type: 'single-field-rollback', productNo, product, verification });
+        if (!verification.missing.length && !verification.mismatches.length) {
+          factoryLog(`Cafe24 1필드 되돌리기 재조회 확인 완료: ${verification.matched}/${verification.checked}개 필드 일치`, 'ok');
+        } else {
+          const issues = [
+            verification.missing.length ? `응답 누락 ${verification.missing.slice(0, 5).join(', ')}` : '',
+            verification.mismatches.length ? `값 확인 필요 ${verification.mismatches.slice(0, 5).join(', ')}` : '',
+          ].filter(Boolean).join(' · ');
+          factoryLog(`Cafe24 1필드 되돌리기 재조회 확인 필요: ${issues}`, 'error');
+        }
+      } else {
+        current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
+          type: 'single-field-rollback',
+          productNo,
+          product,
+          verification: { checked: 1, matched: 0, missing: [], mismatches: [] },
+          message: '되돌리기 후 상세 재조회 결과가 비어 있습니다.',
+        });
+      }
+    } catch(e) {
+      current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
+        type: 'single-field-rollback',
+        productNo,
+        product,
+        verification: { checked: 1, matched: 0, missing: [], mismatches: [] },
+        error: e.message || String(e),
+      });
+      factoryLog(`되돌리기 후 Cafe24 상세 재조회 보류: ${e.message || e}`, 'error');
+    }
+    saveLastWorkNow();
+    render();
+    return body;
+  } catch(e) {
+    const current = factoryState();
+    current.product.cafe24ApiStatus = `Cafe24 1필드 되돌리기 실패: ${e.message || e}`;
+    current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
+      type: 'single-field-rollback',
+      productNo,
+      product,
+      verification: { checked: 1, matched: 0, missing: [], mismatches: [] },
       error: e.message || String(e),
     });
     factoryLog(current.product.cafe24ApiStatus, 'error');
@@ -35507,6 +35700,7 @@ function factoryRefreshCafe24PrimaryActionButtons() {
   const saveFieldCount = saveDiff?.fieldNames?.length || 0;
   const createFieldCount = createModel?.fieldNames?.length || 0;
   const canSaveProduct = !!saveDiff?.productNo && saveFieldCount > 0;
+  const canVerifySingleField = canSaveProduct && saveFieldCount === 1;
   const canCreateProduct = !createModel?.productNo && !createModel?.requiredMissing?.length && createFieldCount > 0;
   const canSyncCategory = !!readyPlan?.productNo && factoryCafe24CategoryTouched(factory) && factorySelectedCafe24CategoryRows(factory, factory.product.finalDb || {}).length > 0;
   const createReason = createModel?.productNo
@@ -35520,6 +35714,11 @@ function factoryRefreshCafe24PrimaryActionButtons() {
   const saveReason = !saveDiff?.productNo
     ? 'Cafe24 상품번호를 먼저 확정해주세요. 기존 상품 저장은 선택한 Cafe24 상품에만 전송됩니다.'
     : '수정한 상품 기본 입력칸이 없습니다. 옵션/품목/재고, 카테고리, 이미지, 태그, SEO는 전용 동기화 버튼을 사용하세요.';
+  const singleVerifyReason = !saveDiff?.productNo
+    ? 'Cafe24 상품번호를 먼저 확정해주세요.'
+    : saveFieldCount === 0
+    ? '검증할 변경 필드가 없습니다. 상품 기본 입력칸 하나만 수정하면 활성화됩니다.'
+    : `1필드 왕복 검증은 정확히 1개 변경일 때만 실행합니다. 현재 ${saveFieldCount}개 변경이 잡혔습니다.`;
   factorySetCafe24ActionButton(
     'factoryCreateCafe24Api',
     canCreateProduct,
@@ -35531,6 +35730,12 @@ function factoryRefreshCafe24PrimaryActionButtons() {
     canSaveProduct,
     saveReason,
     `<span class="material-icons-outlined" style="font-size:14px">save</span>Cafe24 기본 저장${saveFieldCount ? ` (${saveFieldCount})` : ''}`
+  );
+  factorySetCafe24ActionButton(
+    'factoryVerifyCafe24SingleField',
+    canVerifySingleField,
+    singleVerifyReason,
+    `<span class="material-icons-outlined" style="font-size:14px">rule</span>1필드 왕복 검증`
   );
   factorySetCafe24ActionButton(
     'factorySyncCafe24ReadyAll',
@@ -35973,6 +36178,10 @@ registerBindEventExtension(function bindFactoryEvents() {
   if (createCafe24Api) createCafe24Api.onclick = () => factoryCreateCafe24ProductFromFinalDb();
   const saveCafe24Api = document.getElementById('factorySaveCafe24Api');
   if (saveCafe24Api) saveCafe24Api.onclick = () => factorySaveCafe24ProductFromFinalDb();
+  const verifyCafe24SingleField = document.getElementById('factoryVerifyCafe24SingleField');
+  if (verifyCafe24SingleField) verifyCafe24SingleField.onclick = () => factoryVerifyCafe24SingleFieldRoundTrip();
+  const rollbackCafe24SingleField = document.getElementById('factoryRollbackCafe24SingleField');
+  if (rollbackCafe24SingleField) rollbackCafe24SingleField.onclick = () => factoryRollbackLastCafe24SingleFieldVerification();
   document.querySelectorAll('#factorySyncCafe24ReadyAll,#factorySyncCafe24ReadyAllRoute').forEach(btn => {
     btn.onclick = () => factoryRunCafe24ReadySync();
   });
