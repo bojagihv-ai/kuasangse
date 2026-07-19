@@ -4,7 +4,8 @@ const {
   assertChecks,
   connectCdp,
   ensureCdp,
-  evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -25,39 +26,54 @@ async function main() {
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
     await cdp.send('Page.navigate', { url: `${APP_URL}?candidateDraftScope=v163` });
-    await waitFor(cdp, '!!(window.state && window.factoryState && window.factoryCandidateReviewCanApply && window.factoryCandidateReviewScopeKey)', 60000);
-    proof = await evaluate(cdp, `(() => {
+    await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+      && typeof factoryCurrentWorkspaceId === 'function'
+      && typeof factoryCandidateReviewScopeKey === 'function'
+      && typeof factoryCandidateReviewCanApply === 'function'
+      && typeof factoryNormalizeIdentityText === 'function'
+      && typeof rotateLastWorkDraftScope === 'function'`, 60000);
+    proof = await evaluateFactoryCdpFixture(cdp, `({
+      setAppState,
+      cloneFactory,
+      readFactory,
+      replaceFactory,
+    }) => {
       const productName = '새 초안 범위 검증 수저집';
-      const factory = window.factoryState();
-      window.state.currentProjectId = '';
-      window.state.currentProjectName = '';
-      window.state.productName = productName;
+      setAppState({
+        currentProjectId: '',
+        currentProjectName: '',
+        productName,
+      });
+      const factory = cloneFactory();
       factory.workspace = { ...(factory.workspace || {}), id: '', name: '' };
       factory.currentProjectId = '';
+      factory.currentProjectName = '';
       factory.product = {
         ...(factory.product || {}),
         productName,
         userProductName: productName,
-        productKey: window.factoryNormalizeIdentityText(productName),
+        productKey: factoryNormalizeIdentityText(productName),
         currentRunId: 'draft-scope-run-v163',
         inputImageFingerprint: 'draft-scope-image-v163',
       };
-      const beforeWorkspaceId = window.factoryCurrentWorkspaceId(factory);
-      const beforeScopeKey = window.factoryCandidateReviewScopeKey(factory);
+      replaceFactory(factory);
+      const currentFactory = readFactory();
+      const beforeWorkspaceId = factoryCurrentWorkspaceId(currentFactory);
+      const beforeScopeKey = factoryCandidateReviewScopeKey(currentFactory);
       const candidate = {
         product_name: '새 초안 후보',
         match_query: productName,
         reviewProductScopeKey: beforeScopeKey,
         reviewProductName: productName,
       };
-      const beforeSelectable = window.factoryCandidateReviewCanApply(candidate, factory);
-      const rotatedScope = window.rotateLastWorkDraftScope();
-      const afterWorkspaceId = window.factoryCurrentWorkspaceId(factory);
-      const afterScopeKey = window.factoryCandidateReviewScopeKey(factory);
+      const beforeSelectable = factoryCandidateReviewCanApply(candidate, currentFactory);
+      const rotatedScope = rotateLastWorkDraftScope();
+      const afterWorkspaceId = factoryCurrentWorkspaceId(readFactory());
+      const afterScopeKey = factoryCandidateReviewScopeKey(readFactory());
       const staleCandidate = { ...candidate, reviewProductScopeKey: beforeScopeKey };
-      const staleSelectable = window.factoryCandidateReviewCanApply(staleCandidate, factory);
+      const staleSelectable = factoryCandidateReviewCanApply(staleCandidate, readFactory());
       return {
-        buildId: window.__KUASANGSE_APP_BUILD_ID__ || '',
+        buildId: typeof __KUASANGSE_APP_BUILD_ID__ === 'string' ? __KUASANGSE_APP_BUILD_ID__ : '',
         beforeWorkspaceId,
         beforeScopeKey,
         beforeSelectable,
@@ -66,7 +82,7 @@ async function main() {
         afterScopeKey,
         staleSelectable,
       };
-    })()`);
+    }`);
   } finally {
     try { cdp.close(); } catch (_) {}
     await runtime.cleanup();
