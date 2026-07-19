@@ -60,6 +60,7 @@ export const KNOWN_FOUNDATION_MODULE_IDS = Object.freeze([
   'src/menus/sections-menu-cards-view.mjs',
   'src/menus/sections-menu-view.mjs',
   'src/menus/sections-menu.mjs',
+  'src/menus/sections-menu-a2-events.mjs',
   'src/menus/generating-menu.mjs',
   'src/menus/preview-menu-view.mjs',
   'src/menus/preview-menu.mjs',

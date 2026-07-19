@@ -9873,6 +9873,9 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
     getOperationToken() {
       return currentRuntimeMenuOperationToken();
     },
+    isOperationCurrent(operationToken) {
+      return factoryRuntimeIsOperationCurrent(operationToken);
+    },
     reportError(error) {
       const message = String(error?.message || error || '메뉴 작업 중 오류가 발생했습니다.');
       if (message !== 'READ_ONLY') state.error = message;
@@ -10157,6 +10160,20 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
       })),
       actions: {
         ...analysisPanelActions,
+        generateCompetitorPlan(_value, operationContext) {
+          if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+          const result = generateCompetitorPlan(operationContext);
+          return result && typeof result.then === 'function'
+            ? Promise.resolve(result).then(output => runtimeOperationContextIsCurrent(operationContext) ? output : undefined)
+            : result;
+        },
+        openCompetitor() {
+          state.step = 'competitor';
+          state.compPage = state.compPage || {};
+          state.compPage.subStep = state.compPage.analysisResult ? 'report' : 'input';
+          savePersistentState();
+          render();
+        },
         generateAll(_value, operationContext) {
           return generateAllSections(operationContext);
         },
@@ -10258,6 +10275,98 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         toggleSectionLock(sectionId) {
           setSectionLock(sectionId, !state.sectionLocks[sectionId]);
         },
+        updateSectionAssemblySource(value = {}) {
+          const sectionId = String(value.sectionId || '').trim();
+          const sourceId = String(value.sourceId || '').trim();
+          if (!sectionId || !SECTION_ASSEMBLY_SOURCES.some(source => source.id === sourceId)) return false;
+          if (!state.sectionAssembly || typeof state.sectionAssembly !== 'object') state.sectionAssembly = {};
+          const current = getSectionAssembly(sectionId);
+          const sources = { ...(current.sources || {}) };
+          sources[sourceId] = !!value.selected;
+          if (!Object.values(sources).some(Boolean)) sources.current = true;
+          state.sectionAssembly[sectionId] = {
+            ...current,
+            sources: normalizeSectionAssemblySources(sources),
+            updatedAt: Date.now(),
+          };
+          const selected = sectionAssemblySelectedSourceIds(sectionId);
+          if (selected.length === 1) {
+            state.sectionBasisModes[sectionId] = selected[0];
+            saveSectionBasisModes(state.sectionBasisModes);
+          }
+          saveSectionAssemblyState();
+          render();
+          return true;
+        },
+        updateSectionAssemblyCutUsage(value = {}) {
+          const sectionId = String(value.sectionId || '').trim();
+          const cutUsage = String(value.cutUsage || '').trim();
+          if (!sectionId || !SECTION_ASSEMBLY_CUT_USAGES.some(usage => usage.id === cutUsage)) return false;
+          if (!state.sectionAssembly || typeof state.sectionAssembly !== 'object') state.sectionAssembly = {};
+          const current = getSectionAssembly(sectionId);
+          const nextUsage = (!sectionAssemblyCanPlaceCutInSection(sectionId) && (cutUsage === 'section' || cutUsage === 'both'))
+            ? 'prompt'
+            : cutUsage;
+          state.sectionAssembly[sectionId] = { ...current, cutUsage: nextUsage, updatedAt: Date.now() };
+          applySectionAssemblyPlacement(sectionId);
+          saveSectionAssemblyState();
+          render();
+          return true;
+        },
+        updateSectionAssemblyCut(value = {}) {
+          const sectionId = String(value.sectionId || '').trim();
+          if (!sectionId) return false;
+          if (!state.sectionAssembly || typeof state.sectionAssembly !== 'object') state.sectionAssembly = {};
+          const current = getSectionAssembly(sectionId);
+          const cutAssetKey = String(value.cutAssetKey || '').trim();
+          state.sectionAssembly[sectionId] = {
+            ...current,
+            cutAssetKey,
+            cutUsage: cutAssetKey && current.cutUsage === 'none' ? 'prompt' : current.cutUsage,
+            updatedAt: Date.now(),
+          };
+          applySectionAssemblyPlacement(sectionId);
+          saveSectionAssemblyState();
+          render();
+          return true;
+        },
+        updateSectionAssemblyNote(value = {}) {
+          const sectionId = String(value.sectionId || '').trim();
+          if (!sectionId) return false;
+          if (!state.sectionAssembly || typeof state.sectionAssembly !== 'object') state.sectionAssembly = {};
+          const current = getSectionAssembly(sectionId);
+          state.sectionAssembly[sectionId] = {
+            ...current,
+            note: String(value.note || ''),
+            updatedAt: Date.now(),
+          };
+          saveSectionAssembly(state.sectionAssembly);
+          scheduleLastWorkSave(900);
+          return true;
+        },
+        autoDistributeSectionAssemblyCuts() {
+          return autoDistributeSectionAssemblyCuts();
+        },
+        clearSectionAssemblyCutUsage() {
+          return clearSectionAssemblyCutUsage();
+        },
+        applySectionImageHelperTips(sectionId) {
+          applySectionImageHelperTips(sectionId);
+          render();
+        },
+        applyAllSectionImageHelperTips() {
+          return applyAllSectionImageHelperTips();
+        },
+        beginSectionOrderChange() {
+          pushEditorHistory('섹션 설정 순서 변경 전');
+        },
+        updateSectionOrder(value) {
+          if (!Array.isArray(value)) return false;
+          state.sectionOrder = value.map(sectionId => String(sectionId || '').trim()).filter(Boolean);
+          savePersistentState();
+          render();
+          return true;
+        },
         navigate: runtimeRouteNavigate,
       },
       renderHelpers: {
@@ -10298,6 +10407,7 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           ? bindAnalysisPanelEvents
           : () => () => {},
         normalizeBrandPresetColor: normalizeHexColor,
+        getSortable: () => (typeof window !== 'undefined' ? window.Sortable : null),
         disabledAttr,
         escAttr,
         escapeHtml,

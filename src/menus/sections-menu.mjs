@@ -1,5 +1,6 @@
 import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contracts.mjs';
 import { renderSectionsView } from './sections-menu-view.mjs';
+import { bindSectionsLegacyFallback, bindSectionsSortable, createSectionsA2Handlers } from './sections-menu-a2-events.mjs';
 
 const RENDER_HELPER_NAMES = Object.freeze([
   "ensureCurrentProductAnalysisForGeneration",
@@ -47,6 +48,11 @@ const ACTION_NAMES = Object.freeze([
   'connectDrive', 'uploadAllSectionImages', 'toggleSection', 'hideSection',
   'updateSectionInstruction', 'setSectionGenerationMode', 'setSectionBasisMode',
   'generateSection', 'toggleSectionLock', 'navigate',
+  'generateCompetitorPlan', 'openCompetitor',
+  'updateSectionAssemblySource', 'updateSectionAssemblyCutUsage', 'updateSectionAssemblyCut',
+  'updateSectionAssemblyNote', 'autoDistributeSectionAssemblyCuts', 'clearSectionAssemblyCutUsage',
+  'applySectionImageHelperTips', 'applyAllSectionImageHelperTips',
+  'beginSectionOrderChange', 'updateSectionOrder',
   'toggleAnalysisLog', 'toggleRawJson', 'selectBrandPreset', 'selectLayoutTemplate', 'createBrandPreset', 'saveBrandPreset', 'deleteBrandPreset', 'updateBrandPresetDraft',
 ]);
 const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['generateAll', 'generateSection', 'navigate']));
@@ -74,15 +80,21 @@ export function createSectionsMenu(capabilities = {}) {
   if (!Array.isArray(renderHelpers.SECTION_GENERATION_MODES)) throw new TypeError('SECTION_GENERATION_MODES must be an array');
   const bindAnalysisPanelEvents = requiredFunction(renderHelpers, 'bindAnalysisPanelEvents'); const normalizeBrandPresetColor = typeof renderHelpers.normalizeBrandPresetColor === 'function' ? renderHelpers.normalizeBrandPresetColor : value => value;
 
+  const isOperationCurrent = typeof capabilities.isOperationCurrent === 'function'
+    ? capabilities.isOperationCurrent
+    : token => getOperationToken() === token;
+  const getSortable = typeof renderHelpers.getSortable === 'function' ? renderHelpers.getSortable : () => null;
+
   let active = false, generation = 0, contract;
   const activeDisposers = new Set();
   const bindingByRoot = new WeakMap();
+  const sortableByRoot = new WeakMap();
 
-  function runCommand(action, value) {
+  function runCommand(action, value, rootIsCurrent = () => true) {
     const operationToken = getOperationToken();
     const context = Object.freeze({
       operationToken,
-      isCurrent: () => getOperationToken() === operationToken,
+      isCurrent: () => rootIsCurrent() && isOperationCurrent(operationToken),
     });
     const result = action(value, context);
     if (!result || typeof result.then !== 'function') return result;
@@ -95,30 +107,30 @@ export function createSectionsMenu(capabilities = {}) {
   const commands = {
     generateAll: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.generateAll, value);
+        return runCommand(menuActions.generateAll, value, context?.isCurrent);
       },
     },
     generateSection: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.generateSection, value);
+        return runCommand(menuActions.generateSection, value, context?.isCurrent);
       },
     },
     navigate: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.navigate, value);
+        return runCommand(menuActions.navigate, value, context?.isCurrent);
       },
     },
   };
 
-  function invoke(name, value) {
+  function invoke(name, value, rootIsCurrent = () => true) {
     try {
-      const result = contract.invoke(name, value);
+      const result = contract.invoke(name, value, Object.freeze({ isCurrent: rootIsCurrent }));
       if (result && typeof result.catch === 'function') result.catch(reportError);
       return result;
     } catch (error) {
@@ -131,7 +143,7 @@ export function createSectionsMenu(capabilities = {}) {
     if (!isCurrent()) return undefined;
     try {
       assertMutable();
-      const result = runCommand(menuActions[name], value);
+      const result = runCommand(menuActions[name], value, isCurrent);
       if (result && typeof result.catch === 'function') result.catch(reportError);
       return result;
     } catch (error) {
@@ -159,16 +171,18 @@ export function createSectionsMenu(capabilities = {}) {
       const token = getOperationToken();
       const boundGeneration = generation;
       let disposed = false;
-      const isCurrent = () => !disposed && active && generation === boundGeneration && getOperationToken() === token;
+      const isCurrent = () => !disposed && active && generation === boundGeneration && isOperationCurrent(token);
       const closest = (event, selector) => {
         const node = event?.target?.closest?.(selector);
         return node && root?.contains?.(node) !== false ? node : null;
       };
       const call = (name, value) => invokeAction(name, value, isCurrent);
+      const a2Handlers = createSectionsA2Handlers({ closest, call });
       const onClick = event => {
+        if (a2Handlers.onClick(event)) return;
         const route = closest(event, '[data-route-target]');
-        if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget); return; }
-        if (closest(event, '#generateAll') || closest(event, '#generateAll2')) { event.preventDefault?.(); if (isCurrent()) invoke('generateAll'); return; }
+        if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget, isCurrent); return; }
+        if (closest(event, '#generateAll') || closest(event, '#generateAll2')) { event.preventDefault?.(); if (isCurrent()) invoke('generateAll', undefined, isCurrent); return; }
         if (closest(event, '#sectionBatchBasisMode') || closest(event, '#sectionBatchGenerationMode') || closest(event, '[data-section-batch]')) { event.stopPropagation?.(); return; }
         if (closest(event, '#selectMissingSectionsForBatch')) { event.stopPropagation?.(); call('selectMissingSections'); return; }
         if (closest(event, '#clearMissingSectionBatchSelection')) { event.stopPropagation?.(); call('clearMissingSectionSelection'); return; }
@@ -191,14 +205,16 @@ export function createSectionsMenu(capabilities = {}) {
         const mode = closest(event, '[data-section-mode]'); if (mode) { event.stopPropagation?.(); return; }
         const basis = closest(event, '[data-section-basis]'); if (basis) { event.stopPropagation?.(); return; }
         const generate = closest(event, '[data-generate-section]');
-        if (generate) { event.preventDefault?.(); event.stopPropagation?.(); if (isCurrent()) invoke('generateSection', generate.dataset.generateSection); return; }
+        if (generate) { event.preventDefault?.(); event.stopPropagation?.(); if (isCurrent()) invoke('generateSection', generate.dataset.generateSection, isCurrent); return; }
         const lock = closest(event, '[data-lock-section]'); if (lock) { event.stopPropagation?.(); call('toggleSectionLock', lock.dataset.lockSection); }
       };
       const onInput = event => {
+        if (a2Handlers.onInput(event)) return;
         const input = closest(event, '[data-section-input]');
         if (input) call('updateSectionInstruction', { sectionId: input.dataset.sectionInput, value: input.value || '' });
       };
       const onChange = event => {
+        if (a2Handlers.onChange(event)) return;
         const basisMode = closest(event, '#sectionBatchBasisMode');
         if (basisMode) { event.stopPropagation?.(); call('updateBatchBasisMode', basisMode.value); return; }
         const generationMode = closest(event, '#sectionBatchGenerationMode');
@@ -213,27 +229,16 @@ export function createSectionsMenu(capabilities = {}) {
       const listeners = { click: onClick, input: onInput, change: onChange };
       for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
       const analysisPanelDispose = bindAnalysisPanelEvents(root, call, normalizeBrandPresetColor) || (() => {});
-      const legacyBindings = [];
-      if (typeof root?.addEventListener !== 'function') {
-        const legacySpecs = [
-          ['#generateAll,#generateAll2', 'generateAll', ''],
-          ['[data-route-target]', 'navigate', 'routeTarget'],
-          ['[data-generate-section]', 'generateSection', 'generateSection'],
-        ];
-        for (const [selector, name, dataKey] of legacySpecs) {
-          for (const node of root?.querySelectorAll?.(selector) || []) {
-            const previous = node.onclick;
-            const handler = event => { event?.preventDefault?.(); event?.stopPropagation?.(); invoke(name, dataKey ? node.dataset[dataKey] : undefined); };
-            node.onclick = handler;
-            legacyBindings.push(() => { if (node.onclick === handler) node.onclick = previous || null; });
-          }
-        }
-      }
+      bindSectionsSortable({ root, isCurrent, call, getSortable, sortableByRoot });
+      const legacyBindings = bindSectionsLegacyFallback({ root, invoke });
       const dispose = () => {
         if (disposed) return;
         disposed = true;
         for (const [type, handler] of Object.entries(listeners)) root?.removeEventListener?.(type, handler);
         analysisPanelDispose?.();
+        const sortable = sortableByRoot.get(root);
+        sortable?.destroy?.();
+        sortableByRoot.delete(root);
         for (const disposeLegacy of legacyBindings.splice(0).reverse()) disposeLegacy();
         activeDisposers.delete(dispose);
         if (bindingByRoot.get(root) === dispose) bindingByRoot.delete(root);
@@ -245,9 +250,6 @@ export function createSectionsMenu(capabilities = {}) {
     onEnter() {
       active = true;
       generation += 1;
-      void active;
-      void generation;
-      void getOperationToken();
     },
     onLeave() {
       for (const dispose of [...activeDisposers].reverse()) dispose();

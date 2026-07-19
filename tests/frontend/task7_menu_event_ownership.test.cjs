@@ -193,6 +193,15 @@ const ROUTE_CONTROLS = Object.freeze({
     c('[data-section-basis]', 'click change', { sectionBasis: 'hero' }),
     c('[data-generate-section]', 'click', { generateSection: 'hero' }),
     c('[data-lock-section]', 'click', { lockSection: 'hero' }),
+    c('[data-section-generate-comp-plan]', 'click'),
+    c('[data-section-open-competitor]', 'click'),
+    c('[data-section-assembly-source]', 'click change', { sectionAssemblySource: 'hero:current' }),
+    c('[data-section-assembly-cut-usage]', 'click change', { sectionAssemblyCutUsage: 'hero' }),
+    c('[data-section-assembly-cut]', 'click change', { sectionAssemblyCut: 'hero' }),
+    c('[data-section-assembly-note]', 'click input', { sectionAssemblyNote: 'hero' }),
+    c('#autoSectionAssemblyCutsBtn'), c('#clearSectionAssemblyCutsBtn'),
+    c('[data-apply-section-helper]', 'click', { applySectionHelper: 'hero' }),
+    c('[data-apply-all-section-helpers]'),
   ]),
   generating: Object.freeze([c('#stopAfterCurrentSection')]),
   preview: Object.freeze([
@@ -282,7 +291,10 @@ async function createRouteMenu(route, calls = []) {
       'updateBatchSelection', 'addCustomSection', 'restoreHiddenSections', 'saveDriveFolder',
       'connectDrive', 'uploadAllSectionImages', 'toggleSection', 'hideSection',
       'updateSectionInstruction', 'setSectionGenerationMode', 'setSectionBasisMode',
-      'generateSection', 'toggleSectionLock', 'navigate',
+      'generateSection', 'toggleSectionLock', 'navigate', 'generateCompetitorPlan',
+      'openCompetitor', 'updateSectionAssemblySource', 'updateSectionAssemblyCutUsage',
+      'updateSectionAssemblyCut', 'updateSectionAssemblyNote', 'autoDistributeSectionAssemblyCuts',
+      'clearSectionAssemblyCutUsage', 'applySectionImageHelperTips', 'applyAllSectionImageHelperTips',
     ];
     return (await importMenu('sections-menu.mjs')).createSectionsMenu(domainCapabilities(names, {
       actions: Object.fromEntries(names.map(name => [name, (value, context) => calls.push([name, value, context.operationToken])])),
@@ -498,6 +510,24 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
       fire(sectionBasis, 'change', {}, root);
       fire(root.nodes.get('[data-generate-section]'), 'click', {}, root);
       fire(root.nodes.get('[data-lock-section]'), 'click', {}, root);
+      fire(root.nodes.get('[data-section-generate-comp-plan]'), 'click', {}, root);
+      fire(root.nodes.get('[data-section-open-competitor]'), 'click', {}, root);
+      const assemblySource = root.nodes.get('[data-section-assembly-source]');
+      assemblySource.checked = true;
+      fire(assemblySource, 'change', {}, root);
+      const assemblyUsage = root.nodes.get('[data-section-assembly-cut-usage]');
+      assemblyUsage.value = 'section';
+      fire(assemblyUsage, 'change', {}, root);
+      const assemblyCut = root.nodes.get('[data-section-assembly-cut]');
+      assemblyCut.value = 'cut:hero';
+      fire(assemblyCut, 'change', {}, root);
+      const assemblyNote = root.nodes.get('[data-section-assembly-note]');
+      assemblyNote.value = 'assembly-note';
+      fire(assemblyNote, 'input', {}, root);
+      fire(root.nodes.get('#autoSectionAssemblyCutsBtn'), 'click', {}, root);
+      fire(root.nodes.get('#clearSectionAssemblyCutsBtn'), 'click', {}, root);
+      fire(root.nodes.get('[data-apply-section-helper]'), 'click', {}, root);
+      fire(root.nodes.get('[data-apply-all-section-helpers]'), 'click', {}, root);
       assert.deepEqual(calls, [
         ['generateAll', undefined, 'workspace:a:fence:1'],
         ['updateBatchBasisMode', 'current', 'workspace:a:fence:1'],
@@ -519,11 +549,21 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
         ['setSectionBasisMode', { sectionId: 'hero', basisId: 'current' }, 'workspace:a:fence:1'],
         ['generateSection', 'hero', 'workspace:a:fence:1'],
         ['toggleSectionLock', 'hero', 'workspace:a:fence:1'],
+        ['generateCompetitorPlan', undefined, 'workspace:a:fence:1'],
+        ['openCompetitor', undefined, 'workspace:a:fence:1'],
+        ['updateSectionAssemblySource', { sectionId: 'hero', sourceId: 'current', selected: true }, 'workspace:a:fence:1'],
+        ['updateSectionAssemblyCutUsage', { sectionId: 'hero', cutUsage: 'section' }, 'workspace:a:fence:1'],
+        ['updateSectionAssemblyCut', { sectionId: 'hero', cutAssetKey: 'cut:hero' }, 'workspace:a:fence:1'],
+        ['updateSectionAssemblyNote', { sectionId: 'hero', note: 'assembly-note' }, 'workspace:a:fence:1'],
+        ['autoDistributeSectionAssemblyCuts', undefined, 'workspace:a:fence:1'],
+        ['clearSectionAssemblyCutUsage', undefined, 'workspace:a:fence:1'],
+        ['applySectionImageHelperTips', 'hero', 'workspace:a:fence:1'],
+        ['applyAllSectionImageHelperTips', undefined, 'workspace:a:fence:1'],
       ]);
       const staleClick = [...root.rootListeners.get('click')][0];
       menu.onLeave();
       staleClick({ target: root.nodes.get('#generateAll'), preventDefault() {}, stopPropagation() {} });
-      assert.equal(calls.length, 20, 'stale sections listener must be a no-op after workspace switch');
+      assert.equal(calls.length, 30, 'stale sections listener must be a no-op after workspace switch');
       menu.onEnter();
     }
     if (route === 'preview') {
@@ -631,8 +671,16 @@ test('Task 7 classic bindEvents owns zero route-specific selectors', () => {
     '#brandPresetBackgroundPicker', '#openRemainingSectionsAfterStop',
     '[data-section-mode-choice]', '[data-section-basis-choice]',
   ];
+  const a2Selectors = [
+    '[data-section-generate-comp-plan]', '[data-section-open-competitor]',
+    '[data-section-assembly-source]', '[data-section-assembly-cut-usage]',
+    '[data-section-assembly-cut]', '[data-section-assembly-note]',
+    '#autoSectionAssemblyCutsBtn', '#clearSectionAssemblyCutsBtn',
+    '[data-apply-section-helper]', '[data-apply-all-section-helpers]',
+    'sectionSortable',
+  ];
   const selectors = [...new Set([
-    ...Object.values(ROUTE_CONTROLS).flat().map(control => control.selector), ...a1Selectors,
+    ...Object.values(ROUTE_CONTROLS).flat().map(control => control.selector), ...a1Selectors, ...a2Selectors,
   ])]
     .filter(selector => selector !== '[data-nav]');
   const retained = selectors.filter(selector => binder.includes(selector.replace(/^#/, '')));
