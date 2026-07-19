@@ -5239,13 +5239,15 @@ function preloadImageForSwitch(src) {
   });
 }
 
-async function updateSectionVariantImageDom(sectionId, variant, switchToken) {
+async function updateSectionVariantImageDom(sectionId, variant, switchToken, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const sectionSel = previewSelectorValue(sectionId);
   const root = document.querySelector(`[data-preview-section="${sectionSel}"]`);
   const imageSrc = sectionVariantImageForDisplay(sectionId, variant);
   if (!root || !imageSrc) return false;
 
   await preloadImageForSwitch(imageSrc);
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   if (switchToken && state.sectionVariantSwitchTokens?.[sectionId] !== switchToken) return true;
 
   root.querySelectorAll('img[data-section-main-image]').forEach(img => {
@@ -5268,10 +5270,11 @@ async function updateSectionVariantImageDom(sectionId, variant, switchToken) {
   return true;
 }
 
-async function applySectionVariantImageOnly(sectionId, variantId) {
+async function applySectionVariantImageOnly(sectionId, variantId, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const variant = (state.sectionVariants[sectionId] || []).find(item => item.id === variantId);
   const image = sectionVariantImageForDisplay(sectionId, variant);
-  if (!image) return;
+  if (!image) return false;
   state.sectionImages[sectionId] = image;
   state.currentSectionVariantIds[sectionId] = variant.id;
   compactCurrentSectionVariantImages(sectionId);
@@ -5281,10 +5284,13 @@ async function applySectionVariantImageOnly(sectionId, variantId) {
   markContentChanged(false);
   scheduleLastWorkSave(500);
   try {
-    const updated = await updateSectionVariantImageDom(sectionId, variant, switchToken);
+    const updated = await updateSectionVariantImageDom(sectionId, variant, switchToken, operationContext);
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     if (!updated) render();
+    return true;
   } catch(_) {
-    render();
+    if (runtimeOperationContextIsCurrent(operationContext)) render();
+    return false;
   }
 }
 
@@ -5956,11 +5962,11 @@ Return ONLY JSON:
   render();
 }
 
-function applyBestEvaluatedVariant(sectionId) {
+function applyBestEvaluatedVariant(sectionId, operationContext = null) {
   const evalResult = state.sectionVariantEvaluations?.[sectionId];
   const bestId = evalResult?.recommended_variant_id || evalResult?.variants?.find(v => v.recommended)?.variant_id;
-  if (!bestId) return;
-  applySectionVariantImageOnly(sectionId, bestId);
+  if (!bestId) return false;
+  return applySectionVariantImageOnly(sectionId, bestId, operationContext);
 }
 
 function renderSectionVariantQuickBar(sectionId) {
@@ -10448,6 +10454,7 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         qaVersion: state.qaVersion,
         sectionBatchRun: state.sectionBatchRun,
         sectionContents: state.sectionContents,
+        sectionLocks: state.sectionLocks,
         sectionGenerating: state.sectionGenerating,
         sectionImages: state.sectionImages,
         sectionInstructions: state.sectionInstructions,
@@ -10478,6 +10485,50 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           setSectionInstructionValue(payload.sectionId, payload.value, 'manual', { source: '미리보기 수정 패널' });
           state.editingPreviewSection = null;
           return regenerateSection(payload.sectionId);
+        },
+        setSectionLock(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          setSectionLock(sectionId, !!payload.locked);
+          return true;
+        },
+        saveManualSection(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId || !payload.patch || typeof payload.patch !== 'object') return false;
+          pushEditorHistory(`${sectionId} 직접 수정 저장 전`);
+          saveManualSectionContent(sectionId, payload.patch);
+          render();
+          return true;
+        },
+        applySectionVariant(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          const variantId = String(payload.variantId || '').trim();
+          if (!sectionId || !variantId) return false;
+          applySectionVariant(sectionId, variantId);
+          return true;
+        },
+        applySectionVariantImage(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          const variantId = String(payload.variantId || '').trim();
+          if (!sectionId || !variantId) return false;
+          return applySectionVariantImageOnly(sectionId, variantId, operationContext);
+        },
+        applyBestEvaluatedVariant(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          return applyBestEvaluatedVariant(sectionId, operationContext);
+        },
+        setRecoveredDetailMode(enabled, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          state.previewRecoveredDetailMode = !!enabled;
+          saveLastWorkNow({ sync: false, server: false });
+          render();
+          return state.previewRecoveredDetailMode;
         },
         updatePreviewInstruction(payload) {
           setSectionInstructionValue(payload.sectionId, payload.value, 'manual', { source: '미리보기 수정 패널' });

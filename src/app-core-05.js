@@ -15797,57 +15797,10 @@ function bindEvents() {
   bindDetailImageManagementEvents();
   bindPreviewLayerEvents();
 
-  document.querySelectorAll('[data-lock-preview]').forEach(btn => {
-    btn.onclick = () => {
-      const id = btn.dataset.lockPreview;
-      setSectionLock(id, !state.sectionLocks[id]);
-    };
-  });
-  document.querySelectorAll('[data-save-manual]').forEach(btn => {
-    btn.onclick = () => {
-      const id = btn.dataset.saveManual;
-      pushEditorHistory(`${id} 직접 수정 저장 전`);
-      saveManualSectionContent(id, {
-        headline: document.querySelector(`[data-manual-headline="${id}"]`)?.value || '',
-        subheadline: document.querySelector(`[data-manual-subheadline="${id}"]`)?.value || '',
-        body_text: document.querySelector(`[data-manual-body="${id}"]`)?.value || '',
-        cta_text: document.querySelector(`[data-manual-cta="${id}"]`)?.value || '',
-        extra_elements: document.querySelector(`[data-manual-extra="${id}"]`)?.value || '',
-        layout_suggestion: state.sectionContents[id]?.layout_suggestion || '',
-      });
-      render();
-    };
-  });
-  document.querySelectorAll('[data-apply-variant]').forEach(btn => {
-    btn.onclick = () => {
-      const [sectionId, variantId] = (btn.dataset.applyVariant || '').split(':');
-      if (sectionId && variantId) applySectionVariant(sectionId, variantId);
-    };
-  });
-  document.querySelectorAll('[data-apply-variant-image]').forEach(btn => {
-    btn.onclick = () => {
-      const [sectionId, variantId] = (btn.dataset.applyVariantImage || '').split(':');
-      if (sectionId && variantId) applySectionVariantImageOnly(sectionId, variantId);
-    };
-  });
   document.querySelectorAll('[data-eval-section-variants]').forEach(btn => {
     btn.onclick = () => {
       const sectionId = btn.dataset.evalSectionVariants;
       if (sectionId) evaluateSectionVariants(sectionId);
-    };
-  });
-  document.querySelectorAll('[data-apply-eval-best]').forEach(btn => {
-    btn.onclick = () => {
-      const sectionId = btn.dataset.applyEvalBest;
-      if (sectionId) applyBestEvaluatedVariant(sectionId);
-    };
-  });
-
-  document.querySelectorAll('[data-preview-recovered-detail-mode]').forEach(btn => {
-    btn.onclick = () => {
-      state.previewRecoveredDetailMode = btn.dataset.previewRecoveredDetailMode === 'on';
-      saveLastWorkNow({ sync: false, server: false });
-      render();
     };
   });
 

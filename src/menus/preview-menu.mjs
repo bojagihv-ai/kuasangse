@@ -33,6 +33,8 @@ const RENDER_HELPER_NAMES = Object.freeze([
 const ACTION_NAMES = Object.freeze([
   'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair',
   'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
+  'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
+  'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
   'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
   'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
   'openRemainingSectionsAfterStop',
@@ -66,11 +68,11 @@ export function createPreviewMenu(capabilities = {}) {
   const activeDisposers = new Set();
   const bindingByRoot = new WeakMap();
 
-  function runCommand(action, value) {
+  function runCommand(action, value, rootIsCurrent = () => true) {
     const operationToken = getOperationToken();
     const context = Object.freeze({
       operationToken,
-      isCurrent: () => getOperationToken() === operationToken,
+      isCurrent: () => rootIsCurrent() && getOperationToken() === operationToken,
     });
     const result = action(value, context);
     if (!result || typeof result.then !== 'function') return result;
@@ -83,30 +85,30 @@ export function createPreviewMenu(capabilities = {}) {
   const commands = {
     setViewport: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.setViewport, value);
+        return runCommand(menuActions.setViewport, value, context?.isCurrent);
       },
     },
     navigate: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.navigate, value);
+        return runCommand(menuActions.navigate, value, context?.isCurrent);
       },
     },
     startGenerating: {
       capability: 'detail-document:write',
-      execute(value) {
+      execute(value, context) {
         assertMutable();
-        return runCommand(menuActions.startGenerating, value);
+        return runCommand(menuActions.startGenerating, value, context?.isCurrent);
       },
     },
   };
 
-  function invoke(name, value) {
+  function invoke(name, value, rootIsCurrent = () => true) {
     try {
-      const result = contract.invoke(name, value);
+      const result = contract.invoke(name, value, Object.freeze({ isCurrent: rootIsCurrent }));
       if (result && typeof result.catch === 'function') result.catch(reportError);
       return result;
     } catch (error) {
@@ -119,7 +121,7 @@ export function createPreviewMenu(capabilities = {}) {
     if (!isCurrent()) return undefined;
     try {
       assertMutable();
-      const result = runCommand(menuActions[name], value);
+      const result = runCommand(menuActions[name], value, isCurrent);
       if (result && typeof result.catch === 'function') result.catch(reportError);
       return result;
     } catch (error) {
@@ -152,16 +154,18 @@ export function createPreviewMenu(capabilities = {}) {
         const node = event?.target?.closest?.(selector);
         return node && root?.contains?.(node) !== false ? node : null;
       };
-      const call = (name, value) => invokeAction(name, value, isCurrent);
+      const call = (name, value) => invokeAction(name, value, isCurrent); const selectorValue = value => String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const readManualField = (sectionId, field) => root?.querySelector?.(`[data-manual-${field}="${selectorValue(sectionId)}"]`)?.value || '';
+      const sectionSnapshot = sectionId => getSnapshot()?.sectionContents?.[sectionId] || {};
       const onClick = event => {
         const route = closest(event, '[data-route-target]');
-        if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget); return; }
-        if (closest(event, '[data-start-generating]')) { event.preventDefault?.(); if (isCurrent()) invoke('startGenerating'); return; }
+        if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget, isCurrent); return; }
+        if (closest(event, '[data-start-generating]')) { event.preventDefault?.(); if (isCurrent()) invoke('startGenerating', undefined, isCurrent); return; }
         if (closest(event, '#openRemainingSectionsAfterStop')) { event.preventDefault?.(); call('openRemainingSectionsAfterStop'); return; }
         const viewport = closest(event, '[data-preview-viewport]');
-        if (viewport) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', viewport.dataset.previewViewport); return; }
-        if (closest(event, '#viewportPc')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'pc'); return; }
-        if (closest(event, '#viewportMobile')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'mobile'); return; }
+        if (viewport) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', viewport.dataset.previewViewport, isCurrent); return; }
+        if (closest(event, '#viewportPc')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'pc', isCurrent); return; }
+        if (closest(event, '#viewportMobile')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'mobile', isCurrent); return; }
         const edit = closest(event, '[data-edit-preview]'); if (edit) { call('togglePreviewEdit', edit.dataset.editPreview); return; }
         const repair = closest(event, '[data-ai-repair]'); if (repair) { call('openAiRepair', repair.dataset.aiRepair); return; }
         const undo = closest(event, '[data-undo-ai-repair]'); if (undo) { call('undoAiRepair', undo.dataset.undoAiRepair); return; }
@@ -174,12 +178,27 @@ export function createPreviewMenu(capabilities = {}) {
           call('applyPreviewEdit', { sectionId, value: input?.value || '' });
           return;
         }
-        const clickActions = {
-          runQaBtn: 'runQaCheck', runAiQaBtn: 'runAiQaCheck', toggleLayerMode: 'toggleLayerMode',
-          resetAllLayers: 'resetAllLayers', exportLayeredSVG: 'exportLayeredSVG',
-          exportPhotoshopPackage: 'exportPhotoshopPackage', exportJpgAll: 'exportJpgAll',
-          exportJpgSections: 'exportJpgSections', exportHTML: 'exportHTML',
-        };
+        const lock = closest(event, '[data-lock-preview]');
+        if (lock) { const sectionId = String(lock.dataset.lockPreview || '').trim(); if (sectionId) call('setSectionLock', { sectionId, locked: !getSnapshot()?.sectionLocks?.[sectionId] }); return; }
+        const manual = closest(event, '[data-save-manual]');
+        if (manual) {
+          const sectionId = String(manual.dataset.saveManual || '').trim();
+          if (sectionId) { const content = sectionSnapshot(sectionId); call('saveManualSection', { sectionId, patch: {
+            headline: readManualField(sectionId, 'headline'), subheadline: readManualField(sectionId, 'subheadline'),
+            body_text: readManualField(sectionId, 'body'), cta_text: readManualField(sectionId, 'cta'),
+            extra_elements: readManualField(sectionId, 'extra'), layout_suggestion: content.layout_suggestion || '',
+          } }); }
+          return;
+        }
+        const b1Specs = [['[data-apply-variant]', 'applyVariant', 'applySectionVariant'], ['[data-apply-variant-image]', 'applyVariantImage', 'applySectionVariantImage'], ['[data-apply-eval-best]', 'applyEvalBest', 'applyBestEvaluatedVariant'], ['[data-preview-recovered-detail-mode]', 'previewRecoveredDetailMode', 'setRecoveredDetailMode']];
+        for (const [selector, key, name] of b1Specs) {
+          const node = closest(event, selector); if (!node) continue;
+          const raw = String(node.dataset[key] || '').trim();
+          if (name === 'setRecoveredDetailMode') { if (raw === 'on' || raw === 'off') call(name, raw === 'on'); return; }
+          if (name === 'applyBestEvaluatedVariant') { if (raw) call(name, { sectionId: raw }); return; }
+          const [sectionId, variantId] = raw.split(':'); if (sectionId && variantId) call(name, { sectionId, variantId }); return;
+        }
+        const clickActions = { runQaBtn: 'runQaCheck', runAiQaBtn: 'runAiQaCheck', toggleLayerMode: 'toggleLayerMode', resetAllLayers: 'resetAllLayers', exportLayeredSVG: 'exportLayeredSVG', exportPhotoshopPackage: 'exportPhotoshopPackage', exportJpgAll: 'exportJpgAll', exportJpgSections: 'exportJpgSections', exportHTML: 'exportHTML' };
         for (const [id, name] of Object.entries(clickActions)) {
           if (closest(event, `#${id}`)) { call(name); return; }
         }
@@ -188,8 +207,7 @@ export function createPreviewMenu(capabilities = {}) {
         const input = closest(event, '[data-edit-input]');
         if (input) call('updatePreviewInstruction', { sectionId: input.dataset.editInput, value: input.value || '' });
       };
-      const listeners = { click: onClick, input: onInput };
-      for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
+      const listeners = { click: onClick, input: onInput }; for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
       const legacyBindings = [];
       if (typeof root?.addEventListener !== 'function') {
         const legacySpecs = [
