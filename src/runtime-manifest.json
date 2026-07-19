@@ -45,6 +45,7 @@
     "src/menus/sections-menu-a2-events.mjs",
     "src/menus/generating-menu.mjs",
     "src/menus/preview-menu-view.mjs",
+    "src/menus/preview-image-insert-events.mjs",
     "src/menus/preview-menu.mjs",
     "src/menus/competitor-menu-report-view.mjs",
     "src/menus/competitor-menu-plan-view.mjs",

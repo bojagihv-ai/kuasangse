@@ -10475,6 +10475,7 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         sectionGenerating: state.sectionGenerating,
         sectionImages: state.sectionImages,
         sectionInstructions: state.sectionInstructions,
+        imageInsert: state.imageInsert,
       })),
       actions: {
         setViewport(value) {
@@ -10589,6 +10590,47 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           openImageInsert(sectionId, payload.mode);
           return true;
         },
+        closeImageInsert(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          closeImageInsert();
+          return true;
+        },
+        updateImageInsertFolder(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          state.imageInsert.driveFolderId = String(value || '');
+          return state.imageInsert.driveFolderId;
+        },
+        applyImageInsert(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          if (!payload?.dataUrl) return false;
+          applyImageInsert(payload.dataUrl, payload.label, payload.source, operationContext);
+          return true;
+        },
+        loadDetailDriveImages(value, operationContext) {
+          return loadDetailDriveImages(value, operationContext);
+        },
+        connectImageInsertDrive(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          return connectDrive(operationContext);
+        },
+        useDriveDetailImage(value, operationContext) {
+          return useDriveDetailImage(value, operationContext);
+        },
+        useCutDetailImage(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          return useCutDetailImage(value, operationContext);
+        },
+        setImageInsertError(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          if (!state.imageInsert) state.imageInsert = {};
+          state.imageInsert.error = String(value || '');
+          return true;
+        },
+        requestRender(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          render();
+          return true;
+        },
         updatePreviewInstruction(payload) {
           setSectionInstructionValue(payload.sectionId, payload.value, 'manual', { source: '미리보기 수정 패널' });
         },
@@ -10639,6 +10681,7 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         escAttr,
         escapeHtml,
       },
+      readImageFileAsDataUrl,
     }));
   }
 

@@ -1,5 +1,6 @@
 import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contracts.mjs';
 import { renderPreviewView } from './preview-menu-view.mjs';
+import { createPreviewImageInsertBridge } from './preview-image-insert-events.mjs';
 
 const RENDER_HELPER_NAMES = Object.freeze([
   "syncFixedSectionPlacementImages",
@@ -37,7 +38,7 @@ const ACTION_NAMES = Object.freeze([
   'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
   'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
   'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
-  'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert',
+  'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert', 'closeImageInsert', 'applyImageInsert', 'updateImageInsertFolder', 'loadDetailDriveImages', 'connectImageInsertDrive', 'useDriveDetailImage', 'useCutDetailImage', 'setImageInsertError', 'requestRender',
 ]);
 const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['setViewport', 'navigate', 'startGenerating']));
 
@@ -58,10 +59,7 @@ export function createPreviewMenu(capabilities = {}) {
       ? requiredFunction(actions, name)
       : (typeof actions[name] === 'function' ? actions[name] : () => undefined),
   ]));
-  const reportMenuError = error => {
-    if (error?.message === 'STALE_MENU_OPERATION') return;
-    reportError(error);
-  };
+  const reportMenuError = error => { if (error?.message !== 'STALE_MENU_OPERATION') reportError(error); };
   const renderHelpers = capabilities.renderHelpers || {};
   for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);
 
@@ -133,6 +131,8 @@ export function createPreviewMenu(capabilities = {}) {
       return undefined;
     }
   }
+
+  const imageInsertEvents = createPreviewImageInsertBridge({ getSnapshot, getOperationToken, readImageFileAsDataUrl: capabilities.readImageFileAsDataUrl, actions: menuActions, invokeAction });
 
   contract = createMenuContract({
     version: MENU_CONTRACT_VERSION,
@@ -213,6 +213,7 @@ export function createPreviewMenu(capabilities = {}) {
         if (input) call('updatePreviewInstruction', { sectionId: input.dataset.editInput, value: input.value || '' });
       };
       const listeners = { click: onClick, input: onInput }; for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
+      const imageInsertDispose = typeof root?.addEventListener === 'function' ? imageInsertEvents.bind(root, isCurrent) : () => undefined;
       const legacyBindings = [];
       if (typeof root?.addEventListener !== 'function') {
         const legacySpecs = [
@@ -235,7 +236,7 @@ export function createPreviewMenu(capabilities = {}) {
       const dispose = () => {
         if (disposed) return;
         disposed = true;
-        for (const [type, handler] of Object.entries(listeners)) root?.removeEventListener?.(type, handler);
+        for (const [type, handler] of Object.entries(listeners)) root?.removeEventListener?.(type, handler); imageInsertDispose?.();
         for (const disposeLegacy of legacyBindings.splice(0).reverse()) disposeLegacy();
         activeDisposers.delete(dispose);
         if (bindingByRoot.get(root) === dispose) bindingByRoot.delete(root);

@@ -15793,7 +15793,6 @@ function bindEvents() {
   });
 
   bindAiRepairEvents();
-  bindImageInsertEvents();
   bindPreviewLayerEvents();
 
   runBindEventExtensions();
@@ -15884,7 +15883,8 @@ function readImageFileAsDataUrl(file) {
   });
 }
 
-function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = 'local') {
+function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = 'local', operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const insert = state.imageInsert || {};
   if (!dataUrl) return;
   if (insert.targetSectionId) {
@@ -15907,10 +15907,12 @@ function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = '
     state.detailImageBlocks = [...(state.detailImageBlocks || []), block];
     markContentChanged();
   }
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   state.imageInsert.open = false;
   state.imageInsert.error = '';
   savePersistentState();
   render();
+  return true;
 }
 
 function deleteDetailImageBlock(blockId) {
@@ -15957,19 +15959,23 @@ function moveDetailImageBlock(blockId, direction) {
   render();
 }
 
-async function loadDetailDriveImages() {
-  const folderRaw = document.getElementById('detailImageDriveFolderInput')?.value || state.imageInsert?.driveFolderId || '';
-  const folderId = extractFolderId(folderRaw);
+async function loadDetailDriveImages(folderRaw = '', operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+  const folderValue = String(folderRaw || state.imageInsert?.driveFolderId || '');
+  const folderId = extractFolderId(folderValue);
   if (!folderId) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.imageInsert.error = 'Google Drive 폴더 URL 또는 ID를 입력해주세요.';
     render();
-    return;
+    return false;
   }
   if (!driveService && !(await ensureDriveServiceReady())) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.imageInsert.error = 'Google Drive가 아직 연결되지 않았습니다. 먼저 연결해주세요.';
     render();
-    return;
+    return false;
   }
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   state.imageInsert.driveFolderId = folderId;
   state.imageInsert.driveLoading = true;
   state.imageInsert.error = '';
@@ -15977,74 +15983,47 @@ async function loadDetailDriveImages() {
   render();
   try {
     const files = await driveService.listImages(folderId);
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.imageInsert.driveFiles = files;
     state.imageInsert.driveLoading = false;
     state.imageInsert.error = files.length ? '' : '이 폴더에서 이미지 파일을 찾지 못했습니다.';
     render();
+    return true;
   } catch(e) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.imageInsert.driveLoading = false;
     state.imageInsert.error = e.message || 'Google Drive 이미지를 불러오지 못했습니다.';
     render();
+    return false;
   }
 }
 
-async function useDriveDetailImage(fileId) {
+async function useDriveDetailImage(fileId, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const file = (state.imageInsert?.driveFiles || []).find(item => item.id === fileId);
   if ((!driveService && !(await ensureDriveServiceReady())) || !fileId) return;
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   state.imageInsert.driveLoading = true;
   state.imageInsert.error = '';
   render();
   try {
     const imgData = await driveService.downloadFile(fileId);
-    applyImageInsert(imgData.dataUrl, file?.name || 'Google Drive 이미지', 'Google Drive');
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+    return applyImageInsert(imgData.dataUrl, file?.name || 'Google Drive 이미지', 'Google Drive', operationContext);
   } catch(e) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.imageInsert.driveLoading = false;
     state.imageInsert.error = e.message || 'Drive 이미지 다운로드에 실패했습니다.';
     render();
+    return false;
   }
 }
 
-function useCutDetailImage(index) {
+function useCutDetailImage(index, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const cut = state.cuts?.prompts?.[Number(index)];
-  if (!cut?.result) return;
-  applyImageInsert(cut.result, cut.label || `이미지컷 ${Number(index) + 1}`, '이미지컷');
-}
-
-function bindImageInsertEvents() {
-  const insert = state.imageInsert;
-  if (!insert?.open) return;
-  const overlay = document.getElementById('imageInsertOverlay');
-  if (overlay) overlay.onclick = closeImageInsert;
-  const closeBtn = document.getElementById('closeImageInsert');
-  if (closeBtn) closeBtn.onclick = closeImageInsert;
-  const pickBtn = document.getElementById('pickDetailImageFile');
-  const fileInput = document.getElementById('detailImageInsertFileInput');
-  if (pickBtn) pickBtn.onclick = () => fileInput?.click();
-  if (fileInput) {
-    fileInput.onchange = async e => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      try {
-        const dataUrl = await readImageFileAsDataUrl(file);
-        applyImageInsert(dataUrl, file.name, '내 파일');
-      } catch(err) {
-        state.imageInsert.error = err.message || '이미지를 불러오지 못했습니다.';
-        render();
-      }
-    };
-  }
-  const driveInput = document.getElementById('detailImageDriveFolderInput');
-  if (driveInput) driveInput.oninput = e => { state.imageInsert.driveFolderId = e.target.value; };
-  const loadDriveBtn = document.getElementById('loadDetailDriveImages');
-  if (loadDriveBtn) loadDriveBtn.onclick = loadDetailDriveImages;
-  const connectDriveBtn = document.getElementById('connectImageInsertDrive');
-  if (connectDriveBtn) connectDriveBtn.onclick = connectDrive;
-  document.querySelectorAll('[data-use-drive-detail-image]').forEach(btn => {
-    btn.onclick = () => useDriveDetailImage(btn.dataset.useDriveDetailImage);
-  });
-  document.querySelectorAll('[data-use-cut-detail-image]').forEach(btn => {
-    btn.onclick = () => useCutDetailImage(btn.dataset.useCutDetailImage);
-  });
+  if (!cut?.result) return false;
+  return applyImageInsert(cut.result, cut.label || `이미지컷 ${Number(index) + 1}`, '이미지컷', operationContext);
 }
 
 function cacheRepairMaskFromCanvas() {

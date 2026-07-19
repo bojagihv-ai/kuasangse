@@ -19683,13 +19683,16 @@ async function ensureDriveServiceReady() {
   }
 }
 
-function connectDrive() {
+function connectDrive(operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const clientId = document.getElementById('gdClientId')?.value.trim() || GD_CLIENT_ID;
   if (!clientId) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = 'Google Cloud OAuth Client ID를 입력하세요.';
     render();
-    return;
+    return false;
   }
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   localStorage.setItem('gd_client_id', clientId);
   state.auto.gdClientId = clientId;
   try {
@@ -19699,6 +19702,7 @@ function connectDrive() {
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly',
       callback: (resp) => {
+        if (!runtimeOperationContextIsCurrent(operationContext)) return;
         if (resp.error) {
           state.error = `Drive 인증 실패: ${resp.error}`;
           render();
@@ -19712,9 +19716,12 @@ function connectDrive() {
       },
     });
     tokenClient.requestAccessToken();
+    return true;
   } catch(e) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = `Google 인증 오류: ${e.message}`;
     render();
+    return false;
   }
 }
 
