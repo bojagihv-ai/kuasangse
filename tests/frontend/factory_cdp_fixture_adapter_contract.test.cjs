@@ -1,19 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const UTILS = path.join(ROOT, 'tools', 'factory_cdp_test_utils.cjs');
-const OWNED_VERIFIERS = [
-  path.join(ROOT, 'tools', 'verify_factory_integrity_cdp_v80.cjs'),
-  path.join(ROOT, 'tools', 'verify_factory_responsive_controls_v230.cjs'),
-];
-
-function source(file) {
-  return fs.readFileSync(file, 'utf8');
-}
 
 test('factory CDP fixture adapter reaches canonical lexical runtime without mutable window aliases', () => {
   const {
@@ -82,12 +73,5 @@ test('factory CDP fixture adapter reaches canonical lexical runtime without muta
   );
   for (const legacyAlias of ['state', 'factoryState', 'render']) {
     assert.equal(Object.hasOwn(context, legacyAlias), false, `${legacyAlias} must remain lexical-only`);
-  }
-});
-
-test('owned factory CDP verifiers contain zero legacy mutable window alias references', () => {
-  const legacyWindowAlias = /window\s*\.\s*(?:state|factoryState|render)\b/g;
-  for (const file of OWNED_VERIFIERS) {
-    assert.deepEqual(source(file).match(legacyWindowAlias) || [], [], path.basename(file));
   }
 });

@@ -2184,6 +2184,9 @@ const _savedSizeCutPromptSlotCount = normalizeCutPromptSlotCount(
   _savedSession?.cuts?.sizePromptSlotCount ?? localStorage.getItem(SIZE_CUTS_PROMPT_SLOT_COUNT_STORAGE_KEY),
   _savedSizeCutPrompts.length
 );
+let factoryRuntimeStore = null;
+let factoryRuntimeBootstrapFactory = null;
+
 const state = {
   step: _savedSession?.step || 'upload', // upload | analyzing | sections | generating | preview | modelsettings
   apiKey: _savedKey,
@@ -7216,11 +7219,18 @@ function renderWorkspaceAuthorityBanner() {
     : '';
   const editing = authority.mode === 'editing';
   const readonly = authority.mode === 'readonly';
+  const acquiring = authority.mode === 'acquiring';
   const offlineDraft = authority.mode === 'offline-edit' || /^draft:/i.test(String(authority.scopeId || ''));
-  const takeoverDisabled = editing || offlineDraft;
+  const takeoverDisabled = editing || acquiring || offlineDraft;
   const takeoverTitle = offlineDraft
     ? '로컬 초안은 서버 편집권 인계 대상이 아닙니다.'
-    : (editing ? '이 창이 이미 편집권을 가지고 있습니다.' : '다른 창의 편집권을 이 창으로 가져옵니다.');
+    : (editing
+      ? '이 창이 이미 편집권을 가지고 있습니다.'
+      : (acquiring ? '편집권 확인이 끝날 때까지 기다려 주세요.' : '다른 창의 편집권을 이 창으로 가져옵니다.'));
+  const readonlyTitle = acquiring
+    ? '편집권 확인이 끝날 때까지 기다려 주세요.'
+    : (readonly ? '이 창은 이미 읽기 전용입니다.' : '현재 작업을 읽기 전용으로 엽니다.');
+  const transitionTitle = acquiring ? '편집권 확인이 끝날 때까지 기다려 주세요.' : '';
   return `<section class="workspace-authority-banner" data-mode="${escAttr(authority.mode)}" role="status" aria-live="polite">
     <div class="workspace-authority-copy">
       <strong>${escapeHtml(label)}</strong>
@@ -7228,9 +7238,9 @@ function renderWorkspaceAuthorityBanner() {
       ${owner}
     </div>
     <div class="workspace-authority-actions">
-      <button class="btn-sm" type="button" data-workspace-authority-action="refresh">상태 새로고침</button>
-      <button class="btn-sm" type="button" data-workspace-authority-action="readonly" ${readonly ? 'disabled aria-disabled="true"' : ''}>읽기 전용으로 열기</button>
-      <button class="btn-sm" type="button" data-workspace-authority-action="save-copy">새 작업으로 저장</button>
+      <button class="btn-sm" type="button" data-workspace-authority-action="refresh" title="${escAttr(transitionTitle)}" ${acquiring ? 'disabled aria-disabled="true"' : ''}>상태 새로고침</button>
+      <button class="btn-sm" type="button" data-workspace-authority-action="readonly" title="${escAttr(readonlyTitle)}" ${readonly || acquiring ? 'disabled aria-disabled="true"' : ''}>읽기 전용으로 열기</button>
+      <button class="btn-sm" type="button" data-workspace-authority-action="save-copy" title="${escAttr(transitionTitle)}" ${acquiring ? 'disabled aria-disabled="true"' : ''}>새 작업으로 저장</button>
       <button class="btn-sm primary" type="button" data-workspace-authority-action="takeover" title="${escAttr(takeoverTitle)}" ${takeoverDisabled ? 'disabled aria-disabled="true"' : ''}>편집권 가져오기</button>
     </div>
   </section>`;
@@ -7241,8 +7251,6 @@ let shellRuntimeComposition = null;
 let classicRuntimeHydrationActive = true;
 let classicRuntimeHydrationReady = false;
 let classicRuntimeInitialRenderComplete = false;
-let factoryRuntimeStore = null;
-let factoryRuntimeBootstrapFactory = null;
 let factoryRuntimeStartTab = null;
 let factoryRuntimeDbTab = null;
 let factoryRuntimeFieldsTab = null;
@@ -7411,7 +7419,10 @@ function factoryRuntimeReplaceFactorySnapshot(value, options = {}) {
     throw factoryRuntimeStaleActionError(options.reason || 'factory-snapshot-import');
   }
   if (options.mode === 'hydrate') {
-    store.assertMutable('factory');
+    const takeoverIdentity = options.takeoverAuthority
+      ? workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority)
+      : null;
+    if (!takeoverIdentity) store.assertMutable('factory');
     const workspaceId = String(
       options.workspaceId || state.currentProjectId || nextFactory.workspace?.id || operationToken.workspaceId,
     ).trim() || operationToken.workspaceId;

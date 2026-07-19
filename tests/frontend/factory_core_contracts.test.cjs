@@ -1046,7 +1046,20 @@ test('다른 이름으로 저장하면 선택한 실제 파일명이 저장본�
         productName: factoryRuntimeReadFactory().product?.productName,
       };
     } finally {
-      await lock.release().catch(() => {});
+      await lock.release();
+      restoringAuthority = true;
+      if (authorityBackup.scopeId) {
+        const restoredAuthority = await lock.acquire({
+          scopeId: authorityBackup.scopeId,
+          ownerId: authorityBackup.ownerId,
+        });
+        if (
+          restoredAuthority?.scopeId !== authorityBackup.scopeId
+          || restoredAuthority?.mode !== authorityBackup.mode
+        ) {
+          throw new Error(`workspace authority restore failed: ${JSON.stringify(restoredAuthority)}`);
+        }
+      }
       Object.keys(state).forEach(key => { delete state[key]; });
       Object.assign(state, stateBackup);
       factoryRuntimeReplaceFactorySnapshot(factoryBackup, {
@@ -1055,13 +1068,6 @@ test('다른 이름으로 저장하면 선택한 실제 파일명이 저장본�
         reason: 'factory-core-save-as-restore',
       });
       workspacePersistenceApi = originals.workspacePersistenceApi;
-      restoringAuthority = true;
-      if (authorityBackup.scopeId) {
-        await lock.acquire({
-          scopeId: authorityBackup.scopeId,
-          ownerId: authorityBackup.ownerId,
-        }).catch(() => {});
-      }
       Object.entries(originals).forEach(([name, value]) => {
         if (name !== 'workspacePersistenceApi') window[name] = value;
       });

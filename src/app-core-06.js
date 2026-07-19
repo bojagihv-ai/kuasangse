@@ -30767,26 +30767,46 @@ function disposeClassicRuntimeLifecycle() {
   if (classicRuntimeLifecycleDisposer) classicRuntimeLifecycleDisposer();
 }
 
-function reloadAcceptedWorkspace(accepted) {
-  return hydrateServerLastWorkSnapshot({
-    force: true,
-    forceStep: true,
-    takeoverSync: true,
-    minimumRevision: Number(accepted?.revision) || 0,
-  });
+async function reloadAcceptedWorkspace(accepted) {
+  const takeoverAuthority = workspaceTakeoverHydrationAuthority.create(accepted);
+  try {
+    return await hydrateServerLastWorkSnapshot({
+      force: true,
+      forceStep: true,
+      takeoverSync: true,
+      minimumRevision: takeoverAuthority.identity.revision,
+      takeoverAuthority,
+    });
+  } finally {
+    takeoverAuthority.close();
+  }
 }
 
 async function runClassicRuntimeHydration(envelope) {
   installClassicRuntimeLifecycle();
   try {
     if (hasGeminiConnection()) gemini = createGeminiClient();
-    const initialWorkspaceAuthority = ensureWorkspaceEditAuthority(getCurrentLastWorkWorkspaceScope()).catch(() => null);
+    const hydrationWorkspaceScope = getCurrentLastWorkWorkspaceScope();
+    const hydrationProjectId = String(state.currentProjectId || '').trim();
+    const hydrationIdentityIsCurrent = () => getCurrentLastWorkWorkspaceScope() === hydrationWorkspaceScope
+      && String(state.currentProjectId || '').trim() === hydrationProjectId;
+    const hydrationResult = stale => Object.freeze({
+      schema: envelope.schema,
+      version: envelope.version,
+      hydrated: true,
+      stale,
+    });
+    const initialWorkspaceAuthority = hydrationIdentityIsCurrent()
+      ? ensureWorkspaceEditAuthority(hydrationWorkspaceScope).catch(() => null)
+      : Promise.resolve(null);
     try { markSessionAssetFingerprintSaved(); } catch(e) {}
     loadCutsArchiveFolderStatus({ render: false }).catch(() => {});
     refreshWorkspaceLists().catch(() => {});
     await hydratePersistentSessionAssets().catch(() => {});
     await initialWorkspaceAuthority;
-    await ensureWorkspaceEditAuthority(getCurrentLastWorkWorkspaceScope()).catch(() => null);
+    if (!hydrationIdentityIsCurrent()) return hydrationResult(true);
+    await ensureWorkspaceEditAuthority(hydrationWorkspaceScope).catch(() => null);
+    if (!hydrationIdentityIsCurrent()) return hydrationResult(true);
     await hydrateServerLastWorkSnapshot().catch(() => {});
     if (typeof factoryRestoreCurrentWorkfileLocalArchive === 'function') {
       await factoryRestoreCurrentWorkfileLocalArchive({ silent: true }).catch(() => null);
@@ -30806,11 +30826,7 @@ async function runClassicRuntimeHydration(envelope) {
     }
     await new Promise(resolve => setTimeout(resolve, 0));
     if (factoryRuntimeStore) factoryRuntimeHydrateStoreFromBootstrap();
-    return Object.freeze({
-      schema: envelope.schema,
-      version: envelope.version,
-      hydrated: true,
-    });
+    return hydrationResult(false);
   } catch (error) {
     disposeClassicRuntimeLifecycle();
     throw error;

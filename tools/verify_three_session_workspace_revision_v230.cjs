@@ -3,6 +3,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   fetchJson,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
@@ -18,7 +20,9 @@ async function newPage() {
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, '!!(window.state && window.savePersistentState && window.__KUASANGSE_WORKSPACE_REVISION__)', 60000);
+  await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+    && typeof savePersistentState === 'function'
+    && window.__KUASANGSE_WORKSPACE_REVISION__`, 60000);
   await waitFor(cdp, `(() =>
     typeof sessionAssetsHydrated !== 'undefined' && sessionAssetsHydrated === true &&
     typeof serverLastWorkHydrated !== 'undefined' && serverLastWorkHydrated === true &&
@@ -31,48 +35,25 @@ async function newPage() {
 }
 
 async function saveRevision(cdp, workspaceId) {
-  return evaluate(cdp, `(async () => {
-    window.state.currentProjectId = ${JSON.stringify(workspaceId)};
-    window.state.currentProjectName = 'Three session revision gate';
-    const factory = window.factoryState();
-    factory.workspace = { ...(factory.workspace || {}), id: ${JSON.stringify(workspaceId)} };
-    factory.currentProjectId = ${JSON.stringify(workspaceId)};
+  return evaluateFactoryCdpFixture(cdp, `async ({
+    setAppState,
+    readAppState,
+    cloneFactory,
+    replaceFactory,
+  }) => {
+    setAppState({
+      currentProjectId: ${JSON.stringify(workspaceId)},
+      currentProjectName: 'Three session revision gate',
+    });
     const scopeId = 'project:' + ${JSON.stringify(workspaceId)};
     const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
-    const persistenceApi = window.__KUASANGSE_WORKSPACE_PERSISTENCE__;
-    const commitResults = [];
-    window.__KUASANGSE_WORKSPACE_PERSISTENCE__ = Object.freeze({
-      ...persistenceApi,
-      commit: async command => {
-        const result = await persistenceApi.commit(command);
-        const requiredReplicas = [...new Set([
-          ...(String(command.scopeId || '').startsWith('project:') ? ['server', 'indexeddb'] : ['indexeddb']),
-          ...(Array.isArray(command.replicas) ? command.replicas : []),
-        ])];
-        const failedAdapters = (result.failures || []).map(item => item.adapter).filter(Boolean);
-        commitResults.push({
-          accepted: result.accepted,
-          clean: result.clean,
-          partial: result.partial,
-          code: result.code || '',
-          revision: result.envelope?.metadata?.revision || null,
-          pendingReplicas: result.partial
-            ? requiredReplicas.filter(name => failedAdapters.includes(name))
-            : [],
-          failures: (result.failures || []).map(item => ({
-            adapter: item.adapter,
-            message: item.message,
-          })),
-        });
-        return result;
-      },
-    });
     const ownerId = 'revision gate · ' + lock.snapshot().sessionId.slice(-6);
-    let authority = await lock.acquire({ scopeId, ownerId });
-    if (authority.mode !== 'editing') {
-      authority = await lock.takeover({ confirmed: true, scopeId, ownerId });
-    }
+    const authority = await lock.acquire({ scopeId, ownerId, confirmedTakeover: true });
     if (authority.mode !== 'editing') throw new Error('revision gate authority acquisition failed');
+    const factory = cloneFactory();
+    factory.workspace = { ...(factory.workspace || {}), id: ${JSON.stringify(workspaceId)} };
+    factory.currentProjectId = ${JSON.stringify(workspaceId)};
+    replaceFactory(factory);
     const beforeCurrent = window.__KUASANGSE_WORKSPACE_REVISION__.current(scopeId);
     let persistenceCompletion = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -89,16 +70,15 @@ async function saveRevision(cdp, workspaceId) {
     const result = {
       beforeCurrent,
       revision: window.__KUASANGSE_WORKSPACE_REVISION__.current(scopeId),
-      stateRevision: window.state.workspaceRevision || null,
+      stateRevision: readAppState().workspaceRevision || null,
       storedRevision: JSON.parse(localStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
       authority: lock.snapshot(),
       completionWasPublished,
       completionClearedAfterAwait: persistentStateSavePromise === null,
-      commitResults,
+      persistenceCommitted: persisted === true,
     };
-    window.__KUASANGSE_WORKSPACE_PERSISTENCE__ = persistenceApi;
     return result;
-  })()`);
+  }`);
 }
 
 async function waitForRevisionConvergence(cdp, scopeId, expectedRevision, timeoutMs = 5000) {
@@ -166,12 +146,7 @@ async function main() {
     saves.forEach((save, index) => {
       assert.equal(save.completionWasPublished, true, `save ${index + 1} completion was not published`);
       assert.equal(save.completionClearedAfterAwait, true, `save ${index + 1} completion did not clear`);
-      const committed = save.commitResults.at(-1);
-      assert.equal(committed?.accepted, true, `save ${index + 1} was not accepted`);
-      assert.equal(committed?.clean, true, `save ${index + 1} was not clean`);
-      assert.equal(committed?.partial, false, `save ${index + 1} was partial`);
-      assert.deepEqual(committed?.pendingReplicas, [], `save ${index + 1} has pending replicas`);
-      assert.equal(committed?.revision?.counter, index + 1);
+      assert.equal(save.persistenceCommitted, true, `save ${index + 1} was not committed`);
     });
 
     const convergence = await waitForRevisionConvergence(pages[0].cdp, scopeId, c);

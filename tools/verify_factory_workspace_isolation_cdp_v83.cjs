@@ -5,6 +5,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -38,9 +40,16 @@ async function main() {
     mobile: false,
   });
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryAssetMatchesCurrentJob)', 60000);
+  await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+    && typeof factoryAssetMatchesCurrentJob === 'function'`, 60000);
 
-  const proof = await evaluate(cdp, `(async () => {
+  const proof = await evaluateFactoryCdpFixture(cdp, `async ({
+    setAppState,
+    readAppState,
+    cloneFactory,
+    replaceFactory,
+    renderApp,
+  }) => {
     const img = ${JSON.stringify(svgDataUrl('workspace-current', '#0f766e'))};
     const productName = '작업파일격리검증상품';
     const workspaceId = 'project_workspace_current_v83';
@@ -49,29 +58,37 @@ async function main() {
     const inputFingerprint = window.factoryImagePayloadFingerprint(img);
     const productKey = window.factoryNormalizeIdentityText(productName);
 
-    window.state.step = 'factory';
-    window.state.currentProjectId = workspaceId;
-    window.state.currentProjectName = productName;
-    window.state.currentProjectCreatedAt = Date.now();
-    window.state.productName = productName;
-    window.state.imagePreview = img;
-    window.state.imageBase64 = img.replace(/^data:image\\/[^;,]+;base64,/i, '');
-    window.state.imageMime = 'image/svg+xml';
-    window.state.factory = window.normalizeFactoryState({});
-    const factory = window.factoryState();
-    window.factoryStampWorkspaceIdentity(factory, { projectId: workspaceId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
+    const createdAt = Date.now();
+    const imageBase64 = img.replace(/^data:image\\/[^;,]+;base64,/i, '');
+    setAppState({
+      step: 'factory',
+      currentProjectId: workspaceId,
+      currentProjectName: productName,
+      currentProjectCreatedAt: createdAt,
+      productName,
+      imagePreview: img,
+      imageBase64,
+      imageMime: 'image/svg+xml',
+    });
+    const scopeId = 'project:' + workspaceId;
+    const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
+    const ownerId = 'workspace isolation v83 · ' + lock.snapshot().sessionId.slice(-6);
+    const authority = await lock.acquire({ scopeId, ownerId });
+    if (authority.mode !== 'editing') throw new Error('workspace isolation authority acquisition failed: ' + authority.mode);
+    const factory = cloneFactory();
+    window.factoryStampWorkspaceIdentity(factory, { projectId: workspaceId, projectName: productName, createdAt });
     factory.product.productName = productName;
     factory.product.userProductName = productName;
     factory.product.currentRunId = runId;
     factory.product.generationRunId = runId;
     factory.product.lockedInputImageFingerprint = inputFingerprint;
-    factory.product.imageBase64 = window.state.imageBase64;
+    factory.product.imageBase64 = imageBase64;
     factory.product.imagePreview = img;
     factory.product.imageMime = 'image/svg+xml';
     factory.product.inputImages = [{
       id: 'input_workspace_v83',
       name: 'workspace-input.svg',
-      base64: window.state.imageBase64,
+      base64: imageBase64,
       preview: img,
       mime: 'image/svg+xml',
       currentRunId: runId,
@@ -133,6 +150,7 @@ async function main() {
       delete unscopedAsset.sourceMap.currentProjectId;
     }
     factory.assets = [currentAsset, foreignAsset, unscopedAsset];
+    replaceFactory(factory);
 
     const currentJob = window.factoryAssetMatchesCurrentJob(currentAsset, 'hero', factory);
     const foreignJob = window.factoryAssetMatchesCurrentJob(foreignAsset, 'hero', factory);
@@ -173,7 +191,8 @@ async function main() {
     factory.product.generationRunId = runId;
     factory.automation.currentRunId = runId;
     factory.goalRun.currentRunId = runId;
-    const sectionBeforeDirectLoad = JSON.stringify(window.state.sectionContents?.header || null);
+    replaceFactory(factory);
+    const sectionBeforeDirectLoad = JSON.stringify(readAppState().sectionContents?.header || null);
     const originalFetch = window.fetch;
     const scopedRecord = {
       archiveId: 'archive_direct_scope_v83',
@@ -212,11 +231,11 @@ async function main() {
     };
     const conflictingWrapperLoadOk = await window.factoryLoadLocalArchiveAsset('conflicting-wrapper', { silent: true });
     const foreignScopeLoadOk = await window.factoryLoadLocalArchiveAsset('foreign-scope', { silent: true });
-    const sectionAfterRejectedLoads = JSON.stringify(window.state.sectionContents?.header || null);
+    const sectionAfterRejectedLoads = JSON.stringify(readAppState().sectionContents?.header || null);
     const currentScopeLoadOk = await window.factoryLoadLocalArchiveAsset('current-scope', { silent: true });
     window.fetch = originalFetch;
-    const currentScopeHeadline = String(window.state.sectionContents?.header?.headline || '');
-    window.render();
+    const currentScopeHeadline = String(readAppState().sectionContents?.header?.headline || '');
+    renderApp();
 
     return {
       workspaceId,
@@ -243,7 +262,7 @@ async function main() {
       payloadFactoryWorkspaceId: workspacePayload.factory?.workspace?.id || '',
       bodyHasProjectId: /project_workspace_current_v83/.test(document.body.innerText || ''),
     };
-  })()`);
+  }`);
 
   await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
     .then(result => fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(result.data, 'base64')));

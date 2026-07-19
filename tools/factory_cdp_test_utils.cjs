@@ -150,6 +150,7 @@ function factoryCdpFixtureExpression(runSource) {
       Object.assign(state, clone(patch));
     };
     const readFactory = () => factoryRuntimeReadFactory();
+    const readAppState = () => clone(state);
     const readAppWorkspaceId = () => String(state.currentProjectId || '').trim();
     const readOperationToken = () => clone(factoryRuntimeStore.getOperationToken());
     const cloneFactory = () => clone(readFactory());
@@ -160,6 +161,7 @@ function factoryCdpFixtureExpression(runSource) {
     const renderApp = () => render();
     return run(Object.freeze({
       setAppState,
+      readAppState,
       readAppWorkspaceId,
       readFactory,
       readOperationToken,

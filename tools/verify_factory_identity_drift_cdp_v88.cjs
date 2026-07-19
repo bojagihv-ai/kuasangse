@@ -3,6 +3,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -11,7 +13,10 @@ const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
 
 async function callInPage(cdp, fn, arg) {
-  return evaluate(cdp, `(${fn.toString()})(${JSON.stringify(arg)})`);
+  return evaluateFactoryCdpFixture(
+    cdp,
+    `fixture => (${fn.toString()})(fixture, ${JSON.stringify(arg)})`,
+  );
 }
 
 (async () => {
@@ -23,19 +28,23 @@ async function callInPage(cdp, fn, arg) {
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, `typeof factoryCurrentProductKey === 'function' && typeof factoryStampLockedInputImage === 'function'`, 30000);
+  await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+    && typeof factoryCurrentProductKey === 'function'
+    && typeof factoryStampLockedInputImage === 'function'`, 30000);
 
-  const result = await callInPage(cdp, ({ base64 }) => {
-    const factory = factoryState();
+  const result = await callInPage(cdp, ({ cloneFactory, replaceFactory, setAppState }, { base64 }) => {
+    const factory = cloneFactory();
     const oldName = '성능측정상품';
     const newName = '띠수네모동전지갑';
     const oldKey = factoryNormalizeIdentityText(oldName);
     const newKey = factoryNormalizeIdentityText(newName);
     // 상태 객체만 직접 바꿔서는 잠긴 기존 작업의 상품 기준을 탈취할 수 없어야 합니다.
-    state.productName = newName;
-    state.imageBase64 = base64;
-    state.imageMime = 'image/png';
-    state.imagePreview = `data:image/png;base64,${base64}`;
+    setAppState({
+      productName: newName,
+      imageBase64: base64,
+      imageMime: 'image/png',
+      imagePreview: `data:image/png;base64,${base64}`,
+    });
     factory.product.userProductName = oldName;
     factory.product.productName = newName;
     factory.product.productKey = oldKey;
@@ -56,6 +65,7 @@ async function callInPage(cdp, fn, arg) {
       preview: `data:image/png;base64,${base64}`,
       name: '현재제품.png',
     }, { id: 'identity_drift_v88' });
+    replaceFactory(factory);
     return {
       oldKey,
       newKey,

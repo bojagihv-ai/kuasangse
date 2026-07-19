@@ -5,6 +5,9 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureExpression,
+  factoryCdpFixtureReadyExpression,
   fetchJson,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
@@ -35,13 +38,10 @@ async function preparePage(cdp, width, height) {
     mobile: false,
   });
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, `!!(
-    window.state
-    && window.render
-    && window.workspacePersistenceApi
+  await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+    && window.__KUASANGSE_WORKSPACE_PERSISTENCE__
     && window.__KUASANGSE_WORKSPACE_LOCK__
-    && document.querySelector('.app')
-  )`, 60_000);
+    && document.querySelector('.app')`, 60_000);
   await evaluate(cdp, `(() => {
     if (document.getElementById('task4-capture-stability')) return true;
     const style = document.createElement('style');
@@ -53,26 +53,28 @@ async function preparePage(cdp, width, height) {
 }
 
 async function setWorkspace(cdp, projectId, name) {
-  return evaluate(cdp, `(async () => {
+  return evaluateFactoryCdpFixture(cdp, `async ({ setAppState, cloneFactory, replaceFactory, renderApp }) => {
     const projectId = ${JSON.stringify(projectId)};
     const scopeId = 'project:' + projectId;
-    window.state.currentProjectId = projectId;
-    window.state.currentProjectName = ${JSON.stringify(name)};
-    window.state.currentProjectCreatedAt = Date.now();
-    window.state.productName = ${JSON.stringify(name)};
-    if (window.state.factory && typeof window.state.factory === 'object') {
-      window.state.factory.workspace = {
-        ...(window.state.factory.workspace || {}),
-        id: projectId,
-        name: ${JSON.stringify(name)},
-      };
-      window.state.factory.currentProjectId = projectId;
-      window.state.factory.currentProjectName = ${JSON.stringify(name)};
-    }
+    setAppState({
+      currentProjectId: projectId,
+      currentProjectName: ${JSON.stringify(name)},
+      currentProjectCreatedAt: Date.now(),
+      productName: ${JSON.stringify(name)},
+    });
+    const factory = cloneFactory();
+    factory.workspace = {
+      ...(factory.workspace || {}),
+      id: projectId,
+      name: ${JSON.stringify(name)},
+    };
+    factory.currentProjectId = projectId;
+    factory.currentProjectName = ${JSON.stringify(name)};
+    replaceFactory(factory);
     const authority = await window.ensureWorkspaceEditAuthority(scopeId, { force: true });
-    window.render();
+    renderApp();
     return authority;
-  })()`);
+  }`);
 }
 
 async function capture(cdp, fileName) {
@@ -128,23 +130,24 @@ async function layoutProof(cdp) {
 }
 
 async function workspaceIdentity(cdp) {
-  return evaluate(cdp, `(() => {
+  return evaluateFactoryCdpFixture(cdp, `({ readAppState }) => {
     const authority = window.__KUASANGSE_WORKSPACE_LOCK__.snapshot();
     const takeover = document.querySelector('[data-workspace-authority-action="takeover"]');
+    const appState = readAppState();
     return {
       mode: authority.mode,
       scopeId: authority.scopeId,
       revision: authority.revision,
-      currentProjectId: window.state.currentProjectId || '',
-      currentProjectName: window.state.currentProjectName || '',
-      productName: window.state.productName || '',
+      currentProjectId: appState.currentProjectId || '',
+      currentProjectName: appState.currentProjectName || '',
+      productName: appState.productName || '',
       workfileName: document.querySelector('.db-workfile-name')?.textContent?.trim() || '',
-      workfileSaveState: window.state.workfileSaveState || '',
-      error: window.state.error || '',
+      workfileSaveState: appState.workfileSaveState || '',
+      error: appState.error || '',
       takeoverDisabled: !!takeover?.disabled,
       takeoverTitle: takeover?.getAttribute('title') || '',
     };
-  })()`);
+  }`);
 }
 
 async function main() {
@@ -176,9 +179,11 @@ async function main() {
     const refreshAction = { before: refreshBefore, after: refreshAfter };
     const readonlyLayoutB = await layoutProof(pageB);
     const readonlyScreenshotB = await capture(pageB, 'workspace-conflict-readonly-390x600.png');
-    const savedA = await evaluate(pageA, `(async () => {
-      window.state.productName = ${JSON.stringify(acceptedName)};
-      window.state.currentProjectName = ${JSON.stringify(acceptedName)};
+    const savedA = await evaluateFactoryCdpFixture(pageA, `async ({ setAppState, renderApp }) => {
+      setAppState({
+        productName: ${JSON.stringify(acceptedName)},
+        currentProjectName: ${JSON.stringify(acceptedName)},
+      });
       const scopeId = ${JSON.stringify(scopeId)};
       const snapshot = window.buildServerLastWorkSnapshot('workspace-conflict-cdp');
       const result = await window.workspacePersistenceApi().commit({
@@ -188,25 +193,25 @@ async function main() {
         context: { server: { bases: [${JSON.stringify(BACKEND_BASE)}] } },
         isCurrent: () => true,
       });
-      window.render();
+      renderApp();
       return {
         accepted: result.accepted,
         clean: result.clean,
         revision: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().revision,
       };
-    })()`);
+    }`);
     await evaluate(pageB, `(() => {
       window.confirm = () => true;
       document.querySelector('[data-workspace-authority-action="takeover"]').click();
       return true;
     })()`);
     await new Promise(resolve => setTimeout(resolve, 2_000));
-    const takeoverDebug = await evaluate(pageB, `(() => ({
+    const takeoverDebug = await evaluateFactoryCdpFixture(pageB, `({ readAppState }) => ({
       authority: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot(),
-      error: window.state.error || '',
+      error: readAppState().error || '',
       buttonDisabled: document.querySelector('[data-workspace-authority-action="takeover"]')?.disabled,
       banner: document.querySelector('.workspace-authority-banner')?.textContent || '',
-    }))()`);
+    })`);
     console.log(JSON.stringify({ authorityA, authorityB, savedA, takeoverDebug }, null, 2));
     await waitFor(pageB, `window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().mode === 'editing'
       && window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().revision >= ${Number(savedA.revision)}`, 30_000);
@@ -228,11 +233,11 @@ async function main() {
         saveDisabled: document.querySelector('#saveCurrentProjectFileBtn')?.disabled || false,
       };
     })()`);
-    const postTakeoverB = await evaluate(pageB, `(() => ({
+    const postTakeoverB = await evaluateFactoryCdpFixture(pageB, `({ readAppState }) => ({
       authority: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot(),
-      productName: window.state.productName,
+      productName: readAppState().productName,
       banner: document.querySelector('.workspace-authority-banner')?.textContent || '',
-    }))()`);
+    })`);
     const layoutA = await layoutProof(pageA);
     const layoutB = await layoutProof(pageB);
     const screenshotA = await capture(pageA, 'workspace-conflict-1280x480.png');
@@ -271,7 +276,10 @@ async function main() {
       document.querySelector('[data-workspace-authority-action="save-copy"]')?.click();
       return true;
     })()`);
-    await waitFor(pageB, `window.state.workfileSaveState === 'saved' || window.state.workfileSaveState === 'error'`, 30_000);
+    await waitFor(pageB, factoryCdpFixtureExpression(`({ readAppState }) => {
+      const saveState = readAppState().workfileSaveState;
+      return saveState === 'saved' || saveState === 'error';
+    }`), 30_000);
     const saveCopyAfter = await workspaceIdentity(pageB);
     const serverAfterSaveCopy = await fetchJson(`${BACKEND_BASE}/api/last-work?workspaceId=${encodeURIComponent(scopeId)}`);
     const serverAfterSaveCopyName = serverAfterSaveCopy.snapshot?.assets?.productName
@@ -288,15 +296,15 @@ async function main() {
     const offlineTarget = await pageTarget(offlineTargetId);
     pageC = connectCdp(offlineTarget.webSocketDebuggerUrl);
     await preparePage(pageC, 390, 600);
-    await evaluate(pageC, `(async () => {
+    await evaluateFactoryCdpFixture(pageC, `async ({ setAppState, renderApp }) => {
       await window.__KUASANGSE_STARTUP_RESTORE_PROMISE__;
-      window.state.productName = '오프라인 초안 인계 차단 기준본';
+      setAppState({ productName: '오프라인 초안 인계 차단 기준본' });
       await window.startNewProjectDraft();
       window.__TASK4_CONFIRM_COUNT__ = 0;
       window.confirm = () => { window.__TASK4_CONFIRM_COUNT__ += 1; return true; };
-      window.render();
+      renderApp();
       return true;
-    })()`);
+    }`);
     const offlineBefore = await workspaceIdentity(pageC);
     await evaluate(pageC, `(() => {
       document.querySelector('[data-workspace-authority-action="takeover"]')?.click();

@@ -2710,6 +2710,7 @@ function applyProductImageBackupPayload(payload, options = {}) {
       factoryRuntimeReplaceFactorySnapshot(factory, {
         mode: 'hydrate',
         reason: 'product-image-backup-restore',
+        takeoverAuthority: options.takeoverAuthority,
       });
     }
     return changed;
@@ -4341,10 +4342,13 @@ function getStoredLastWorkDraftScope() {
 }
 
 function getCurrentLastWorkWorkspaceScope() {
+  const factory = typeof factoryRuntimeReadFactory === 'function'
+    ? factoryRuntimeReadFactory()
+    : {};
   const projectId = String(
     state?.currentProjectId ||
-    state?.factory?.workspace?.id ||
-    state?.factory?.currentProjectId ||
+    factory?.workspace?.id ||
+    factory?.currentProjectId ||
     ''
   ).trim();
   return projectId
@@ -4380,6 +4384,56 @@ function workspaceLockApi() {
 function currentWorkspaceAuthority() {
   return workspaceLockApi()?.snapshot?.() || null;
 }
+
+const workspaceTakeoverHydrationAuthority = (() => {
+  const issuedIdentities = new WeakMap();
+  const activeAuthorities = new WeakSet();
+  const readIdentity = value => {
+    const identity = Object.freeze({
+      scopeId: String(value?.scopeId || '').trim(),
+      sessionId: String(value?.sessionId || '').trim(),
+      leaseId: String(value?.leaseId || '').trim(),
+      fencingToken: Number(value?.fencingToken),
+      revision: Number(value?.revision),
+    });
+    if (!identity.scopeId || !identity.sessionId || !identity.leaseId
+      || !Number.isInteger(identity.fencingToken) || identity.fencingToken <= 0
+      || !Number.isInteger(identity.revision) || identity.revision < 0) {
+      throw new Error('INVALID_TAKEOVER_HYDRATION_AUTHORITY');
+    }
+    return identity;
+  };
+  const create = accepted => {
+    const identity = readIdentity(accepted);
+    const authority = Object.freeze({
+      identity,
+      close: () => { activeAuthorities.delete(authority); },
+    });
+    issuedIdentities.set(authority, identity);
+    activeAuthorities.add(authority);
+    return authority;
+  };
+  const assert = authority => {
+    if ((typeof authority !== 'object' && typeof authority !== 'function') || authority === null) {
+      throw new Error('INVALID_TAKEOVER_HYDRATION_AUTHORITY');
+    }
+    const identity = issuedIdentities.get(authority);
+    if (!identity) throw new Error('INVALID_TAKEOVER_HYDRATION_AUTHORITY');
+    if (!activeAuthorities.has(authority)) throw new Error('STALE_TAKEOVER_HYDRATION_AUTHORITY');
+    const current = currentWorkspaceAuthority();
+    let observed;
+    try {
+      observed = readIdentity(current);
+    } catch (error) {
+      throw new Error('STALE_TAKEOVER_HYDRATION_AUTHORITY');
+    }
+    const matches = current?.mode === 'acquiring'
+      && Object.keys(identity).every(field => identity[field] === observed[field]);
+    if (!matches) throw new Error('STALE_TAKEOVER_HYDRATION_AUTHORITY');
+    return identity;
+  };
+  return Object.freeze({ create, assert });
+})();
 
 function factoryLastSnapshotRecoveryWriteDecision(scopeId, authority, currentScopeId) {
   const targetScope = String(scopeId || '').trim();
@@ -4878,13 +4932,17 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
       targetName,
       forceProductRestore: true,
       allowEqualRevision: true,
+      takeoverAuthority: options.takeoverAuthority,
     }) || changed;
     if (options.persistReplica !== false && sessionAssetsHydrated && snapshotHasInlineImagePayload(assets)) {
       workspacePutSessionAssets(currentSessionAssetsPayload({ includeImages: false })).catch(() => {});
     }
   }
   if (snapshot.productImageBackup) {
-    changed = applyProductImageBackupPayload(snapshot.productImageBackup, { restoreInline: true }) || changed;
+    changed = applyProductImageBackupPayload(snapshot.productImageBackup, {
+      restoreInline: true,
+      takeoverAuthority: options.takeoverAuthority,
+    }) || changed;
     if (options.persistReplica !== false) saveLastProductImageBackupToDbIfChanged().catch(() => {});
   }
   if (lightweight && !changed) {
@@ -4894,6 +4952,7 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
       targetName,
       forceProductRestore: true,
       allowEqualRevision: true,
+      takeoverAuthority: options.takeoverAuthority,
     }) || changed;
   }
   if (options.persistReplica !== false && assets) persistRecoveredAuxiliaryLastWorkKeys(assets);
@@ -4912,12 +4971,22 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
   const hydrateToken = workspaceBlankResetToken;
   serverLastWorkHydrating = true;
   let shouldResaveAfterHydrate = false;
+  let takeoverIdentity = null;
+  let previousStateSnapshot = null;
+  let previousFactorySnapshot = null;
+  let applyStarted = false;
   try {
+    takeoverIdentity = options.takeoverAuthority
+      ? workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority)
+      : null;
+    previousStateSnapshot = takeoverIdentity ? cloneData(state) : null;
+    previousFactorySnapshot = takeoverIdentity ? factoryRuntimeReadFactory() : null;
     const restored = await workspacePersistenceApi().restore({
-      scopeId: getCurrentLastWorkWorkspaceScope(),
+      scopeId: takeoverIdentity?.scopeId || getCurrentLastWorkWorkspaceScope(),
       sources: ['server'],
     });
     if (hydrateToken !== workspaceBlankResetToken) return false;
+    if (takeoverIdentity) workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority);
     const trustedRevision = restored?.revision && typeof restored.revision === 'object'
       ? restored.revision
       : null;
@@ -4930,10 +4999,13 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       }
       return options.takeoverSync === true;
     }
-    if (!lastWorkSnapshotMatchesCurrentWorkspace(snapshot)) return false;
+    if (!lastWorkSnapshotMatchesCurrentWorkspace(snapshot)) {
+      if (takeoverIdentity) throw new Error('STALE_TAKEOVER_HYDRATION_SCOPE');
+      return false;
+    }
     if (options.takeoverSync) {
       const restoredRevision = Number(workspaceSnapshotRevision(snapshot)?.counter) || 0;
-      const minimumRevision = Number(options.minimumRevision) || 0;
+      const minimumRevision = takeoverIdentity?.revision ?? (Number(options.minimumRevision) || 0);
       if (restoredRevision < minimumRevision) {
         throw new Error(`승인본 리비전이 부족합니다. 필요 ${minimumRevision}, 확인 ${restoredRevision}`);
       }
@@ -4960,9 +5032,11 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       || (serverSavedAt > currentSavedAt + 1000 && serverScore >= currentScore)
       || (serverCompAnalysisAt > currentCompAnalysisAt + 1000);
     if (!shouldApply) return false;
+    applyStarted = true;
     const changed = applyServerLastWorkSnapshot(snapshot, {
       forceStep: options.forceStep,
       persistReplica: options.takeoverSync !== true,
+      takeoverAuthority: options.takeoverAuthority,
     });
     if (changed) {
       if (String(state.storageWarning || '').includes('현재 제품과 다른 이미지 백업')) {
@@ -4987,6 +5061,20 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
     }
     return options.takeoverSync === true;
   } catch(e) {
+    if (applyStarted && previousStateSnapshot) {
+      for (const key of Object.keys(state)) {
+        if (!Object.hasOwn(previousStateSnapshot, key)) delete state[key];
+      }
+      Object.assign(state, previousStateSnapshot);
+    }
+    if (applyStarted && takeoverIdentity && previousFactorySnapshot
+      && factoryRuntimeReadFactory() !== previousFactorySnapshot) {
+      factoryRuntimeReplaceFactorySnapshot(previousFactorySnapshot, {
+        mode: 'hydrate',
+        reason: 'takeover-hydrate-rollback',
+        takeoverAuthority: options.takeoverAuthority,
+      });
+    }
     console.warn('Server last-work hydrate failed:', e);
     if (options.takeoverSync) throw e;
     return false;
@@ -5901,6 +5989,7 @@ function applySessionAssetsPayload(assets, options = {}) {
     mode: 'hydrate',
     reason: 'session-assets-payload',
     workspaceId: state.currentProjectId,
+    takeoverAuthority: options.takeoverAuthority,
   });
   const acceptedRevision = observeWorkspaceRevisionSnapshot(assets);
   if (acceptedRevision) {
