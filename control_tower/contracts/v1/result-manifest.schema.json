@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://kuasangse.local/control-tower/contracts/v1/result-manifest.schema.json","title":"Result manifest","$ref":"common.schema.json#/$defs/resultManifest"}

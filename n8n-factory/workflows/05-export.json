@@ -1,0 +1,229 @@
+{
+  "name": "PDP Factory 05 - Export",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a5000005-0005-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "backendBase",
+              "value": "http://127.0.0.1:5050",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "project_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a5000005-0005-4000-8000-000000000002",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.backendBase}}/api/projects/{{$json.project_id}}/export",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a5000005-0005-4000-8000-000000000003",
+      "name": "Export JSON",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config Ready').item.json.backendBase}}/api/projects/{{$('Config Ready').item.json.project_id}}/export-html",
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "a5000005-0005-4000-8000-000000000004",
+      "name": "Export HTML",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config Ready').first().json;\nconst exp = $('Export JSON').first().json;\nlet html = null;\ntry { html = $('Export HTML').first().json; } catch(e) { html = null; }\nconst base = cfg.backendBase.replace(/\\/+$/,'');\nreturn [{\n  json: {\n    stage: '05-export',\n    project_id: cfg.project_id,\n    exportJson: exp,\n    exportHtmlPreview: typeof html === 'string' ? html.slice(0, 500) : html,\n    urls: {\n      full: `${base}/api/projects/${cfg.project_id}/full`,\n      export: `${base}/api/projects/${cfg.project_id}/export`,\n      exportHtml: `${base}/api/projects/${cfg.project_id}/export-html`,\n      ui: 'http://127.0.0.1:8081/app.html'\n    },\n    note: 'Cafe24 등록은 브라우저 조립공장에서 검수 후 진행하세요.',\n    nextStep: 'manual-cafe24-or-done'\n  }\n}];"
+      },
+      "id": "a5000005-0005-4000-8000-000000000005",
+      "name": "Normalize Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manual path: Set Config 결과 패스스루\nreturn [{ json: { ...($input.first().json || {}) } }];"
+      },
+      "id": "cfg-ready-05exportjson",
+      "name": "Config Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "notes": "Manual/Parent 공통 설정 노드. 하위는 $(\"Config Ready\") 또는 $json 사용"
+    },
+    {
+      "parameters": {},
+      "id": "extrig-05exportjson",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst d = {\n  backendBase: 'http://127.0.0.1:5050',\n  apiHubBase: 'http://127.0.0.1:4321',\n  productName: '테스트 상품',\n  imageUrl: '',\n  imageFilePath: '',\n  project_id: '',\n  llmModel: 'gpt-5.3-codex-spark',\n  generatePollSeconds: 15,\n  generatePollMax: 120,\n  mode: 'image-cuts',\n  imageModel: 'gemini-3.1-flash-image-preview',\n  outputImageSize: '1K',\n  maxFilesPerRun: 1,\n  maxImagesPerRun: 8,\n  enableProfile: false,\n  pollSeconds: 10,\n  maxPolls: 36,\n  actuallyRun: false,\n  driveMode: 'image-cuts',\n  driveImageModel: 'gemini-3.1-flash-image-preview',\n  driveOutputImageSize: '1K',\n  driveActuallyRun: false,\n  channelId: 'smartstore',\n  channelLabels: '스마트스토어,쿠팡',\n  productNo: '',\n  productCode: '',\n  debugPort: 9224,\n  candidatesLimit: 8,\n  sinhwaDirectBase: 'http://127.0.0.1:8200',\n  sinhwaConnectorId: 'db_7db4f9f8f4074c80',\n  sinhwaSearchEndpointId: 'api-search-api-v1-search-get_0cd83217e9d84714',\n  cafe24ConnectorId: 'cafe24_control_tower',\n  cafe24ProductsEndpointId: 'products',\n  tryStartSinhwa: true,\n  query: '',\n};\nconst out = { ...d, ...input };\nif (!out.query && out.productName) out.query = out.productName;\nif (!out.project_id && (input.project_id || input.projectId)) out.project_id = input.project_id || input.projectId;\nif (out.driveActuallyRun && out.actuallyRun === false) out.actuallyRun = true;\nreturn [{ json: out }];"
+      },
+      "id": "apply-05exportjson",
+      "name": "Apply Parent Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export JSON": {
+      "main": [
+        [
+          {
+            "node": "Normalize Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export HTML": {
+      "main": [
+        [
+          {
+            "node": "Normalize Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Ready": {
+      "main": [
+        [
+          {
+            "node": "Export JSON",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Export HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Apply Parent Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Parent Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    {
+      "name": "pdp-factory"
+    }
+  ]
+}

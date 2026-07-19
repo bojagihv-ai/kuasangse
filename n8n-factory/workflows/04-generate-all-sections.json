@@ -1,0 +1,234 @@
+{
+  "name": "PDP Factory 04 - Generate All Sections",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a4000004-0004-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "backendBase",
+              "value": "http://127.0.0.1:5050",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "project_id",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "c3",
+              "name": "generatePollSeconds",
+              "value": 15,
+              "type": "number"
+            },
+            {
+              "id": "c4",
+              "name": "generatePollMax",
+              "value": 120,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a4000004-0004-4000-8000-000000000002",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ],
+      "notes": "generate-all 은 백그라운드 시작 API. 완료까지 Poll Until Done 이 status=completed|error 를 대기. poll 기본 15초×120=약 30분."
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $input.first().json;\nif (!cfg.project_id) throw new Error('Set Config.project_id 가 비어 있습니다. 02-input-analyze 결과 project_id 를 넣으세요.');\nreturn [{ json: cfg }];"
+      },
+      "id": "a4000004-0004-4000-8000-000000000002b",
+      "name": "Assert Project Id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.backendBase}}/api/projects/{{$json.project_id}}/generate-all",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a4000004-0004-4000-8000-000000000003",
+      "name": "Generate All Sections",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "notes": "즉시 started 반환. 실제 완료는 다음 폴링 노드."
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config Ready').first().json;\nconst start = $('Generate All Sections').first().json;\nconst backend = String(cfg.backendBase || 'http://127.0.0.1:5050').replace(/\\/+$/, '');\nconst projectId = cfg.project_id;\nconst pollSeconds = Math.max(5, Number(cfg.generatePollSeconds || 15));\nconst maxPolls = Math.max(1, Number(cfg.generatePollMax || 120));\nconst sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n\nlet last = null;\nlet polls = 0;\nlet done = false;\nfor (let i = 0; i < maxPolls; i++) {\n  await sleep(pollSeconds * 1000);\n  polls = i + 1;\n  last = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `${backend}/api/projects/${projectId}`,\n    json: true,\n    timeout: 30000,\n  });\n  const st = String(last?.status || '');\n  if (st === 'completed' || st === 'error') {\n    done = true;\n    break;\n  }\n}\n\nif (!done) {\n  throw new Error(`generate-all 타임아웃: ${polls}회 폴링 후에도 status=${last?.status || 'unknown'} (progress=${last?.progress ?? '?'})`);\n}\nif (last?.status === 'error') {\n  throw new Error(`generate-all 실패: ${last?.progress_message || 'error'}`);\n}\n\nreturn [{\n  json: {\n    stage: '04-generate-all-sections',\n    project_id: projectId,\n    backendBase: backend,\n    generateStart: start,\n    status: last.status,\n    progress: last.progress,\n    progress_message: last.progress_message,\n    sections_completed: last.sections_completed,\n    polls,\n    pollSeconds,\n    nextStep: '05-export',\n    error: null\n  }\n}];"
+      },
+      "id": "a4000004-0004-4000-8000-000000000004",
+      "name": "Poll Until Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manual path: Set Config 결과 패스스루\nreturn [{ json: { ...($input.first().json || {}) } }];"
+      },
+      "id": "cfg-ready-04generateal",
+      "name": "Config Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "notes": "Manual/Parent 공통 설정 노드. 하위는 $(\"Config Ready\") 또는 $json 사용"
+    },
+    {
+      "parameters": {},
+      "id": "extrig-04generateal",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst d = {\n  backendBase: 'http://127.0.0.1:5050',\n  apiHubBase: 'http://127.0.0.1:4321',\n  productName: '테스트 상품',\n  imageUrl: '',\n  imageFilePath: '',\n  project_id: '',\n  llmModel: 'gpt-5.3-codex-spark',\n  generatePollSeconds: 15,\n  generatePollMax: 120,\n  mode: 'image-cuts',\n  imageModel: 'gemini-3.1-flash-image-preview',\n  outputImageSize: '1K',\n  maxFilesPerRun: 1,\n  maxImagesPerRun: 8,\n  enableProfile: false,\n  pollSeconds: 10,\n  maxPolls: 36,\n  actuallyRun: false,\n  driveMode: 'image-cuts',\n  driveImageModel: 'gemini-3.1-flash-image-preview',\n  driveOutputImageSize: '1K',\n  driveActuallyRun: false,\n  channelId: 'smartstore',\n  channelLabels: '스마트스토어,쿠팡',\n  productNo: '',\n  productCode: '',\n  debugPort: 9224,\n  candidatesLimit: 8,\n  sinhwaDirectBase: 'http://127.0.0.1:8200',\n  sinhwaConnectorId: 'db_7db4f9f8f4074c80',\n  sinhwaSearchEndpointId: 'api-search-api-v1-search-get_0cd83217e9d84714',\n  cafe24ConnectorId: 'cafe24_control_tower',\n  cafe24ProductsEndpointId: 'products',\n  tryStartSinhwa: true,\n  query: '',\n};\nconst out = { ...d, ...input };\nif (!out.query && out.productName) out.query = out.productName;\nif (!out.project_id && (input.project_id || input.projectId)) out.project_id = input.project_id || input.projectId;\nif (out.driveActuallyRun && out.actuallyRun === false) out.actuallyRun = true;\nreturn [{ json: out }];"
+      },
+      "id": "apply-04generateal",
+      "name": "Apply Parent Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assert Project Id": {
+      "main": [
+        [
+          {
+            "node": "Generate All Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate All Sections": {
+      "main": [
+        [
+          {
+            "node": "Poll Until Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Ready": {
+      "main": [
+        [
+          {
+            "node": "Assert Project Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Apply Parent Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Parent Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    {
+      "name": "pdp-factory"
+    }
+  ]
+}

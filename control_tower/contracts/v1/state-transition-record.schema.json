@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://kuasangse.local/control-tower/contracts/v1/state-transition-record.schema.json","title":"State transition record","$ref":"common.schema.json#/$defs/stateTransitionRecord"}

@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://kuasangse.local/control-tower/contracts/v1/cafe24-category-requirements.schema.json","title":"Cafe24 category requirements","$ref":"common.schema.json#/$defs/cafe24CategoryRequirements"}

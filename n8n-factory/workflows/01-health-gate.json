@@ -1,0 +1,292 @@
+{
+  "name": "PDP Factory 01 - Health Gate",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000001-0001-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "backendBase",
+              "value": "http://127.0.0.1:5050",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "apiHubBase",
+              "value": "http://127.0.0.1:4321",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000001-0001-4000-8000-000000000002",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.backendBase}}/api/sections",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1000001-0001-4000-8000-000000000003",
+      "name": "Backend Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        -140
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config Ready').item.json.backendBase}}/api/provider",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1000001-0001-4000-8000-000000000003b",
+      "name": "Provider Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config Ready').item.json.backendBase}}/pdp/automation/status",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1000001-0001-4000-8000-000000000003c",
+      "name": "PDP Automation Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        140
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Config Ready').item.json.apiHubBase}}/api/status",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "a1000001-0001-4000-8000-000000000004",
+      "name": "API Hub Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        280
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config Ready').first().json;\nfunction pick(name) { try { return $(name).first().json; } catch (e) { return { _error: String(e.message || e) }; } }\nconst backend = pick('Backend Health');\nconst provider = pick('Provider Health');\nconst pdp = pick('PDP Automation Health');\nconst hub = pick('API Hub Health');\nconst backendOk = Array.isArray(backend) && backend.length > 0 && !backend._error;\nconst providerOk = !!(provider && provider.gemini_route && !provider._error && !provider.error);\nconst pdpOk = !!(pdp && (pdp.ok === true || pdp.status) && !pdp._error);\nconst hubOk = hub?.ok === true;\nconst ready = backendOk && hubOk;\nreturn [{\n  json: {\n    ...cfg,\n    backendOk,\n    providerOk,\n    pdpAutomationOk: pdpOk,\n    apiHubOk: hubOk,\n    ready,\n    gemini_route: provider?.gemini_route || null,\n    google_cloud_project: provider?.google_cloud_project || null,\n    sectionCount: Array.isArray(backend) ? backend.length : 0,\n    message: ready\n      ? `조립공장 n8n 게이트 통과 (sections=${Array.isArray(backend) ? backend.length : 0}, route=${provider?.gemini_route || '?'}, hub=ok)`\n      : `게이트 실패 backendOk=${backendOk} apiHubOk=${hubOk} providerOk=${providerOk} pdpOk=${pdpOk}`,\n    checkedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a1000001-0001-4000-8000-000000000005",
+      "name": "Merge Gate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manual path: Set Config 결과 패스스루\nreturn [{ json: { ...($input.first().json || {}) } }];"
+      },
+      "id": "cfg-ready-01healthgate",
+      "name": "Config Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "notes": "Manual/Parent 공통 설정 노드. 하위는 $(\"Config Ready\") 또는 $json 사용"
+    },
+    {
+      "parameters": {},
+      "id": "extrig-01healthgate",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst d = {\n  backendBase: 'http://127.0.0.1:5050',\n  apiHubBase: 'http://127.0.0.1:4321',\n  productName: '테스트 상품',\n  imageUrl: '',\n  imageFilePath: '',\n  project_id: '',\n  llmModel: 'gpt-5.3-codex-spark',\n  generatePollSeconds: 15,\n  generatePollMax: 120,\n  mode: 'image-cuts',\n  imageModel: 'gemini-3.1-flash-image-preview',\n  outputImageSize: '1K',\n  maxFilesPerRun: 1,\n  maxImagesPerRun: 8,\n  enableProfile: false,\n  pollSeconds: 10,\n  maxPolls: 36,\n  actuallyRun: false,\n  driveMode: 'image-cuts',\n  driveImageModel: 'gemini-3.1-flash-image-preview',\n  driveOutputImageSize: '1K',\n  driveActuallyRun: false,\n  channelId: 'smartstore',\n  channelLabels: '스마트스토어,쿠팡',\n  productNo: '',\n  productCode: '',\n  debugPort: 9224,\n  candidatesLimit: 8,\n  sinhwaDirectBase: 'http://127.0.0.1:8200',\n  sinhwaConnectorId: 'db_7db4f9f8f4074c80',\n  sinhwaSearchEndpointId: 'api-search-api-v1-search-get_0cd83217e9d84714',\n  cafe24ConnectorId: 'cafe24_control_tower',\n  cafe24ProductsEndpointId: 'products',\n  tryStartSinhwa: true,\n  query: '',\n};\nconst out = { ...d, ...input };\nif (!out.query && out.productName) out.query = out.productName;\nif (!out.project_id && (input.project_id || input.projectId)) out.project_id = input.project_id || input.projectId;\nif (out.driveActuallyRun && out.actuallyRun === false) out.actuallyRun = true;\nreturn [{ json: out }];"
+      },
+      "id": "apply-01healthgate",
+      "name": "Apply Parent Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backend Health": {
+      "main": [
+        [
+          {
+            "node": "Merge Gate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Provider Health": {
+      "main": [
+        [
+          {
+            "node": "Merge Gate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDP Automation Health": {
+      "main": [
+        [
+          {
+            "node": "Merge Gate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API Hub Health": {
+      "main": [
+        [
+          {
+            "node": "Merge Gate Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Ready": {
+      "main": [
+        [
+          {
+            "node": "Backend Health",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Provider Health",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PDP Automation Health",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "API Hub Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Apply Parent Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Parent Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    {
+      "name": "pdp-factory"
+    }
+  ]
+}

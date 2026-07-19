@@ -1,0 +1,194 @@
+{
+  "name": "PDP Factory 03 - Competitors",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a3000003-0003-4000-8000-000000000001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "backendBase",
+              "value": "http://127.0.0.1:5050",
+              "type": "string"
+            },
+            {
+              "id": "c2",
+              "name": "project_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3000003-0003-4000-8000-000000000002",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ],
+      "notes": "02-input-analyze 결과의 project_id 를 붙여 넣세요. 마스터 오케스트레이터에서는 자동 전달됩니다."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.backendBase}}/api/projects/{{$json.project_id}}/search-competitors",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "a3000003-0003-4000-8000-000000000003",
+      "name": "Search Competitors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config Ready').first().json;\nconst res = $input.first().json;\nreturn [{\n  json: {\n    stage: '03-competitors',\n    project_id: cfg.project_id,\n    backendBase: cfg.backendBase,\n    status: res.status || (res.error ? 'error' : 'ok'),\n    competitor_data: res.competitor_data || res || null,\n    error: res.error || null,\n    nextStep: '04-generate-all-sections'\n  }\n}];"
+      },
+      "id": "a3000003-0003-4000-8000-000000000004",
+      "name": "Normalize Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Manual path: Set Config 결과 패스스루\nreturn [{ json: { ...($input.first().json || {}) } }];"
+      },
+      "id": "cfg-ready-03competitor",
+      "name": "Config Ready",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        360,
+        0
+      ],
+      "notes": "Manual/Parent 공통 설정 노드. 하위는 $(\"Config Ready\") 또는 $json 사용"
+    },
+    {
+      "parameters": {},
+      "id": "extrig-03competitor",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json || {};\nconst d = {\n  backendBase: 'http://127.0.0.1:5050',\n  apiHubBase: 'http://127.0.0.1:4321',\n  productName: '테스트 상품',\n  imageUrl: '',\n  imageFilePath: '',\n  project_id: '',\n  llmModel: 'gpt-5.3-codex-spark',\n  generatePollSeconds: 15,\n  generatePollMax: 120,\n  mode: 'image-cuts',\n  imageModel: 'gemini-3.1-flash-image-preview',\n  outputImageSize: '1K',\n  maxFilesPerRun: 1,\n  maxImagesPerRun: 8,\n  enableProfile: false,\n  pollSeconds: 10,\n  maxPolls: 36,\n  actuallyRun: false,\n  driveMode: 'image-cuts',\n  driveImageModel: 'gemini-3.1-flash-image-preview',\n  driveOutputImageSize: '1K',\n  driveActuallyRun: false,\n  channelId: 'smartstore',\n  channelLabels: '스마트스토어,쿠팡',\n  productNo: '',\n  productCode: '',\n  debugPort: 9224,\n  candidatesLimit: 8,\n  sinhwaDirectBase: 'http://127.0.0.1:8200',\n  sinhwaConnectorId: 'db_7db4f9f8f4074c80',\n  sinhwaSearchEndpointId: 'api-search-api-v1-search-get_0cd83217e9d84714',\n  cafe24ConnectorId: 'cafe24_control_tower',\n  cafe24ProductsEndpointId: 'products',\n  tryStartSinhwa: true,\n  query: '',\n};\nconst out = { ...d, ...input };\nif (!out.query && out.productName) out.query = out.productName;\nif (!out.project_id && (input.project_id || input.projectId)) out.project_id = input.project_id || input.projectId;\nif (out.driveActuallyRun && out.actuallyRun === false) out.actuallyRun = true;\nreturn [{ json: out }];"
+      },
+      "id": "apply-03competitor",
+      "name": "Apply Parent Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Competitors": {
+      "main": [
+        [
+          {
+            "node": "Normalize Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config Ready": {
+      "main": [
+        [
+          {
+            "node": "Search Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Apply Parent Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Parent Config": {
+      "main": [
+        [
+          {
+            "node": "Config Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [
+    {
+      "name": "pdp-factory"
+    }
+  ]
+}

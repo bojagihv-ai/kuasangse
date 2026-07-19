@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "goalMode": true,
+  "backendBase": "http://127.0.0.1:5050",
+  "apiHubBase": "http://127.0.0.1:4321",
+  "productName": "[N8N-GOAL-TEST] 띠수네모동전지갑",
+  "imageUrl": "http://127.0.0.1:5050/static/uploads/auto_src_13ac3e6e.jpg",
+  "imageUrlHint": "Override if this file is missing; must be reachable from n8n host/docker network (host.docker.internal may be needed)",
+  "autoApplyTopDb": true,
+  "sinhwaIndex": 0,
+  "cafe24Index": 0,
+  "vmTopK": 2,
+  "selectedVmIndexes": "0,1",
+  "fieldDefaults": {
+    "category": "패션잡화",
+    "material": "원단",
+    "width_mm": "100",
+    "height_mm": "80",
+    "weight_g": "30",
+    "price": "15000",
+    "origin": "대한민국"
+  },
+  "assetSelect": {
+    "mode": "all_images",
+    "selectedAssetIds": "all"
+  },
+  "approveDetail": true,
+  "runCafe24DryRun": true,
+  "cafe24": {
+    "register": true,
+    "display": "F",
+    "selling": "F",
+    "displayLabel": "진열안함",
+    "sellingLabel": "판매안함",
+    "namePrefix": "[N8N-GOAL-TEST] "
+  },
+  "generatePollSeconds": 15,
+  "generatePollMax": 120,
+  "notes": "Unattended policy for Goal loop. Never set display/selling to on."
+}

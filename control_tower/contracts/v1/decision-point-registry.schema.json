@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://kuasangse.local/control-tower/contracts/v1/decision-point-registry.schema.json","title":"Decision point registry","$ref":"common.schema.json#/$defs/decisionPointRegistry"}

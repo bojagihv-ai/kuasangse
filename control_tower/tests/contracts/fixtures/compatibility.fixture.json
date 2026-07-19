@@ -1,0 +1,53 @@
+{
+  "fixtureVersion": "1.0.0",
+  "cases": [
+    {
+      "name": "valid_factory_compatibility_registry",
+      "payload": {
+        "contractType": "decision-point-registry",
+        "contractVersion": "1.0.0",
+        "capabilityVersion": "1.0.0",
+        "registryId": "factory-compatibility-v1",
+        "registeredJudgeIds": ["judge.factory-compatibility.v1"],
+        "entries": [
+          {"entryId": "product_name", "kind": "field", "label": "제품명", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "product_code", "kind": "field", "label": "제품코드", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "category", "kind": "field", "label": "분류", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "sale_price", "kind": "field", "label": "판매가", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "consumer_price", "kind": "field", "label": "소비자가", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "purchase_price", "kind": "field", "label": "원가·공급가", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "dimensions", "kind": "field", "label": "치수", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "size", "kind": "field", "label": "크기", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "material", "kind": "field", "label": "소재", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "use_case", "kind": "field", "label": "사용용도", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "weight", "kind": "field", "label": "무게", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "manufacturer", "kind": "field", "label": "제조사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "supplier", "kind": "field", "label": "공급사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "stock", "kind": "field", "label": "재고", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_method", "kind": "field", "label": "옵션 방식", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_name", "kind": "field", "label": "옵션 이름", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_values", "kind": "field", "label": "옵션 값", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_count", "kind": "field", "label": "옵션수", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_image", "kind": "field", "label": "옵션 이미지", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "cafe24_category_requirements", "kind": "field", "label": "Cafe24 카테고리 필수값", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "sinhwa_db_product", "kind": "selection-stage", "label": "신화사 DB 제품", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "cafe24_product", "kind": "selection-stage", "label": "Cafe24 제품", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "competitor_coupang", "kind": "selection-stage", "label": "쿠팡 경쟁사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "competitor_smartstore", "kind": "selection-stage", "label": "스마트스토어 경쟁사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "competitor_gmarket", "kind": "selection-stage", "label": "G마켓 경쟁사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "competitor_auction", "kind": "selection-stage", "label": "옥션 경쟁사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "competitor_11st", "kind": "selection-stage", "label": "11번가 경쟁사", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "required_field_candidate", "kind": "selection-stage", "label": "필수값 후보", "decisionMode": "auto", "judgeId": null, "exactOneProof": {"proofType": "validated-candidate-count", "validatedCandidateCount": 1, "evidenceRefs": [{"artifactId": "candidate-proof-001", "kind": "validation", "uri": "evidence/candidate-proof-001.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}, "evidenceRefs": []},
+          {"entryId": "hero_a_cut", "kind": "selection-stage", "label": "대표 이미지 A컷", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "size_a_cut", "kind": "selection-stage", "label": "사이즈 이미지 A컷", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "option_color_a_cut", "kind": "selection-stage", "label": "옵션·색상 이미지 A컷", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "general_a_cut", "kind": "selection-stage", "label": "일반 이미지 A컷", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "section_variant_a_cut", "kind": "selection-stage", "label": "섹션 변형·A컷", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []},
+          {"entryId": "final_detail_page", "kind": "selection-stage", "label": "최종 상세페이지", "decisionMode": "auto", "judgeId": "judge.factory-compatibility.v1", "exactOneProof": null, "evidenceRefs": []}
+        ],
+        "evidenceRefs": []
+      },
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    }
+  ]
+}

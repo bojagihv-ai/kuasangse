@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://kuasangse.local/control-tower/contracts/v1/cafe24-staging-receipt.schema.json","title":"Cafe24 staging receipt","$ref":"common.schema.json#/$defs/cafe24StagingReceipt"}

@@ -1,0 +1,718 @@
+{
+  "name": "PDP HITL 10 - Factory Line (조립공장 동일 순서)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 조립공장 = n8n HITL 라인\n앱 코드 수정 없음.\n\n순서: 입력→분석→**DB선택**→**필수값**→**VM선택**→생성→**컷선택**→상세→export→**전송승인**\n\n빨간 Wait = 사람 게이트 (스킵 금지 원칙).",
+        "height": 260,
+        "width": 380,
+        "color": 4
+      },
+      "id": "note-main",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-200, -320]
+    },
+    {
+      "parameters": {
+        "formTitle": "조립공장 시작 — 제품 입력",
+        "formDescription": "G0: 제품 이미지 URL과 제품명을 넣습니다. (앱 start 탭과 동일 역할)",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "productName",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "예: 띠수 네모 동전지갑"
+            },
+            {
+              "fieldLabel": "imageUrl",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "http://127.0.0.1:5050/static/uploads/....jpg"
+            },
+            {
+              "fieldLabel": "backendBase",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "http://127.0.0.1:5050"
+            },
+            {
+              "fieldLabel": "apiHubBase",
+              "fieldType": "text",
+              "requiredField": false,
+              "placeholder": "http://127.0.0.1:4321"
+            },
+            {
+              "fieldLabel": "autoApplyTopDb",
+              "fieldType": "dropdown",
+              "requiredField": false,
+              "fieldOptions": {
+                "values": [
+                  { "option": "false" },
+                  { "option": "true" }
+                ]
+              }
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "hitl-form-start",
+      "name": "G0 Form Start",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [0, 0],
+      "webhookId": "pdp-hitl-g0-start"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst backendBase = String(j.backendBase || 'http://127.0.0.1:5050').replace(/\\/+$/, '');\nconst apiHubBase = String(j.apiHubBase || 'http://127.0.0.1:4321').replace(/\\/+$/, '');\nconst productName = String(j.productName || '').trim();\nconst imageUrl = String(j.imageUrl || '').trim();\nif (!productName) throw new Error('G0: productName 필수');\nif (!imageUrl) throw new Error('G0: imageUrl 필수');\nreturn [{\n  json: {\n    backendBase,\n    apiHubBase,\n    productName,\n    imageUrl,\n    query: productName,\n    autoApplyTopDb: String(j.autoApplyTopDb || 'false') === 'true',\n    project_id: '',\n    sinhwaCandidates: [],\n    cafe24Candidates: [],\n    confirmedSinhwa: null,\n    confirmedCafe24: null,\n    missingFields: [],\n    productFields: {},\n    vmCandidates: [],\n    selectedVmIndexes: [],\n    generatedNote: '',\n    selectedAssetNote: '',\n    publishApproved: false,\n    stage: 'g0-input',\n    bus: 'factory-hitl-v1'\n  }\n}];"
+      },
+      "id": "hitl-norm-g0",
+      "name": "G0 Normalize Bus",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 0]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-01-health-gate", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-01",
+      "name": "Auto: 01 Health",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('G0 Normalize Bus').first().json;\nconst health = $input.first().json || {};\nif (health.ready === false) throw new Error('Health gate 실패: ' + (health.message || ''));\nreturn [{ json: { ...bus, health, stage: 'g0-health-ok' } }];"
+      },
+      "id": "hitl-after-01",
+      "name": "After Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-02-input-analyze", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-02",
+      "name": "Auto: 02 Analyze",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1000, 0],
+      "notes": "앱 factoryEnsureCurrentProductImageAnalysis 에 해당"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('After Health').first().json;\nconst child = $input.first().json || {};\nconst project_id = child.project_id || child.projectId || '';\nif (!project_id) throw new Error('02 Analyze 후 project_id 없음');\nreturn [{\n  json: {\n    ...bus,\n    ...child,\n    project_id,\n    analysis: child.analysis || child.product_analysis || bus.analysis || null,\n    stage: 'g0-analyzed'\n  }\n}];"
+      },
+      "id": "hitl-after-02",
+      "name": "After Analyze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 0]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G0 확정 — 제품명 검수",
+        "formDescription": "={{'분석 완료 project_id=' + $json.project_id + ' / 현재 제품명: ' + $json.productName + ' — 틀리면 수정하세요 (앱 시작 탭 제품명 수정과 동일).'}}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "confirmedProductName",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "={{$json.productName}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g0-name",
+      "name": "WAIT G0 제품명 확정",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1480, 0],
+      "webhookId": "pdp-hitl-g0-name"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('After Analyze').first().json;\nconst form = $input.first().json || {};\nconst productName = String(form.confirmedProductName || bus.productName || '').trim();\nif (!productName) throw new Error('확정 제품명 비어 있음');\nreturn [{ json: { ...bus, productName, query: productName, stage: 'g1-ready' } }];"
+      },
+      "id": "hitl-apply-g0-name",
+      "name": "Apply G0 Name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1720, 0]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-07-db-candidates-sinhwa-cafe24", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-07",
+      "name": "Auto: 07 DB Candidates",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1960, 0],
+      "notes": "앱 factoryRunDbCandidatesForSelection"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Apply G0 Name').first().json;\nconst child = $input.first().json || {};\nfunction listFrom(x) {\n  if (Array.isArray(x)) return x;\n  if (Array.isArray(x?.sinhwaTop)) return x.sinhwaTop;\n  if (Array.isArray(x?.products)) return x.products;\n  return [];\n}\nconst sinhwa = listFrom(child.sinhwaTop || child.sinhwaCandidates || child);\nconst cafe = Array.isArray(child.cafe24Top) ? child.cafe24Top : (Array.isArray(child.cafe24Candidates) ? child.cafe24Candidates : []);\nconst sinhwaLines = (sinhwa.length ? sinhwa : [{ name: '(후보 없음)', code: '' }]).slice(0, 15).map((p, i) => `${i}: ${p.name || p.product_name || p.jname || ''} | ${p.code || p.jcode || p.product_code || ''}`).join('\\n');\nconst cafeLines = (cafe.length ? cafe : [{ name: '(후보 없음)', product_no: '' }]).slice(0, 15).map((p, i) => `${i}: ${p.name || p.product_name || ''} | no=${p.product_no || p.productNo || ''} | ${p.product_code || p.productCode || ''}`).join('\\n');\nreturn [{\n  json: {\n    ...bus,\n    sinhwaCandidates: sinhwa,\n    cafe24Candidates: cafe,\n    sinhwaCount: sinhwa.length,\n    cafe24Count: cafe.length,\n    sinhwaPickList: sinhwaLines,\n    cafe24PickList: cafeLines,\n    dbChild: child,\n    stage: 'g1-candidates'\n  }\n}];"
+      },
+      "id": "hitl-prep-g1",
+      "name": "Prep G1 Candidate Lists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2200, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "auto",
+              "leftValue": "={{$json.autoApplyTopDb}}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hitl-if-auto-db",
+      "name": "If autoApplyTopDb",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2440, 0],
+      "notes": "앱 candidateAutoApply 와 동일. 기본 false → 사람 선택"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $input.first().json;\nconst s = bus.sinhwaCandidates?.[0] || null;\nconst c = bus.cafe24Candidates?.[0] || null;\nreturn [{ json: { ...bus, confirmedSinhwa: s, confirmedCafe24: c, sinhwaIndex: 0, cafe24Index: 0, stage: 'g1-auto-applied' } }];"
+      },
+      "id": "hitl-auto-db",
+      "name": "Auto Apply Top DB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2680, -140]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G1 DB 확정 — 후보 선택",
+        "formDescription": "={{'신화사 후보:\\n' + $json.sinhwaPickList + '\\n\\nCafe24 후보:\\n' + $json.cafe24PickList + '\\n\\n앱 DB 확정 탭과 동일: 번호를 고르세요. 없으면 -1'}}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "sinhwaIndex",
+              "fieldType": "number",
+              "requiredField": true,
+              "placeholder": "0"
+            },
+            {
+              "fieldLabel": "cafe24Index",
+              "fieldType": "number",
+              "requiredField": true,
+              "placeholder": "0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g1",
+      "name": "WAIT G1 DB 후보 선택",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2680, 140],
+      "webhookId": "pdp-hitl-g1-db"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Prep G1 Candidate Lists').first().json;\nconst form = $input.first().json || {};\nconst si = Number(form.sinhwaIndex);\nconst ci = Number(form.cafe24Index);\nconst s = Number.isFinite(si) && si >= 0 ? (bus.sinhwaCandidates[si] || null) : null;\nconst c = Number.isFinite(ci) && ci >= 0 ? (bus.cafe24Candidates[ci] || null) : null;\nif (!s && !c) throw new Error('G1: 신화사/Cafe24 중 최소 1개 후보를 선택하세요 (앱도 확정 없이 진행 불가에 가깝음)');\nreturn [{ json: { ...bus, confirmedSinhwa: s, confirmedCafe24: c, sinhwaIndex: si, cafe24Index: ci, stage: 'g1-confirmed' } }];"
+      },
+      "id": "hitl-apply-g1",
+      "name": "Apply G1 Selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2920, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $input.first().json;\nconst analysis = bus.analysis || {};\nconst fields = {\n  productName: bus.productName || analysis.product_name || '',\n  category: analysis.category || '',\n  material: (analysis.materials && analysis.materials[0]) || analysis.material || '',\n  width_mm: analysis.width_mm || analysis.size_width || '',\n  height_mm: analysis.height_mm || analysis.size_height || '',\n  weight_g: analysis.weight_g || '',\n  price: analysis.price_range_estimate || '',\n  origin: analysis.origin || '대한민국',\n};\nconst required = ['productName', 'category', 'material', 'width_mm', 'height_mm'];\nconst missingFields = required.filter(k => !String(fields[k] || '').trim());\nconst missingText = missingFields.length ? missingFields.join(', ') : '(없음)';\nreturn [{\n  json: {\n    ...bus,\n    productFields: { ...fields, ...(bus.productFields || {}) },\n    missingFields,\n    missingText,\n    stage: 'g2-check'\n  }\n}];"
+      },
+      "id": "hitl-prep-g2",
+      "name": "G2 Check Required Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3160, 0],
+      "notes": "앱 fields 탭 누락 검사에 해당 (간소화 필드 세트, 이후 확장)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "miss",
+              "leftValue": "={{$json.missingFields.length}}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hitl-if-missing",
+      "name": "If Missing Fields",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3400, 0]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G2 필수값 기입",
+        "formDescription": "={{'누락: ' + $json.missingText + ' — 앱 필수값 탭과 동일. 아는 값만 채우세요.'}}",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "category", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "material", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "width_mm", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "height_mm", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "weight_g", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "price", "fieldType": "text", "requiredField": false },
+            { "fieldLabel": "origin", "fieldType": "text", "requiredField": false }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g2",
+      "name": "WAIT G2 필수값 기입",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3640, -120],
+      "webhookId": "pdp-hitl-g2-fields"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('G2 Check Required Fields').first().json;\nconst form = $input.first().json || {};\nconst productFields = { ...bus.productFields };\nfor (const k of ['category','material','width_mm','height_mm','weight_g','price','origin']) {\n  if (form[k] != null && String(form[k]).trim() !== '') productFields[k] = String(form[k]).trim();\n}\nconst required = ['productName', 'category', 'material', 'width_mm', 'height_mm'];\nconst missingFields = required.filter(k => !String(productFields[k] || '').trim());\nif (missingFields.length) {\n  throw new Error('G2 여전히 누락: ' + missingFields.join(', ') + ' — 워크플로 재실행 또는 값 보충 필요');\n}\nreturn [{ json: { ...bus, productFields, missingFields: [], stage: 'g2-filled' } }];"
+      },
+      "id": "hitl-apply-g2",
+      "name": "Apply G2 Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3880, -120]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$input.first().json, stage: 'g2-ok' } }];"
+      },
+      "id": "hitl-skip-g2",
+      "name": "G2 Already Complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3640, 140]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-03-competitors", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-03",
+      "name": "Auto: 03 Competitors / VM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [4120, 0],
+      "notes": "앱 factoryRunVmCompetitorCollectionForSelection 근사 (API 경쟁 검색)"
+    },
+    {
+      "parameters": {
+        "jsCode": "function pick(name) { try { return $(name).first().json; } catch (e) { return null; } }\nconst prev = pick('Apply G2 Fields') || pick('G2 Already Complete') || {};\nconst child = $input.first().json || {};\nlet list = [];\nif (Array.isArray(child.competitor_data?.similar_products)) list = child.competitor_data.similar_products;\nelse if (Array.isArray(child.similar_products)) list = child.similar_products;\nelse if (Array.isArray(child.competitors)) list = child.competitors;\nelse if (Array.isArray(child.vmCandidates)) list = child.vmCandidates;\nconst lines = (list.length ? list : [{ title: '(후보 없음 — 직접 인덱스 -1)', url: '' }]).slice(0, 20).map((p, i) => {\n  const title = p.title || p.name || p.product_name || '';\n  const url = p.product_url || p.url || p.link || '';\n  const platform = p.platform || p.mall || p.site || '';\n  return `${i}: [${platform}] ${title} | ${url}`;\n}).join('\\n');\nreturn [{\n  json: {\n    ...prev,\n    vmCandidates: list,\n    vmPickList: lines,\n    competitorRaw: child,\n    stage: 'g3-candidates'\n  }\n}];"
+      },
+      "id": "hitl-prep-g3",
+      "name": "Prep G3 VM Lists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4360, 0]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G3 경쟁사/VM — 상세 수집 대상 선택",
+        "formDescription": "={{'앱 경쟁사 탭과 동일.\\n' + $json.vmPickList + '\\n\\n수집할 번호를 콤마로 (예: 0,2,3). 없으면 -1'}}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "selectedVmIndexes",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "0,1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g3",
+      "name": "WAIT G3 VM 후보 선택",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [4600, 0],
+      "webhookId": "pdp-hitl-g3-vm"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Prep G3 VM Lists').first().json;\nconst form = $input.first().json || {};\nconst raw = String(form.selectedVmIndexes || '').trim();\nlet idxs = [];\nif (raw && raw !== '-1') {\n  idxs = raw.split(/[,\\s]+/).map(x => Number(x)).filter(n => Number.isFinite(n) && n >= 0);\n}\nconst selected = idxs.map(i => bus.vmCandidates[i]).filter(Boolean);\nreturn [{\n  json: {\n    ...bus,\n    selectedVmIndexes: idxs,\n    selectedVm: selected,\n    stage: 'g3-selected'\n  }\n}];"
+      },
+      "id": "hitl-apply-g3",
+      "name": "Apply G3 VM Selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4840, 0]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-04-generate-all-sections", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-04",
+      "name": "Auto: 04 Generate (hero/cuts/detail 근사)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [5080, 0],
+      "notes": "생성 완료 폴링 후 full 조회로 섹션 이미지 목록 추출 → G4 사람 선택"
+    },
+    {
+      "parameters": {
+        "url": "={{$('Apply G3 VM Selection').item.json.backendBase}}/api/projects/{{$('Apply G3 VM Selection').item.json.project_id}}/full",
+        "options": { "timeout": 60000 }
+      },
+      "id": "hitl-fetch-full",
+      "name": "Fetch Project Full Assets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [5320, 0],
+      "notes": "앱 assets 탭에 쌓이는 생성 결과 근사: sections[].image_url + product_image_url"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Apply G3 VM Selection').first().json;\nconst full = $input.first().json || {};\nconst gen = (() => { try { return $('Auto: 04 Generate (hero/cuts/detail 근사)').first().json; } catch(e) { return {}; } })();\nconst base = String(bus.backendBase || 'http://127.0.0.1:5050').replace(/\\/+$/, '');\nfunction absUrl(u) {\n  const s = String(u || '').trim();\n  if (!s) return '';\n  if (/^https?:\\/\\//i.test(s)) return s;\n  if (s.startsWith('/')) return base + s;\n  return base + '/' + s.replace(/^\\/+/, '');\n}\nconst assets = [];\n// 0) 입력/대표 원본\nif (full.product_image_url || bus.imageUrl) {\n  assets.push({\n    id: 'input:product',\n    stage: 'input',\n    label: '입력 제품 이미지',\n    url: absUrl(full.product_image_url || bus.imageUrl),\n    kind: 'image'\n  });\n}\n// 1) 섹션 생성 이미지 = 앱 hero/cuts/detail 산출물의 API 근사 목록\nconst sections = full.sections && typeof full.sections === 'object' ? full.sections : {};\nconst sectionIds = Object.keys(sections).sort((a, b) => {\n  const na = Number(sections[a]?.section_number || sections[a]?.order || 0);\n  const nb = Number(sections[b]?.section_number || sections[b]?.order || 0);\n  return na - nb;\n});\nfor (const sid of sectionIds) {\n  const s = sections[sid] || {};\n  const imageUrl = s.image_url || s.imageUrl || '';\n  const title = s.section_name || s.name || s.title || sid;\n  if (imageUrl) {\n    assets.push({\n      id: 'section:' + sid,\n      stage: 'section',\n      sectionId: sid,\n      label: title,\n      url: absUrl(imageUrl),\n      kind: 'image',\n      hasContent: !!(s.content || s.text || s.body)\n    });\n  } else if (s.content || s.text || s.body) {\n    assets.push({\n      id: 'section-text:' + sid,\n      stage: 'section',\n      sectionId: sid,\n      label: title + ' (텍스트만)',\n      url: '',\n      kind: 'text',\n      hasContent: true\n    });\n  }\n}\nconst pickList = assets.length\n  ? assets.map((a, i) => `${i}: ${a.id} | [${a.stage}] ${a.label}${a.url ? ' | ' + a.url : ''}`).join('\\n')\n  : '0: (생성 이미지 없음 — 재생성 또는 stop_review_in_app)';\nconst allIds = assets.map(a => a.id).join(',');\nconst imageOnlyIds = assets.filter(a => a.kind === 'image').map(a => a.id).join(',');\nconst note = `generate status=${gen.status || full.status || '?'} · assets=${assets.length} · images=${assets.filter(a => a.kind === 'image').length}`;\nreturn [{\n  json: {\n    ...bus,\n    projectFull: { id: full.id, status: full.status, progress: full.progress },\n    generateResult: gen,\n    generatedAssets: assets,\n    assetPickList: pickList,\n    allAssetIds: allIds,\n    imageOnlyAssetIds: imageOnlyIds,\n    generatedNote: note,\n    stage: 'g4-catalog'\n  }\n}];"
+      },
+      "id": "hitl-prep-g4",
+      "name": "Prep G4 Asset Catalog",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [5560, 0]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G4 생성컷 선택 — 사용할 이미지 ID",
+        "formDescription": "={{'앱 assets 탭과 동일 목적: 쓸 결과만 고름.\\n' + $json.generatedNote + '\\n\\n목록:\\n' + $json.assetPickList + '\\n\\n• selectedAssetIds: 콤마로 ID (예: input:product, section:header, section:hook)\\n• 또는 번호: 0,2,5\\n• all = 이미지 전부\\n• handback = 앱에서 마저 선택'}}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "selectedAssetIds",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "placeholder": "all  또는  input:product, section:header, section:key_features"
+            },
+            {
+              "fieldLabel": "selectionMode",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "ids" },
+                  { "option": "all_images" },
+                  { "option": "all" },
+                  { "option": "handback_app" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "assetNote",
+              "fieldType": "textarea",
+              "requiredField": false,
+              "placeholder": "선택 메모"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g4",
+      "name": "WAIT G4 사용 이미지 ID 선택",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [5800, 0],
+      "webhookId": "pdp-hitl-g4-assets"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Prep G4 Asset Catalog').first().json;\nconst form = $input.first().json || {};\nconst mode = String(form.selectionMode || 'ids').trim();\nconst assets = Array.isArray(bus.generatedAssets) ? bus.generatedAssets : [];\nconst byId = Object.fromEntries(assets.map(a => [a.id, a]));\nconst byIndex = assets;\n\nif (mode === 'handback_app') {\n  return [{\n    json: {\n      ...bus,\n      assetPolicy: 'stop_review_in_app',\n      selectedAssetNote: form.assetNote || '',\n      selectedAssetIds: [],\n      selectedAssets: [],\n      stage: 'g4-handback-app',\n      ok: true,\n      message: '앱 조립공장 assets 탭 핸드오프'\n    }\n  }];\n}\n\nlet ids = [];\nif (mode === 'all_images') {\n  ids = assets.filter(a => a.kind === 'image').map(a => a.id);\n} else if (mode === 'all') {\n  ids = assets.map(a => a.id);\n} else {\n  const raw = String(form.selectedAssetIds || '').trim();\n  if (!raw) throw new Error('G4: selectedAssetIds 비어 있음 (또는 selectionMode=all_images)');\n  if (raw.toLowerCase() === 'all') {\n    ids = assets.filter(a => a.kind === 'image').map(a => a.id);\n  } else {\n    const parts = raw.split(/[,\\n]+/).map(s => s.trim()).filter(Boolean);\n    for (const p of parts) {\n      if (/^\\d+$/.test(p)) {\n        const a = byIndex[Number(p)];\n        if (a) ids.push(a.id);\n      } else if (byId[p]) {\n        ids.push(p);\n      } else {\n        // partial section id allow section:xxx\n        const hit = assets.find(a => a.id === p || a.sectionId === p || a.id.endsWith(':' + p));\n        if (hit) ids.push(hit.id);\n      }\n    }\n  }\n}\n\nids = [...new Set(ids)];\nconst selectedAssets = ids.map(id => byId[id]).filter(Boolean);\nif (!selectedAssets.length) {\n  throw new Error('G4: 유효한 선택이 없습니다. 목록 ID/번호를 확인하세요.');\n}\nconst selectedUrls = selectedAssets.filter(a => a.url).map(a => a.url);\nreturn [{\n  json: {\n    ...bus,\n    assetPolicy: mode,\n    selectedAssetNote: form.assetNote || '',\n    selectedAssetIds: ids,\n    selectedAssets,\n    selectedAssetUrls: selectedUrls,\n    selectedCount: selectedAssets.length,\n    stage: 'g5-ready'\n  }\n}];"
+      },
+      "id": "hitl-apply-g4",
+      "name": "Apply G4 Asset Selection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6040, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "hb",
+              "leftValue": "={{$json.stage}}",
+              "rightValue": "g4-handback-app",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hitl-if-handback",
+      "name": "If Handback To App",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [6040, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$input.first().json, finishedAt: new Date().toISOString() } }];"
+      },
+      "id": "hitl-end-handback",
+      "name": "End Handback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6280, -140]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G5 상세/섹션 생성 승인",
+        "formDescription": "앱 sections 탭: 소스 기준 확인 후 생성. 계속할까요?",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "approveDetail",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "yes" },
+                  { "option": "no" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g5",
+      "name": "WAIT G5 상세 생성 승인",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [6280, 140],
+      "webhookId": "pdp-hitl-g5-detail"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Apply G4 Asset Selection').first().json;\nconst form = $input.first().json || {};\nif (String(form.approveDetail) !== 'yes') throw new Error('G5: 상세 생성 거부됨');\nreturn [{ json: { ...bus, detailReady: true, stage: 'g5-approved' } }];"
+      },
+      "id": "hitl-apply-g5",
+      "name": "Apply G5 Approve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [6520, 140]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-05-export", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-05",
+      "name": "Auto: 05 Export",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [6760, 140]
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "formTitle": "G7 전송 승인 (기본 dry-run만)",
+        "formDescription": "앱 publish 탭. live 전송은 기본 금지. dry-run 리포트만 돌릴지 선택.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "runCafe24DryRun",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "yes" },
+                  { "option": "no" }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "publishApproved",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  { "option": "false" },
+                  { "option": "true" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "hitl-wait-g7",
+      "name": "WAIT G7 전송 승인",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [7000, 140],
+      "webhookId": "pdp-hitl-g7-publish"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Apply G5 Approve').first().json;\nconst exp = $('Auto: 05 Export').first().json || {};\nconst form = $input.first().json || {};\nconst runDry = String(form.runCafe24DryRun) === 'yes';\nconst publishApproved = String(form.publishApproved) === 'true';\nif (publishApproved) {\n  // live 전송은 의도적으로 여기서 실행하지 않음 (브라우저/CDP)\n}\nreturn [{\n  json: {\n    ...bus,\n    exportResult: exp,\n    runCafe24DryRun: runDry,\n    publishApproved,\n    stage: runDry ? 'g7-dryrun' : 'g7-done',\n    livePublishBlocked: true,\n    livePublishNote: 'live 전송은 앱 publish/CDP 경로. n8n은 승인 기록 + dry-run만.'\n  }\n}];"
+      },
+      "id": "hitl-apply-g7",
+      "name": "Apply G7",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [7240, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "dry",
+              "leftValue": "={{$json.runCafe24DryRun}}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "hitl-if-dry",
+      "name": "If DryRun",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [7480, 140]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": { "__rl": true, "value": "pdp-09-cafe24-openmarket-dry-run", "mode": "id" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "hitl-run-09",
+      "name": "Auto: 09 Cafe24 DryRun",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [7720, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const bus = $('Apply G7').first().json;\nlet dry = null;\ntry { dry = $('Auto: 09 Cafe24 DryRun').first().json; } catch(e) { dry = null; }\nconst base = String(bus.backendBase || '').replace(/\\/+$/, '');\nreturn [{\n  json: {\n    ok: true,\n    orchestration: 'factory-hitl-line',\n    stage: 'complete',\n    project_id: bus.project_id,\n    productName: bus.productName,\n    gates: {\n      g0_input: true,\n      g1_db_select: !!(bus.confirmedSinhwa || bus.confirmedCafe24),\n      g2_fields: (bus.missingFields || []).length === 0,\n      g3_vm_select: true,\n      g4_assets: !!(bus.selectedAssetIds && bus.selectedAssetIds.length) || !!bus.assetPolicy,\n      g5_detail: !!bus.detailReady,\n      g7_publish_decision: true,\n      live_blocked: true\n    },\n    confirmedSinhwa: bus.confirmedSinhwa,\n    confirmedCafe24: bus.confirmedCafe24,\n    productFields: bus.productFields,\n    selectedVmCount: (bus.selectedVm || []).length,\n    selectedAssetIds: bus.selectedAssetIds || [],\n    selectedAssetUrls: bus.selectedAssetUrls || [],\n    selectedCount: bus.selectedCount || 0,\n    dryRun: dry,\n    urls: bus.project_id ? {\n      project: base + '/api/projects/' + bus.project_id,\n      full: base + '/api/projects/' + bus.project_id + '/full',\n      export: base + '/api/projects/' + bus.project_id + '/export',\n      app: 'http://127.0.0.1:8081/app.html'\n    } : null,\n    finishedAt: new Date().toISOString(),\n    note: '조립공장과 같은 게이트 순서. 개별 썸네일 픽커 UX는 Form 한계로 ID/정책 선택. live 전송은 앱/CDP.'\n  }\n}];"
+      },
+      "id": "hitl-final",
+      "name": "Final Summary HITL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [8000, 140]
+    }
+  ],
+  "connections": {
+    "G0 Form Start": { "main": [[{ "node": "G0 Normalize Bus", "type": "main", "index": 0 }]] },
+    "G0 Normalize Bus": { "main": [[{ "node": "Auto: 01 Health", "type": "main", "index": 0 }]] },
+    "Auto: 01 Health": { "main": [[{ "node": "After Health", "type": "main", "index": 0 }]] },
+    "After Health": { "main": [[{ "node": "Auto: 02 Analyze", "type": "main", "index": 0 }]] },
+    "Auto: 02 Analyze": { "main": [[{ "node": "After Analyze", "type": "main", "index": 0 }]] },
+    "After Analyze": { "main": [[{ "node": "WAIT G0 제품명 확정", "type": "main", "index": 0 }]] },
+    "WAIT G0 제품명 확정": { "main": [[{ "node": "Apply G0 Name", "type": "main", "index": 0 }]] },
+    "Apply G0 Name": { "main": [[{ "node": "Auto: 07 DB Candidates", "type": "main", "index": 0 }]] },
+    "Auto: 07 DB Candidates": { "main": [[{ "node": "Prep G1 Candidate Lists", "type": "main", "index": 0 }]] },
+    "Prep G1 Candidate Lists": { "main": [[{ "node": "If autoApplyTopDb", "type": "main", "index": 0 }]] },
+    "If autoApplyTopDb": {
+      "main": [
+        [{ "node": "Auto Apply Top DB", "type": "main", "index": 0 }],
+        [{ "node": "WAIT G1 DB 후보 선택", "type": "main", "index": 0 }]
+      ]
+    },
+    "Auto Apply Top DB": { "main": [[{ "node": "G2 Check Required Fields", "type": "main", "index": 0 }]] },
+    "WAIT G1 DB 후보 선택": { "main": [[{ "node": "Apply G1 Selection", "type": "main", "index": 0 }]] },
+    "Apply G1 Selection": { "main": [[{ "node": "G2 Check Required Fields", "type": "main", "index": 0 }]] },
+    "G2 Check Required Fields": { "main": [[{ "node": "If Missing Fields", "type": "main", "index": 0 }]] },
+    "If Missing Fields": {
+      "main": [
+        [{ "node": "WAIT G2 필수값 기입", "type": "main", "index": 0 }],
+        [{ "node": "G2 Already Complete", "type": "main", "index": 0 }]
+      ]
+    },
+    "WAIT G2 필수값 기입": { "main": [[{ "node": "Apply G2 Fields", "type": "main", "index": 0 }]] },
+    "Apply G2 Fields": { "main": [[{ "node": "Auto: 03 Competitors / VM", "type": "main", "index": 0 }]] },
+    "G2 Already Complete": { "main": [[{ "node": "Auto: 03 Competitors / VM", "type": "main", "index": 0 }]] },
+    "Auto: 03 Competitors / VM": { "main": [[{ "node": "Prep G3 VM Lists", "type": "main", "index": 0 }]] },
+    "Prep G3 VM Lists": { "main": [[{ "node": "WAIT G3 VM 후보 선택", "type": "main", "index": 0 }]] },
+    "WAIT G3 VM 후보 선택": { "main": [[{ "node": "Apply G3 VM Selection", "type": "main", "index": 0 }]] },
+    "Apply G3 VM Selection": { "main": [[{ "node": "Auto: 04 Generate (hero/cuts/detail 근사)", "type": "main", "index": 0 }]] },
+    "Auto: 04 Generate (hero/cuts/detail 근사)": { "main": [[{ "node": "Fetch Project Full Assets", "type": "main", "index": 0 }]] },
+    "Fetch Project Full Assets": { "main": [[{ "node": "Prep G4 Asset Catalog", "type": "main", "index": 0 }]] },
+    "Prep G4 Asset Catalog": { "main": [[{ "node": "WAIT G4 사용 이미지 ID 선택", "type": "main", "index": 0 }]] },
+    "WAIT G4 사용 이미지 ID 선택": { "main": [[{ "node": "Apply G4 Asset Selection", "type": "main", "index": 0 }]] },
+    "Apply G4 Asset Selection": { "main": [[{ "node": "If Handback To App", "type": "main", "index": 0 }]] },
+    "If Handback To App": {
+      "main": [
+        [{ "node": "End Handback", "type": "main", "index": 0 }],
+        [{ "node": "WAIT G5 상세 생성 승인", "type": "main", "index": 0 }]
+      ]
+    },
+    "WAIT G5 상세 생성 승인": { "main": [[{ "node": "Apply G5 Approve", "type": "main", "index": 0 }]] },
+    "Apply G5 Approve": { "main": [[{ "node": "Auto: 05 Export", "type": "main", "index": 0 }]] },
+    "Auto: 05 Export": { "main": [[{ "node": "WAIT G7 전송 승인", "type": "main", "index": 0 }]] },
+    "WAIT G7 전송 승인": { "main": [[{ "node": "Apply G7", "type": "main", "index": 0 }]] },
+    "Apply G7": { "main": [[{ "node": "If DryRun", "type": "main", "index": 0 }]] },
+    "If DryRun": {
+      "main": [
+        [{ "node": "Auto: 09 Cafe24 DryRun", "type": "main", "index": 0 }],
+        [{ "node": "Final Summary HITL", "type": "main", "index": 0 }]
+      ]
+    },
+    "Auto: 09 Cafe24 DryRun": { "main": [[{ "node": "Final Summary HITL", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": true },
+  "tags": [{ "name": "pdp-factory" }, { "name": "hitl" }]
+}

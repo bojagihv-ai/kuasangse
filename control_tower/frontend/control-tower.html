@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="생산관제 격리 런타임 상태 화면">
+  <link rel="icon" href="data:,">
+  <title>생산관제</title>
+  <style>
+    :root {
+      --bg: #0f0f13;
+      --bg-card: #1a1a23;
+      --bg-input: #13131a;
+      --border: #2a2a36;
+      --primary: #6366f1;
+      --primary-h: #818cf8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #fb7185;
+      --text: #f4f4f5;
+      --text-d: #d4d4d8;
+      --text-m: #a1a1aa;
+      --color-page-background: var(--bg);
+      --color-card-background: var(--bg-card);
+      --color-input-background: var(--bg-input);
+      --color-border-default: var(--border);
+      --color-accent-primary: var(--primary);
+      --color-accent-highlight: var(--primary-h);
+      --color-status-ok: var(--ok);
+      --color-status-warn: var(--warn);
+      --color-status-error: var(--err);
+      --color-text-primary: var(--text);
+      --color-text-secondary: var(--text-d);
+      --color-text-muted: var(--text-m);
+      --color-primary-glow: radial-gradient(circle at 12% 0%, rgb(99 102 241 / 0.16), transparent 34rem);
+      --color-surface-sheen: linear-gradient(145deg, rgb(255 255 255 / 0.035), transparent 42%);
+      --color-accent-wash: rgb(99 102 241 / 0.14);
+      --color-ok-border: rgb(52 211 153 / 0.34);
+      --color-error-border: rgb(251 113 133 / 0.34);
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
+      --space-4: 32px;
+      --space-page-bottom: 48px;
+      --page-gutter: 32px;
+      --page-gutter-compact: 24px;
+      --border-width-default: 1px;
+      --radius-card: 16px;
+      --radius-compact: 8px;
+      --radius-pill: 999px;
+      --radius-circle: 50%;
+      --content-max-width: 1160px;
+      --content-copy-wide: 62ch;
+      --content-copy-narrow: 52ch;
+      --status-dot-size: 8px;
+      --status-mark-size: 36px;
+      --grid-min-detail: 240px;
+      --grid-min-card: 304px;
+      --card-min-block-size: 144px;
+      --scope-row-min-block-size: 96px;
+      --font-family-sans: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
+      --font-family-mono: "SFMono-Regular", Consolas, monospace;
+      --font-size-kicker: 11px;
+      --font-size-compact: 12px;
+      --font-size-panel-copy: 13px;
+      --font-size-card-title: 15px;
+      --font-size-status-mark: 16px;
+      --font-size-section-title: 20px;
+      --font-size-page-title: clamp(22px, 3vw, 26px);
+      --line-height-body: 1.5;
+      --line-height-page-title: 1.2;
+      --line-height-section-title: 1.3;
+      --line-height-card-title: 1.35;
+      --tracking-kicker: 0.12em;
+      --tracking-label: 0.06em;
+      --font-weight-strong: 700;
+      --font-weight-emphasis: 800;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-height: 100%;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+      background: var(--color-page-background);
+      color: var(--color-text-primary);
+    }
+
+    body {
+      min-height: 100%;
+      margin: 0;
+      background:
+        var(--color-primary-glow),
+        var(--color-page-background);
+      color: var(--color-text-primary);
+      font-family: var(--font-family-sans);
+      line-height: var(--line-height-body);
+    }
+
+    .page {
+      min-height: 100dvh;
+      padding: var(--space-3) 0 var(--space-page-bottom);
+    }
+
+    .shell {
+      width: min(var(--content-max-width), calc(100% - var(--page-gutter)));
+      margin: 0 auto;
+    }
+
+    .masthead,
+    .section-heading,
+    .connection-card,
+    .status-line,
+    .scope-row,
+    .footer-line {
+      min-inline-size: 0;
+    }
+
+    .masthead {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-2);
+      padding: var(--space-3) 0 var(--space-4);
+      border-bottom: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .eyebrow,
+    .label,
+    .card-kicker {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      font-weight: var(--font-weight-strong);
+      letter-spacing: var(--tracking-kicker);
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      margin-bottom: var(--space-1);
+      font-size: var(--font-size-page-title);
+      font-weight: var(--font-weight-strong);
+      line-height: var(--line-height-page-title);
+    }
+
+    h2 {
+      margin-bottom: var(--space-1);
+      font-size: var(--font-size-section-title);
+      font-weight: var(--font-weight-strong);
+      line-height: var(--line-height-section-title);
+    }
+
+    h3 {
+      margin-bottom: var(--space-1);
+      font-size: var(--font-size-card-title);
+      font-weight: var(--font-weight-strong);
+      line-height: var(--line-height-card-title);
+    }
+
+    .lede,
+    .section-copy,
+    .card-copy,
+    .footer-line {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
+      word-break: keep-all;
+    }
+
+    .lede {
+      max-inline-size: var(--content-copy-wide);
+      margin-bottom: 0;
+    }
+
+    .factory-pill {
+      display: inline-flex;
+      align-items: center;
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      font-weight: var(--font-weight-strong);
+      white-space: nowrap;
+    }
+
+    .health-chip {
+      gap: var(--space-1);
+      flex: 0 0 auto;
+      padding: var(--space-1) var(--space-2);
+      background: var(--color-card-background);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+    }
+
+    .health-chip::before {
+      width: var(--status-dot-size);
+      height: var(--status-dot-size);
+      border-radius: var(--radius-circle);
+      background: var(--color-status-warn);
+      content: "";
+    }
+
+    [data-state="ready"] .health-chip {
+      border-color: var(--color-ok-border);
+      color: var(--color-status-ok);
+    }
+
+    [data-state="ready"] .health-chip::before {
+      background: var(--color-status-ok);
+    }
+
+    [data-state="error"] .health-chip {
+      border-color: var(--color-error-border);
+      color: var(--color-status-error);
+    }
+
+    [data-state="error"] .health-chip::before {
+      background: var(--color-status-error);
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+
+    .section {
+      padding-top: var(--space-2);
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: var(--space-2);
+      margin-bottom: var(--space-2);
+    }
+
+    .section-copy {
+      max-inline-size: var(--content-copy-narrow);
+      margin-bottom: 0;
+      text-align: end;
+    }
+
+    .factory-card {
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .panel {
+      padding: var(--space-2);
+    }
+
+    .status-line {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding-bottom: var(--space-2);
+      border-bottom: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .status-mark {
+      display: grid;
+      width: var(--status-mark-size);
+      height: var(--status-mark-size);
+      flex: 0 0 auto;
+      place-items: center;
+      border: var(--border-width-default) solid var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-status-mark);
+      font-weight: var(--font-weight-emphasis);
+    }
+
+    .status-line h3,
+    .status-line p {
+      margin-bottom: 0;
+    }
+
+    .status-line p {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .detail-grid,
+    .connection-grid,
+    .scope-grid {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+    }
+
+    .detail-grid {
+      padding-top: var(--space-2);
+    }
+
+    .detail {
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .detail .label {
+      margin-bottom: var(--space-1);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .value,
+    .url {
+      display: block;
+      color: var(--color-text-secondary);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .connection-card {
+      min-block-size: var(--card-min-block-size);
+      padding: var(--space-2);
+    }
+
+    .connection-card h3 {
+      margin-bottom: var(--space-1);
+    }
+
+    .connection-card .url {
+      margin-top: var(--space-2);
+      color: var(--color-accent-highlight);
+    }
+
+    .connection-card .card-copy {
+      margin-bottom: 0;
+    }
+
+    .scope-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-card), 100%), 1fr));
+    }
+
+    .scope-row {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2);
+      min-block-size: var(--scope-row-min-block-size);
+      padding: var(--space-2);
+    }
+
+    .scope-state {
+      flex: 0 0 auto;
+      padding: var(--space-1);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+    }
+
+    .scope-row h3,
+    .scope-row p {
+      margin-bottom: 0;
+    }
+
+    .scope-row p {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
+      word-break: keep-all;
+    }
+
+    .keep-together {
+      white-space: nowrap;
+    }
+
+    .footer {
+      padding-top: var(--space-4);
+    }
+
+    .footer-line {
+      margin-bottom: 0;
+      padding-top: var(--space-2);
+      border-top: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    /* CSS custom properties are not supported in media conditions; 720px is the sole raw threshold exception. */
+    @media (max-width: 720px) {
+      .page {
+        padding-top: var(--space-2);
+      }
+
+      .shell {
+        width: min(calc(100% - var(--page-gutter-compact)), var(--content-max-width));
+      }
+
+      .masthead,
+      .section-heading {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .section-copy {
+        text-align: start;
+      }
+
+      .panel {
+        padding: var(--space-2);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page" id="app" data-state="loading">
+    <div class="shell stack">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">BATCH PRODUCTION CONTROL</p>
+          <h1>생산관제</h1>
+          <p class="lede">기존 조립공장과 분리된 읽기 전용 셸입니다. 지금은 준비 상태와 로컬 연결 구조만 확인합니다.</p>
+        </div>
+        <span class="factory-pill health-chip" id="health-chip" role="status" aria-live="polite">상태 확인 중</span>
+      </header>
+
+      <section class="section" aria-labelledby="health-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">RUNTIME STATUS</p>
+            <h2 id="health-heading">런타임 상태</h2>
+          </div>
+          <p class="section-copy">백엔드의 실제 <code>/api/health</code> 응답만 상태의 근거로 사용합니다.</p>
+        </div>
+        <div class="factory-card panel">
+          <div class="status-line">
+            <span class="status-mark" aria-hidden="true">BT</span>
+            <div>
+              <h3 id="status-title">백엔드 응답 대기 중</h3>
+              <p id="status-detail">127.0.0.1:5062에서 준비 상태를 확인하고 있습니다.</p>
+            </div>
+          </div>
+          <div class="detail-grid">
+            <div class="detail">
+              <span class="label">서비스 식별자</span>
+              <span class="value" id="service-value">확인 중</span>
+            </div>
+            <div class="detail">
+              <span class="label">준비 상태</span>
+              <span class="value" id="status-value">확인 중</span>
+            </div>
+            <div class="detail">
+              <span class="label">수신 주소</span>
+              <span class="value" id="listen-value">확인 중</span>
+            </div>
+            <div class="detail">
+              <span class="label">계약 버전</span>
+              <span class="value" id="schema-value">확인 중</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="connections-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">LOCAL TOPOLOGY</p>
+            <h2 id="connections-heading">로컬 연결 토폴로지</h2>
+          </div>
+          <p class="section-copy">health 응답의 링크만 표시합니다. 실제 연결 성공으로 간주하지 않습니다.</p>
+        </div>
+        <div class="connection-grid">
+          <article class="factory-card connection-card">
+            <p class="card-kicker">FACTORY FRONTEND</p>
+            <h3>조립공장 화면</h3>
+            <p class="card-copy">기존 화면 위치를 보존합니다.</p>
+            <span class="url" id="factory-frontend">응답 대기 중</span>
+          </article>
+          <article class="factory-card connection-card">
+            <p class="card-kicker">FACTORY BACKEND</p>
+            <h3>조립공장 백엔드</h3>
+            <p class="card-copy">기존 API 위치를 보존합니다.</p>
+            <span class="url" id="factory-backend">응답 대기 중</span>
+          </article>
+          <article class="factory-card connection-card">
+            <p class="card-kicker">API HUB</p>
+            <h3>API Hub</h3>
+            <p class="card-copy">공용 연결 허브 위치를 표시합니다.</p>
+            <span class="url" id="api-hub">응답 대기 중</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="scope-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">TASK 1 BOUNDARY</p>
+            <h2 id="scope-heading">이번 런타임의 경계</h2>
+          </div>
+          <p class="section-copy">상태를 꾸미지 않고, 아직 제공하지 않는 동작을 명시적으로 남깁니다.</p>
+        </div>
+        <div class="scope-grid">
+          <article class="factory-card scope-row">
+            <span class="factory-pill scope-state">제공</span>
+            <div>
+              <h3>health 조회</h3>
+              <p>서비스 식별자, 버전, 수신 주소와 연결 링크를 결정적으로 보여줍니다.</p>
+            </div>
+          </article>
+          <article class="factory-card scope-row">
+            <span class="factory-pill scope-state">보류</span>
+            <div>
+              <h3>작업 실행과 확보</h3>
+              <p>Task 1은 작업을 만들거나 작업자를 배정하지 않습니다.</p>
+            </div>
+          </article>
+          <article class="factory-card scope-row">
+            <span class="factory-pill scope-state">보류</span>
+            <div>
+              <h3>생성 및 전송</h3>
+              <p>이미지 생성과 Cafe24 전송은 <span class="keep-together">이 런타임의 범위가 아닙니다.</span></p>
+            </div>
+          </article>
+          <article class="factory-card scope-row">
+            <span class="factory-pill scope-state">보호</span>
+            <div>
+              <h3>기존 조립공장</h3>
+              <p>기존 8081 화면과 5050 API를 <span class="keep-together">시작하거나 종료하지 않습니다.</span></p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p class="footer-line"><span class="keep-together">표시 기준: 백엔드 health 응답.</span> <span class="keep-together">연결 대상 카드의 URL은 설정값이며</span> <span class="keep-together">실제 연결 상태를 의미하지 않습니다.</span></p>
+      </footer>
+    </div>
+  </main>
+  <script>
+    (() => {
+      const app = document.getElementById("app");
+      const chip = document.getElementById("health-chip");
+      const statusTitle = document.getElementById("status-title");
+      const statusDetail = document.getElementById("status-detail");
+      const statusValue = document.getElementById("status-value");
+      const serviceValue = document.getElementById("service-value");
+      const listenValue = document.getElementById("listen-value");
+      const schemaValue = document.getElementById("schema-value");
+      const links = {
+        factoryFrontend: document.getElementById("factory-frontend"),
+        factoryBackend: document.getElementById("factory-backend"),
+        apiHub: document.getElementById("api-hub")
+      };
+      const healthUrl = "http://127.0.0.1:5062/api/health";
+
+      const setText = (element, value) => {
+        if (element) {
+          element.textContent = value;
+        }
+      };
+
+      const renderFailure = (message) => {
+        app.dataset.state = "error";
+        setText(chip, "상태 확인 실패");
+        setText(statusTitle, "백엔드 상태를 확인할 수 없습니다");
+        setText(statusDetail, message);
+        setText(statusValue, "오류");
+        setText(serviceValue, "확인 불가");
+        setText(listenValue, "확인 불가");
+        setText(schemaValue, "확인 불가");
+        Object.values(links).forEach((element) => setText(element, "확인 불가"));
+      };
+
+      const renderReady = (health) => {
+        app.dataset.state = "ready";
+        setText(chip, "준비됨");
+        setText(statusTitle, `${health.displayName} 런타임 준비됨`);
+        setText(statusDetail, "health 응답이 정상이며 읽기 전용 상태 화면을 표시합니다.");
+        setText(statusValue, health.status || "확인 불가");
+        setText(serviceValue, health.service || "확인 불가");
+        setText(listenValue, `${health.listen?.host || "확인 불가"}:${health.listen?.port || "확인 불가"}`);
+        setText(schemaValue, `${health.schemaVersion || "확인 불가"} / ${health.version || "확인 불가"}`);
+        setText(links.factoryFrontend, health.links?.factoryFrontend || "확인 불가");
+        setText(links.factoryBackend, health.links?.factoryBackend || "확인 불가");
+        setText(links.apiHub, health.links?.apiHub || "확인 불가");
+      };
+
+      const loadHealth = async () => {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+        try {
+          const response = await fetch(healthUrl, { signal: controller.signal });
+          const health = await response.json();
+          if (!response.ok || health.status !== "ready") {
+            renderFailure("health 응답이 준비 상태를 보고하지 않았습니다.");
+            return;
+          }
+          renderReady(health);
+        } catch (error) {
+          const message = error instanceof DOMException && error.name === "AbortError"
+            ? "health 응답 시간이 초과되었습니다."
+            : "127.0.0.1:5062 백엔드에 연결할 수 없습니다.";
+          renderFailure(message);
+        } finally {
+          window.clearTimeout(timeoutId);
+        }
+      };
+
+      loadHealth();
+    })();
+  </script>
+</body>
+</html>

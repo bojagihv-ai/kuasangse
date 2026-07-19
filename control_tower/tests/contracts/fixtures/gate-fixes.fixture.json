@@ -1,0 +1,45 @@
+{
+  "fixtureVersion": "1.0.0",
+  "cases": [
+    {
+      "name": "unknown_contract_type",
+      "payload": {"contractType": "unknown-contract", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0"},
+      "expected": {"ok": false, "code": "schema_invalid", "path": "$.contractType"}
+    },
+    {
+      "name": "unknown_operation_capability",
+      "payload": {"contractType": "work-order", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-unknown-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-unknown-001", "idempotencyKey": "batch-001:product-001:unknown:1", "operation": {"capability": "unknown-capability", "parameters": {"candidateCount": 1, "sourceArtifactIds": ["p001-base"]}}, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "capability_version_unsupported", "path": "$.operation.capability"}
+    },
+    {
+      "name": "identifier_exactly_256_characters",
+      "payload": {"contractType": "field-record", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "fieldId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "status": "confirmed", "value": null, "source": "boundary-fixture", "nullable": true, "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "identifier_257_characters",
+      "payload": {"contractType": "field-record", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "fieldId": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefX", "status": "confirmed", "value": null, "source": "boundary-fixture", "nullable": true, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "schema_invalid", "path": "$.fieldId"}
+    },
+    {
+      "name": "valid_product_state_transition_table",
+      "payload": {"contractType": "state-transition-table", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "tableId": "product-transitions-v1", "stateKind": "product", "owner": "product-controller", "allowedTransitions": [{"from": "queued", "to": "running", "owner": "product-controller", "occurredAt": null, "reason": "first stage started", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "queued", "expectedRevision": 3, "expectedFingerprint": null}, "terminal": false, "restartBehavior": "resume"}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_stage_state_transition_table",
+      "payload": {"contractType": "state-transition-table", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "tableId": "stage-transitions-v1", "stateKind": "stage", "owner": "stage-scheduler", "allowedTransitions": [{"from": "queued", "to": "running", "owner": "worker-high", "occurredAt": null, "reason": "work acknowledged", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "queued", "expectedRevision": 7, "expectedFingerprint": null}, "terminal": false, "restartBehavior": "retry"}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_review_state_transition_table",
+      "payload": {"contractType": "state-transition-table", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "tableId": "review-transitions-v1", "stateKind": "review", "owner": "review-controller", "allowedTransitions": [{"from": "pending", "to": "approved", "owner": "reviewer", "occurredAt": null, "reason": "evidence approved", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "pending", "expectedRevision": 1, "expectedFingerprint": null}, "terminal": true, "restartBehavior": "forbid"}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_registration_state_transition_table",
+      "payload": {"contractType": "state-transition-table", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "tableId": "registration-transitions-v1", "stateKind": "registration", "owner": "registration-controller", "allowedTransitions": [{"from": "staged", "to": "registered", "owner": "registration-worker", "occurredAt": null, "reason": "staging receipt accepted", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "staged", "expectedRevision": 1, "expectedFingerprint": null}, "terminal": true, "restartBehavior": "manual-review"}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+const RUNTIME_MANIFEST = require('../src/runtime-manifest.json');
+
+const FRONTEND_SOURCES = [
+  'src/app-loader.js',
+  'src/app-core-01.js',
+  'src/app-core-02.js',
+  'src/app-core-03.js',
+  'src/app-core-04.js',
+  'src/app-core-05.js',
+  'src/app-core-06.js',
+  'src/cafe24-api.js',
+  'src/cafe24-fields.js',
+  'src/cafe24-options.js',
+  'src/cafe24-product-form.js',
+  'src/cafe24-payloads.js',
+  'src/cafe24-sync.js',
+];
+
+const BACKEND_SOURCES = [
+  'backend/app.py',
+  'backend/routes/api.py',
+  'backend/routes/api_core.py',
+  'backend/routes/api_archive.py',
+  'backend/routes/api_marketplus.py',
+  'backend/routes/api_shared.py',
+  'backend/routes/api_vm.py',
+  'backend/routes/api_workspace_lock.py',
+  'backend/services/workspace_lock_store.py',
+  'backend/services/workspace_lock_service.py',
+];
+
+const RUNTIME_SOURCES = [...new Set([
+  'app.html',
+  'src/runtime-manifest.json',
+  RUNTIME_MANIFEST.loader,
+  RUNTIME_MANIFEST.authorityModule,
+  ...(RUNTIME_MANIFEST.modules || []),
+  ...(RUNTIME_MANIFEST.scripts || []),
+  RUNTIME_MANIFEST.bundle,
+  ...BACKEND_SOURCES,
+  'tools/build_runtime_bundle.cjs',
+  'tools/factory_cdp_test_utils.cjs',
+  'tools/regression_manifest.cjs',
+  'tools/run_daily_regression.cjs',
+  'tools/runtime_source_guard.cjs',
+  'tools/verify_oauth_status_workspace_isolation_v246.cjs',
+  'tools/verify_three_session_workspace_revision_v230.cjs',
+  'tools/verify_workspace_conflict_cdp_v233.cjs',
+  'tools/measure_factory_perf_cdp_v79.cjs',
+  'tools/verify_factory_new_file_blank_cdp_v85.cjs',
+].filter(Boolean))];
+
+const MANUAL_EXTERNAL_GATES = [
+  'Vertex 실제 이미지 생성 1장씩: 비용과 quota를 사용하므로 수동 승인 후 실행',
+  'VM 오픈마켓 5곳 실제 수집: VM/로그인/마켓 상태가 필요한 별도 실환경 검사',
+  'Cafe24 실제 상품 등록: 새 상품·진열안함·판매안함·오픈마켓 안 함으로 마지막에만 실행',
+  'GPT/Google/Cafe24 OAuth 재로그인: 저장된 인증 만료 시에만 API Hub 상태 확인 후 실행',
+];
+
+function nodeFile(id, area, title, file, tier = 'daily', timeoutMs = 360000) {
+  return { id, area, title, tier, command: process.execPath, args: [file], timeoutMs };
+}
+
+function buildRegressionSteps(pythonExe) {
+  const syntaxSteps = FRONTEND_SOURCES.map((file, index) => ({
+    id: `SYN-JS-${String(index + 1).padStart(2, '0')}`,
+    area: '공통/문법',
+    title: `${file} 문법 검사`,
+    tier: 'fast',
+    command: process.execPath,
+    args: ['--check', file],
+    timeoutMs: 60000,
+  }));
+  return [
+    ...syntaxSteps,
+    {
+      id: 'SYN-MJS-01', area: '공통/문법', title: 'workspace revision 모듈 문법 검사', tier: 'fast',
+      command: process.execPath, args: ['--check', 'src/modules/workspace-revision.mjs'], timeoutMs: 60000,
+    },
+    {
+      id: 'SYN-MJS-02', area: '공통/문법', title: 'workspace authority 모듈 문법 검사', tier: 'fast',
+      command: process.execPath, args: ['--check', 'src/modules/workspace-lock.mjs'], timeoutMs: 60000,
+    },
+    {
+      id: 'SYN-MJS-03', area: '공통/문법', title: 'workspace authority 프로토콜 문법 검사', tier: 'fast',
+      command: process.execPath, args: ['--check', 'src/modules/workspace-lock-protocol.mjs'], timeoutMs: 60000,
+    },
+    {
+      id: 'BUILD-01', area: '공통/실행 기준', title: 'runtime bundle과 manifest/source 일치 검사', tier: 'fast',
+      command: process.execPath, args: ['tools/build_runtime_bundle.cjs', '--check'], timeoutMs: 60000,
+    },
+    {
+      id: 'SYN-BUNDLE-01', area: '공통/문법', title: '생성 runtime bundle 문법 검사', tier: 'fast',
+      command: process.execPath, args: ['--check', 'dist/app-runtime.bundle.js'], timeoutMs: 60000,
+    },
+    {
+      id: 'SYN-PY-01', area: '공통/문법', title: '백엔드 핵심 모듈 컴파일 검사', tier: 'fast',
+      command: pythonExe, args: ['-m', 'py_compile', ...BACKEND_SOURCES], timeoutMs: 120000,
+      clearEnv: ['SSL_CERT_FILE'],
+    },
+    nodeFile('UNIT-ARCH-01', '공통/구조', '실행 기준·identity·revision 구조 계약', 'tests/frontend/architecture_source_contracts.test.cjs', 'fast'),
+    nodeFile('UNIT-FE-01', '공통/데이터 격리', '프론트 실제 함수 단위 계약', 'tests/frontend/factory_core_contracts.test.cjs', 'fast'),
+    nodeFile('UNIT-FE-02', '공통/실행 안정성', '브라우저 인프라 실패만 1회 재시도', 'tests/frontend/regression_runner_contracts.test.cjs', 'fast'),
+    {
+      id: 'UNIT-AUTH-01', area: '공통/동시 편집', title: 'lease·fence·작업파일·명령 차단 단위 계약', tier: 'fast',
+      command: process.execPath,
+      args: [
+        '--test',
+        'tests/frontend/workspace_lock_contracts.test.cjs',
+        'tests/frontend/workspace_fencing_orchestrator.test.cjs',
+        'tests/frontend/workfile_stale_guard.test.cjs',
+        'tests/frontend/command_authority_guard.test.cjs',
+      ],
+      timeoutMs: 120000,
+    },
+    {
+      id: 'UNIT-BE-01', area: '공통/로컬 아카이브', title: '백엔드 pytest 단위 계약', tier: 'fast',
+      command: pythonExe, args: ['-m', 'pytest', '-q', 'backend/tests'], timeoutMs: 180000,
+      clearEnv: ['SSL_CERT_FILE'],
+    },
+    nodeFile('UI-BASE-01', '공통/화면', '앱 로드·이미지 깨짐·기본 렌더', 'tools/verify_factory_integrity_cdp_v80.cjs'),
+    nodeFile('UI-RESP-01', '공통/화면', '작은 창 사이즈 확인 버튼·상태 레일 도달성', 'tools/verify_factory_responsive_controls_v230.cjs'),
+    nodeFile('SCOPE-01', '1 제품/DB', '현재 상품 식별자 드리프트 차단', 'tools/verify_factory_identity_drift_cdp_v88.cjs'),
+    nodeFile('SCOPE-02', '1 제품/DB', '다른 작업파일 데이터 격리', 'tools/verify_factory_workspace_isolation_cdp_v83.cjs'),
+    nodeFile('SCOPE-OAUTH-01', '공통/저장', 'Cafe24 OAuth 상태 갱신과 작업파일 revision 분리', 'tools/verify_oauth_status_workspace_isolation_v246.cjs'),
+    nodeFile('SCOPE-REV-01', '공통/저장', '세 세션 최신 revision 우선·이전 저장 거부', 'tools/verify_three_session_workspace_revision_v230.cjs'),
+    nodeFile('AUTH-01', '공통/동시 편집', '두 창 편집권 인계·stale 저장 차단·작은 창 복구 UI', 'tools/verify_workspace_conflict_cdp_v233.cjs'),
+    nodeFile('DB-01', '1 제품/DB', '새 상품 후보 범위와 후보 없음 처리', 'tools/verify_factory_candidate_new_draft_scope_v163.cjs'),
+    nodeFile('DB-02', '1 제품/DB', 'DB/Cafe24 확정 선택 새로고침 유지', 'tools/verify_factory_candidate_confirmation_reload_cdp_v185.cjs'),
+    nodeFile('DB-03', '1 제품/DB', '초안 첫 저장·작업파일 저장 뒤 후보 선택 유지', 'tools/verify_factory_candidate_workspace_transition_v220.cjs'),
+    nodeFile('DB-04', '1 제품/DB', '기존 저장본 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_restore_recovery_v221.cjs'),
+    nodeFile('DB-05', '1 제품/DB', '브라우저 시작 복원 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_startup_restore_v223.cjs'),
+    nodeFile('DB-06', '1 제품/DB', '서버/자산 복원 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_asset_restore_v224.cjs'),
+    nodeFile('FIELD-01', '1 제품/DB', '사용용도 확정값 Ctrl+F5 유지', 'tools/verify_factory_usage_ctrl_f5_persistence_v218.cjs'),
+    nodeFile('FIELD-02', '3 필수값', '선택한 값만 신화사DB/Cafe24 명시 전송', 'tools/verify_factory_selected_field_transfer_v219.cjs'),
+    nodeFile('IMG-01', '2 대표이미지', '기본 이미지 새로고침 복원', 'tools/verify_factory_input_image_reload_v165.cjs'),
+    nodeFile('IMG-02', '2~5 생성 이미지', '생성 이미지 즉시 저장·복원', 'tools/verify_factory_persistence_cdp_v81.cjs'),
+    nodeFile('OPT-01', '4 색상옵션', '옵션분류기와 조립공장 색상컷 연동', 'tools/verify_color_option_factory_sync_cdp_v187.cjs'),
+    nodeFile('OPT-02', '4 색상옵션', '옵션 3,3,3,3 배열·드래그 교환', 'tools/verify_option_map_layout_drag_cdp_v137.cjs'),
+    nodeFile('OPT-03', '4 색상옵션', '옵션 생성 결과 조립공장 전송', 'tools/verify_option_sorter_send_factory_cdp_v189.cjs'),
+    nodeFile('DETAIL-01', '6 상세페이지', '고객 화면 작업용 라벨 제거', 'tools/verify_factory_section_labels_cdp_v96.cjs'),
+    nodeFile('DETAIL-02', '6 상세페이지', '현재 섹션 완료 후 생성 중단', 'tools/verify_section_graceful_stop_cdp_v208.cjs'),
+    nodeFile('DETAIL-03', '6 상세페이지', '개별 섹션 재생성 후보 추가·실패 보존', 'tools/verify_section_regeneration_cdp_v214.cjs'),
+    nodeFile('DETAIL-04', '6 상세페이지', '전체 이미지 JPG 원본 비율 보존', 'tools/verify_detail_jpg_full_image_cdp_v215.cjs'),
+    nodeFile('PROGRESS-01', '공통/진행상태', '5초 이상 작업 진행 로그·상태 표시', 'tools/verify_factory_progress_observability_cdp_v170.cjs'),
+    nodeFile('PERF-00', '공통/성능', '진행률 갱신은 공정/로그 패널을 다시 만들지 않음', 'tools/verify_factory_progress_patch_perf_v217.cjs'),
+    nodeFile('PERF-02', '공통/성능', '분석·상세생성 주기 갱신은 전체 화면을 다시 만들지 않음', 'tools/verify_factory_periodic_ticker_patch_cdp_v001.cjs'),
+    nodeFile('GENERATE-01', '2~6 생성 공정', '생성 중·완료·실패 상태 전이', 'tools/verify_factory_generation_status_cdp_v119.cjs'),
+    nodeFile('PERF-01', '공통/성능', '96개 후보 렌더·메모리 기준', 'tools/measure_factory_perf_cdp_v79.cjs'),
+    nodeFile('SAVE-01', '7 저장/내보내기', '로컬 아카이브 비삭제 보존', 'tools/verify_local_archive_preservation_v123.cjs'),
+    nodeFile('SAVE-02', '7 저장/내보내기', '작업파일 저장·열기 전체 상태', 'tools/verify_factory_project_file_cdp_v84.cjs'),
+    nodeFile('SAVE-03', '7 저장/내보내기', '새 작업은 빈 상태로 완전 분리', 'tools/verify_factory_new_file_blank_cdp_v85.cjs'),
+    nodeFile('SAVE-04', '7 저장/내보내기', '같은 작업파일 범위 새로고침 복원', 'tools/verify_workfile_scoped_reload_cdp_v138.cjs'),
+    nodeFile('SAVE-05', '7 저장/내보내기', 'Ctrl+F5 로컬 아카이브 부트스트랩', 'tools/verify_workfile_ctrl_f5_archive_bootstrap_cdp_v195.cjs'),
+    nodeFile('SAVE-06', '7 저장/내보내기', 'Cafe24 등록 성공·실패 뒤 현재 작업 보존', 'tools/verify_factory_final_registration_preserves_work_v225.cjs'),
+    nodeFile('VM-01', '4 경쟁사', 'VM 브리지 요청·결과 계약', 'tools/verify_vm_candidate_bridge_contract.cjs'),
+    nodeFile('VM-02', '4 경쟁사', 'VM 후보 현재 작업 범위 격리', 'tools/verify_factory_vm_scope_isolation_v130.cjs'),
+    nodeFile('MARKET-01', '4 경쟁사', '선택 후보만 상세수집 범위 유지', 'tools/test_comp_market_selection_scope_v180.cjs'),
+    nodeFile('FULL-01', '1 제품/DB', '필수값 확인 상태 새로고침 유지', 'tools/verify_factory_field_confirmation_persistence_cdp_v143.cjs', 'full'),
+    nodeFile('FULL-02', '공통/공정 이동', '공정 탭 이동 상태 보존', 'tools/verify_factory_stage_jump_cdp_v171.cjs', 'full'),
+    nodeFile('FULL-03', '4 경쟁사', '마켓별 후보 누적', 'tools/test_comp_market_accumulation_v179.cjs', 'full'),
+    nodeFile('FULL-04', '4 경쟁사', '마켓 상태 정합성', 'tools/test_comp_market_status_reconciliation_v183.cjs', 'full'),
+    nodeFile('FULL-05', '4 경쟁사', '마켓 상태 UI 정합성', 'tools/verify_comp_market_status_reconciliation_cdp_v183.cjs', 'full'),
+    nodeFile('FULL-06', '7 저장/내보내기', '작업파일 불러오기 성능', 'tools/measure_workfile_import_perf_cdp_v122.cjs', 'full'),
+    nodeFile('FULL-07', '4 색상옵션', '옵션 이미지 추가 UI', 'tools/verify_option_sorter_add_image_cdp_v126.cjs', 'full'),
+    nodeFile('FULL-08', '4 색상옵션', '옵션분류기 전체 작업 흐름', 'tools/verify_option_sorter_workflow_cdp_v127.cjs', 'full'),
+    nodeFile('FULL-09', '1 제품/DB', 'Cafe24 후보 제품 링크 표시', 'tools/verify_factory_cafe24_product_link_screen_v165.cjs', 'full'),
+    nodeFile('FULL-10', '6 상세페이지', '15섹션 진행률 정합성', 'tools/verify_factory_detail_progress_cdp_v184.cjs', 'full'),
+    nodeFile('FULL-11', '7 저장/내보내기', '최근 작업파일 4개 표시', 'tools/verify_factory_recent_workfile_row_cdp_v147.cjs', 'full'),
+    nodeFile('FULL-12', '4 경쟁사', '로그인 수동개입 요청 UX', 'tools/verify_vm_manual_intervention_cdp_v181.cjs', 'full'),
+  ];
+}
+
+module.exports = { FRONTEND_SOURCES, MANUAL_EXTERNAL_GATES, RUNTIME_SOURCES, buildRegressionSteps };

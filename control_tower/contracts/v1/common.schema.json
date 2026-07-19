@@ -1,0 +1,564 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kuasangse.local/control-tower/contracts/v1/common.schema.json",
+  "title": "Batch production control tower contract definitions",
+  "$defs": {
+    "contractVersion": {"type": "string", "minLength": 1},
+    "capabilityVersion": {"type": "string", "minLength": 1},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "fingerprint": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "evidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "kind", "uri", "sha256"],
+      "properties": {
+        "artifactId": {"$ref": "#/$defs/identifier"},
+        "kind": {"type": "string", "enum": ["source", "validation", "artifact", "review", "transition"]},
+        "uri": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidenceRef"}
+    },
+    "workOrderEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "capabilityVersion",
+        "commandId",
+        "batchId",
+        "productId",
+        "productKey",
+        "stageId",
+        "attempt",
+        "issuedAt",
+        "deadlineAt",
+        "workspaceId",
+        "currentRunId",
+        "inputImageFingerprint",
+        "expectedWorkfileRevision",
+        "operationToken",
+        "idempotencyKey"
+      ],
+      "properties": {
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/identifier"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "stageId": {"$ref": "#/$defs/identifier"},
+        "attempt": {"type": "integer", "minimum": 1},
+        "issuedAt": {"$ref": "#/$defs/timestamp"},
+        "deadlineAt": {"$ref": "#/$defs/timestamp"},
+        "workspaceId": {"$ref": "#/$defs/identifier"},
+        "currentRunId": {"$ref": "#/$defs/identifier"},
+        "inputImageFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "expectedWorkfileRevision": {"type": "integer", "minimum": 0},
+        "operationToken": {"$ref": "#/$defs/identifier"},
+        "idempotencyKey": {"$ref": "#/$defs/identifier"}
+      }
+    },
+    "echoEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "capabilityVersion",
+        "commandId",
+        "batchId",
+        "productId",
+        "productKey",
+        "stageId",
+        "attempt",
+        "issuedAt",
+        "deadlineAt",
+        "workspaceId",
+        "currentRunId",
+        "inputImageFingerprint",
+        "expectedWorkfileRevision",
+        "operationToken",
+        "idempotencyKey",
+        "eventSequence"
+      ],
+      "properties": {
+        "contractVersion": {"$ref": "#/$defs/workOrderEnvelope/properties/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/workOrderEnvelope/properties/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/workOrderEnvelope/properties/commandId"},
+        "batchId": {"$ref": "#/$defs/workOrderEnvelope/properties/batchId"},
+        "productId": {"$ref": "#/$defs/workOrderEnvelope/properties/productId"},
+        "productKey": {"$ref": "#/$defs/workOrderEnvelope/properties/productKey"},
+        "stageId": {"$ref": "#/$defs/workOrderEnvelope/properties/stageId"},
+        "attempt": {"$ref": "#/$defs/workOrderEnvelope/properties/attempt"},
+        "issuedAt": {"$ref": "#/$defs/workOrderEnvelope/properties/issuedAt"},
+        "deadlineAt": {"$ref": "#/$defs/workOrderEnvelope/properties/deadlineAt"},
+        "workspaceId": {"$ref": "#/$defs/workOrderEnvelope/properties/workspaceId"},
+        "currentRunId": {"$ref": "#/$defs/workOrderEnvelope/properties/currentRunId"},
+        "inputImageFingerprint": {"$ref": "#/$defs/workOrderEnvelope/properties/inputImageFingerprint"},
+        "expectedWorkfileRevision": {"$ref": "#/$defs/workOrderEnvelope/properties/expectedWorkfileRevision"},
+        "operationToken": {"$ref": "#/$defs/workOrderEnvelope/properties/operationToken"},
+        "idempotencyKey": {"$ref": "#/$defs/workOrderEnvelope/properties/idempotencyKey"},
+        "eventSequence": {"type": "integer", "minimum": 1}
+      }
+    },
+    "inputImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageId", "role", "ordinal", "colorName", "fileName", "sha256", "evidenceRefs"],
+      "properties": {
+        "imageId": {"$ref": "#/$defs/identifier"},
+        "role": {"type": "string", "enum": ["base", "color-option"]},
+        "ordinal": {"type": ["integer", "null"], "minimum": 1},
+        "colorName": {"type": ["string", "null"]},
+        "fileName": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "productManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "batchId", "productId", "productKey", "workspaceId", "currentRunId", "inputImageFingerprint", "workfileRevision", "inputImages", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "product-manifest"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "workspaceId": {"$ref": "#/$defs/identifier"},
+        "currentRunId": {"$ref": "#/$defs/identifier"},
+        "inputImageFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "workfileRevision": {"type": "integer", "minimum": 0},
+        "inputImages": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/inputImage"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "batchManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "batchId", "workspaceId", "createdAt", "products", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "batch-manifest"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "workspaceId": {"$ref": "#/$defs/identifier"},
+        "createdAt": {"$ref": "#/$defs/timestamp"},
+        "products": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/productManifest"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "fieldRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "fieldId", "status", "value", "source", "nullable", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "field-record"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "fieldId": {"$ref": "#/$defs/identifier"},
+        "status": {"type": "string", "enum": ["candidate", "confirmed", "missing", "rejected"]},
+        "value": {"type": ["string", "number", "boolean", "null"]},
+        "source": {"type": ["string", "null"]},
+        "nullable": {"type": "boolean"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "exactOneProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proofType", "validatedCandidateCount", "evidenceRefs"],
+      "properties": {
+        "proofType": {"const": "validated-candidate-count"},
+        "validatedCandidateCount": {"const": 1},
+        "evidenceRefs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidenceRef"}}
+      }
+    },
+    "decisionRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionMode", "judgeId", "exactOneProof"],
+      "properties": {
+        "decisionMode": {"type": "string", "enum": ["manual", "auto"]},
+        "judgeId": {"type": ["string", "null"]},
+        "exactOneProof": {"anyOf": [{"$ref": "#/$defs/exactOneProof"}, {"type": "null"}]}
+      }
+    },
+    "cancellation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "requestedAt", "reason"],
+      "properties": {
+        "requested": {"type": "boolean"},
+        "requestedAt": {"type": ["string", "null"], "format": "date-time"},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "stagePolicySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "policyId", "stageId", "owner", "maxAttempts", "decisionRule", "cancellation", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "stage-policy-snapshot"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "policyId": {"$ref": "#/$defs/identifier"},
+        "stageId": {"$ref": "#/$defs/identifier"},
+        "owner": {"$ref": "#/$defs/identifier"},
+        "maxAttempts": {"type": "integer", "minimum": 1},
+        "decisionRule": {"$ref": "#/$defs/decisionRule"},
+        "cancellation": {"$ref": "#/$defs/cancellation"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "decisionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryId", "kind", "label", "decisionMode", "judgeId", "exactOneProof", "evidenceRefs"],
+      "properties": {
+        "entryId": {"$ref": "#/$defs/identifier"},
+        "kind": {"type": "string", "enum": ["field", "selection-stage"]},
+        "label": {"type": "string", "minLength": 1},
+        "decisionMode": {"type": "string", "enum": ["manual", "auto"]},
+        "judgeId": {"type": ["string", "null"]},
+        "exactOneProof": {"anyOf": [{"$ref": "#/$defs/exactOneProof"}, {"type": "null"}]},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "decisionPointRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "registryId", "registeredJudgeIds", "entries", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "decision-point-registry"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "registryId": {"$ref": "#/$defs/identifier"},
+        "registeredJudgeIds": {"type": "array", "items": {"$ref": "#/$defs/identifier"}},
+        "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/decisionEntry"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "operationParameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateCount", "sourceArtifactIds"],
+      "properties": {
+        "candidateCount": {"type": "integer", "minimum": 1},
+        "sourceArtifactIds": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/identifier"}}
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "parameters"],
+      "properties": {
+        "capability": {"$ref": "#/$defs/identifier"},
+        "parameters": {"$ref": "#/$defs/operationParameters"}
+      }
+    },
+    "workOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "commandId", "batchId", "productId", "productKey", "stageId", "attempt", "issuedAt", "deadlineAt", "workspaceId", "currentRunId", "inputImageFingerprint", "expectedWorkfileRevision", "operationToken", "idempotencyKey", "operation", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "work-order"},
+        "contractVersion": {"$ref": "#/$defs/workOrderEnvelope/properties/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/workOrderEnvelope/properties/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/workOrderEnvelope/properties/commandId"},
+        "batchId": {"$ref": "#/$defs/workOrderEnvelope/properties/batchId"},
+        "productId": {"$ref": "#/$defs/workOrderEnvelope/properties/productId"},
+        "productKey": {"$ref": "#/$defs/workOrderEnvelope/properties/productKey"},
+        "stageId": {"$ref": "#/$defs/workOrderEnvelope/properties/stageId"},
+        "attempt": {"$ref": "#/$defs/workOrderEnvelope/properties/attempt"},
+        "issuedAt": {"$ref": "#/$defs/workOrderEnvelope/properties/issuedAt"},
+        "deadlineAt": {"$ref": "#/$defs/workOrderEnvelope/properties/deadlineAt"},
+        "workspaceId": {"$ref": "#/$defs/workOrderEnvelope/properties/workspaceId"},
+        "currentRunId": {"$ref": "#/$defs/workOrderEnvelope/properties/currentRunId"},
+        "inputImageFingerprint": {"$ref": "#/$defs/workOrderEnvelope/properties/inputImageFingerprint"},
+        "expectedWorkfileRevision": {"$ref": "#/$defs/workOrderEnvelope/properties/expectedWorkfileRevision"},
+        "operationToken": {"$ref": "#/$defs/workOrderEnvelope/properties/operationToken"},
+        "idempotencyKey": {"$ref": "#/$defs/workOrderEnvelope/properties/idempotencyKey"},
+        "operation": {"$ref": "#/$defs/operation"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "workerAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "commandId", "batchId", "productId", "productKey", "stageId", "attempt", "issuedAt", "deadlineAt", "workspaceId", "currentRunId", "inputImageFingerprint", "expectedWorkfileRevision", "operationToken", "idempotencyKey", "eventSequence", "workerId", "accepted", "acknowledgedAt", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "worker-ack"},
+        "contractVersion": {"$ref": "#/$defs/echoEnvelope/properties/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/echoEnvelope/properties/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/echoEnvelope/properties/commandId"},
+        "batchId": {"$ref": "#/$defs/echoEnvelope/properties/batchId"},
+        "productId": {"$ref": "#/$defs/echoEnvelope/properties/productId"},
+        "productKey": {"$ref": "#/$defs/echoEnvelope/properties/productKey"},
+        "stageId": {"$ref": "#/$defs/echoEnvelope/properties/stageId"},
+        "attempt": {"$ref": "#/$defs/echoEnvelope/properties/attempt"},
+        "issuedAt": {"$ref": "#/$defs/echoEnvelope/properties/issuedAt"},
+        "deadlineAt": {"$ref": "#/$defs/echoEnvelope/properties/deadlineAt"},
+        "workspaceId": {"$ref": "#/$defs/echoEnvelope/properties/workspaceId"},
+        "currentRunId": {"$ref": "#/$defs/echoEnvelope/properties/currentRunId"},
+        "inputImageFingerprint": {"$ref": "#/$defs/echoEnvelope/properties/inputImageFingerprint"},
+        "expectedWorkfileRevision": {"$ref": "#/$defs/echoEnvelope/properties/expectedWorkfileRevision"},
+        "operationToken": {"$ref": "#/$defs/echoEnvelope/properties/operationToken"},
+        "idempotencyKey": {"$ref": "#/$defs/echoEnvelope/properties/idempotencyKey"},
+        "eventSequence": {"$ref": "#/$defs/echoEnvelope/properties/eventSequence"},
+        "workerId": {"$ref": "#/$defs/identifier"},
+        "accepted": {"type": "boolean"},
+        "acknowledgedAt": {"$ref": "#/$defs/timestamp"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "workerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "commandId", "batchId", "productId", "productKey", "stageId", "attempt", "issuedAt", "deadlineAt", "workspaceId", "currentRunId", "inputImageFingerprint", "expectedWorkfileRevision", "operationToken", "idempotencyKey", "eventSequence", "eventType", "occurredAt", "progressPercent", "message", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "worker-event"},
+        "contractVersion": {"$ref": "#/$defs/echoEnvelope/properties/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/echoEnvelope/properties/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/echoEnvelope/properties/commandId"},
+        "batchId": {"$ref": "#/$defs/echoEnvelope/properties/batchId"},
+        "productId": {"$ref": "#/$defs/echoEnvelope/properties/productId"},
+        "productKey": {"$ref": "#/$defs/echoEnvelope/properties/productKey"},
+        "stageId": {"$ref": "#/$defs/echoEnvelope/properties/stageId"},
+        "attempt": {"$ref": "#/$defs/echoEnvelope/properties/attempt"},
+        "issuedAt": {"$ref": "#/$defs/echoEnvelope/properties/issuedAt"},
+        "deadlineAt": {"$ref": "#/$defs/echoEnvelope/properties/deadlineAt"},
+        "workspaceId": {"$ref": "#/$defs/echoEnvelope/properties/workspaceId"},
+        "currentRunId": {"$ref": "#/$defs/echoEnvelope/properties/currentRunId"},
+        "inputImageFingerprint": {"$ref": "#/$defs/echoEnvelope/properties/inputImageFingerprint"},
+        "expectedWorkfileRevision": {"$ref": "#/$defs/echoEnvelope/properties/expectedWorkfileRevision"},
+        "operationToken": {"$ref": "#/$defs/echoEnvelope/properties/operationToken"},
+        "idempotencyKey": {"$ref": "#/$defs/echoEnvelope/properties/idempotencyKey"},
+        "eventSequence": {"$ref": "#/$defs/echoEnvelope/properties/eventSequence"},
+        "eventType": {"type": "string", "enum": ["progress", "checkpoint", "completed", "failed"]},
+        "occurredAt": {"$ref": "#/$defs/timestamp"},
+        "progressPercent": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+        "message": {"type": ["string", "null"]},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "artifactType", "uri", "sha256", "mediaType", "revision", "evidenceRefs"],
+      "properties": {
+        "artifactId": {"$ref": "#/$defs/identifier"},
+        "artifactType": {"type": "string", "enum": ["image", "json", "html", "workfile", "receipt"]},
+        "uri": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "mediaType": {"type": "string", "minLength": 1},
+        "revision": {"type": "integer", "minimum": 1},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "artifactManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "manifestId", "batchId", "productId", "productKey", "stageId", "artifacts", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "artifact-manifest"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "manifestId": {"$ref": "#/$defs/identifier"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "stageId": {"$ref": "#/$defs/identifier"},
+        "artifacts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/artifact"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "resultManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "resultManifestId", "batchId", "productId", "productKey", "stageId", "status", "artifactManifest", "completedAt", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "result-manifest"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "resultManifestId": {"$ref": "#/$defs/identifier"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "stageId": {"$ref": "#/$defs/identifier"},
+        "status": {"type": "string", "enum": ["completed", "failed", "cancelled"]},
+        "artifactManifest": {"anyOf": [{"$ref": "#/$defs/artifactManifest"}, {"type": "null"}]},
+        "completedAt": {"type": ["string", "null"], "format": "date-time"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "workerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "commandId", "batchId", "productId", "productKey", "stageId", "attempt", "issuedAt", "deadlineAt", "workspaceId", "currentRunId", "inputImageFingerprint", "expectedWorkfileRevision", "operationToken", "idempotencyKey", "eventSequence", "status", "completedAt", "resultManifest", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "worker-result"},
+        "contractVersion": {"$ref": "#/$defs/echoEnvelope/properties/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/echoEnvelope/properties/capabilityVersion"},
+        "commandId": {"$ref": "#/$defs/echoEnvelope/properties/commandId"},
+        "batchId": {"$ref": "#/$defs/echoEnvelope/properties/batchId"},
+        "productId": {"$ref": "#/$defs/echoEnvelope/properties/productId"},
+        "productKey": {"$ref": "#/$defs/echoEnvelope/properties/productKey"},
+        "stageId": {"$ref": "#/$defs/echoEnvelope/properties/stageId"},
+        "attempt": {"$ref": "#/$defs/echoEnvelope/properties/attempt"},
+        "issuedAt": {"$ref": "#/$defs/echoEnvelope/properties/issuedAt"},
+        "deadlineAt": {"$ref": "#/$defs/echoEnvelope/properties/deadlineAt"},
+        "workspaceId": {"$ref": "#/$defs/echoEnvelope/properties/workspaceId"},
+        "currentRunId": {"$ref": "#/$defs/echoEnvelope/properties/currentRunId"},
+        "inputImageFingerprint": {"$ref": "#/$defs/echoEnvelope/properties/inputImageFingerprint"},
+        "expectedWorkfileRevision": {"$ref": "#/$defs/echoEnvelope/properties/expectedWorkfileRevision"},
+        "operationToken": {"$ref": "#/$defs/echoEnvelope/properties/operationToken"},
+        "idempotencyKey": {"$ref": "#/$defs/echoEnvelope/properties/idempotencyKey"},
+        "eventSequence": {"$ref": "#/$defs/echoEnvelope/properties/eventSequence"},
+        "status": {"type": "string", "enum": ["completed", "failed", "cancelled"]},
+        "completedAt": {"$ref": "#/$defs/timestamp"},
+        "resultManifest": {"$ref": "#/$defs/resultManifest"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "reviewTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "reviewTaskId", "batchId", "productId", "productKey", "stageId", "owner", "status", "createdAt", "completedAt", "reason", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "review-task"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "reviewTaskId": {"$ref": "#/$defs/identifier"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "stageId": {"$ref": "#/$defs/identifier"},
+        "owner": {"$ref": "#/$defs/identifier"},
+        "status": {"type": "string", "enum": ["pending", "approved", "rejected", "cancelled"]},
+        "createdAt": {"$ref": "#/$defs/timestamp"},
+        "completedAt": {"type": ["string", "null"], "format": "date-time"},
+        "reason": {"type": ["string", "null"]},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "categoryRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fieldId", "label", "required", "nullable", "allowedValues", "evidenceRefs"],
+      "properties": {
+        "fieldId": {"$ref": "#/$defs/identifier"},
+        "label": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"},
+        "nullable": {"type": "boolean"},
+        "allowedValues": {"type": ["array", "null"], "items": {"type": "string"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "cafe24CategoryRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "categoryId", "categoryRevision", "requirements", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "cafe24-category-requirements"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "categoryId": {"$ref": "#/$defs/identifier"},
+        "categoryRevision": {"type": "integer", "minimum": 1},
+        "requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/categoryRequirement"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "cafe24StagingReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "receiptId", "batchId", "productId", "productKey", "categoryId", "status", "stagedAt", "externalProductNo", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "cafe24-staging-receipt"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "receiptId": {"$ref": "#/$defs/identifier"},
+        "batchId": {"$ref": "#/$defs/identifier"},
+        "productId": {"$ref": "#/$defs/identifier"},
+        "productKey": {"$ref": "#/$defs/identifier"},
+        "categoryId": {"$ref": "#/$defs/identifier"},
+        "status": {"type": "string", "enum": ["staged", "rejected"]},
+        "stagedAt": {"$ref": "#/$defs/timestamp"},
+        "externalProductNo": {"type": ["string", "null"]},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "casPrerequisite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expectedState", "expectedRevision", "expectedFingerprint"],
+      "properties": {
+        "expectedState": {"$ref": "#/$defs/identifier"},
+        "expectedRevision": {"type": "integer", "minimum": 0},
+        "expectedFingerprint": {"anyOf": [{"$ref": "#/$defs/fingerprint"}, {"type": "null"}]}
+      }
+    },
+    "transitionMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "owner", "occurredAt", "reason", "attempt", "cancellation", "casPrerequisite", "terminal", "restartBehavior"],
+      "properties": {
+        "from": {"$ref": "#/$defs/identifier"},
+        "to": {"$ref": "#/$defs/identifier"},
+        "owner": {"$ref": "#/$defs/identifier"},
+        "occurredAt": {"type": ["string", "null"], "format": "date-time"},
+        "reason": {"type": ["string", "null"]},
+        "attempt": {"type": "integer", "minimum": 1},
+        "cancellation": {"$ref": "#/$defs/cancellation"},
+        "casPrerequisite": {"$ref": "#/$defs/casPrerequisite"},
+        "terminal": {"type": "boolean"},
+        "restartBehavior": {"type": "string", "enum": ["resume", "retry", "manual-review", "forbid"]}
+      }
+    },
+    "stateTransitionTable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "tableId", "stateKind", "owner", "allowedTransitions", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "state-transition-table"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "tableId": {"$ref": "#/$defs/identifier"},
+        "stateKind": {"type": "string", "enum": ["batch", "product", "stage", "review", "registration"]},
+        "owner": {"$ref": "#/$defs/identifier"},
+        "allowedTransitions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/transitionMetadata"}},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    },
+    "stateTransitionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractType", "contractVersion", "capabilityVersion", "transitionId", "stateKind", "subjectId", "owner", "from", "to", "occurredAt", "reason", "attempt", "cancellation", "casPrerequisite", "terminal", "restartBehavior", "evidenceRefs"],
+      "properties": {
+        "contractType": {"const": "state-transition-record"},
+        "contractVersion": {"$ref": "#/$defs/contractVersion"},
+        "capabilityVersion": {"$ref": "#/$defs/capabilityVersion"},
+        "transitionId": {"$ref": "#/$defs/identifier"},
+        "stateKind": {"type": "string", "enum": ["batch", "product", "stage", "review", "registration"]},
+        "subjectId": {"$ref": "#/$defs/identifier"},
+        "owner": {"$ref": "#/$defs/identifier"},
+        "from": {"$ref": "#/$defs/transitionMetadata/properties/from"},
+        "to": {"$ref": "#/$defs/transitionMetadata/properties/to"},
+        "occurredAt": {"$ref": "#/$defs/transitionMetadata/properties/occurredAt"},
+        "reason": {"$ref": "#/$defs/transitionMetadata/properties/reason"},
+        "attempt": {"$ref": "#/$defs/transitionMetadata/properties/attempt"},
+        "cancellation": {"$ref": "#/$defs/transitionMetadata/properties/cancellation"},
+        "casPrerequisite": {"$ref": "#/$defs/transitionMetadata/properties/casPrerequisite"},
+        "terminal": {"$ref": "#/$defs/transitionMetadata/properties/terminal"},
+        "restartBehavior": {"$ref": "#/$defs/transitionMetadata/properties/restartBehavior"},
+        "evidenceRefs": {"$ref": "#/$defs/evidenceRefs"}
+      }
+    }
+  }
+}

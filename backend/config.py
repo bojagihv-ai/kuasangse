@@ -19,9 +19,11 @@ class Config:
     GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+    SINHWA_PDP_API_BASE = os.getenv("SINHWA_PDP_API_BASE", "http://127.0.0.1:8200/api/pdp").strip()
     UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "static", "uploads")
     GENERATED_FOLDER = os.path.join(os.path.dirname(__file__), "static", "generated")
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+    LOCAL_ARCHIVE_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "output", "local-archive"))
+    MAX_CONTENT_LENGTH = 150 * 1024 * 1024  # 150MB - 로컬 상세페이지/이미지 원본 보관용
 
     # Gemini model settings
     GEMINI_VISION_MODEL = "gemini-2.5-flash"

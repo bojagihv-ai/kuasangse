@@ -1,0 +1,204 @@
+{
+  "fixtureVersion": "1.0.0",
+  "cases": [
+    {
+      "name": "valid_two_product_batch",
+      "payload": {
+        "contractType": "batch-manifest",
+        "contractVersion": "1.0.0",
+        "capabilityVersion": "1.0.0",
+        "batchId": "batch-001",
+        "workspaceId": "workspace-001",
+        "createdAt": "2026-07-18T01:00:00Z",
+        "products": [
+          {
+            "contractType": "product-manifest",
+            "contractVersion": "1.0.0",
+            "capabilityVersion": "1.0.0",
+            "batchId": "batch-001",
+            "productId": "product-001",
+            "productKey": "KUA-P001",
+            "workspaceId": "workspace-001",
+            "currentRunId": "run-p001-001",
+            "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "workfileRevision": 7,
+            "inputImages": [
+              {"imageId": "p001-base", "role": "base", "ordinal": null, "colorName": null, "fileName": "base.png", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "evidenceRefs": []},
+              {"imageId": "p001-color-01", "role": "color-option", "ordinal": 1, "colorName": "빨강", "fileName": "01.red.png", "sha256": "1212121212121212121212121212121212121212121212121212121212121212", "evidenceRefs": []},
+              {"imageId": "p001-color-02", "role": "color-option", "ordinal": 2, "colorName": "파랑", "fileName": "02.blue.png", "sha256": "1313131313131313131313131313131313131313131313131313131313131313", "evidenceRefs": []}
+            ],
+            "evidenceRefs": []
+          },
+          {
+            "contractType": "product-manifest",
+            "contractVersion": "1.0.0",
+            "capabilityVersion": "1.0.0",
+            "batchId": "batch-001",
+            "productId": "product-002",
+            "productKey": "KUA-P002",
+            "workspaceId": "workspace-001",
+            "currentRunId": "run-p002-001",
+            "inputImageFingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "workfileRevision": 3,
+            "inputImages": [
+              {"imageId": "p002-base", "role": "base", "ordinal": null, "colorName": null, "fileName": "base.jpg", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "evidenceRefs": []},
+              {"imageId": "p002-color-01", "role": "color-option", "ordinal": 1, "colorName": "아이보리", "fileName": "01.ivory.jpg", "sha256": "2323232323232323232323232323232323232323232323232323232323232323", "evidenceRefs": []}
+            ],
+            "evidenceRefs": []
+          }
+        ],
+        "evidenceRefs": []
+      },
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_product_manifest",
+      "payload": {
+        "contractType": "product-manifest",
+        "contractVersion": "1.0.0",
+        "capabilityVersion": "1.0.0",
+        "batchId": "batch-001",
+        "productId": "product-001",
+        "productKey": "KUA-P001",
+        "workspaceId": "workspace-001",
+        "currentRunId": "run-p001-001",
+        "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "workfileRevision": 7,
+        "inputImages": [
+          {"imageId": "p001-base", "role": "base", "ordinal": null, "colorName": null, "fileName": "base.png", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "evidenceRefs": []},
+          {"imageId": "p001-color-01", "role": "color-option", "ordinal": 1, "colorName": "빨강", "fileName": "01.red.png", "sha256": "1212121212121212121212121212121212121212121212121212121212121212", "evidenceRefs": []}
+        ],
+        "evidenceRefs": []
+      },
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_field_record",
+      "payload": {"contractType": "field-record", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "fieldId": "sale_price", "status": "confirmed", "value": 19000, "source": "sinhwa-db", "nullable": false, "evidenceRefs": [{"artifactId": "field-source-001", "kind": "source", "uri": "evidence/field-source-001.json", "sha256": "abababababababababababababababababababababababababababababababab"}]},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_stage_policy_snapshot",
+      "payload": {"contractType": "stage-policy-snapshot", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "policyId": "policy-hero-v1", "stageId": "hero", "owner": "production-control", "maxAttempts": 3, "decisionRule": {"decisionMode": "auto", "judgeId": "judge.hero.v1", "exactOneProof": null}, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_work_order",
+      "payload": {"contractType": "work-order", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "operation": {"capability": "image-generate", "parameters": {"candidateCount": 3, "sourceArtifactIds": ["p001-base"]}}, "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_worker_ack",
+      "payload": {"contractType": "worker-ack", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 1, "workerId": "worker-high-001", "accepted": true, "acknowledgedAt": "2026-07-18T01:00:01Z", "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 0, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_worker_event",
+      "payload": {"contractType": "worker-event", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 2, "eventType": "progress", "occurredAt": "2026-07-18T01:00:02Z", "progressPercent": 40, "message": "candidate generation", "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 1, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_artifact_manifest",
+      "payload": {"contractType": "artifact-manifest", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "manifestId": "artifacts-hero-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "artifacts": [{"artifactId": "hero-001", "artifactType": "image", "uri": "artifacts/hero-001.png", "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "mediaType": "image/png", "revision": 1, "evidenceRefs": []}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_result_manifest",
+      "payload": {"contractType": "result-manifest", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "resultManifestId": "result-hero-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "status": "completed", "artifactManifest": {"contractType": "artifact-manifest", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "manifestId": "artifacts-hero-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "artifacts": [{"artifactId": "hero-001", "artifactType": "image", "uri": "artifacts/hero-001.png", "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", "mediaType": "image/png", "revision": 1, "evidenceRefs": []}], "evidenceRefs": []}, "completedAt": "2026-07-18T01:05:00Z", "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_worker_result",
+      "payload": {"contractType": "worker-result", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 3, "status": "completed", "completedAt": "2026-07-18T01:05:00Z", "resultManifest": {"contractType": "result-manifest", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "resultManifestId": "result-hero-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "status": "completed", "artifactManifest": null, "completedAt": "2026-07-18T01:05:00Z", "evidenceRefs": []}, "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 2, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_review_task",
+      "payload": {"contractType": "review-task", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "reviewTaskId": "review-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "owner": "reviewer-001", "status": "pending", "createdAt": "2026-07-18T01:05:00Z", "completedAt": null, "reason": null, "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_cafe24_category_requirements",
+      "payload": {"contractType": "cafe24-category-requirements", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "categoryId": "24", "categoryRevision": 3, "requirements": [{"fieldId": "fabric", "label": "소재", "required": true, "nullable": false, "allowedValues": null, "evidenceRefs": []}, {"fieldId": "country", "label": "원산지", "required": true, "nullable": false, "allowedValues": ["KR", "CN"], "evidenceRefs": []}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_cafe24_staging_receipt",
+      "payload": {"contractType": "cafe24-staging-receipt", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "receiptId": "receipt-001", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "categoryId": "24", "status": "staged", "stagedAt": "2026-07-18T01:07:00Z", "externalProductNo": null, "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_state_transition_table",
+      "payload": {"contractType": "state-transition-table", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "tableId": "batch-transitions-v1", "stateKind": "batch", "owner": "production-control", "allowedTransitions": [{"from": "queued", "to": "running", "owner": "scheduler", "occurredAt": null, "reason": "worker claim", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "queued", "expectedRevision": 7, "expectedFingerprint": null}, "terminal": false, "restartBehavior": "resume"}, {"from": "running", "to": "completed", "owner": "scheduler", "occurredAt": null, "reason": "all products terminal", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "running", "expectedRevision": 8, "expectedFingerprint": null}, "terminal": true, "restartBehavior": "forbid"}], "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "valid_state_transition_record",
+      "payload": {"contractType": "state-transition-record", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "transitionId": "transition-001", "stateKind": "stage", "subjectId": "product-001:hero", "owner": "worker-high-001", "from": "queued", "to": "running", "occurredAt": "2026-07-18T01:00:01Z", "reason": "work acknowledged", "attempt": 1, "cancellation": {"requested": false, "requestedAt": null, "reason": null}, "casPrerequisite": {"expectedState": "queued", "expectedRevision": 7, "expectedFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}, "terminal": false, "restartBehavior": "resume", "evidenceRefs": []},
+      "expected": {"ok": true, "code": "ok", "path": "$"}
+    },
+    {
+      "name": "missing_product_key",
+      "payload": {"contractType": "work-order", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "operation": {"capability": "image-generate", "parameters": {"candidateCount": 3, "sourceArtifactIds": ["p001-base"]}}, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "identifier_missing", "path": "$.productKey"}
+    },
+    {
+      "name": "mismatched_current_run",
+      "payload": {"contractType": "worker-ack", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-stale-999", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 1, "workerId": "worker-high-001", "accepted": true, "acknowledgedAt": "2026-07-18T01:00:01Z", "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 0, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "expected": {"ok": false, "code": "identifier_mismatch", "path": "$.currentRunId"}
+    },
+    {
+      "name": "unsupported_contract_version",
+      "payload": {"contractType": "work-order", "contractVersion": "9.9.9", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "operation": {"capability": "image-generate", "parameters": {"candidateCount": 3, "sourceArtifactIds": ["p001-base"]}}, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "contract_version_unsupported", "path": "$.contractVersion"}
+    },
+    {
+      "name": "unsupported_capability_version",
+      "payload": {"contractType": "work-order", "contractVersion": "1.0.0", "capabilityVersion": "9.9.9", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "operation": {"capability": "image-generate", "parameters": {"candidateCount": 3, "sourceArtifactIds": ["p001-base"]}}, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "capability_version_unsupported", "path": "$.capabilityVersion"}
+    },
+    {
+      "name": "nested_secret_like_key",
+      "payload": {"contractType": "work-order", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "operation": {"capability": "image-generate", "parameters": {"candidateCount": 3, "sourceArtifactIds": ["p001-base"], "client_secret": "redacted-placeholder"}}, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "secret_key_forbidden", "path": "$.operation.parameters.client_secret"}
+    },
+    {
+      "name": "invalid_field_status",
+      "payload": {"contractType": "field-record", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "fieldId": "sale_price", "status": "maybe", "value": 19000, "source": "sinhwa-db", "nullable": false, "evidenceRefs": []},
+      "expected": {"ok": false, "code": "field_status_invalid", "path": "$.status"}
+    },
+    {
+      "name": "auto_decision_without_rule",
+      "payload": {"contractType": "decision-point-registry", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "registryId": "broken-registry", "registeredJudgeIds": [], "entries": [{"entryId": "hero_a_cut", "kind": "selection-stage", "label": "대표 이미지 A컷", "decisionMode": "auto", "judgeId": null, "exactOneProof": null, "evidenceRefs": []}], "evidenceRefs": []},
+      "expected": {"ok": false, "code": "decision_rule_missing", "path": "$.entries[0]"}
+    },
+    {
+      "name": "auto_decision_with_unregistered_judge",
+      "payload": {"contractType": "decision-point-registry", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "registryId": "broken-registry", "registeredJudgeIds": [], "entries": [{"entryId": "hero_a_cut", "kind": "selection-stage", "label": "대표 이미지 A컷", "decisionMode": "auto", "judgeId": "judge.unregistered", "exactOneProof": null, "evidenceRefs": []}], "evidenceRefs": []},
+      "expected": {"ok": false, "code": "decision_rule_missing", "path": "$.entries[0]"}
+    },
+    {
+      "name": "stale_event_fingerprint",
+      "payload": {"contractType": "worker-event", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:9999999999999999999999999999999999999999999999999999999999999999", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 5, "eventType": "progress", "occurredAt": "2026-07-18T01:00:05Z", "progressPercent": 80, "message": "stale candidate", "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 4, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "stateBefore": {"lastEventSequence": 4, "revision": 7, "status": "queued"},
+      "mutationIfAccepted": {"lastEventSequence": 5, "revision": 8, "status": "running"},
+      "expected": {"ok": false, "code": "fingerprint_mismatch", "path": "$.inputImageFingerprint"}
+    },
+    {
+      "name": "non_monotonic_event_sequence",
+      "payload": {"contractType": "worker-event", "contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1", "eventSequence": 4, "eventType": "progress", "occurredAt": "2026-07-18T01:00:05Z", "progressPercent": 80, "message": "duplicate candidate", "evidenceRefs": []},
+      "context": {"referenceEnvelope": {"contractVersion": "1.0.0", "capabilityVersion": "1.0.0", "commandId": "cmd-b001-p001-hero-a1", "batchId": "batch-001", "productId": "product-001", "productKey": "KUA-P001", "stageId": "hero", "attempt": 1, "issuedAt": "2026-07-18T01:00:00Z", "deadlineAt": "2026-07-18T01:10:00Z", "workspaceId": "workspace-001", "currentRunId": "run-p001-001", "inputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "expectedWorkfileRevision": 7, "operationToken": "operation-001", "idempotencyKey": "batch-001:product-001:hero:1"}, "previousEventSequence": 4, "expectedInputImageFingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+      "expected": {"ok": false, "code": "event_sequence_not_monotonic", "path": "$.eventSequence"}
+    },
+    {
+      "name": "malformed_input",
+      "payload": ["not", "a", "contract"],
+      "expected": {"ok": false, "code": "schema_invalid", "path": "$"}
+    }
+  ]
+}

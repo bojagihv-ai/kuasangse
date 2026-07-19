@@ -36,3 +36,24 @@ _head_app.html
 *.badbak
 http_test.log
 web-*.log
+
+# Local runtime output / generated test artifacts
+output/
+test-results/
+.omo/
+.playwright-cli/
+NUL
+*.log
+
+# Temporary, corrupted, and backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*.temp
+*.corrupted-backup-*
+*.pre_split_backup
+.tmp_*
+.debug-journal*
+*~
