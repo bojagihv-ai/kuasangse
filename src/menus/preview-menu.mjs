@@ -1,6 +1,7 @@
 import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contracts.mjs';
 import { renderPreviewView } from './preview-menu-view.mjs';
 import { createPreviewImageInsertBridge } from './preview-image-insert-events.mjs';
+import { createPreviewAiRepairEvents } from './preview-ai-repair-events.mjs';
 
 const RENDER_HELPER_NAMES = Object.freeze([
   "syncFixedSectionPlacementImages",
@@ -32,7 +33,7 @@ const RENDER_HELPER_NAMES = Object.freeze([
 ]);
 
 const ACTION_NAMES = Object.freeze([
-  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair',
+  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair', 'closeAiRepair', 'updateAiRepairField', 'persistAiRepairMask', 'runAiRepair',
   'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
   'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
   'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
@@ -66,7 +67,7 @@ export function createPreviewMenu(capabilities = {}) {
 
   let active = false;
   let generation = 0;
-  let contract;
+  let contract; let activeRefresh = null;
   const activeDisposers = new Set();
   const bindingByRoot = new WeakMap();
 
@@ -133,6 +134,7 @@ export function createPreviewMenu(capabilities = {}) {
   }
 
   const imageInsertEvents = createPreviewImageInsertBridge({ getSnapshot, getOperationToken, readImageFileAsDataUrl: capabilities.readImageFileAsDataUrl, actions: menuActions, invokeAction });
+  const aiRepairEvents = createPreviewAiRepairEvents({ getSnapshot, getOperationToken, actions: menuActions, callAction: (name, value, context) => invokeAction(name, value, context.isCurrent), createImage: capabilities.createImage, setTimeout: capabilities.setTimeout, clearTimeout: capabilities.clearTimeout, reportError });
 
   contract = createMenuContract({
     version: MENU_CONTRACT_VERSION,
@@ -148,6 +150,7 @@ export function createPreviewMenu(capabilities = {}) {
     render(view) {
       return renderPreviewView(view, renderHelpers);
     },
+    refresh(root) { return activeRefresh?.(root); },
     bind(root) {
       bindingByRoot.get(root)?.();
       const token = getOperationToken();
@@ -214,6 +217,8 @@ export function createPreviewMenu(capabilities = {}) {
       };
       const listeners = { click: onClick, input: onInput }; for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
       const imageInsertDispose = typeof root?.addEventListener === 'function' ? imageInsertEvents.bind(root, isCurrent) : () => undefined;
+      let aiRepairDispose = typeof root?.addEventListener === 'function' ? aiRepairEvents.bind(root, isCurrent) : () => undefined;
+      activeRefresh = currentRoot => { if (currentRoot && currentRoot !== root) return undefined; aiRepairDispose?.(); aiRepairDispose = aiRepairEvents.bind(root, isCurrent); return aiRepairDispose; };
       const legacyBindings = [];
       if (typeof root?.addEventListener !== 'function') {
         const legacySpecs = [
@@ -237,6 +242,7 @@ export function createPreviewMenu(capabilities = {}) {
         if (disposed) return;
         disposed = true;
         for (const [type, handler] of Object.entries(listeners)) root?.removeEventListener?.(type, handler); imageInsertDispose?.();
+        aiRepairDispose?.(); activeRefresh = null;
         for (const disposeLegacy of legacyBindings.splice(0).reverse()) disposeLegacy();
         activeDisposers.delete(dispose);
         if (bindingByRoot.get(root) === dispose) bindingByRoot.delete(root);
@@ -245,18 +251,8 @@ export function createPreviewMenu(capabilities = {}) {
       bindingByRoot.set(root, dispose);
       return dispose;
     },
-    onEnter() {
-      active = true;
-      generation += 1;
-      void active;
-      void generation;
-      void getOperationToken();
-    },
-    onLeave() {
-      for (const dispose of [...activeDisposers].reverse()) dispose();
-      active = false;
-      generation += 1;
-    },
+    onEnter() { active = true; generation += 1; void active; void generation; void getOperationToken(); },
+    onLeave() { for (const dispose of [...activeDisposers].reverse()) dispose(); active = false; generation += 1; },
   });
 
   return contract;

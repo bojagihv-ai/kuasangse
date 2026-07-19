@@ -1,0 +1,31 @@
+﻿✔ RED: AI repair helper module exists and owns closed/open modal behavior (4.4951ms)
+✖ RED: AI repair fields/buttons/canvas preserve behavior and disposer fences stale work (2.7581ms)
+✔ RED: preview menu wires AI repair actions through injected capabilities (0.3492ms)
+✔ RED: classic AI repair binder/canvas ownership is removed and capability seam is explicit (6.2389ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 3
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 105.017
+
+✖ failing tests:
+
+test at tests\frontend\task7_ai_repair_events.test.cjs:158:1
+✖ RED: AI repair fields/buttons/canvas preserve behavior and disposer fences stale work (2.7581ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_ai_repair_events.test.cjs:177:10)
+      at async Test.run (node:internal/test_runner/test:1125:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

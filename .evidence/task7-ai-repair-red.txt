@@ -1,0 +1,520 @@
+﻿✖ RED: AI repair helper module exists and owns closed/open modal behavior (2.039ms)
+✖ RED: AI repair fields/buttons/canvas preserve behavior and disposer fences stale work (0.7575ms)
+✖ RED: preview menu wires AI repair actions through injected capabilities (1.6701ms)
+✖ RED: classic AI repair binder/canvas ownership is removed and capability seam is explicit (5.9307ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 90.3865
+
+✖ failing tests:
+
+test at tests\frontend\task7_ai_repair_events.test.cjs:145:1
+✖ RED: AI repair helper module exists and owns closed/open modal behavior (2.039ms)
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\kua\Documents\GitHub\kuasangse\src\menus\preview-ai-repair-events.mjs' imported from C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_ai_repair_events.test.cjs
+      at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+      at moduleResolve (node:internal/modules/esm/resolve:865:10)
+      at defaultResolve (node:internal/modules/esm/resolve:991:11)
+      at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)
+      at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)
+      at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)
+      at #resolve (node:internal/modules/esm/loader:701:17)
+      at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)
+      at onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:650:32)
+      at TracingChannel.tracePromise (node:diagnostics_channel:350:14) {
+    code: 'ERR_MODULE_NOT_FOUND',
+    url: 'file:///C:/Users/kua/Documents/GitHub/kuasangse/src/menus/preview-ai-repair-events.mjs?task7-ai-repair=1784436836504-0.9100861528633535'
+  }
+
+test at tests\frontend\task7_ai_repair_events.test.cjs:158:1
+✖ RED: AI repair fields/buttons/canvas preserve behavior and disposer fences stale work (0.7575ms)
+  Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'C:\Users\kua\Documents\GitHub\kuasangse\src\menus\preview-ai-repair-events.mjs' imported from C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_ai_repair_events.test.cjs
+      at finalizeResolution (node:internal/modules/esm/resolve:275:11)
+      at moduleResolve (node:internal/modules/esm/resolve:865:10)
+      at defaultResolve (node:internal/modules/esm/resolve:991:11)
+      at #cachedDefaultResolve (node:internal/modules/esm/loader:719:20)
+      at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:736:38)
+      at ModuleLoader.resolveSync (node:internal/modules/esm/loader:765:52)
+      at #resolve (node:internal/modules/esm/loader:701:17)
+      at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:621:35)
+      at onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:650:32)
+      at TracingChannel.tracePromise (node:diagnostics_channel:350:14) {
+    code: 'ERR_MODULE_NOT_FOUND',
+    url: 'file:///C:/Users/kua/Documents/GitHub/kuasangse/src/menus/preview-ai-repair-events.mjs?task7-ai-repair=1784436836506-0.5548640705770067'
+  }
+
+test at tests\frontend\task7_ai_repair_events.test.cjs:190:1
+✖ RED: preview menu wires AI repair actions through injected capabilities (1.6701ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /preview-ai-repair-events\.mjs/. Input:
+  
+  "import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contracts.mjs';\n" +
+    "import { renderPreviewView } from './preview-menu-view.mjs';\n" +
+    "import { createPreviewImageInsertBridge } from './preview-image-insert-events.mjs';\n" +
+    '\n' +
+    'const RENDER_HELPER_NAMES = Object.freeze([\n' +
+    '  "syncFixedSectionPlacementImages",\n' +
+    '  "orderedSections",\n' +
+    '  "factoryRecoveredDetailPreviewHtml",\n' +
+    '  "renderBrandStudioPanel",\n' +
+    '  "renderToneQuickPanel",\n' +
+    '  "renderQaPanel",\n' +
+    '  "renderFixedDetailImagePanel",\n' +
+    '  "renderRecoveredDetailPreviewNotice",\n' +
+    '  "renderRecoveredDetailPreviewAside",\n' +
+    '  "renderPreviewOutline",\n' +
+    '  "renderFixedDetailImageForExport",\n' +
+    '  "cssFontFamily",\n' +
+    '  "displayableImageSrc",\n' +
+    '  "canUndoAiRepair",\n' +
+    '  "getSectionGenerationModeInfo",\n' +
+    '  "resolveSectionRenderGenerationMode",\n' +
+    '  "renderSectionVariantQuickBar",\n' +
+    '  "renderSectionVariantEvaluationPanel",\n' +
+    '  "renderPreviewEditPanel",\n' +
+    '  "renderSectionTemplate",\n' +
+    '  "renderDetailImageBlocksAfter",\n' +
+    '  "renderFactoryLightImage",\n' +
+    '  "publicSectionText",\n' +
+    '  "nl2br",\n' +
+    '  "escAttr",\n' +
+    '  "escapeHtml"\n' +
+    ']);\n' +
+    '\n' +
+    'const ACTION_NAMES = Object.freeze([\n' +
+    "  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair',\n" +
+    "  'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',\n" +
+    "  'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',\n" +
+    "  'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',\n" +
+    "  'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',\n" +
+    "  'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',\n" +
+    "  'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert', 'closeImageInsert', 'applyImageInsert', 'updateImageInsertFolder', 'loadDetailDriveImages', 'connectImageInsertDrive', 'useDriveDetailImage', 'useCutDetailImage', 'setImageInsertError', 'requestRender',\n" +
+    ']);\n' +
+    "const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['setViewport', 'navigate', 'startGenerating']));\n" +
+    '\n' +
+    'function requiredFunction(source, name) {\n' +
+    "  if (typeof source?.[name] !== 'function') throw new TypeError(name + ' must be a function');\n" +
+    '  return source[name];\n' +
+    '}\n' +
+    '\n' +
+    'export function createPreviewMenu(capabilities = {}) {\n' +
+    "  const getSnapshot = requiredFunction(capabilities, 'getSnapshot');\n" +
+    "  const assertMutable = requiredFunction(capabilities, 'assertMutable');\n" +
+    "  const getOperationToken = requiredFunction(capabilities, 'getOperationToken');\n" +
+    "  const reportError = requiredFunction(capabilities, 'reportError');\n" +
+    '  const actions = capabilities.actions || {};\n' +
+    '  const menuActions = Object.fromEntries(ACTION_NAMES.map(name => [\n' +
+    '    name,\n' +
+    '    REQUIRED_ACTION_NAMES.has(name)\n' +
+    '      ? requiredFunction(actions, name)\n' +
+    "      : (typeof actions[name] === 'function' ? actions[name] : () => undefined),\n" +
+    '  ]));\n' +
+    "  const reportMenuError = error => { if (error?.message !== 'STALE_MENU_OPERATION') reportError(error); };\n" +
+    '  const renderHelpers = capabilities.renderHelpers || {};\n' +
+    '  for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);\n' +
+    '\n' +
+    '\n' +
+    '  let active = false;\n' +
+    '  let generation = 0;\n' +
+    '  let contract;\n' +
+    '  const activeDisposers = new Set();\n' +
+    '  const bindingByRoot = new WeakMap();\n' +
+    '\n' +
+    '  function runCommand(action, value, rootIsCurrent = () => true) {\n' +
+    '    const operationToken = getOperationToken();\n' +
+    '    const context = Object.freeze({\n' +
+    '      operationToken,\n' +
+    '      isCurrent: () => rootIsCurrent() && getOperationToken() === operationToken,\n' +
+    '    });\n' +
+    '    const result = action(value, context);\n' +
+    "    if (!result || typeof result.then !== 'function') return result;\n" +
+    '    return Promise.resolve(result).then(output => {\n' +
+    "      if (!context.isCurrent()) throw new Error('STALE_MENU_OPERATION');\n" +
+    '      return output;\n' +
+    '    });\n' +
+    '  }\n' +
+    '\n' +
+    '  const commands = {\n' +
+    '    setViewport: {\n' +
+    "      capability: 'detail-document:write',\n" +
+    '      execute(value, context) {\n' +
+    '        assertMutable();\n' +
+    '        return runCommand(menuActions.setViewport, value, context?.isCurrent);\n' +
+    '      },\n' +
+    '    },\n' +
+    '    navigate: {\n' +
+    "      capability: 'detail-document:write',\n" +
+    '      execute(value, context) {\n' +
+    '        assertMutable();\n' +
+    '        return runCommand(menuActions.navigate, value, context?.isCurrent);\n' +
+    '      },\n' +
+    '    },\n' +
+    '    startGenerating: {\n' +
+    "      capability: 'detail-document:write',\n" +
+    '      execute(value, context) {\n' +
+    '        assertMutable();\n' +
+    '        return runCommand(menuActions.startGenerating, value, context?.isCurrent);\n' +
+    '      },\n' +
+    '    },\n' +
+    '  };\n' +
+    '\n' +
+    '  function invoke(name, value, rootIsCurrent = () => true) {\n' +
+    '    try {\n' +
+    '      const result = contract.invoke(name, value, Object.freeze({ isCurrent: rootIsCurrent }));\n' +
+    "      if (result && typeof result.catch === 'function') result.catch(reportMenuError);\n" +
+    '      return result;\n' +
+    '    } catch (error) {\n' +
+    '      reportMenuError(error);\n' +
+    '      return undefined;\n' +
+    '    }\n' +
+    '  }\n' +
+    '\n' +
+    '  function invokeAction(name, value, isCurrent) {\n' +
+    '    if (!isCurrent()) return undefined;\n' +
+    '    try {\n' +
+    '      assertMutable();\n' +
+    '      const result = runCommand(menuActions[name], value, isCurrent);\n' +
+    "      if (result && typeof result.catch === 'function') result.catch(reportMenuError);\n" +
+    '      return result;\n' +
+    '    } catch (error) {\n' +
+    '      reportMenuError(error);\n' +
+    '      return undefined;\n' +
+    '    }\n' +
+    '  }\n' +
+    '\n' +
+    '  const imageInsertEvents = createPreviewImageInsertBridge({ getSnapshot, getOperationToken, readImageFileAsDataUrl: capabilities.readImageFileAsDataUrl, actions: menuActions, invokeAction });\n' +
+    '\n' +
+    '  contract = createMenuContract({\n' +
+    '    version: MENU_CONTRACT_VERSION,\n' +
+    "    id: 'preview',\n" +
+    "    routes: ['preview'],\n" +
+    "    ownedSlices: ['detail-document'],\n" +
+    "    capabilities: ['detail-document:read', 'detail-document:write'],\n" +
+    "    persistence: { reads: ['detail-document'], writes: ['detail-document'] },\n" +
+    '    select() {\n' +
+    '      return getSnapshot() || {};\n' +
+    '    },\n' +
+    '    commands,\n' +
+    '    render(view) {\n' +
+    '      return renderPreviewView(view, renderHelpers);\n' +
+    '    },\n' +
+    '    bind(root) {\n' +
+    '      bindingByRoot.get(root)?.();\n' +
+    '      const token = getOperationToken();\n' +
+    '      const boundGeneration = generation;\n' +
+    '      let disposed = false;\n' +
+    '      const isCurrent = () => !disposed && active && generation === boundGeneration && getOperationToken() === token;\n' +
+    '      const closest = (event, selector) => {\n' +
+    '        const node = event?.target?.closest?.(selector);\n' +
+    '        return node && root?.contains?.(node) !== false ? node : null;\n' +
+    '      };\n' +
+    `      const call = (name, value) => invokeAction(name, value, isCurrent); const selectorValue = value => String(value || '').replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');\n` +
+    '      const readManualField = (sectionId, field) => root?.querySelector?.(`[data-manual-${field}="${selectorValue(sectionId)}"]`)?.value || \'\';\n' +
+    '      const sectionSnapshot = sectionId => getSnapshot()?.sectionContents?.[sectionId] || {};\n' +
+    '      const onClick = event => {\n' +
+    "        const route = closest(event, '[data-route-target]');\n" +
+    "        if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget, isCurrent); return; }\n" +
+    "        if (closest(event, '[data-start-generating]')) { event.preventDefault?.(); if (isCurrent()) invoke('startGenerating', undefined, isCurrent); return; }\n" +
+    "        if (closest(event, '#openRemainingSectionsAfterStop')) { event.preventDefault?.(); call('openRemainingSectionsAfterStop'); return; }\n" +
+    "        const viewport = closest(event, '[data-preview-viewport]');\n" +
+    "        if (viewport) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', viewport.dataset.previewViewport, isCurrent); return; }\n" +
+    "        if (closest(event, '#viewportPc')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'pc', isCurrent); return; }\n" +
+    "        if (closest(event, '#viewportMobile')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'mobile', isCurrent); return; }\n" +
+    "        const edit = closest(event, '[data-edit-preview]'); if (edit) { call('togglePreviewEdit', edit.dataset.editPreview); return; }\n" +
+    "        const repair = closest(event, '[data-ai-repair]'); if (repair) { call('openAiRepair', repair.dataset.aiRepair); return; }\n" +
+    "        const undo = closest(event, '[data-undo-ai-repair]'); if (undo) { call('undoAiRepair', undo.dataset.undoAiRepair); return; }\n" +
+    "        const regen = closest(event, '[data-regen]'); if (regen) { call('regenerateSection', regen.dataset.regen); return; }\n" +
+    "        const apply = closest(event, '[data-apply-edit]');\n" +
+    '        if (apply) {\n' +
+    '          const sectionId = apply.dataset.applyEdit;\n' +
+    "          const inputs = [...(root?.querySelectorAll?.('[data-edit-input]') || [])];\n" +
+    '          const input = inputs.filter(node => node.dataset.editInput === sectionId).at(-1);\n' +
+    "          call('applyPreviewEdit', { sectionId, value: input?.value || '' });\n" +
+    '          return;\n' +
+    '        }\n' +
+    "        const lock = closest(event, '[data-lock-preview]');\n" +
+    "        if (lock) { const sectionId = String(lock.dataset.lockPreview || '').trim(); if (sectionId) call('setSectionLock', { sectionId, locked: !getSnapshot()?.sectionLocks?.[sectionId] }); return; }\n" +
+    "        const manual = closest(event, '[data-save-manual]');\n" +
+    '        if (manual) {\n' +
+    "          const sectionId = String(manual.dataset.saveManual || '').trim();\n" +
+    "          if (sectionId) { const content = sectionSnapshot(sectionId); call('saveManualSection', { sectionId, patch: {\n" +
+    "            headline: readManualField(sectionId, 'headline'), subheadline: readManualField(sectionId, 'subheadline'),\n" +
+    "            body_text: readManualField(sectionId, 'body'), cta_text: readManualField(sectionId, 'cta'),\n" +
+    "            extra_elements: readManualField(sectionId, 'extra'), layout_suggestion: content.layout_suggestion || '',\n" +
+    '          } }); }\n' +
+    '          return; }\n' +
+    "        const deleteDetailImage = closest(event, '[data-delete-detail-image]'); if (deleteDetailImage) { const blockId = String(deleteDetailImage.dataset.deleteDetailImage || '').trim(); if (blockId) call('deleteDetailImage', { blockId }); return; } const moveDetailImage = closest(event, '[data-move-detail-image]'); if (moveDetailImage) { const [blockId, direction] = String(moveDetailImage.dataset.moveDetailImage || '').split(':'); if (blockI"... 4652 more characters
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_ai_repair_events.test.cjs:192:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'import { MENU_CONTRACT_VERSION, createMenuContract } from \'../modules/menu-contracts.mjs\';\nimport { renderPreviewView } from \'./preview-menu-view.mjs\';\nimport { createPreviewImageInsertBridge } from \'./preview-image-insert-events.mjs\';\n\nconst RENDER_HELPER_NAMES = Object.freeze([\n  "syncFixedSectionPlacementImages",\n  "orderedSections",\n  "factoryRecoveredDetailPreviewHtml",\n  "renderBrandStudioPanel",\n  "renderToneQuickPanel",\n  "renderQaPanel",\n  "renderFixedDetailImagePanel",\n  "renderRecoveredDetailPreviewNotice",\n  "renderRecoveredDetailPreviewAside",\n  "renderPreviewOutline",\n  "renderFixedDetailImageForExport",\n  "cssFontFamily",\n  "displayableImageSrc",\n  "canUndoAiRepair",\n  "getSectionGenerationModeInfo",\n  "resolveSectionRenderGenerationMode",\n  "renderSectionVariantQuickBar",\n  "renderSectionVariantEvaluationPanel",\n  "renderPreviewEditPanel",\n  "renderSectionTemplate",\n  "renderDetailImageBlocksAfter",\n  "renderFactoryLightImage",\n  "publicSectionText",\n  "nl2br",\n  "escAttr",\n  "escapeHtml"\n]);\n\nconst ACTION_NAMES = Object.freeze([\n  \'setViewport\', \'navigate\', \'startGenerating\', \'togglePreviewEdit\', \'openAiRepair\',\n  \'undoAiRepair\', \'regenerateSection\', \'applyPreviewEdit\', \'updatePreviewInstruction\',\n  \'setSectionLock\', \'saveManualSection\', \'applySectionVariant\', \'applySectionVariantImage\',\n  \'evaluateSectionVariants\', \'applyBestEvaluatedVariant\', \'setRecoveredDetailMode\',\n  \'runQaCheck\', \'runAiQaCheck\', \'toggleLayerMode\', \'resetAllLayers\', \'exportLayeredSVG\',\n  \'exportPhotoshopPackage\', \'exportJpgAll\', \'exportJpgSections\', \'exportHTML\',\n  \'openRemainingSectionsAfterStop\', \'deleteDetailImage\', \'moveDetailImage\', \'focusSectionImage\', \'deleteSectionImage\', \'openImageInsert\', \'closeImageInsert\', \'applyImageInsert\', \'updateImageInsertFolder\', \'loadDetailDriveImages\', \'connectImageInsertDrive\', \'useDriveDetailImage\', \'useCutDetailImage\', \'setImageInsertError\', \'requestRender\',\n]);\nconst REQUIRED_ACTION_NAMES = Object.freeze(new Set([\'setViewport\', \'navigate\', \'startGenerating\']));\n\nfunction requiredFunction(source, name) {\n  if (typeof source?.[name] !== \'function\') throw new TypeError(name + \' must be a function\');\n  return source[name];\n}\n\nexport function createPreviewMenu(capabilities = {}) {\n  const getSnapshot = requiredFunction(capabilities, \'getSnapshot\');\n  const assertMutable = requiredFunction(capabilities, \'assertMutable\');\n  const getOperationToken = requiredFunction(capabilities, \'getOperationToken\');\n  const reportError = requiredFunction(capabilities, \'reportError\');\n  const actions = capabilities.actions || {};\n  const menuActions = Object.fromEntries(ACTION_NAMES.map(name => [\n    name,\n    REQUIRED_ACTION_NAMES.has(name)\n      ? requiredFunction(actions, name)\n      : (typeof actions[name] === \'function\' ? actions[name] : () => undefined),\n  ]));\n  const reportMenuError = error => { if (error?.message !== \'STALE_MENU_OPERATION\') reportError(error); };\n  const renderHelpers = capabilities.renderHelpers || {};\n  for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);\n\n\n  let active = false;\n  let generation = 0;\n  let contract;\n  const activeDisposers = new Set();\n  const bindingByRoot = new WeakMap();\n\n  function runCommand(action, value, rootIsCurrent = () => true) {\n    const operationToken = getOperationToken();\n    const context = Object.freeze({\n      operationToken,\n      isCurrent: () => rootIsCurrent() && getOperationToken() === operationToken,\n    });\n    const result = action(value, context);\n    if (!result || typeof result.then !== \'function\') return result;\n    return Promise.resolve(result).then(output => {\n      if (!context.isCurrent()) throw new Error(\'STALE_MENU_OPERATION\');\n      return output;\n    });\n  }\n\n  const commands = {\n    setViewport: {\n      capability: \'detail-document:write\',\n      execute(value, context) {\n        assertMutable();\n        return runCommand(menuActions.setViewport, value, context?.isCurrent);\n      },\n    },\n    navigate: {\n      capability: \'detail-document:write\',\n      execute(value, context) {\n        assertMutable();\n        return runCommand(menuActions.navigate, value, context?.isCurrent);\n      },\n    },\n    startGenerating: {\n      capability: \'detail-document:write\',\n      execute(value, context) {\n        assertMutable();\n        return runCommand(menuActions.startGenerating, value, context?.isCurrent);\n      },\n    },\n  };\n\n  function invoke(name, value, rootIsCurrent = () => true) {\n    try {\n      const result = contract.invoke(name, value, Object.freeze({ isCurrent: rootIsCurrent }));\n      if (result && typeof result.catch === \'function\') result.catch(reportMenuError);\n      return result;\n    } catch (error) {\n      reportMenuError(error);\n      return undefined;\n    }\n  }\n\n  function invokeAction(name, value, isCurrent) {\n    if (!isCurrent()) return undefined;\n    try {\n      assertMutable();\n      const result = runCommand(menuActions[name], value, isCurrent);\n      if (result && typeof result.catch === \'function\') result.catch(reportMenuError);\n      return result;\n    } catch (error) {\n      reportMenuError(error);\n      return undefined;\n    }\n  }\n\n  const imageInsertEvents = createPreviewImageInsertBridge({ getSnapshot, getOperationToken, readImageFileAsDataUrl: capabilities.readImageFileAsDataUrl, actions: menuActions, invokeAction });\n\n  contract = createMenuContract({\n    version: MENU_CONTRACT_VERSION,\n    id: \'preview\',\n    routes: [\'preview\'],\n    ownedSlices: [\'detail-document\'],\n    capabilities: [\'detail-document:read\', \'detail-document:write\'],\n    persistence: { reads: [\'detail-document\'], writes: [\'detail-document\'] },\n    select() {\n      return getSnapshot() || {};\n    },\n    commands,\n    render(view) {\n      return renderPreviewView(view, renderHelpers);\n    },\n    bind(root) {\n      bindingByRoot.get(root)?.();\n      const token = getOperationToken();\n      const boundGeneration = generation;\n      let disposed = false;\n      const isCurrent = () => !disposed && active && generation === boundGeneration && getOperationToken() === token;\n      const closest = (event, selector) => {\n        const node = event?.target?.closest?.(selector);\n        return node && root?.contains?.(node) !== false ? node : null;\n      };\n      const call = (name, value) => invokeAction(name, value, isCurrent); const selectorValue = value => String(value || \'\').replace(/\\\\/g, \'\\\\\\\\\').replace(/"/g, \'\\\\"\');\n      const readManualField = (sectionId, field) => root?.querySelector?.(`[data-manual-${field}="${selectorValue(sectionId)}"]`)?.value || \'\';\n      const sectionSnapshot = sectionId => getSnapshot()?.sectionContents?.[sectionId] || {};\n      const onClick = event => {\n        const route = closest(event, \'[data-route-target]\');\n        if (route) { event.preventDefault?.(); if (isCurrent()) invoke(\'navigate\', route.dataset.routeTarget, isCurrent); return; }\n        if (closest(event, \'[data-start-generating]\')) { event.preventDefault?.(); if (isCurrent()) invoke(\'startGenerating\', undefined, isCurrent); return; }\n        if (closest(event, \'#openRemainingSectionsAfterStop\')) { event.preventDefault?.(); call(\'openRemainingSectionsAfterStop\'); return; }\n        const viewport = closest(event, \'[data-preview-viewport]\');\n        if (viewport) { event.preventDefault?.(); if (isCurrent()) invoke(\'setViewport\', viewport.dataset.previewViewport, isCurrent); return; }\n        if (closest(event, \'#viewportPc\')) { event.preventDefault?.(); if (isCurrent()) invoke(\'setViewport\', \'pc\', isCurrent); return; }\n        if (closest(event, \'#viewportMobile\')) { event.preventDefault?.(); if (isCurrent()) invoke(\'setViewport\', \'mobile\', isCurrent); return; }\n        const edit = closest(event, \'[data-edit-preview]\'); if (edit) { call(\'togglePreviewEdit\', edit.dataset.editPreview); return; }\n        const repair = closest(event, \'[data-ai-repair]\'); if (repair) { call(\'openAiRepair\', repair.dataset.aiRepair); return; }\n        const undo = closest(event, \'[data-undo-ai-repair]\'); if (undo) { call(\'undoAiRepair\', undo.dataset.undoAiRepair); return; }\n        const regen = closest(event, \'[data-regen]\'); if (regen) { call(\'regenerateSection\', regen.dataset.regen); return; }\n        const apply = closest(event, \'[data-apply-edit]\');\n        if (apply) {\n          const sectionId = apply.dataset.applyEdit;\n          const inputs = [...(root?.querySelectorAll?.(\'[data-edit-input]\') || [])];\n          const input = inputs.filter(node => node.dataset.editInput === sectionId).at(-1);\n          call(\'applyPreviewEdit\', { sectionId, value: input?.value || \'\' });\n          return;\n        }\n        const lock = closest(event, \'[data-lock-preview]\');\n        if (lock) { const sectionId = String(lock.dataset.lockPreview || \'\').trim(); if (sectionId) call(\'setSectionLock\', { sectionId, locked: !getSnapshot()?.sectionLocks?.[sectionId] }); return; }\n        const manual = closest(event, \'[data-save-manual]\');\n        if (manual) {\n          const sectionId = String(manual.dataset.saveManual || \'\').trim();\n          if (sectionId) { const content = sectionSnapshot(sectionId); call(\'saveManualSection\', { sectionId, patch: {\n            headline: readManualField(sectionId, \'headline\'), subheadline: readManualField(sectionId, \'subheadline\'),\n            body_text: readManualField(sectionId, \'body\'), cta_text: readManualField(sectionId, \'cta\'),\n            extra_elements: readManualField(sectionId, \'extra\'), layout_suggestion: content.layout_suggestion || \'\',\n          } }); }\n          return; }\n        const deleteDetailImage = closest(event, \'[data-delete-detail-image]\'); if (deleteDetailImage) { const blockId = String(deleteDetailImage.dataset.deleteDetailImage || \'\').trim(); if (blockId) call(\'deleteDetailImage\', { blockId }); return; } const moveDetailImage = closest(event, \'[data-move-detail-image]\'); if (moveDetailImage) { const [blockId, direction] = String(moveDetailImage.dataset.moveDetailImage || \'\').split(\':\'); if (blockI'... 4652 more characters,
+    expected: /preview-ai-repair-events\.mjs/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests\frontend\task7_ai_repair_events.test.cjs:198:1
+✖ RED: classic AI repair binder/canvas ownership is removed and capability seam is explicit (5.9307ms)
+  AssertionError [ERR_ASSERTION]: The input was expected to not match the regular expression /bindAiRepairEvents\s*\(/. Input:
+  
+  '\r\n' +
+    'const FACTORY_AUTOMATION_ASSET_SCAN_LIMIT = 120;\r\n' +
+    'const COMP_MARKET_STATE_RESULT_LIMIT = 80;\r\n' +
+    'const COMP_MARKET_STATE_IMAGE_LIMIT = 80;\r\n' +
+    'const FACTORY_PAGE_SESSION_ID = (() => {\r\n' +
+    '  try {\r\n' +
+    "    return (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')\r\n" +
+    '      ? crypto.randomUUID()\r\n' +
+    '      : `page_${Date.now()}_${Math.random().toString(36).slice(2)}`;\r\n' +
+    '  } catch(_) {\r\n' +
+    '    return `page_${Date.now()}_${Math.random().toString(36).slice(2)}`;\r\n' +
+    '  }\r\n' +
+    '})();\r\n' +
+    '\r\n' +
+    'function renderFactoryCompetitorPanel(factory) {\r\n' +
+    '  const competitors = factoryCurrentWorkCompetitors(factory);\r\n' +
+    '  const rows = [];\r\n' +
+    '  competitors.slice(0, 20).forEach((item, index) => {\r\n' +
+    "    if (item && typeof item === 'object') factoryFlattenDbRows(item, `경쟁사 ${index + 1}`, 'competitor', '', rows, 0);\r\n" +
+    '  });\r\n' +
+    '  const compact = competitors.slice(0, 6).map((item, index) => {\r\n' +
+    '    const name = item?.product_name || item?.name || item?.title || item?.상품명 || `경쟁사 ${index + 1}`;\r\n' +
+    "    const price = item?.price || item?.sale_price || item?.판매가 || item?.consumer_price || '';\r\n" +
+    "    const url = item?.url || item?.link || item?.detail_url || '';\r\n" +
+    '    return `<div class="factory-mini">\r\n' +
+    '      참고 ${index + 1}<b>${escapeHtml(name)}</b>\r\n' +
+    '      ${price ? `<span class="factory-small">${escapeHtml(String(price))}</span>` : \'\'}\r\n' +
+    '      ${url ? `<span class="factory-small" title="${escAttr(url)}">${escapeHtml(String(url).slice(0, 46))}</span>` : \'\'}\r\n' +
+    '    </div>`;\r\n' +
+    "  }).join('');\r\n" +
+    '  return `<div class="factory-card" style="margin-top:12px">\r\n' +
+    '    <div class="factory-db-review-head" style="margin-bottom:8px">\r\n' +
+    '      <div>\r\n' +
+    '        <h4>경쟁사 참고자료</h4>\r\n' +
+    '        <p>경쟁사 자료는 완성 DB 값으로 섞지 않고, 상세페이지 섹션/카피/구성 참고용으로만 따로 봅니다.</p>\r\n' +
+    '      </div>\r\n' +
+    '      <div class="factory-toolbar">\r\n' +
+    '        <button class="btn-sm" id="factoryImportCompetitorBottom" type="button"><span class="material-icons-outlined" style="font-size:14px">travel_explore</span>경쟁사 결과 가져오기</button>\r\n' +
+    '      </div>\r\n' +
+    '    </div>\r\n' +
+    '    ${competitors.length ? `<div class="factory-mini-grid">${compact}</div>` : `<div class="factory-small">아직 경쟁사 자료가 없습니다. 경쟁사 분석 탭 결과를 가져오거나 제품/DB 확보를 실행하면 여기에 따로 쌓입니다.</div>`}\r\n' +
+    '    <details class="factory-db-raw" ${rows.length ? \'\' : \'style="display:none"\'}>\r\n' +
+    '      <summary>경쟁사 자료 필드 보기 (${rows.length}개)</summary>\r\n' +
+    '      <div class="factory-db-raw-table">\r\n' +
+    '        ${rows.slice(0, 160).map(row => `<div class="factory-db-raw-row">\r\n' +
+    '          <b>${escapeHtml(row.sourceLabel)}</b>\r\n' +
+    '          <code title="${escAttr(row.key)}">${escapeHtml(row.key)}</code>\r\n' +
+    '          <span class="factory-db-raw-value" title="${escAttr(row.value)}">${escapeHtml(row.value)}</span>\r\n' +
+    '          <span class="factory-db-source">참고</span>\r\n' +
+    "        </div>`).join('')}\r\n" +
+    '      </div>\r\n' +
+    '    </details>\r\n' +
+    '  </div>`;\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    'function factoryCompetitorMatchesCurrentWork(item = {}, factory = factoryRuntimeReadFactory()) {\r\n' +
+    '  let current = null;\r\n' +
+    '  try {\r\n' +
+    "    if (typeof compMarketCurrentWorkScope === 'function') current = compMarketCurrentWorkScope();\r\n" +
+    '  } catch(_) {\r\n' +
+    '    current = null;\r\n' +
+    '  }\r\n' +
+    '  const currentWorkspaceId = String(\r\n' +
+    '    state.currentProjectId ||\r\n' +
+    '    factory?.workspace?.id ||\r\n' +
+    '    factory?.currentProjectId ||\r\n' +
+    "    ''\r\n" +
+    '  ).trim();\r\n' +
+    '  const itemWorkspaceId = String(\r\n' +
+    '    item?.workspaceId ||\r\n' +
+    '    item?.currentProjectId ||\r\n' +
+    '    item?.projectId ||\r\n' +
+    '    item?.metadata?.workspaceId ||\r\n' +
+    '    item?.metadata?.currentProjectId ||\r\n' +
+    "    ''\r\n" +
+    '  ).trim();\r\n' +
+    '  if (!currentWorkspaceId || !itemWorkspaceId || currentWorkspaceId !== itemWorkspaceId) return false;\r\n' +
+    "  if (typeof compMarketCandidateMatchesCurrentWork === 'function' && !compMarketCandidateMatchesCurrentWork(item, current)) {\r\n" +
+    '    return false;\r\n' +
+    '  }\r\n' +
+    '  if (!current?.scopeKey) return true;\r\n' +
+    "  const workKey = String(item?.factoryWorkKey || item?.workScopeKey || '').trim();\r\n" +
+    '  if (workKey) return workKey === current.scopeKey;\r\n' +
+    "  const currentRunId = String(current.currentRunId || '').trim();\r\n" +
+    '  const itemRunId = String(\r\n' +
+    '    item?.currentRunId ||\r\n' +
+    '    item?.generationRunId ||\r\n' +
+    '    item?.metadata?.currentRunId ||\r\n' +
+    '    item?.metadata?.generationRunId ||\r\n' +
+    "    ''\r\n" +
+    '  ).trim();\r\n' +
+    '  if (currentRunId && itemRunId !== currentRunId) return false;\r\n' +
+    "  const currentProductKey = String(current.productKey || '').trim();\r\n" +
+    "  const currentInputKey = String(current.inputImageFingerprint || '').trim();\r\n" +
+    "  const itemProductKey = String(item?.productKey || item?.productIdentityKey || '').trim();\r\n" +
+    "  const itemInputKey = String(item?.inputImageFingerprint || item?.inputImageKey || item?.sourceImageKey || '').trim();\r\n" +
+    '  if (itemProductKey || itemInputKey) {\r\n' +
+    '    const productOk = !itemProductKey || !currentProductKey || itemProductKey === currentProductKey;\r\n' +
+    '    const inputOk = !itemInputKey || !currentInputKey || itemInputKey === currentInputKey;\r\n' +
+    '    return productOk && inputOk;\r\n' +
+    '  }\r\n' +
+    '  return false;\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    'function factoryCurrentWorkCompetitors(factory = factoryRuntimeReadFactory()) {\r\n' +
+    '  const list = Array.isArray(factory?.product?.competitors) ? factory.product.competitors : [];\r\n' +
+    '  return list.filter(item => factoryCompetitorMatchesCurrentWork(item, factory));\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    'function factoryEnsureAutomationRunScope(factory) {\n' +
+    "  if (!factory || typeof factory !== 'object') return '';\r\n" +
+    "  factory.automation = factory.automation && typeof factory.automation === 'object' ? factory.automation : {};\r\n" +
+    "  let scopeKey = '';\r\n" +
+    '  try {\r\n' +
+    "    scopeKey = String(compMarketCurrentWorkScope()?.scopeKey || '').trim();\r\n" +
+    '  } catch(_) {\r\n' +
+    "    scopeKey = '';\r\n" +
+    '  }\r\n' +
+    "  if (!scopeKey) return '';\r\n" +
+    "  const previous = String(factory.automation.startRunScopeKey || '').trim();\r\n" +
+    '  if (previous && previous !== scopeKey) {\r\n' +
+    '    factory.automation.startRunCounts = {};\r\n' +
+    '  }\r\n' +
+    '  factory.automation.startRunScopeKey = scopeKey;\r\n' +
+    "  factory.automation.startRunCounts = factory.automation.startRunCounts && typeof factory.automation.startRunCounts === 'object'\r\n" +
+    '    ? factory.automation.startRunCounts\r\n' +
+    '    : {};\r\n' +
+    '  return scopeKey;\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    'function factorySinhwaCandidateKey(candidate) {\r\n' +
+    "  return String(candidate?.jcode || candidate?.id || candidate?.product_name || candidate?.jname || '').trim();\r\n" +
+    '}\r\n' +
+    '\r\n' +
+    "function factoryCandidateScore(candidate, type = '') {\r\n" +
+    "  const raw = type === 'cafe24'\r\n" +
+    '    ? (candidate?.match_score ?? candidate?.local_match_score ?? candidate?.gpt_similarity_score ?? candidate?.score)\r\n' +
+    '    : (candidate?.score ?? candidate?.match_score);\r\n' +
+    '  const num = Number(raw);\r\n' +
+    '  return Number.isFinite(num) ? Math.round(num) : null;\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    "function factoryCandidateMetaItems(candidate, type = '') {\r\n" +
+    "  if (type === 'cafe24') {\r\n" +
+    '    const raw = parseCafe24Raw(candidate);\r\n' +
+    "    const groups = factoryExtractCafe24OptionGroups(candidate, 'Cafe24 후보', 'cafe24');\r\n" +
+    '    const optionCount = groups.reduce((sum, group) => sum + (group.values?.length || 0), 0);\r\n' +
+    '    return [\r\n' +
+    "      candidate?.factory_recent_append ? (candidate.factory_append_label || '이번 추가검색') : '',\r\n" +
+    "      candidate?.direct_recall ? 'Cafe24 직접검색' : '',\r\n" +
+    "      candidate?.product_no || raw.product_no ? `상품번호 ${candidate?.product_no || raw.product_no}` : '',\r\n" +
+    "      candidate?.product_code || raw.product_code || '',\r\n" +
+    "      candidate?.price || raw.price ? `${candidate?.price || raw.price}원` : '',\r\n" +
+    "      candidate?.display || raw.display || candidate?.selling || raw.selling ? `진열 ${candidate?.display || raw.display || '-'} · 판매 ${candidate?.selling || raw.selling || '-'}` : '',\r\n" +
+    "      optionCount ? `옵션 ${optionCount}개` : '',\r\n" +
+    '    ].filter(Boolean);\r\n' +
+    '  }\r\n' +
+    '  return [\r\n' +
+    "    candidate?.jcode ? `코드 ${candidate.jcode}` : '',\r\n" +
+    "    candidate?.dimensions || candidate?.size || '',\r\n" +
+    "    candidate?.sale_price ? `판매가 ${candidate.sale_price}` : '',\r\n" +
+    "    Number.isFinite(Number(candidate?.stock_qty)) ? `재고 ${Number(candidate.stock_qty).toLocaleString('ko-KR')}` : '',\r\n" +
+    '  ].filter(Boolean);\r\n' +
+    '}\r\n' +
+    '\r\n' +
+    "function factoryCandidateName(candidate, type = '') {\r\n" +
+    "  if (type === 'cafe24') {\r\n" +
+    '    const raw = parseCafe24Raw(candidate);\r\n' +
+    '    return candidate?.product_name || raw.product_name || candidate?.product_code || raw.product_code || `Cafe24 후보`;\r\n' +
+    '  }\r\n' +
+    "  return candidate?.product_name || candidate?.jname || candidate?.jname2 || candidate?.jcode || '신화사DB 후보';\r\n" +
+    '}\r\n' +
+    '\r\n' +
+    'function factoryNormalizeWebImageUrl(url) {\n' +
+    "  const raw = String(url || '').trim();\n" +
+    "  if (!raw) return '';\n" +
+    '  if (/^\\/\\//.test(raw)) return `https:${raw}`;\n' +
+    '  return raw;\n' +
+    '}\n' +
+    '\n' +
+    'function factoryCandidateBrowserImageUrl(url) {\n' +
+    '  const normalized = factoryNormalizeWebImageUrl(url);\n' +
+    "  if (!normalized) return '';\n" +
+    '  try {\n' +
+    '    const parsed = new URL(normalized);\n' +
+    "    if (parsed.hostname === '03030.co.kr' || parsed.hostname === 'www.03030.co.kr') {\n" +
+    "      const base = typeof factoryBackendBaseUrl === 'function' ? factoryBackendBaseUrl() : 'http://127.0.0.1:5050';\n" +
+    "      return `${String(base).replace(/\\/+$/, '')}/api/image-proxy?raw=1&url=${encodeURIComponent(normalized)}`;\n" +
+    '    }\n' +
+    '  } catch (_) {\n' +
+    '    return normalized;\n' +
+    '  }\n' +
+    '  return normalized;\n' +
+    '}\n' +
+    '\r\n' +
+    "function factoryCandidateImageUrl(candidate, type = '') {\n" +
+    "  if (!candidate || typeof candidate !== 'object') return '';\r\n" +
+    "  if (type === 'cafe24') {\r\n" +
+    '    const raw = parseCafe24Raw(candidate);\r\n' +
+    '    return factoryCandidateBrowserImageUrl(\n' +
+    '      candidate.image ||\r\n' +
+    '      candidate.detail_image ||\r\n' +
+    '      raw.detail_image ||\r\n' +
+    '      raw.list_image ||\r\n' +
+    '      raw.small_image ||\r\n' +
+    '      raw.tiny_image ||\r\n' +
+    '      raw.image ||\r\n' +
+    "      ''\r\n" +
+    '    );\r\n' +
+    '  }\r\n' +
+    '  const images = Array.isArray(candidate.images) ? candidate.images : [];\r\n' +
+    '  const first = images[0] || null;\r\n' +
+    '  return factoryCandidateBrowserImageUrl(absoluteSinhwaMediaUrl(\n' +
+    '    candidate.image ||\r\n' +
+    '    candidate.thumb_url ||\r\n' +
+    '    candidate.image_url ||\r\n' +
+    '    candidate.file_path ||\r\n' +
+    '    first?.thumb_url ||\r\n' +
+    '    first?.url ||\r\n' +
+    '    first?.file_path ||\r\n' +
+    "    ''\n" +
+    '  ));\n' +
+    '}\n' +
+    '\n' +
+    'function factoryCafe24CandidateProductUrl(candidate = {}) {\n' +
+    "  if (!candidate || typeof candidate !== 'object') return '';\n" +
+    '  const raw = parseCafe24Raw(candidate) || {};\n' +
+    '  const direct = [\n' +
+    '    candidate.product_url,\n' +
+    '    candidate.productUrl,\n' +
+    '    candidate.detail_url,\n' +
+    '    candidate.detailUrl,\n' +
+    '    candidate.link,\n' +
+    '    candidate.url,\n' +
+    '    raw.product_url,\n' +
+    '    r'... 999821 more characters
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_ai_repair_events.test.cjs:201:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '\r\nconst FACTORY_AUTOMATION_ASSET_SCAN_LIMIT = 120;\r\nconst COMP_MARKET_STATE_RESULT_LIMIT = 80;\r\nconst COMP_MARKET_STATE_IMAGE_LIMIT = 80;\r\nconst FACTORY_PAGE_SESSION_ID = (() => {\r\n  try {\r\n    return (typeof crypto !== \'undefined\' && typeof crypto.randomUUID === \'function\')\r\n      ? crypto.randomUUID()\r\n      : `page_${Date.now()}_${Math.random().toString(36).slice(2)}`;\r\n  } catch(_) {\r\n    return `page_${Date.now()}_${Math.random().toString(36).slice(2)}`;\r\n  }\r\n})();\r\n\r\nfunction renderFactoryCompetitorPanel(factory) {\r\n  const competitors = factoryCurrentWorkCompetitors(factory);\r\n  const rows = [];\r\n  competitors.slice(0, 20).forEach((item, index) => {\r\n    if (item && typeof item === \'object\') factoryFlattenDbRows(item, `경쟁사 ${index + 1}`, \'competitor\', \'\', rows, 0);\r\n  });\r\n  const compact = competitors.slice(0, 6).map((item, index) => {\r\n    const name = item?.product_name || item?.name || item?.title || item?.상품명 || `경쟁사 ${index + 1}`;\r\n    const price = item?.price || item?.sale_price || item?.판매가 || item?.consumer_price || \'\';\r\n    const url = item?.url || item?.link || item?.detail_url || \'\';\r\n    return `<div class="factory-mini">\r\n      참고 ${index + 1}<b>${escapeHtml(name)}</b>\r\n      ${price ? `<span class="factory-small">${escapeHtml(String(price))}</span>` : \'\'}\r\n      ${url ? `<span class="factory-small" title="${escAttr(url)}">${escapeHtml(String(url).slice(0, 46))}</span>` : \'\'}\r\n    </div>`;\r\n  }).join(\'\');\r\n  return `<div class="factory-card" style="margin-top:12px">\r\n    <div class="factory-db-review-head" style="margin-bottom:8px">\r\n      <div>\r\n        <h4>경쟁사 참고자료</h4>\r\n        <p>경쟁사 자료는 완성 DB 값으로 섞지 않고, 상세페이지 섹션/카피/구성 참고용으로만 따로 봅니다.</p>\r\n      </div>\r\n      <div class="factory-toolbar">\r\n        <button class="btn-sm" id="factoryImportCompetitorBottom" type="button"><span class="material-icons-outlined" style="font-size:14px">travel_explore</span>경쟁사 결과 가져오기</button>\r\n      </div>\r\n    </div>\r\n    ${competitors.length ? `<div class="factory-mini-grid">${compact}</div>` : `<div class="factory-small">아직 경쟁사 자료가 없습니다. 경쟁사 분석 탭 결과를 가져오거나 제품/DB 확보를 실행하면 여기에 따로 쌓입니다.</div>`}\r\n    <details class="factory-db-raw" ${rows.length ? \'\' : \'style="display:none"\'}>\r\n      <summary>경쟁사 자료 필드 보기 (${rows.length}개)</summary>\r\n      <div class="factory-db-raw-table">\r\n        ${rows.slice(0, 160).map(row => `<div class="factory-db-raw-row">\r\n          <b>${escapeHtml(row.sourceLabel)}</b>\r\n          <code title="${escAttr(row.key)}">${escapeHtml(row.key)}</code>\r\n          <span class="factory-db-raw-value" title="${escAttr(row.value)}">${escapeHtml(row.value)}</span>\r\n          <span class="factory-db-source">참고</span>\r\n        </div>`).join(\'\')}\r\n      </div>\r\n    </details>\r\n  </div>`;\r\n}\r\n\r\nfunction factoryCompetitorMatchesCurrentWork(item = {}, factory = factoryRuntimeReadFactory()) {\r\n  let current = null;\r\n  try {\r\n    if (typeof compMarketCurrentWorkScope === \'function\') current = compMarketCurrentWorkScope();\r\n  } catch(_) {\r\n    current = null;\r\n  }\r\n  const currentWorkspaceId = String(\r\n    state.currentProjectId ||\r\n    factory?.workspace?.id ||\r\n    factory?.currentProjectId ||\r\n    \'\'\r\n  ).trim();\r\n  const itemWorkspaceId = String(\r\n    item?.workspaceId ||\r\n    item?.currentProjectId ||\r\n    item?.projectId ||\r\n    item?.metadata?.workspaceId ||\r\n    item?.metadata?.currentProjectId ||\r\n    \'\'\r\n  ).trim();\r\n  if (!currentWorkspaceId || !itemWorkspaceId || currentWorkspaceId !== itemWorkspaceId) return false;\r\n  if (typeof compMarketCandidateMatchesCurrentWork === \'function\' && !compMarketCandidateMatchesCurrentWork(item, current)) {\r\n    return false;\r\n  }\r\n  if (!current?.scopeKey) return true;\r\n  const workKey = String(item?.factoryWorkKey || item?.workScopeKey || \'\').trim();\r\n  if (workKey) return workKey === current.scopeKey;\r\n  const currentRunId = String(current.currentRunId || \'\').trim();\r\n  const itemRunId = String(\r\n    item?.currentRunId ||\r\n    item?.generationRunId ||\r\n    item?.metadata?.currentRunId ||\r\n    item?.metadata?.generationRunId ||\r\n    \'\'\r\n  ).trim();\r\n  if (currentRunId && itemRunId !== currentRunId) return false;\r\n  const currentProductKey = String(current.productKey || \'\').trim();\r\n  const currentInputKey = String(current.inputImageFingerprint || \'\').trim();\r\n  const itemProductKey = String(item?.productKey || item?.productIdentityKey || \'\').trim();\r\n  const itemInputKey = String(item?.inputImageFingerprint || item?.inputImageKey || item?.sourceImageKey || \'\').trim();\r\n  if (itemProductKey || itemInputKey) {\r\n    const productOk = !itemProductKey || !currentProductKey || itemProductKey === currentProductKey;\r\n    const inputOk = !itemInputKey || !currentInputKey || itemInputKey === currentInputKey;\r\n    return productOk && inputOk;\r\n  }\r\n  return false;\r\n}\r\n\r\nfunction factoryCurrentWorkCompetitors(factory = factoryRuntimeReadFactory()) {\r\n  const list = Array.isArray(factory?.product?.competitors) ? factory.product.competitors : [];\r\n  return list.filter(item => factoryCompetitorMatchesCurrentWork(item, factory));\r\n}\r\n\r\nfunction factoryEnsureAutomationRunScope(factory) {\n  if (!factory || typeof factory !== \'object\') return \'\';\r\n  factory.automation = factory.automation && typeof factory.automation === \'object\' ? factory.automation : {};\r\n  let scopeKey = \'\';\r\n  try {\r\n    scopeKey = String(compMarketCurrentWorkScope()?.scopeKey || \'\').trim();\r\n  } catch(_) {\r\n    scopeKey = \'\';\r\n  }\r\n  if (!scopeKey) return \'\';\r\n  const previous = String(factory.automation.startRunScopeKey || \'\').trim();\r\n  if (previous && previous !== scopeKey) {\r\n    factory.automation.startRunCounts = {};\r\n  }\r\n  factory.automation.startRunScopeKey = scopeKey;\r\n  factory.automation.startRunCounts = factory.automation.startRunCounts && typeof factory.automation.startRunCounts === \'object\'\r\n    ? factory.automation.startRunCounts\r\n    : {};\r\n  return scopeKey;\r\n}\r\n\r\nfunction factorySinhwaCandidateKey(candidate) {\r\n  return String(candidate?.jcode || candidate?.id || candidate?.product_name || candidate?.jname || \'\').trim();\r\n}\r\n\r\nfunction factoryCandidateScore(candidate, type = \'\') {\r\n  const raw = type === \'cafe24\'\r\n    ? (candidate?.match_score ?? candidate?.local_match_score ?? candidate?.gpt_similarity_score ?? candidate?.score)\r\n    : (candidate?.score ?? candidate?.match_score);\r\n  const num = Number(raw);\r\n  return Number.isFinite(num) ? Math.round(num) : null;\r\n}\r\n\r\nfunction factoryCandidateMetaItems(candidate, type = \'\') {\r\n  if (type === \'cafe24\') {\r\n    const raw = parseCafe24Raw(candidate);\r\n    const groups = factoryExtractCafe24OptionGroups(candidate, \'Cafe24 후보\', \'cafe24\');\r\n    const optionCount = groups.reduce((sum, group) => sum + (group.values?.length || 0), 0);\r\n    return [\r\n      candidate?.factory_recent_append ? (candidate.factory_append_label || \'이번 추가검색\') : \'\',\r\n      candidate?.direct_recall ? \'Cafe24 직접검색\' : \'\',\r\n      candidate?.product_no || raw.product_no ? `상품번호 ${candidate?.product_no || raw.product_no}` : \'\',\r\n      candidate?.product_code || raw.product_code || \'\',\r\n      candidate?.price || raw.price ? `${candidate?.price || raw.price}원` : \'\',\r\n      candidate?.display || raw.display || candidate?.selling || raw.selling ? `진열 ${candidate?.display || raw.display || \'-\'} · 판매 ${candidate?.selling || raw.selling || \'-\'}` : \'\',\r\n      optionCount ? `옵션 ${optionCount}개` : \'\',\r\n    ].filter(Boolean);\r\n  }\r\n  return [\r\n    candidate?.jcode ? `코드 ${candidate.jcode}` : \'\',\r\n    candidate?.dimensions || candidate?.size || \'\',\r\n    candidate?.sale_price ? `판매가 ${candidate.sale_price}` : \'\',\r\n    Number.isFinite(Number(candidate?.stock_qty)) ? `재고 ${Number(candidate.stock_qty).toLocaleString(\'ko-KR\')}` : \'\',\r\n  ].filter(Boolean);\r\n}\r\n\r\nfunction factoryCandidateName(candidate, type = \'\') {\r\n  if (type === \'cafe24\') {\r\n    const raw = parseCafe24Raw(candidate);\r\n    return candidate?.product_name || raw.product_name || candidate?.product_code || raw.product_code || `Cafe24 후보`;\r\n  }\r\n  return candidate?.product_name || candidate?.jname || candidate?.jname2 || candidate?.jcode || \'신화사DB 후보\';\r\n}\r\n\r\nfunction factoryNormalizeWebImageUrl(url) {\n  const raw = String(url || \'\').trim();\n  if (!raw) return \'\';\n  if (/^\\/\\//.test(raw)) return `https:${raw}`;\n  return raw;\n}\n\nfunction factoryCandidateBrowserImageUrl(url) {\n  const normalized = factoryNormalizeWebImageUrl(url);\n  if (!normalized) return \'\';\n  try {\n    const parsed = new URL(normalized);\n    if (parsed.hostname === \'03030.co.kr\' || parsed.hostname === \'www.03030.co.kr\') {\n      const base = typeof factoryBackendBaseUrl === \'function\' ? factoryBackendBaseUrl() : \'http://127.0.0.1:5050\';\n      return `${String(base).replace(/\\/+$/, \'\')}/api/image-proxy?raw=1&url=${encodeURIComponent(normalized)}`;\n    }\n  } catch (_) {\n    return normalized;\n  }\n  return normalized;\n}\n\r\nfunction factoryCandidateImageUrl(candidate, type = \'\') {\n  if (!candidate || typeof candidate !== \'object\') return \'\';\r\n  if (type === \'cafe24\') {\r\n    const raw = parseCafe24Raw(candidate);\r\n    return factoryCandidateBrowserImageUrl(\n      candidate.image ||\r\n      candidate.detail_image ||\r\n      raw.detail_image ||\r\n      raw.list_image ||\r\n      raw.small_image ||\r\n      raw.tiny_image ||\r\n      raw.image ||\r\n      \'\'\r\n    );\r\n  }\r\n  const images = Array.isArray(candidate.images) ? candidate.images : [];\r\n  const first = images[0] || null;\r\n  return factoryCandidateBrowserImageUrl(absoluteSinhwaMediaUrl(\n    candidate.image ||\r\n    candidate.thumb_url ||\r\n    candidate.image_url ||\r\n    candidate.file_path ||\r\n    first?.thumb_url ||\r\n    first?.url ||\r\n    first?.file_path ||\r\n    \'\'\n  ));\n}\n\nfunction factoryCafe24CandidateProductUrl(candidate = {}) {\n  if (!candidate || typeof candidate !== \'object\') return \'\';\n  const raw = parseCafe24Raw(candidate) || {};\n  const direct = [\n    candidate.product_url,\n    candidate.productUrl,\n    candidate.detail_url,\n    candidate.detailUrl,\n    candidate.link,\n    candidate.url,\n    raw.product_url,\n    r'... 999821 more characters,
+    expected: /bindAiRepairEvents\s*\(/,
+    operator: 'doesNotMatch',
+    diff: 'simple'
+  }

@@ -1,0 +1,113 @@
+﻿✔ 앱 HTML과 로더는 빌드 ID를 하드코딩하지 않고 매니페스트만 따른다 (1.6235ms)
+✔ 앱 로더는 전체 소스를 문자열로 합쳐 eval하지 않는다 (0.314ms)
+✖ 런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다 (4970.055ms)
+✔ 최종 등록용 이름 조회는 오래된 Cafe24 값보다 현재 작업 identity를 우선한다 (4.3286ms)
+✔ 세 세션의 저장 revision은 최신 저장만 적용하고 이전 저장을 거부한다 (11.0294ms)
+✔ revision fence가 로컬·IndexedDB·서버 복원과 저장 payload에 연결된다 (3.8589ms)
+✔ 검증된 작업파일만 revision 없는 내장 자산을 명시적으로 복원할 수 있다 (3.9223ms)
+✔ 작업 편집권 UI는 표시 의미가 없는 revision 변화로 전체 화면을 다시 그리지 않는다 (4.8657ms)
+✔ 메뉴 비동기 작업 identity는 저장 revision이 아니라 작업 범위와 fencing token을 따른다 (3.5852ms)
+✔ 작업파일 복원은 시각 검증과 server IndexedDB session commit을 각각 한 번만 끝낸다 (5.124ms)
+✔ OAuth 백그라운드 상태 완료는 작업파일 복원 렌더를 끼어들지 않는다 (5.5328ms)
+✔ 가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지 않는다 (2.2307ms)
+✔ static analysis toolchain은 고정된 실제 parser와 AST engine을 사용한다 (161.5014ms)
+✔ runtime registry는 source parser를 소유하지 않고 250줄 이하 metadata boundary다 (0.5741ms)
+✔ runtime graph registry는 manifest-known branded contract만 허용한다 (4.2625ms)
+✔ branded import graph validator는 duplicate, cycle, peer-store, raw state를 거부한다 (1.6696ms)
+▶ AST policy는 bracket·optional·computed·escape·grouping·alias origin을 구조적으로 거부한다
+  ✔ executable-0 (96.3772ms)
+  ✔ executable-1 (99.315ms)
+  ✔ executable-2 (102.3157ms)
+  ✔ executable-3 (100.6015ms)
+  ✔ executable-4 (274.2897ms)
+  ✔ executable-5 (106.8906ms)
+  ✔ executable-6 (100.4938ms)
+  ✔ executable-7 (100.6658ms)
+  ✔ executable-8 (94.1095ms)
+  ✔ executable-9 (94.2748ms)
+  ✔ executable-10 (94.5419ms)
+  ✔ executable-11 (93.6149ms)
+  ✔ executable-12 (267.3221ms)
+  ✔ executable-13 (107.7491ms)
+  ✔ executable-14 (104.7909ms)
+  ✔ executable-15 (96.766ms)
+  ✔ executable-16 (93.9842ms)
+  ✔ executable-17 (92.6988ms)
+  ✔ executable-18 (267.7548ms)
+  ✔ executable-19 (92.7988ms)
+  ✔ executable-20 (91.9986ms)
+  ✔ executable-21 (90.7063ms)
+✔ AST policy는 bracket·optional·computed·escape·grouping·alias origin을 구조적으로 거부한다 (2666.1122ms)
+▶ AST policy는 string, comment, regex의 global text를 검사하지 않는다
+  ✔ benign-0 (89.2384ms)
+  ✔ benign-1 (104.9211ms)
+  ✔ benign-2 (290.711ms)
+  ✔ benign-3 (98.3136ms)
+  ✔ benign-4 (96.2161ms)
+  ✔ benign-5 (109.5161ms)
+  ✔ benign-6 (113.3384ms)
+  ✔ benign-7 (334.9703ms)
+  ✔ benign-8 (123.4095ms)
+  ✔ benign-9 (338.9418ms)
+  ✔ benign-10 (108.0096ms)
+  ✔ benign-11 (364.2233ms)
+  ✔ benign-12 (333.6695ms)
+  ✔ benign-13 (104.0715ms)
+  ✔ benign-14 (488.5355ms)
+  ✔ benign-15 (469.4126ms)
+  ✔ benign-16 (115.356ms)
+✔ AST policy는 string, comment, regex의 global text를 검사하지 않는다 (3684.6164ms)
+▶ 실제 ESM parser는 malformed corpus를 fail-closed한다
+  ✔ malformed-0 (53.734ms)
+  ✔ malformed-1 (53.7286ms)
+  ✔ malformed-2 (50.2123ms)
+  ✔ malformed-3 (48.823ms)
+  ✔ malformed-4 (50.2798ms)
+  ✔ malformed-5 (51.1074ms)
+  ✔ malformed-6 (50.2608ms)
+  ✔ malformed-7 (50.2195ms)
+  ✔ malformed-8 (54.1765ms)
+  ✔ malformed-9 (50.3637ms)
+  ✔ malformed-10 (51.1808ms)
+  ✔ malformed-11 (49.2774ms)
+  ✔ malformed-12 (56.8498ms)
+  ✔ malformed-13 (52.0277ms)
+  ✔ malformed-14 (52.8608ms)
+  ✔ malformed-15 (56.9569ms)
+  ✔ malformed-16 (54.3393ms)
+  ✔ malformed-17 (57.5796ms)
+  ✔ malformed-18 (52.5598ms)
+  ✔ malformed-19 (55.7257ms)
+✔ 실제 ESM parser는 malformed corpus를 fail-closed한다 (1054.5929ms)
+✔ manifest modules는 실제 ESM으로 parse되고 Task 2 graph는 static policy와 runtime metadata contract를 통과한다 (31478.6779ms)
+ℹ tests 79
+ℹ suites 0
+ℹ pass 78
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 39149.6928
+
+✖ failing tests:
+
+test at tests\frontend\architecture_source_contracts.test.cjs:78:1
+✖ 런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다 (4970.055ms)
+  AssertionError [ERR_ASSERTION]: runtime bundle은 현재 manifest/source와 정확히 일치해야 합니다.
+  
+  false !== true
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\architecture_source_contracts.test.cjs:154:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

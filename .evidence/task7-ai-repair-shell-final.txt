@@ -1,0 +1,34 @@
+﻿✔ T7 shell target boundary는 네 개의 명시적 ESM 모듈을 요구한다 (8.7191ms)
+✔ T7 route controller는 module registry의 12 sidebar route만 선택하고 gate redirect를 적용한다 (4.7619ms)
+✔ T7 render lifecycle는 old disposer/onLeave와 new onEnter/bind 순서를 한 번만 실행하고 50 cycle 후 정리된다 (12.5571ms)
+✔ T7 route/workspace switch invalidates stale operation tokens while same route+workspace stays current (4.0702ms)
+✔ T7 bootstrap은 authority→modules→bundle/compat→menu install→versioned hydrate→initial render를 idempotently 보장한다 (1.1519ms)
+✔ T7 bootstrap의 authority/manifest/module 일부 실패는 visibly reject되고 partial ready를 남기지 않는다 (1.039ms)
+✔ T7 diagnostic bridge는 mutable global alias 대신 frozen detached snapshot만 설치한다 (1.0045ms)
+✔ T7 factory selector/diagnostic snapshot은 archive/save/timer side effect 없이 읽기만 한다 (1.0586ms)
+✔ T7 classic app-core router/bootstrap/global source boundary는 shell ESM으로 위임된 뒤에만 green이다 (18.4136ms)
+✔ Task 7 shell registry adapter resolves all twelve runtime routes without exposing descriptor registry (3.2854ms)
+✔ Task 7 shell composition adapts lifecycle render input and diagnostic snapshot API explicitly (2.1595ms)
+✔ Task 7 shell composition smoke instantiates real lifecycle, router, and diagnostic modules (12.8689ms)
+✔ Task 7 classic render delegates one generic active menu and leaves menu binding to lifecycle (3.2129ms)
+✔ Task 7 loader delegates the exact boot sequence to the canonical coordinator and event bridge (2.887ms)
+✔ Task 7 authority stage explicitly installs workspace lock before its production consumer runs (4.9441ms)
+✔ Task 7 loader and classic runtime exchange frozen one-shot event messages (3.2021ms)
+✔ Task 7 loader event bridge fails closed when the classic endpoint is absent (14.269ms)
+✔ Task 7 canonical bootstrap is ordered and idempotent under concurrent boot calls (1.1254ms)
+✔ Task 7 canonical bootstrap fails closed and never reports ready after a stage error (1.186ms)
+✔ Task 7 classic hydration is coordinator-owned and the initial render is a separate final stage (13.2193ms)
+✔ Task 7 classic hydration shares one promise and receives a detached frozen factory envelope (9.8584ms)
+✔ Task 7 classic listener binder is idempotent across fifty bootstrap attempts (6.1536ms)
+✔ Task 7 initial render and background lifecycle each have one owner and a real disposer (7.3882ms)
+✔ Task 7 loader metadata and load errors are detached frozen non-writable runtime projections (0.6039ms)
+✔ Task 7 image generation testability is an explicit executor capability with no global hook (5.7556ms)
+✔ Task 7 retires mutable classic globals and publishes only frozen diagnostics and metadata (23.481ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 213.8047

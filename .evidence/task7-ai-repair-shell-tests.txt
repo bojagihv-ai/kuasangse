@@ -1,0 +1,64 @@
+﻿✔ Task 6 여섯 route는 allowlist export와 독립 menu:v1 계약을 제공한다 (20.1606ms)
+✔ Task 6 route bind/onEnter/onLeave 50회는 핸들러 잔존 없이 정리된다 (9.8166ms)
+✔ Task 6 route binder는 소유 명령만 연결하고 복제 cross-route selector는 건드리지 않는다 (0.9555ms)
+✖ Task 6 메뉴 controller/view/fragment ESM은 각각 250 pure LOC 이하이다 (3.1305ms)
+✔ Task 6 route 명령은 읽기 전용 권한에서 실제 action 전에 거부된다 (1.1805ms)
+✔ Task 6 비동기 route 명령은 작업공간 fence가 바뀐 뒤 완료값을 승인하지 않는다 (0.9489ms)
+✔ Task 6 route 구현은 classic 전역과 중복 렌더 구현에 의존하지 않는다 (35.6185ms)
+✔ Task 6 route view는 렌더 중 상세 이미지 배치를 동기화하지 않는다 (0.5959ms)
+✔ Task 6 외부/LLM 텍스트는 innerHTML sink에 들어가기 전에 이스케이프된다 (0.5797ms)
+✔ Task 6 제품 분석의 경쟁사 검색 catch는 stale fence를 완료 처리하지 않는다 (4.5227ms)
+✔ T7 shell target boundary는 네 개의 명시적 ESM 모듈을 요구한다 (8.0783ms)
+✔ T7 route controller는 module registry의 12 sidebar route만 선택하고 gate redirect를 적용한다 (5.1664ms)
+✔ T7 render lifecycle는 old disposer/onLeave와 new onEnter/bind 순서를 한 번만 실행하고 50 cycle 후 정리된다 (11.5226ms)
+✔ T7 route/workspace switch invalidates stale operation tokens while same route+workspace stays current (4.6838ms)
+✔ T7 bootstrap은 authority→modules→bundle/compat→menu install→versioned hydrate→initial render를 idempotently 보장한다 (1.0394ms)
+✔ T7 bootstrap의 authority/manifest/module 일부 실패는 visibly reject되고 partial ready를 남기지 않는다 (1.0468ms)
+✔ T7 diagnostic bridge는 mutable global alias 대신 frozen detached snapshot만 설치한다 (0.8212ms)
+✔ T7 factory selector/diagnostic snapshot은 archive/save/timer side effect 없이 읽기만 한다 (0.901ms)
+✔ T7 classic app-core router/bootstrap/global source boundary는 shell ESM으로 위임된 뒤에만 green이다 (18.0299ms)
+✔ Task 7 shell registry adapter resolves all twelve runtime routes without exposing descriptor registry (3.3119ms)
+✔ Task 7 shell composition adapts lifecycle render input and diagnostic snapshot API explicitly (2.5361ms)
+✔ Task 7 shell composition smoke instantiates real lifecycle, router, and diagnostic modules (12.4817ms)
+✔ Task 7 classic render delegates one generic active menu and leaves menu binding to lifecycle (3.205ms)
+✔ Task 7 loader delegates the exact boot sequence to the canonical coordinator and event bridge (2.9166ms)
+✔ Task 7 authority stage explicitly installs workspace lock before its production consumer runs (4.3682ms)
+✔ Task 7 loader and classic runtime exchange frozen one-shot event messages (2.7312ms)
+✔ Task 7 loader event bridge fails closed when the classic endpoint is absent (8.2822ms)
+✔ Task 7 canonical bootstrap is ordered and idempotent under concurrent boot calls (1.1054ms)
+✔ Task 7 canonical bootstrap fails closed and never reports ready after a stage error (0.9397ms)
+✔ Task 7 classic hydration is coordinator-owned and the initial render is a separate final stage (12.6234ms)
+✔ Task 7 classic hydration shares one promise and receives a detached frozen factory envelope (10.4078ms)
+✔ Task 7 classic listener binder is idempotent across fifty bootstrap attempts (5.9739ms)
+✔ Task 7 initial render and background lifecycle each have one owner and a real disposer (7.0302ms)
+✔ Task 7 loader metadata and load errors are detached frozen non-writable runtime projections (0.5985ms)
+✔ Task 7 image generation testability is an explicit executor capability with no global hook (4.8818ms)
+✔ Task 7 retires mutable classic globals and publishes only frozen diagnostics and metadata (22.0359ms)
+ℹ tests 36
+ℹ suites 0
+ℹ pass 35
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 200.32
+
+✖ failing tests:
+
+test at tests\frontend\task6_domain_route_modules.test.cjs:212:1
+✖ Task 6 메뉴 controller/view/fragment ESM은 각각 250 pure LOC 이하이다 (3.1305ms)
+  AssertionError [ERR_ASSERTION]: preview-menu.mjs: 277 pure LOC
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task6_domain_route_modules.test.cjs:216:12)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

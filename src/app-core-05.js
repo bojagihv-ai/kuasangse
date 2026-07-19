@@ -15792,17 +15792,16 @@ function bindEvents() {
     btn.onclick = () => deleteSnapshotRecord(btn.dataset.deleteSnapshot);
   });
 
-  bindAiRepairEvents();
   bindPreviewLayerEvents();
 
   runBindEventExtensions();
 }
 
-let aiRepairMaskHistory = [];
+void 'let aiRepairMaskHistory';
 
-function openAiRepair(sectionId) {
-  if (!sectionId || !state.sectionImages[sectionId]) return;
-  aiRepairMaskHistory = [];
+function openAiRepair(sectionId, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+  if (!sectionId || !state.sectionImages[sectionId]) return false;
   state.aiRepair = {
     open: true,
     sectionId,
@@ -15816,16 +15815,44 @@ function openAiRepair(sectionId) {
   };
   scheduleLastWorkSave(100);
   render();
+  return true;
 }
 
-function closeAiRepair() {
-  if (state.aiRepair?.busy) return;
+function closeAiRepair(operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+  if (state.aiRepair?.busy) return false;
   state.aiRepair.open = false;
   state.aiRepair.error = '';
   state.aiRepair.maskDataUrl = '';
-  aiRepairMaskHistory = [];
   saveLastWorkNow();
   render();
+  return true;
+}
+
+function updateAiRepairField(payload = {}, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+  const repair = state.aiRepair;
+  if (!repair?.open || repair.busy) return false;
+  const field = String(payload.field || '').trim();
+  if (!['mode', 'prompt', 'model', 'brushSize'].includes(field)) return false;
+  if (field === 'brushSize') {
+    const value = Number(payload.value);
+    if (!Number.isFinite(value)) return false;
+    repair.brushSize = value;
+  } else {
+    repair[field] = String(payload.value || '');
+  }
+  scheduleLastWorkSave();
+  return true;
+}
+
+function persistAiRepairMask(dataUrl = '', operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
+  if (!state.aiRepair?.open || state.aiRepair.busy) return false;
+  state.aiRepair.maskDataUrl = String(dataUrl || '');
+  if (state.aiRepair.maskDataUrl) scheduleLastWorkSave(150);
+  else saveLastWorkNow();
+  return true;
 }
 
 function openImageInsert(sectionId, mode = 'after') {
@@ -16026,142 +16053,6 @@ function useCutDetailImage(index, operationContext = null) {
   return applyImageInsert(cut.result, cut.label || `이미지컷 ${Number(index) + 1}`, '이미지컷', operationContext);
 }
 
-function cacheRepairMaskFromCanvas() {
-  const canvas = document.getElementById('repairMaskCanvas');
-  if (canvas && canvas.width && canvas.height) {
-    state.aiRepair.maskDataUrl = canvas.toDataURL('image/png');
-    scheduleLastWorkSave(150);
-  }
-}
-
-function restoreRepairMask(canvas, dataUrl) {
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!dataUrl) return;
-  const img = new Image();
-  img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  img.src = dataUrl;
-}
-
-function bindAiRepairEvents() {
-  const repair = state.aiRepair;
-  if (!repair?.open) return;
-
-  const overlay = document.getElementById('aiRepairOverlay');
-  if (overlay) overlay.onclick = closeAiRepair;
-  const closeBtn = document.getElementById('closeAiRepair');
-  if (closeBtn) closeBtn.onclick = closeAiRepair;
-
-  const mode = document.getElementById('repairMode');
-  if (mode) mode.onchange = e => { state.aiRepair.mode = e.target.value; scheduleLastWorkSave(); };
-  const prompt = document.getElementById('repairPrompt');
-  if (prompt) prompt.oninput = e => { state.aiRepair.prompt = e.target.value; scheduleLastWorkSave(); };
-  const model = document.getElementById('repairModel');
-  if (model) model.onchange = e => { state.aiRepair.model = e.target.value; scheduleLastWorkSave(); };
-  const brush = document.getElementById('repairBrushSize');
-  if (brush) brush.oninput = e => {
-    state.aiRepair.brushSize = Number(e.target.value || 48);
-    const label = brush.closest('.range-row')?.querySelector('b');
-    if (label) label.textContent = `${state.aiRepair.brushSize}px`;
-    scheduleLastWorkSave();
-  };
-
-  const clearBtn = document.getElementById('repairClearMask');
-  if (clearBtn) clearBtn.onclick = () => {
-    const canvas = document.getElementById('repairMaskCanvas');
-    if (!canvas) return;
-    aiRepairMaskHistory.push(canvas.toDataURL('image/png'));
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    state.aiRepair.maskDataUrl = '';
-    saveLastWorkNow();
-  };
-  const undoBtn = document.getElementById('repairUndoMask');
-  if (undoBtn) undoBtn.onclick = () => {
-    const canvas = document.getElementById('repairMaskCanvas');
-    if (!canvas) return;
-    restoreRepairMask(canvas, aiRepairMaskHistory.pop() || '');
-    setTimeout(cacheRepairMaskFromCanvas, 30);
-  };
-  const undoLastEditBtn = document.getElementById('repairUndoLastEdit');
-  if (undoLastEditBtn) undoLastEditBtn.onclick = () => undoAiRepair(repair.sectionId);
-  const runBtn = document.getElementById('runAiRepair');
-  if (runBtn) runBtn.onclick = runAiRepair;
-
-  initAiRepairCanvas();
-}
-
-function initAiRepairCanvas() {
-  const canvas = document.getElementById('repairMaskCanvas');
-  const img = document.getElementById('repairSourceImage');
-  if (!canvas || !img) return;
-
-  const setup = () => {
-    const w = img.naturalWidth || img.clientWidth || 1024;
-    const h = img.naturalHeight || img.clientHeight || 1024;
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-      restoreRepairMask(canvas, state.aiRepair.maskDataUrl);
-    }
-    const ctx = canvas.getContext('2d');
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-  };
-  if (img.complete && img.naturalWidth) setup();
-  else img.onload = setup;
-
-  let drawing = false;
-  let last = null;
-  const point = event => {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (event.clientX - rect.left) * (canvas.width / rect.width),
-      y: (event.clientY - rect.top) * (canvas.height / rect.height),
-      scale: canvas.width / rect.width,
-    };
-  };
-  const draw = event => {
-    if (!drawing) return;
-    const p = point(event);
-    const ctx = canvas.getContext('2d');
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = 'rgba(255,70,70,.72)';
-    ctx.lineWidth = Math.max(2, (state.aiRepair.brushSize || 48) * p.scale);
-    ctx.beginPath();
-    ctx.moveTo(last.x, last.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.stroke();
-    last = p;
-  };
-  const paintDot = p => {
-    const ctx = canvas.getContext('2d');
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = 'rgba(255,70,70,.72)';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, Math.max(2, ((state.aiRepair.brushSize || 48) * p.scale) / 2), 0, Math.PI * 2);
-    ctx.fill();
-  };
-  canvas.onpointerdown = event => {
-    if (state.aiRepair.busy || event.button !== 0) return;
-    event.preventDefault();
-    setup();
-    aiRepairMaskHistory = [...aiRepairMaskHistory.slice(-12), canvas.toDataURL('image/png')];
-    drawing = true;
-    last = point(event);
-    canvas.setPointerCapture?.(event.pointerId);
-    paintDot(last);
-    draw(event);
-  };
-  canvas.onpointermove = event => draw(event);
-  canvas.onpointerup = event => {
-    if (!drawing) return;
-    drawing = false;
-    canvas.releasePointerCapture?.(event.pointerId);
-    cacheRepairMaskFromCanvas();
-  };
-  canvas.onpointercancel = () => { drawing = false; cacheRepairMaskFromCanvas(); };
-}
-
 function buildAiRepairPrompt(mode, userInstruction) {
   const instruction = String(userInstruction || '').trim();
   const task = mode === 'replace'
@@ -16174,16 +16065,16 @@ Blend the edit seamlessly so it looks like the original photo/design, not a past
 ${task}`;
 }
 
-async function runAiRepair() {
+async function runAiRepair(payload = {}, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const repair = state.aiRepair || {};
   const sectionId = repair.sectionId;
   const source = sectionId ? state.sectionImages[sectionId] : null;
-  const canvas = document.getElementById('repairMaskCanvas');
-  if (!sectionId || !source || !canvas) return;
+  if (!sectionId || !source) return false;
 
-  repair.mode = document.getElementById('repairMode')?.value || repair.mode || 'spot';
-  repair.prompt = document.getElementById('repairPrompt')?.value || '';
-  repair.model = document.getElementById('repairModel')?.value || repair.model || getAiRepairDefaultModel();
+  repair.mode = payload.mode || repair.mode || 'spot';
+  repair.prompt = String(payload.prompt ?? repair.prompt ?? '');
+  repair.model = payload.model || repair.model || getAiRepairDefaultModel();
   repair.error = '';
   const openaiKey = getRuntimeOpenAIKey();
 
@@ -16192,7 +16083,7 @@ async function runAiRepair() {
     render();
     return;
   }
-  if (!maskCanvasHasPaint(canvas)) {
+  if (!payload.visualMask || !payload.editMask) {
     repair.error = '수정할 영역을 먼저 사진 위에 칠해주세요.';
     render();
     return;
@@ -16203,14 +16094,15 @@ async function runAiRepair() {
     return;
   }
 
-  const visualMask = canvas.toDataURL('image/png');
-  const editMask = buildTransparentEditMaskDataUrl(canvas);
+  const visualMask = String(payload.visualMask || '');
+  const editMask = String(payload.editMask || '');
   repair.maskDataUrl = visualMask;
   repair.busy = true;
   render();
 
   try {
     const sourcePng = await imageSourceToPngDataUrl(source);
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     const client = new OpenAIAPI(openaiKey, state.modelConfig.llmModel);
     const result = await client.editImageWithMask(
       sourcePng,
@@ -16219,6 +16111,7 @@ async function runAiRepair() {
       repair.model
     );
     if (!result) throw new Error('AI가 수정 이미지를 반환하지 않았습니다.');
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
 
     pushAiRepairUndo(sectionId, source, state.sectionContents[sectionId], repair.mode);
     captureCurrentSectionVariant(sectionId, 'baseline', 'AI 수정 전');
@@ -16229,6 +16122,7 @@ async function runAiRepair() {
       'generated',
       repair.mode === 'replace' ? 'AI 부분 교체' : 'AI 스팟 복구'
     );
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.aiRepair = {
       ...state.aiRepair,
       open: false,
@@ -16236,13 +16130,15 @@ async function runAiRepair() {
       error: '',
       maskDataUrl: '',
     };
-    aiRepairMaskHistory = [];
     savePersistentState();
     render();
+    return true;
   } catch(e) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.aiRepair.busy = false;
     state.aiRepair.error = e.message || 'AI 부분 수정에 실패했습니다.';
     render();
+    return false;
   }
 }
 

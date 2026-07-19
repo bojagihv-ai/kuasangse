@@ -1,0 +1,13 @@
+﻿✔ RED: AI repair helper module exists and owns closed/open modal behavior (5.3869ms)
+✔ RED: AI repair fields/buttons/canvas preserve behavior and disposer fences stale work (2.7757ms)
+✔ RED: preview menu wires AI repair actions through injected capabilities (0.4735ms)
+✔ RED: AI repair helper fences workspace revision and keeps global state/persistence out of ESM (1.7663ms)
+✔ RED: classic AI repair binder/canvas ownership is removed and capability seam is explicit (7.2765ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 95.5046

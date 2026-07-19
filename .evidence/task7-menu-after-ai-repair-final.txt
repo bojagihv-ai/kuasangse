@@ -1,0 +1,28 @@
+﻿✔ Task 7 upload menu.bind owns rendered controls without classic bindEvents (7.4583ms)
+✔ Task 7 analyzing menu.bind owns rendered controls without classic bindEvents (2.9593ms)
+✔ Task 7 competitor menu.bind owns rendered controls without classic bindEvents (4.7743ms)
+✔ Task 7 sections menu.bind owns rendered controls without classic bindEvents (4.5006ms)
+✔ Task 7 generating menu.bind owns rendered controls without classic bindEvents (1.3552ms)
+✔ Task 7 preview menu.bind owns rendered controls without classic bindEvents (4.5067ms)
+✔ Task 7 imagecuts menu.bind owns rendered controls without classic bindEvents (1.9633ms)
+✔ Task 7 optionsorter menu.bind owns rendered controls without classic bindEvents (2.2431ms)
+✔ Task 7 automation menu.bind owns rendered controls without classic bindEvents (1.8352ms)
+✔ Task 7 modelsettings menu.bind owns rendered controls without classic bindEvents (1.7796ms)
+✔ Task 7 manual menu.bind owns rendered controls without classic bindEvents (1.1364ms)
+✔ Task 7 classic bindEvents owns zero route-specific selectors (3.9741ms)
+✔ Task 7 repeated bind/dispose leaves zero route listeners after 50 cycles (29.479ms)
+✔ Task 7 B1 A1 menu ownership routes panel, preset, section-choice, and stop-preview actions through capabilities (5.2464ms)
+✔ Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and fence stale async actions (2.1633ms)
+✔ Task 7 B1 B2 preview evaluation completion is ignored after route leave (5.293ms)
+✔ Task 7 B1 B2 preview evaluation rebind fences the old completion and leaves no listeners (2.6814ms)
+✔ Task 7 B2 detail image block controls dispatch semantic payloads through injected capabilities (2.5346ms)
+✔ Task 7 B2 classic detail image management binder and selectors are retired (3.9565ms)
+✔ Task 7 B2 detail image section controls dispatch semantic payloads through injected capabilities (2.2376ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 166.6971

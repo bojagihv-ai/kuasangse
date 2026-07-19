@@ -1,0 +1,69 @@
+﻿✔ Task 7 upload menu.bind owns rendered controls without classic bindEvents (7.5436ms)
+✔ Task 7 analyzing menu.bind owns rendered controls without classic bindEvents (2.8198ms)
+✔ Task 7 competitor menu.bind owns rendered controls without classic bindEvents (3.7677ms)
+✔ Task 7 sections menu.bind owns rendered controls without classic bindEvents (4.6764ms)
+✔ Task 7 generating menu.bind owns rendered controls without classic bindEvents (1.547ms)
+✔ Task 7 preview menu.bind owns rendered controls without classic bindEvents (4.7566ms)
+✔ Task 7 imagecuts menu.bind owns rendered controls without classic bindEvents (1.7705ms)
+✔ Task 7 optionsorter menu.bind owns rendered controls without classic bindEvents (2.4931ms)
+✔ Task 7 automation menu.bind owns rendered controls without classic bindEvents (1.7864ms)
+✔ Task 7 modelsettings menu.bind owns rendered controls without classic bindEvents (1.8697ms)
+✔ Task 7 manual menu.bind owns rendered controls without classic bindEvents (1.0257ms)
+✖ Task 7 classic bindEvents owns zero route-specific selectors (3.9454ms)
+✔ Task 7 repeated bind/dispose leaves zero route listeners after 50 cycles (27.1127ms)
+✔ Task 7 B1 A1 menu ownership routes panel, preset, section-choice, and stop-preview actions through capabilities (5.1302ms)
+✔ Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and fence stale async actions (2.0336ms)
+✔ Task 7 B1 B2 preview evaluation completion is ignored after route leave (5.7923ms)
+✔ Task 7 B1 B2 preview evaluation rebind fences the old completion and leaves no listeners (2.5955ms)
+✔ Task 7 B2 detail image block controls dispatch semantic payloads through injected capabilities (2.2802ms)
+✖ Task 7 B2 classic detail image management binder and selectors are retired (7.0629ms)
+✔ Task 7 B2 detail image section controls dispatch semantic payloads through injected capabilities (2.4131ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 18
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 174.2611
+
+✖ failing tests:
+
+test at tests\frontend\task7_menu_event_ownership.test.cjs:675:1
+✖ Task 7 classic bindEvents owns zero route-specific selectors (3.9454ms)
+  AssertionError [ERR_ASSERTION]: classic bindEvents boundary must remain discoverable during migration
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_menu_event_ownership.test.cjs:679:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests\frontend\task7_menu_event_ownership.test.cjs:979:1
+✖ Task 7 B2 classic detail image management binder and selectors are retired (7.0629ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(bindEventsStart >= 0 && bindEventsEnd > bindEventsStart)
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\task7_menu_event_ownership.test.cjs:984:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

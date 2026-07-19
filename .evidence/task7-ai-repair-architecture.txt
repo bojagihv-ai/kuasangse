@@ -1,0 +1,198 @@
+﻿✔ 앱 HTML과 로더는 빌드 ID를 하드코딩하지 않고 매니페스트만 따른다 (1.6542ms)
+✔ 앱 로더는 전체 소스를 문자열로 합쳐 eval하지 않는다 (0.306ms)
+✖ 런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다 (2.0951ms)
+✔ 최종 등록용 이름 조회는 오래된 Cafe24 값보다 현재 작업 identity를 우선한다 (3.9538ms)
+✔ 세 세션의 저장 revision은 최신 저장만 적용하고 이전 저장을 거부한다 (8.4107ms)
+✔ revision fence가 로컬·IndexedDB·서버 복원과 저장 payload에 연결된다 (4.0189ms)
+✔ 검증된 작업파일만 revision 없는 내장 자산을 명시적으로 복원할 수 있다 (3.5982ms)
+✔ 작업 편집권 UI는 표시 의미가 없는 revision 변화로 전체 화면을 다시 그리지 않는다 (5.3359ms)
+✔ 메뉴 비동기 작업 identity는 저장 revision이 아니라 작업 범위와 fencing token을 따른다 (2.5881ms)
+✔ 작업파일 복원은 시각 검증과 server IndexedDB session commit을 각각 한 번만 끝낸다 (4.7879ms)
+✔ OAuth 백그라운드 상태 완료는 작업파일 복원 렌더를 끼어들지 않는다 (5.7766ms)
+✔ 가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지 않는다 (2.0319ms)
+✔ static analysis toolchain은 고정된 실제 parser와 AST engine을 사용한다 (157.9876ms)
+✖ runtime registry는 source parser를 소유하지 않고 250줄 이하 metadata boundary다 (0.8264ms)
+✔ runtime graph registry는 manifest-known branded contract만 허용한다 (5.5347ms)
+✔ branded import graph validator는 duplicate, cycle, peer-store, raw state를 거부한다 (2.2102ms)
+▶ AST policy는 bracket·optional·computed·escape·grouping·alias origin을 구조적으로 거부한다
+  ✔ executable-0 (102.2938ms)
+  ✔ executable-1 (111.2175ms)
+  ✔ executable-2 (106.8414ms)
+  ✔ executable-3 (106.7521ms)
+  ✔ executable-4 (259.9278ms)
+  ✔ executable-5 (103.3001ms)
+  ✔ executable-6 (104.554ms)
+  ✔ executable-7 (103.0487ms)
+  ✔ executable-8 (103.9895ms)
+  ✔ executable-9 (108.233ms)
+  ✔ executable-10 (101.9274ms)
+  ✔ executable-11 (104.08ms)
+  ✔ executable-12 (108.9516ms)
+  ✔ executable-13 (104.8218ms)
+  ✔ executable-14 (288.4626ms)
+  ✔ executable-15 (94.2044ms)
+  ✔ executable-16 (92.2216ms)
+  ✔ executable-17 (102.6966ms)
+  ✔ executable-18 (99.0454ms)
+  ✔ executable-19 (96.4367ms)
+  ✔ executable-20 (93.5652ms)
+  ✔ executable-21 (89.4074ms)
+✔ AST policy는 bracket·optional·computed·escape·grouping·alias origin을 구조적으로 거부한다 (2588.0911ms)
+▶ AST policy는 string, comment, regex의 global text를 검사하지 않는다
+  ✔ benign-0 (93.2461ms)
+  ✔ benign-1 (91.5147ms)
+  ✔ benign-2 (97.6799ms)
+  ✔ benign-3 (98.6317ms)
+  ✔ benign-4 (98.9661ms)
+  ✔ benign-5 (99.4204ms)
+  ✔ benign-6 (101.1135ms)
+  ✔ benign-7 (287.98ms)
+  ✔ benign-8 (94.8969ms)
+  ✔ benign-9 (97.9088ms)
+  ✔ benign-10 (100.488ms)
+  ✔ benign-11 (96.746ms)
+  ✔ benign-12 (96.4526ms)
+  ✔ benign-13 (97.0747ms)
+  ✔ benign-14 (101.4275ms)
+  ✔ benign-15 (98.6312ms)
+  ✔ benign-16 (103.0775ms)
+✔ AST policy는 string, comment, regex의 global text를 검사하지 않는다 (1856.8976ms)
+▶ 실제 ESM parser는 malformed corpus를 fail-closed한다
+  ✔ malformed-0 (55.9505ms)
+  ✔ malformed-1 (57.4366ms)
+  ✔ malformed-2 (62.7913ms)
+  ✔ malformed-3 (78.5911ms)
+  ✔ malformed-4 (65.3411ms)
+  ✔ malformed-5 (62.5657ms)
+  ✔ malformed-6 (59.437ms)
+  ✔ malformed-7 (214.7435ms)
+  ✔ malformed-8 (60.6384ms)
+  ✔ malformed-9 (63.2251ms)
+  ✔ malformed-10 (63.3533ms)
+  ✔ malformed-11 (59.0425ms)
+  ✔ malformed-12 (66.622ms)
+  ✔ malformed-13 (65.4756ms)
+  ✔ malformed-14 (58.6227ms)
+  ✔ malformed-15 (69.1146ms)
+  ✔ malformed-16 (71.9125ms)
+  ✔ malformed-17 (58.3158ms)
+  ✔ malformed-18 (57.1398ms)
+  ✔ malformed-19 (57.8737ms)
+✔ 실제 ESM parser는 malformed corpus를 fail-closed한다 (1410.2611ms)
+✔ manifest modules는 실제 ESM으로 parse되고 Task 2 graph는 static policy와 runtime metadata contract를 통과한다 (27089.5008ms)
+ℹ tests 79
+ℹ suites 0
+ℹ pass 77
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 33207.9499
+
+✖ failing tests:
+
+test at tests\frontend\architecture_source_contracts.test.cjs:78:1
+✖ 런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다 (2.0951ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+  
+    [
+      'src/domains/cafe24/fields.mjs',
+      'src/domains/cafe24/options.mjs',
+      'src/domains/cafe24/payload.mjs',
+      'src/domains/cafe24/api.mjs',
+  ...
+      'src/menus/preview-image-insert-events.mjs',
+  +   'src/menus/preview-ai-repair-events.mjs',
+      'src/menus/preview-menu.mjs',
+      'src/menus/competitor-menu-report-view.mjs',
+      'src/menus/competitor-menu-plan-view.mjs',
+      'src/menus/competitor-menu-view.mjs',
+      'src/menus/competitor-menu.mjs',
+  
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\architecture_source_contracts.test.cjs:92:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [
+      'src/domains/cafe24/fields.mjs',                      'src/domains/cafe24/options.mjs',
+      'src/domains/cafe24/payload.mjs',                     'src/domains/cafe24/api.mjs',
+      'src/domains/cafe24/sync.mjs',                        'src/domains/cafe24/ui.mjs',
+      'src/domains/cafe24/index.mjs',                       'src/menus/manual-menu.mjs',
+      'src/menus/modelsettings-menu.mjs',                   'src/menus/automation-menu.mjs',
+      'src/menus/imagecuts-menu.mjs',                       'src/menus/optionsorter-menu.mjs',
+      'src/menus/upload-menu.mjs',                          'src/menus/analysis-menu.mjs',
+      'src/menus/sections-menu-cards-view.mjs',             'src/menus/sections-menu-view.mjs',
+      'src/menus/sections-menu.mjs',                        'src/menus/sections-menu-a2-events.mjs',
+      'src/menus/generating-menu.mjs',                      'src/menus/preview-menu-view.mjs',
+      'src/menus/preview-image-insert-events.mjs',          'src/menus/preview-ai-repair-events.mjs',
+      'src/menus/preview-menu.mjs',                         'src/menus/competitor-menu-report-view.mjs',
+      'src/menus/competitor-menu-plan-view.mjs',            'src/menus/competitor-menu-view.mjs',
+      'src/menus/competitor-menu.mjs',                      'src/modules/factory-store.mjs',
+      'src/menus/factory/factory-tab-contract.mjs',         'src/menus/factory/tabs/start-tab.mjs',
+      'src/menus/factory/tabs/db-tab.mjs',                  'src/menus/factory/tabs/fields-tab-render.mjs',
+      'src/menus/factory/tabs/fields-tab.mjs',              'src/menus/factory/tabs/competitor-tab-model.mjs',
+      'src/menus/factory/tabs/competitor-tab-analysis.mjs', 'src/menus/factory/tabs/competitor-tab-candidates.mjs',
+      'src/menus/factory/tabs/competitor-tab-images.mjs',   'src/menus/factory/tabs/competitor-tab-view.mjs',
+      'src/menus/factory/tabs/competitor-tab-events.mjs',   'src/menus/factory/tabs/competitor-tab.mjs',
+      'src/menus/factory/tabs/assets-tab-render.mjs',       'src/menus/factory/tabs/assets-tab-bind.mjs',
+      'src/menus/factory/tabs/assets-tab.mjs',              'src/menus/factory/tabs/sections-tab.mjs',
+      'src/menus/factory/tabs/publish-tab-render.mjs',      'src/menus/factory/tabs/publish-tab.mjs',
+      'src/menus/factory/factory-menu.mjs',                 'src/shell/render-lifecycle.mjs',
+      'src/shell/route-controller.mjs',                     'src/shell/legacy-diagnostic-bridge.mjs',
+      'src/shell/bootstrap.mjs'
+    ],
+    expected: [
+      'src/domains/cafe24/fields.mjs',                        'src/domains/cafe24/options.mjs',
+      'src/domains/cafe24/payload.mjs',                       'src/domains/cafe24/api.mjs',
+      'src/domains/cafe24/sync.mjs',                          'src/domains/cafe24/ui.mjs',
+      'src/domains/cafe24/index.mjs',                         'src/menus/manual-menu.mjs',
+      'src/menus/modelsettings-menu.mjs',                     'src/menus/automation-menu.mjs',
+      'src/menus/imagecuts-menu.mjs',                         'src/menus/optionsorter-menu.mjs',
+      'src/menus/upload-menu.mjs',                            'src/menus/analysis-menu.mjs',
+      'src/menus/sections-menu-cards-view.mjs',               'src/menus/sections-menu-view.mjs',
+      'src/menus/sections-menu.mjs',                          'src/menus/sections-menu-a2-events.mjs',
+      'src/menus/generating-menu.mjs',                        'src/menus/preview-menu-view.mjs',
+      'src/menus/preview-image-insert-events.mjs',            'src/menus/preview-menu.mjs',
+      'src/menus/competitor-menu-report-view.mjs',            'src/menus/competitor-menu-plan-view.mjs',
+      'src/menus/competitor-menu-view.mjs',                   'src/menus/competitor-menu.mjs',
+      'src/modules/factory-store.mjs',                        'src/menus/factory/factory-tab-contract.mjs',
+      'src/menus/factory/tabs/start-tab.mjs',                 'src/menus/factory/tabs/db-tab.mjs',
+      'src/menus/factory/tabs/fields-tab-render.mjs',         'src/menus/factory/tabs/fields-tab.mjs',
+      'src/menus/factory/tabs/competitor-tab-model.mjs',      'src/menus/factory/tabs/competitor-tab-analysis.mjs',
+      'src/menus/factory/tabs/competitor-tab-candidates.mjs', 'src/menus/factory/tabs/competitor-tab-images.mjs',
+      'src/menus/factory/tabs/competitor-tab-view.mjs',       'src/menus/factory/tabs/competitor-tab-events.mjs',
+      'src/menus/factory/tabs/competitor-tab.mjs',            'src/menus/factory/tabs/assets-tab-render.mjs',
+      'src/menus/factory/tabs/assets-tab-bind.mjs',           'src/menus/factory/tabs/assets-tab.mjs',
+      'src/menus/factory/tabs/sections-tab.mjs',              'src/menus/factory/tabs/publish-tab-render.mjs',
+      'src/menus/factory/tabs/publish-tab.mjs',               'src/menus/factory/factory-menu.mjs',
+      'src/shell/render-lifecycle.mjs',                       'src/shell/route-controller.mjs',
+      'src/shell/legacy-diagnostic-bridge.mjs',               'src/shell/bootstrap.mjs'
+    ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests\frontend\import_graph_contracts.test.cjs:122:1
+✖ runtime registry는 source parser를 소유하지 않고 250줄 이하 metadata boundary다 (0.8264ms)
+  AssertionError [ERR_ASSERTION]: module-registry.mjs must be <=250 LOC, received 251
+      at TestContext.<anonymous> (C:\Users\kua\Documents\GitHub\kuasangse\tests\frontend\import_graph_contracts.test.cjs:125:10)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

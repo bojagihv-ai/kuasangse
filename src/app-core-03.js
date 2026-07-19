@@ -6734,13 +6734,15 @@ function pushAiRepairUndo(sectionId, imageData, content, mode = 'spot') {
   state.aiRepairUndoStack[sectionId] = [entry, ...stack].slice(0, 5);
 }
 
-function undoAiRepair(sectionId) {
+function undoAiRepair(sectionId, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const stack = getAiRepairUndoStack(sectionId);
   const entryIndex = stack.findIndex(item => item?.image);
   if (entryIndex < 0) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = '되돌릴 AI 수정 기록이 없습니다.';
     render();
-    return;
+    return false;
   }
   const [entry] = stack.splice(entryIndex, 1);
   state.aiRepairUndoStack[sectionId] = stack;
@@ -6752,8 +6754,10 @@ function undoAiRepair(sectionId) {
   const variant = rememberSectionVariant(sectionId, state.sectionContents[sectionId], entry.image, 'baseline', entry.label || 'AI 수정 전');
   if (variant) state.currentSectionVariantIds[sectionId] = variant.id;
   markContentChanged();
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   savePersistentState();
   render();
+  return true;
 }
 
 function saveManualSectionContent(sectionId, patch) {
@@ -10495,8 +10499,12 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           state.editingPreviewSection = state.editingPreviewSection === sectionId ? null : sectionId;
           render();
         },
-        openAiRepair: sectionId => openAiRepair(sectionId),
-        undoAiRepair: sectionId => undoAiRepair(sectionId),
+        openAiRepair: (sectionId, operationContext) => openAiRepair(sectionId, operationContext),
+        closeAiRepair: (_value, operationContext) => closeAiRepair(operationContext),
+        updateAiRepairField: (value, operationContext) => updateAiRepairField(value, operationContext),
+        persistAiRepairMask: (value, operationContext) => persistAiRepairMask(value, operationContext),
+        runAiRepair: (value, operationContext) => runAiRepair(value, operationContext),
+        undoAiRepair: (sectionId, operationContext) => undoAiRepair(sectionId, operationContext),
         regenerateSection: sectionId => regenerateSection(sectionId),
         applyPreviewEdit(payload) {
           pushEditorHistory(`${payload.sectionId} 지시문 적용 전`);
@@ -10681,6 +10689,9 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         escAttr,
         escapeHtml,
       },
+      hasMaskPaint: maskCanvasHasPaint,
+      buildEditMask: buildTransparentEditMaskDataUrl,
+      createImage: () => new Image(),
       readImageFileAsDataUrl,
     }));
   }
@@ -11077,6 +11088,7 @@ function renderShellFrame(input) {
   const renderStartedAt = Date.now();
   patchAppHtml(root, renderShellMarkup(activation.activeMenuHtml, menu));
   bindShellAfterRender(root);
+  menu?.refresh?.(root);
   if (typeof scheduleFactoryHydrateLightImages === 'function') scheduleFactoryHydrateLightImages(root);
   if (typeof scheduleCompetitorEvidenceCanvasPaint === 'function') scheduleCompetitorEvidenceCanvasPaint();
   else if (typeof paintCompetitorEvidenceCanvases === 'function') paintCompetitorEvidenceCanvases();

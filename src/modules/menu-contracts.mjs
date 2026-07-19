@@ -92,6 +92,7 @@ export function createMenuContract(definition) {
     select: requiredFunction(definition, 'select'),
     commands,
     render: requiredFunction(definition, 'render'),
+    refresh: typeof definition.refresh === 'function' ? definition.refresh : undefined,
     bind(...args) {
       const dispose = originalBind(...args);
       if (typeof dispose !== 'function') throw new TypeError(`menu ${id} bind must return a disposer`);
