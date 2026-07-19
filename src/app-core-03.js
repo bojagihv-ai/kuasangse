@@ -10553,6 +10553,42 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           render();
           return state.previewRecoveredDetailMode;
         },
+        deleteDetailImage(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const blockId = String(payload.blockId || '').trim();
+          if (!blockId) return false;
+          deleteDetailImageBlock(blockId);
+          return true;
+        },
+        moveDetailImage(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const blockId = String(payload.blockId || '').trim();
+          const direction = String(payload.direction || '').trim();
+          if (!blockId || (direction !== 'up' && direction !== 'down')) return false;
+          moveDetailImageBlock(blockId, direction);
+          return true;
+        },
+        focusSectionImage(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          focusSectionImageLayer(sectionId);
+          return true;
+        },
+        deleteSectionImage(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          deleteSectionImage(sectionId);
+          return true;
+        },
+        openImageInsert(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          openImageInsert(sectionId, payload.mode);
+          return true;
+        },
         updatePreviewInstruction(payload) {
           setSectionInstructionValue(payload.sectionId, payload.value, 'manual', { source: '미리보기 수정 패널' });
         },

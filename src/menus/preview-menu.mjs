@@ -37,7 +37,7 @@ const ACTION_NAMES = Object.freeze([
   'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
   'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
   'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
-  'openRemainingSectionsAfterStop',
+  'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert',
 ]);
 const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['setViewport', 'navigate', 'startGenerating']));
 
@@ -192,8 +192,8 @@ export function createPreviewMenu(capabilities = {}) {
             body_text: readManualField(sectionId, 'body'), cta_text: readManualField(sectionId, 'cta'),
             extra_elements: readManualField(sectionId, 'extra'), layout_suggestion: content.layout_suggestion || '',
           } }); }
-          return;
-        }
+          return; }
+        const deleteDetailImage = closest(event, '[data-delete-detail-image]'); if (deleteDetailImage) { const blockId = String(deleteDetailImage.dataset.deleteDetailImage || '').trim(); if (blockId) call('deleteDetailImage', { blockId }); return; } const moveDetailImage = closest(event, '[data-move-detail-image]'); if (moveDetailImage) { const [blockId, direction] = String(moveDetailImage.dataset.moveDetailImage || '').split(':'); if (blockId && (direction === 'up' || direction === 'down')) call('moveDetailImage', { blockId, direction }); return; } const focusSectionImage = closest(event, '[data-focus-section-image]'); if (focusSectionImage) { const sectionId = String(focusSectionImage.dataset.focusSectionImage || '').trim(); if (sectionId) call('focusSectionImage', { sectionId }); return; } const deleteSectionImage = closest(event, '[data-delete-section-image]'); if (deleteSectionImage) { const sectionId = String(deleteSectionImage.dataset.deleteSectionImage || '').trim(); if (sectionId) call('deleteSectionImage', { sectionId }); return; } const openImageInsert = closest(event, '[data-open-image-insert]'); if (openImageInsert) { const [sectionId, mode] = String(openImageInsert.dataset.openImageInsert || '').split(':'); if (sectionId) call('openImageInsert', { sectionId, mode }); return; }
         const b1Specs = [['[data-apply-variant]', 'applyVariant', 'applySectionVariant'], ['[data-apply-variant-image]', 'applyVariantImage', 'applySectionVariantImage'], ['[data-eval-section-variants]', 'evalSectionVariants', 'evaluateSectionVariants'], ['[data-apply-eval-best]', 'applyEvalBest', 'applyBestEvaluatedVariant'], ['[data-preview-recovered-detail-mode]', 'previewRecoveredDetailMode', 'setRecoveredDetailMode']];
         for (const [selector, key, name] of b1Specs) {
           const node = closest(event, selector); if (!node) continue;

@@ -221,6 +221,11 @@ const ROUTE_CONTROLS = Object.freeze({
     c('#runQaBtn'), c('#runAiQaBtn'), c('#toggleLayerMode'), c('#resetAllLayers'),
     c('#exportLayeredSVG'), c('#exportPhotoshopPackage'), c('#exportJpgAll'),
     c('#exportJpgSections'), c('#exportHTML'), c('#viewportPc'), c('#viewportMobile'),
+    c('[data-delete-detail-image]', 'click', { deleteDetailImage: 'detail-block-1' }),
+    c('[data-move-detail-image]', 'click', { moveDetailImage: 'detail-block-1:up' }),
+    c('[data-focus-section-image]', 'click', { focusSectionImage: 'hero' }),
+    c('[data-delete-section-image]', 'click', { deleteSectionImage: 'hero' }),
+    c('[data-open-image-insert]', 'click', { openImageInsert: 'hero:after' }),
   ]),
   imagecuts: Object.freeze([
     c('#cutsUploadArea', 'click dragover drop'), c('#cutsFileInput', 'change'),
@@ -318,6 +323,8 @@ async function createRouteMenu(route, calls = []) {
       'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
       'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
       'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
+      'deleteDetailImage', 'moveDetailImage',
+      'focusSectionImage', 'deleteSectionImage', 'openImageInsert',
     ];
     return (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
       actions: Object.fromEntries(names.map(name => [name, (value, context) => calls.push([name, value, context.operationToken])])),
@@ -940,4 +947,71 @@ test('Task 7 B1 B2 preview evaluation rebind fences the old completion and leave
   assert.equal(calls.length, 2, 'rebound listener must dispatch the current evaluation');
   firstDispose(); secondDispose(); preview.onLeave();
   assert.equal(root.rootListeners.size, 0, 'rebind/dispose must leave no evaluation listeners');
+});
+
+test('Task 7 B2 detail image block controls dispatch semantic payloads through injected capabilities', async () => {
+  const calls = [];
+  const names = ['setViewport', 'navigate', 'startGenerating', 'deleteDetailImage', 'moveDetailImage'];
+  const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
+    actions: Object.fromEntries(names.map(name => [name, (value, context) => {
+      calls.push([name, value, context.operationToken]);
+    }])),
+  }));
+  const root = domRoot([
+    c('[data-delete-detail-image]', 'click', { deleteDetailImage: 'detail-block-1' }),
+    c('[data-move-detail-image]', 'click', { moveDetailImage: 'detail-block-1:up' }),
+  ]);
+
+  preview.onEnter();
+  const dispose = preview.bind(root);
+  preview.bind(root);
+  fire(root.nodes.get('[data-delete-detail-image]'), 'click', {}, root);
+  fire(root.nodes.get('[data-move-detail-image]'), 'click', {}, root);
+  assert.deepEqual(calls, [
+    ['deleteDetailImage', { blockId: 'detail-block-1' }, 'workspace:a:fence:1'],
+    ['moveDetailImage', { blockId: 'detail-block-1', direction: 'up' }, 'workspace:a:fence:1'],
+  ]);
+
+  dispose(); preview.onLeave();
+  assert.equal(root.rootListeners.size, 0, 'detail image delegated listener must be disposed');
+});
+
+test('Task 7 B2 classic detail image management binder and selectors are retired', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-05.js'), 'utf8');
+  assert.doesNotMatch(source, /function bindDetailImageManagementEvents\s*\(/);
+  const bindEventsStart = source.indexOf('function bindEvents()');
+  const bindEventsEnd = source.indexOf('let aiRepairMaskHistory', bindEventsStart);
+  assert.ok(bindEventsStart >= 0 && bindEventsEnd > bindEventsStart);
+  const bindEvents = source.slice(bindEventsStart, bindEventsEnd);
+  assert.doesNotMatch(bindEvents, /bindDetailImageManagementEvents\s*\(/);
+  assert.doesNotMatch(bindEvents, /data-delete-detail-image|data-move-detail-image|data-focus-section-image|data-delete-section-image|data-open-image-insert/);
+});
+
+test('Task 7 B2 detail image section controls dispatch semantic payloads through injected capabilities', async () => {
+  const calls = [];
+  const names = ['setViewport', 'navigate', 'startGenerating', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert'];
+  const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
+    actions: Object.fromEntries(names.map(name => [name, (value, context) => {
+      calls.push([name, value, context.operationToken]);
+    }])),
+  }));
+  const root = domRoot([
+    c('[data-focus-section-image]', 'click', { focusSectionImage: 'hero' }),
+    c('[data-delete-section-image]', 'click', { deleteSectionImage: 'hero' }),
+    c('[data-open-image-insert]', 'click', { openImageInsert: 'hero:after' }),
+  ]);
+
+  preview.onEnter();
+  const dispose = preview.bind(root);
+  preview.bind(root);
+  fire(root.nodes.get('[data-focus-section-image]'), 'click', {}, root);
+  fire(root.nodes.get('[data-delete-section-image]'), 'click', {}, root);
+  fire(root.nodes.get('[data-open-image-insert]'), 'click', {}, root);
+  assert.deepEqual(calls, [
+    ['focusSectionImage', { sectionId: 'hero' }, 'workspace:a:fence:1'],
+    ['deleteSectionImage', { sectionId: 'hero' }, 'workspace:a:fence:1'],
+    ['openImageInsert', { sectionId: 'hero', mode: 'after' }, 'workspace:a:fence:1'],
+  ]);
+  dispose(); preview.onLeave();
+  assert.equal(root.rootListeners.size, 0, 'detail image section delegated listener must be disposed');
 });

@@ -15794,7 +15794,6 @@ function bindEvents() {
 
   bindAiRepairEvents();
   bindImageInsertEvents();
-  bindDetailImageManagementEvents();
   bindPreviewLayerEvents();
 
   runBindEventExtensions();
@@ -16045,30 +16044,6 @@ function bindImageInsertEvents() {
   });
   document.querySelectorAll('[data-use-cut-detail-image]').forEach(btn => {
     btn.onclick = () => useCutDetailImage(btn.dataset.useCutDetailImage);
-  });
-}
-
-function bindDetailImageManagementEvents() {
-  document.querySelectorAll('[data-focus-section-image]').forEach(btn => {
-    btn.onclick = () => focusSectionImageLayer(btn.dataset.focusSectionImage);
-  });
-  document.querySelectorAll('[data-delete-section-image]').forEach(btn => {
-    btn.onclick = () => deleteSectionImage(btn.dataset.deleteSectionImage);
-  });
-  document.querySelectorAll('[data-open-image-insert]').forEach(btn => {
-    btn.onclick = () => {
-      const [sectionId, mode] = (btn.dataset.openImageInsert || '').split(':');
-      if (sectionId) openImageInsert(sectionId, mode);
-    };
-  });
-  document.querySelectorAll('[data-delete-detail-image]').forEach(btn => {
-    btn.onclick = () => deleteDetailImageBlock(btn.dataset.deleteDetailImage);
-  });
-  document.querySelectorAll('[data-move-detail-image]').forEach(btn => {
-    btn.onclick = () => {
-      const [blockId, direction] = (btn.dataset.moveDetailImage || '').split(':');
-      moveDetailImageBlock(blockId, direction);
-    };
   });
 }
 
