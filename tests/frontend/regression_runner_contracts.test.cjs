@@ -184,15 +184,18 @@ test('무결성 브라우저 회귀는 실제 전역 마지막 작업과 분리�
     'utf8',
   );
 
-  // When/Then: fixture를 렌더링하기 전에 명시적인 회귀 전용 workspace가 지정되어야 한다.
+  // When/Then: fixture adapter가 회귀 전용 workspace를 app/store 양쪽에 같은 값으로 지정해야 한다.
   assert.match(
     source,
-    /window\.state\.currentProjectId\s*=\s*['"]regression:factory-integrity-v80['"]/,
+    /const\s+workspaceId\s*=\s*['"]regression:factory-integrity-v80['"]/,
   );
   assert.match(
     source,
-    /f\.workspace\s*=\s*\{[\s\S]*?id:\s*window\.state\.currentProjectId[\s\S]*?\}/,
+    /setAppState\(\{[\s\S]*?currentProjectId:\s*workspaceId[\s\S]*?\}\)/,
   );
+  assert.match(source, /f\.workspace\s*=\s*\{[\s\S]*?id:\s*workspaceId[\s\S]*?\}/);
+  assert.match(source, /replaceFactory\(f,\s*\{[\s\S]*?mode:\s*['"]hydrate['"][\s\S]*?workspaceId[\s\S]*?\}\)/);
+  assert.doesNotMatch(source, /window\s*\.\s*(?:state|factoryState|render)\b/);
 });
 
 test('회귀 실행 중 소스가 바뀌면 변경 파일을 검출한다', t => {

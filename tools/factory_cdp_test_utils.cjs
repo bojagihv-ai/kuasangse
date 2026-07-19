@@ -121,6 +121,59 @@ async function evaluate(cdp, expression, awaitPromise = true) {
   return result.result?.value;
 }
 
+function factoryCdpFixtureReadyExpression() {
+  return `(() => (
+    typeof state === 'object'
+    && state !== null
+    && typeof factoryRuntimeReadFactory === 'function'
+    && typeof factoryRuntimeReplaceFactorySnapshot === 'function'
+    && typeof render === 'function'
+    && typeof factoryRuntimeStore === 'object'
+    && factoryRuntimeStore !== null
+    && typeof factoryRuntimeStore.getOperationToken === 'function'
+    && classicRuntimeHydrationReady === true
+    && classicRuntimeInitialRenderComplete === true
+  ))()`;
+}
+
+function factoryCdpFixtureExpression(runSource) {
+  const source = String(runSource || '').trim();
+  if (!source) throw new TypeError('factory CDP fixture callback source is required');
+  return `((run) => {
+    const clone = value => typeof structuredClone === 'function'
+      ? structuredClone(value)
+      : JSON.parse(JSON.stringify(value));
+    const setAppState = patch => {
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        throw new TypeError('factory CDP app state patch must be an object');
+      }
+      Object.assign(state, clone(patch));
+    };
+    const readFactory = () => factoryRuntimeReadFactory();
+    const readAppWorkspaceId = () => String(state.currentProjectId || '').trim();
+    const readOperationToken = () => clone(factoryRuntimeStore.getOperationToken());
+    const cloneFactory = () => clone(readFactory());
+    const replaceFactory = (value, options = {}) => factoryRuntimeReplaceFactorySnapshot(value, {
+      reason: 'cdp-test-fixture',
+      ...options,
+    });
+    const renderApp = () => render();
+    return run(Object.freeze({
+      setAppState,
+      readAppWorkspaceId,
+      readFactory,
+      readOperationToken,
+      cloneFactory,
+      replaceFactory,
+      renderApp,
+    }));
+  })(${source})`;
+}
+
+async function evaluateFactoryCdpFixture(cdp, runSource, awaitPromise = true) {
+  return evaluate(cdp, factoryCdpFixtureExpression(runSource), awaitPromise);
+}
+
 function isCdpTransportError(error) {
   return /CDP WebSocket (?:error|closed)|CDP command timed out/i.test(String(error?.message || error));
 }
@@ -335,6 +388,9 @@ module.exports = {
   currentSourceBuildId,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureExpression,
+  factoryCdpFixtureReadyExpression,
   fetchJson,
   waitFor,
   waitForCdpPredicateWithReconnect,

@@ -40,6 +40,7 @@ web-*.log
 # Local runtime output / generated test artifacts
 output/
 test-results/
+.evidence/
 .omo/
 .playwright-cli/
 NUL

@@ -5,6 +5,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -39,11 +41,18 @@ async function main() {
     mobile: false,
   });
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, '!!(window.state && window.render && window.factoryState)', 60000);
+  await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
 
   const img = svgData('input-v80');
   const foreignImg = svgData('foreign-v80', '#6366f1');
-  const result = await evaluate(cdp, `(() => {
+  const result = await evaluateFactoryCdpFixture(cdp, `async ({
+    setAppState,
+    readAppWorkspaceId,
+    readFactory,
+    readOperationToken,
+    replaceFactory,
+    renderApp,
+  }) => {
     const inputImage = ${JSON.stringify(img)};
     const foreignImage = ${JSON.stringify(foreignImg)};
     const currentName = 'IntegrityProductV80';
@@ -56,32 +65,37 @@ async function main() {
     const inputFp = window.factoryImagePayloadFingerprint ? window.factoryImagePayloadFingerprint(inputBase64) : 'input_fp_v80';
     const foreignFp = window.factoryImagePayloadFingerprint ? window.factoryImagePayloadFingerprint(foreignBase64) : 'foreign_fp_v80';
 
-    window.state.step = 'factory';
-    window.state.currentProjectId = 'regression:factory-integrity-v80';
-    window.state.currentProjectName = 'Factory integrity v80';
-    window.state.currentProjectCreatedAt = Date.now();
-    window.state.productName = currentName;
-    window.state.imageBase64 = inputBase64;
-    window.state.imageMime = 'image/svg+xml';
-    window.state.imagePreview = inputImage;
-    window.state.imageName = 'integrity-input.svg';
-    window.state.productInfoManualValues = {
-      product_name: currentName,
-      width_mm: '10.4cm',
-      depth_mm: '8.3cm',
-      weight: '14g',
-      product_weight_g: '14g'
-    };
+    const workspaceId = 'regression:factory-integrity-v80';
+    const workspaceName = 'Factory integrity v80';
+    const workspaceCreatedAt = Date.now();
+    setAppState({
+      step: 'factory',
+      currentProjectId: workspaceId,
+      currentProjectName: workspaceName,
+      currentProjectCreatedAt: workspaceCreatedAt,
+      productName: currentName,
+      imageBase64: inputBase64,
+      imageMime: 'image/svg+xml',
+      imagePreview: inputImage,
+      imageName: 'integrity-input.svg',
+      productInfoManualValues: {
+        product_name: currentName,
+        width_mm: '10.4cm',
+        depth_mm: '8.3cm',
+        weight: '14g',
+        product_weight_g: '14g',
+      },
+    });
 
-    const f = window.factoryState();
+    const f = window.normalizeFactoryState ? window.normalizeFactoryState({}) : {};
     f.workspace = {
       ...(f.workspace || {}),
-      id: window.state.currentProjectId,
-      name: window.state.currentProjectName,
-      createdAt: window.state.currentProjectCreatedAt,
+      id: workspaceId,
+      name: workspaceName,
+      createdAt: workspaceCreatedAt,
     };
-    f.currentProjectId = window.state.currentProjectId;
-    f.currentProjectName = window.state.currentProjectName;
+    f.currentProjectId = workspaceId;
+    f.currentProjectName = workspaceName;
     f.product = f.product || {};
     f.product.productName = currentName;
     f.product.userProductName = currentName;
@@ -145,29 +159,41 @@ async function main() {
       }
     ];
 
-    window.state.factory = window.normalizeFactoryState ? window.normalizeFactoryState(f) : f;
-    const factory = window.factoryState();
     if (typeof window.factorySyncDbSizeManualValue === 'function') {
-      window.factorySyncDbSizeManualValue('width_mm', '10.4cm', factory);
-      window.factorySyncDbSizeManualValue('depth_mm', '8.3cm', factory);
-      window.factorySyncDbSizeManualValue('weight', '14g', factory);
+      window.factorySyncDbSizeManualValue('width_mm', '10.4cm', f);
+      window.factorySyncDbSizeManualValue('depth_mm', '8.3cm', f);
+      window.factorySyncDbSizeManualValue('weight', '14g', f);
     }
-    if (typeof window.factoryUpdateFinalDbFromFields === 'function') window.factoryUpdateFinalDbFromFields(factory);
+    if (typeof window.factoryUpdateFinalDbFromFields === 'function') window.factoryUpdateFinalDbFromFields(f);
+    replaceFactory(f, {
+      mode: 'hydrate',
+      reason: 'cdp-integrity-v80',
+      workspaceId,
+    });
+    let factory = readFactory();
+    const hydrationOperationToken = readOperationToken();
+    const appWorkspaceIdAfterHydrate = readAppWorkspaceId();
+    const factoryWorkspaceIdAfterHydrate = String(factory.workspace?.id || factory.currentProjectId || '').trim();
     const authoritativeName = typeof window.factoryFinalRegistrationAuthoritativeProductName === 'function'
       ? window.factoryFinalRegistrationAuthoritativeProductName(factory)
       : '';
     const cleared = typeof window.factoryClearRestoredImageGenerationRuntime === 'function'
       ? window.factoryClearRestoredImageGenerationRuntime({ save: false, log: false })
       : false;
+    factory = readFactory();
     const sizeFields = typeof window.factoryCollectDbSizeFieldModels === 'function'
       ? window.factoryCollectDbSizeFieldModels(factory).map(item => ({ fieldId: item.fieldId, value: item.value, source: item.source }))
       : [];
     const usableHero = typeof window.factoryUsableAssetsForStage === 'function'
       ? window.factoryUsableAssetsForStage('hero', factory).map(asset => asset.id)
       : [];
-    window.render();
+    await renderApp();
     const imgs = Array.from(document.images || []);
     return {
+      expectedWorkspaceId: workspaceId,
+      hydrationOperationToken,
+      appWorkspaceIdAfterHydrate,
+      factoryWorkspaceIdAfterHydrate,
       authoritativeName,
       productName: factory.product.productName,
       userProductName: factory.product.userProductName,
@@ -185,9 +211,9 @@ async function main() {
       heavyDataImgCount: imgs.filter(img => /^data:image\\//i.test(String(img.src || '')) && String(img.src || '').length > 3000).length,
       placeholderDataImgCount: imgs.filter(img => /^data:image\\//i.test(String(img.src || '')) && String(img.src || '').length <= 3000).length,
       brokenImageCount: imgs.filter(img => img.complete && !img.naturalWidth && String(img.src || '')).length,
-      renderMs: window.__KUASANGSE_RENDER_LAST_MS__ || 0
+      renderMs: Number(document.documentElement.dataset.kuasangseRenderLastMs || 0)
     };
-  })()`);
+  }`);
 
   await waitFor(cdp, `(() => {
     const imgs = Array.from(document.images || []).filter(img => String(img.src || ''));
@@ -213,6 +239,20 @@ async function main() {
   await cdpRuntime.cleanup();
   const fieldValue = fieldId => result.sizeFields.find(item => item.fieldId === fieldId)?.value || '';
   assertChecks([
+    {
+      ok: result.hydrationOperationToken?.workspaceId === result.expectedWorkspaceId
+        && result.hydrationOperationToken?.revision === 0,
+      message: `hydrate operation token 불일치: ${JSON.stringify(result.hydrationOperationToken)}`,
+    },
+    {
+      ok: result.appWorkspaceIdAfterHydrate === result.expectedWorkspaceId
+        && result.factoryWorkspaceIdAfterHydrate === result.expectedWorkspaceId,
+      message: `hydrate workspace 정합성 실패: ${JSON.stringify({
+        expected: result.expectedWorkspaceId,
+        app: result.appWorkspaceIdAfterHydrate,
+        factory: result.factoryWorkspaceIdAfterHydrate,
+      })}`,
+    },
     { ok: result.authoritativeName === EXPECTED_PRODUCT_NAME, message: `상품명 우선순위 실패: ${result.authoritativeName}` },
     { ok: result.productName === EXPECTED_PRODUCT_NAME, message: `factory.product.productName 불일치: ${result.productName}` },
     { ok: result.userProductName === EXPECTED_PRODUCT_NAME, message: `factory.product.userProductName 불일치: ${result.userProductName}` },
