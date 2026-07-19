@@ -215,6 +215,7 @@ const ROUTE_CONTROLS = Object.freeze({
     c('[data-save-manual]', 'click', { saveManual: 'hero' }),
     c('[data-apply-variant]', 'click', { applyVariant: 'hero:variant-a' }),
     c('[data-apply-variant-image]', 'click', { applyVariantImage: 'hero:variant-b' }),
+    c('[data-eval-section-variants]', 'click', { evalSectionVariants: 'hero' }),
     c('[data-apply-eval-best]', 'click', { applyEvalBest: 'hero' }),
     c('[data-preview-recovered-detail-mode]', 'click', { previewRecoveredDetailMode: 'on' }),
     c('#runQaBtn'), c('#runAiQaBtn'), c('#toggleLayerMode'), c('#resetAllLayers'),
@@ -316,7 +317,7 @@ async function createRouteMenu(route, calls = []) {
       'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
       'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
       'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
-      'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
+      'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
     ];
     return (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
       actions: Object.fromEntries(names.map(name => [name, (value, context) => calls.push([name, value, context.operationToken])])),
@@ -693,8 +694,8 @@ test('Task 7 classic bindEvents owns zero route-specific selectors', () => {
     .filter(selector => selector !== '[data-nav]');
   const retained = selectors.filter(selector => binder.includes(selector.replace(/^#/, '')));
   assert.deepEqual(retained, [], `classic route selectors remain: ${retained.join(', ')}`);
-  assert.match(binder, /\[data-eval-section-variants\]/,
-    'async variant evaluation start remains outside Preview B1 scope');
+  assert.doesNotMatch(binder, /\[data-eval-section-variants\]/,
+    'classic bindEvents must not retain async variant evaluation ownership');
 });
 
 test('Task 7 repeated bind/dispose leaves zero route listeners after 50 cycles', async () => {
@@ -815,7 +816,7 @@ test('Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and f
   const names = [
     'setViewport', 'navigate', 'startGenerating',
     'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
-    'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
+    'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
   ];
   const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
     getSnapshot: () => ({
@@ -831,6 +832,7 @@ test('Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and f
     c('[data-save-manual]', 'click', { saveManual: 'hero' }),
     c('[data-apply-variant]', 'click', { applyVariant: 'hero:variant-a' }),
     c('[data-apply-variant-image]', 'click', { applyVariantImage: 'hero:variant-b' }),
+    c('[data-eval-section-variants]', 'click', { evalSectionVariants: 'hero' }),
     c('[data-apply-eval-best]', 'click', { applyEvalBest: 'hero' }),
     c('[data-preview-recovered-detail-mode]', 'click', { previewRecoveredDetailMode: 'on' }),
     c('[data-manual-headline="hero"]', 'input'),
@@ -852,6 +854,7 @@ test('Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and f
   fire(root.nodes.get('[data-save-manual]'), 'click', {}, root);
   fire(root.nodes.get('[data-apply-variant]'), 'click', {}, root);
   fire(root.nodes.get('[data-apply-variant-image]'), 'click', {}, root);
+  fire(root.nodes.get('[data-eval-section-variants]'), 'click', {}, root);
   fire(root.nodes.get('[data-apply-eval-best]'), 'click', {}, root);
   fire(root.nodes.get('[data-preview-recovered-detail-mode]'), 'click', {}, root);
   assert.deepEqual(calls, [
@@ -862,13 +865,79 @@ test('Task 7 B1 B1 preview controls dispatch root-scoped semantic payloads and f
     } }, 'workspace:a:fence:1'],
     ['applySectionVariant', { sectionId: 'hero', variantId: 'variant-a' }, 'workspace:a:fence:1'],
     ['applySectionVariantImage', { sectionId: 'hero', variantId: 'variant-b' }, 'workspace:a:fence:1'],
+    ['evaluateSectionVariants', { sectionId: 'hero' }, 'workspace:a:fence:1'],
     ['applyBestEvaluatedVariant', { sectionId: 'hero' }, 'workspace:a:fence:1'],
     ['setRecoveredDetailMode', true, 'workspace:a:fence:1'],
   ]);
   const staleClick = [...root.rootListeners.get('click')][0];
   preview.onLeave();
   staleClick({ target: root.nodes.get('[data-apply-variant-image]'), preventDefault() {}, stopPropagation() {} });
-  assert.equal(calls.length, 6, 'route-leave listener must not dispatch a stale image variant action');
+  assert.equal(calls.length, 7, 'route-leave listener must not dispatch a stale image variant action');
   dispose(); dispose();
   assert.equal(root.rootListeners.size, 0, 'duplicate bind/dispose must leave no delegated listeners');
+});
+
+test('Task 7 B1 B2 preview evaluation completion is ignored after route leave', async () => {
+  const calls = [];
+  let deferred = null;
+  const names = ['setViewport', 'navigate', 'startGenerating', 'evaluateSectionVariants'];
+  const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
+    actions: {
+      setViewport() {}, navigate() {}, startGenerating() {},
+      evaluateSectionVariants(value, context) {
+        calls.push([value, context.operationToken]);
+        deferred = {};
+        deferred.promise = new Promise(resolve => { deferred.resolve = resolve; });
+        return deferred.promise;
+      },
+    },
+  }));
+  const root = domRoot([c('[data-eval-section-variants]', 'click', { evalSectionVariants: 'hero' })]);
+
+  preview.onEnter();
+  const dispose = preview.bind(root);
+  fire(root.nodes.get('[data-eval-section-variants]'), 'click', {}, root);
+  assert.deepEqual(calls, [[{ sectionId: 'hero' }, 'workspace:a:fence:1']]);
+
+  preview.onLeave();
+  deferred.resolve('late-result');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1, 'route leave must fence stale evaluation completion');
+  assert.equal(root.rootListeners.size, 0, 'route leave must dispose evaluation listener');
+  dispose();
+});
+
+test('Task 7 B1 B2 preview evaluation rebind fences the old completion and leaves no listeners', async () => {
+  const calls = [];
+  const pending = [];
+  const names = ['setViewport', 'navigate', 'startGenerating', 'evaluateSectionVariants'];
+  const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
+    actions: {
+      setViewport() {}, navigate() {}, startGenerating() {},
+      evaluateSectionVariants(value, context) {
+        calls.push([value, context.operationToken]);
+        let resolve;
+        const promise = new Promise(done => { resolve = done; });
+        pending.push({ promise, resolve });
+        return promise;
+      },
+    },
+  }));
+  const root = domRoot([c('[data-eval-section-variants]', 'click', { evalSectionVariants: 'hero' })]);
+
+  preview.onEnter();
+  const firstDispose = preview.bind(root);
+  fire(root.nodes.get('[data-eval-section-variants]'), 'click', {}, root);
+  const stale = pending[0];
+  const secondDispose = preview.bind(root);
+  stale.resolve('stale-result');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1, 'rebind must fence the old evaluation completion');
+
+  fire(root.nodes.get('[data-eval-section-variants]'), 'click', {}, root);
+  pending[1].resolve('current-result');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 2, 'rebound listener must dispatch the current evaluation');
+  firstDispose(); secondDispose(); preview.onLeave();
+  assert.equal(root.rootListeners.size, 0, 'rebind/dispose must leave no evaluation listeners');
 });

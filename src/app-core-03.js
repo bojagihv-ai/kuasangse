@@ -5830,9 +5830,10 @@ function normalizeVariantEvaluation(raw, sectionId, variants) {
   };
 }
 
-async function evaluateSectionVariants(sectionId) {
+async function evaluateSectionVariants(sectionId, operationContext = null) {
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   const section = SECTIONS.find(s => s.id === sectionId);
-  if (!section) return;
+  if (!section) return false;
   const variants = (state.sectionVariants?.[sectionId] || [])
     .map(v => ({
       ...v,
@@ -5845,28 +5846,36 @@ async function evaluateSectionVariants(sectionId) {
       evalLabel: `${sectionVariantLetter(index)} · ${sectionVariantSourceLabel(variant.source)} · ${sectionVariantBasisLabel(sectionId, variant)} · ${sectionVariantModeLabel(sectionId, variant)}`,
     }));
   if (variants.length < 2) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = 'AI 컷 심사는 이미지 시안이 2개 이상일 때 사용할 수 있습니다.';
     render();
-    return;
+    return false;
   }
   const originalSrc = getOriginalProductDataUrl();
   if (!originalSrc) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = '원본 제품 이미지가 없어 후보 컷을 비교할 수 없습니다.';
     render();
-    return;
+    return false;
   }
+  if (!runtimeOperationContextIsCurrent(operationContext)) return false;
   state.sectionVariantEvaluationBusy[sectionId] = true;
   render();
+  let completed = false;
   try {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     const llm = getLLMClient();
     const original = await imageSourceToLlmPayload(originalSrc, 1200);
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     const images = [];
     for (const variant of variants) {
+      if (!runtimeOperationContextIsCurrent(operationContext)) return false;
       images.push({
         id: variant.id,
         label: variant.evalLabel,
         payload: await imageSourceToLlmPayload(variant.image, 1200),
       });
+      if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     }
     const prompt = `You are a strict Korean ecommerce image QA judge.
 Evaluate generated section image variants against the original product image and known product data.
@@ -5929,6 +5938,7 @@ Return ONLY JSON:
         contents: [{ parts }],
         generationConfig: { temperature: 0.2, maxOutputTokens: 6000 },
       });
+      if (!runtimeOperationContextIsCurrent(operationContext)) return false;
       tokenTracker.record(llm.model, data.usageMetadata?.promptTokenCount, data.usageMetadata?.candidatesTokenCount, false, '컷심사');
       let text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
       text = text.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
@@ -5946,20 +5956,27 @@ Return ONLY JSON:
         body: JSON.stringify(body),
       });
       const data = await res.json();
+      if (!runtimeOperationContextIsCurrent(operationContext)) return false;
       if (data.error) throw new Error(data.error.message);
       tokenTracker.record(llm.model, data.usage?.prompt_tokens, data.usage?.completion_tokens, false, '컷심사');
       raw = llm._parseJSON(data.choices?.[0]?.message?.content || '{}');
     } else {
       throw new Error('지원하지 않는 LLM 연결입니다.');
     }
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     if (!state.sectionVariantEvaluations) state.sectionVariantEvaluations = {};
     state.sectionVariantEvaluations[sectionId] = normalizeVariantEvaluation(raw, sectionId, variants);
     savePersistentState();
+    completed = true;
   } catch(e) {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return false;
     state.error = `AI 컷 심사 실패: ${e.message}`;
+  } finally {
+    if (!runtimeOperationContextIsCurrent(operationContext)) return;
+    state.sectionVariantEvaluationBusy[sectionId] = false;
+    render();
   }
-  state.sectionVariantEvaluationBusy[sectionId] = false;
-  render();
+  return completed;
 }
 
 function applyBestEvaluatedVariant(sectionId, operationContext = null) {
@@ -10516,6 +10533,12 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           const variantId = String(payload.variantId || '').trim();
           if (!sectionId || !variantId) return false;
           return applySectionVariantImageOnly(sectionId, variantId, operationContext);
+        },
+        evaluateSectionVariants(payload = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(payload.sectionId || '').trim();
+          if (!sectionId) return false;
+          return evaluateSectionVariants(sectionId, operationContext);
         },
         applyBestEvaluatedVariant(payload = {}, operationContext) {
           assertRuntimeOperationContextCurrent(operationContext);

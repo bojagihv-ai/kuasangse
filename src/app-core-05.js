@@ -15797,13 +15797,6 @@ function bindEvents() {
   bindDetailImageManagementEvents();
   bindPreviewLayerEvents();
 
-  document.querySelectorAll('[data-eval-section-variants]').forEach(btn => {
-    btn.onclick = () => {
-      const sectionId = btn.dataset.evalSectionVariants;
-      if (sectionId) evaluateSectionVariants(sectionId);
-    };
-  });
-
   runBindEventExtensions();
 }
 

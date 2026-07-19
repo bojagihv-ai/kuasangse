@@ -34,7 +34,7 @@ const ACTION_NAMES = Object.freeze([
   'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair',
   'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
   'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
-  'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
+  'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
   'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
   'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
   'openRemainingSectionsAfterStop',
@@ -58,6 +58,10 @@ export function createPreviewMenu(capabilities = {}) {
       ? requiredFunction(actions, name)
       : (typeof actions[name] === 'function' ? actions[name] : () => undefined),
   ]));
+  const reportMenuError = error => {
+    if (error?.message === 'STALE_MENU_OPERATION') return;
+    reportError(error);
+  };
   const renderHelpers = capabilities.renderHelpers || {};
   for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);
 
@@ -109,10 +113,10 @@ export function createPreviewMenu(capabilities = {}) {
   function invoke(name, value, rootIsCurrent = () => true) {
     try {
       const result = contract.invoke(name, value, Object.freeze({ isCurrent: rootIsCurrent }));
-      if (result && typeof result.catch === 'function') result.catch(reportError);
+      if (result && typeof result.catch === 'function') result.catch(reportMenuError);
       return result;
     } catch (error) {
-      reportError(error);
+      reportMenuError(error);
       return undefined;
     }
   }
@@ -122,10 +126,10 @@ export function createPreviewMenu(capabilities = {}) {
     try {
       assertMutable();
       const result = runCommand(menuActions[name], value, isCurrent);
-      if (result && typeof result.catch === 'function') result.catch(reportError);
+      if (result && typeof result.catch === 'function') result.catch(reportMenuError);
       return result;
     } catch (error) {
-      reportError(error);
+      reportMenuError(error);
       return undefined;
     }
   }
@@ -190,11 +194,12 @@ export function createPreviewMenu(capabilities = {}) {
           } }); }
           return;
         }
-        const b1Specs = [['[data-apply-variant]', 'applyVariant', 'applySectionVariant'], ['[data-apply-variant-image]', 'applyVariantImage', 'applySectionVariantImage'], ['[data-apply-eval-best]', 'applyEvalBest', 'applyBestEvaluatedVariant'], ['[data-preview-recovered-detail-mode]', 'previewRecoveredDetailMode', 'setRecoveredDetailMode']];
+        const b1Specs = [['[data-apply-variant]', 'applyVariant', 'applySectionVariant'], ['[data-apply-variant-image]', 'applyVariantImage', 'applySectionVariantImage'], ['[data-eval-section-variants]', 'evalSectionVariants', 'evaluateSectionVariants'], ['[data-apply-eval-best]', 'applyEvalBest', 'applyBestEvaluatedVariant'], ['[data-preview-recovered-detail-mode]', 'previewRecoveredDetailMode', 'setRecoveredDetailMode']];
         for (const [selector, key, name] of b1Specs) {
           const node = closest(event, selector); if (!node) continue;
           const raw = String(node.dataset[key] || '').trim();
           if (name === 'setRecoveredDetailMode') { if (raw === 'on' || raw === 'off') call(name, raw === 'on'); return; }
+          if (name === 'evaluateSectionVariants') { if (raw) call(name, { sectionId: raw }); return; }
           if (name === 'applyBestEvaluatedVariant') { if (raw) call(name, { sectionId: raw }); return; }
           const [sectionId, variantId] = raw.split(':'); if (sectionId && variantId) call(name, { sectionId, variantId }); return;
         }
