@@ -10468,7 +10468,9 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         editorHistory: state.editorHistory,
         html: state.html,
         jpgExportBusy: state.jpgExportBusy,
+        activePreviewLayer: state.activePreviewLayer,
         previewLayerMode: state.previewLayerMode,
+        previewLayerEdits: state.previewLayerEdits,
         previewRecoveredDetailMode: state.previewRecoveredDetailMode,
         previewViewport: state.previewViewport,
         qaReport: state.qaReport,
@@ -10639,6 +10641,100 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
           render();
           return true;
         },
+        undoEditorChange(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          return undoEditorChange();
+        },
+        redoEditorChange(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          return redoEditorChange();
+        },
+        applyTonePreset(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          return applyTonePreset(value);
+        },
+        pushEditorHistory(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          pushEditorHistory(String(value || '편집 전'));
+          return true;
+        },
+        resetPreviewOrder(_value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          pushEditorHistory('섹션 순서 초기화 전');
+          state.sectionOrder = allSectionDefinitions().map(section => section.id);
+          savePersistentState();
+          render();
+          return true;
+        },
+        updateSectionOrder(value, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          if (!Array.isArray(value)) return false;
+          state.sectionOrder = value.map(sectionId => String(sectionId || '').trim()).filter(Boolean);
+          savePersistentState();
+          render();
+          return true;
+        },
+        setActivePreviewLayer(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          const layerId = String(value.layerId || '').trim();
+          if (!sectionId || !layerId) return false;
+          state.activePreviewLayer = { sectionId, layerId };
+          state.previewLayerMode = true;
+          render();
+          return true;
+        },
+        setLayerEdit(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          const layerId = String(value.layerId || '').trim();
+          if (!sectionId || !layerId || !value.patch || typeof value.patch !== 'object') return false;
+          setLayerEdit(sectionId, layerId, value.patch);
+          state.activePreviewLayer = { sectionId, layerId };
+          render();
+          return true;
+        },
+        resetLayerEdit(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          const layerId = String(value.layerId || '').trim();
+          if (!sectionId || !layerId) return false;
+          resetLayerEdit(sectionId, layerId);
+          state.activePreviewLayer = { sectionId, layerId };
+          render();
+          return true;
+        },
+        resetLayerSection(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          if (!sectionId) return false;
+          resetLayerEdit(sectionId);
+          state.activePreviewLayer = null;
+          render();
+          return true;
+        },
+        nudgeLayer(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          const layerId = String(value.layerId || '').trim();
+          if (!sectionId || !layerId) return false;
+          const current = getLayerEdit(sectionId, layerId);
+          setLayerEdit(sectionId, layerId, { x: current.x + Number(value.dx || 0), y: current.y + Number(value.dy || 0) });
+          state.activePreviewLayer = { sectionId, layerId };
+          render();
+          return true;
+        },
+        commitLayerDrag(value = {}, operationContext) {
+          assertRuntimeOperationContextCurrent(operationContext);
+          const sectionId = String(value.sectionId || '').trim();
+          const layerId = String(value.layerId || '').trim();
+          if (!sectionId || !layerId) return false;
+          setLayerEdit(sectionId, layerId, { x: Number(value.x || 0), y: Number(value.y || 0) });
+          state.activePreviewLayer = { sectionId, layerId };
+          savePersistentState();
+          render();
+          return true;
+        },
         updatePreviewInstruction(payload) {
           setSectionInstructionValue(payload.sectionId, payload.value, 'manual', { source: '미리보기 수정 패널' });
         },
@@ -10661,6 +10757,12 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         exportJpgSections: () => exportJpgSections(),
         exportHTML: () => exportHTML(),
       },
+      getLayerEdit: (sectionId, layerId) => {
+        const edit = getLayerEdit(sectionId, layerId);
+        return { ...edit };
+      },
+      getDocument: () => document,
+      getSortable: () => (typeof window !== 'undefined' ? window.Sortable : null),
       renderHelpers: {
         syncFixedSectionPlacementImages,
         orderedSections,

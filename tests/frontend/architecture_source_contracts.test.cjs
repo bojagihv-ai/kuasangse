@@ -110,6 +110,7 @@ test('런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 
     'src/menus/sections-menu-a2-events.mjs',
     'src/menus/generating-menu.mjs',
     'src/menus/preview-menu-view.mjs',
+    'src/menus/preview-layer-events.mjs',
     'src/menus/preview-image-insert-events.mjs',
     'src/menus/preview-ai-repair-events.mjs',
     'src/menus/preview-menu.mjs',

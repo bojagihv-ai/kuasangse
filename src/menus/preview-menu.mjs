@@ -2,6 +2,7 @@ import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contr
 import { renderPreviewView } from './preview-menu-view.mjs';
 import { createPreviewImageInsertBridge } from './preview-image-insert-events.mjs';
 import { createPreviewAiRepairEvents } from './preview-ai-repair-events.mjs';
+import { createPreviewLayerBridge, PREVIEW_LAYER_ACTION_NAMES } from './preview-layer-events.mjs';
 
 const RENDER_HELPER_NAMES = Object.freeze([
   "syncFixedSectionPlacementImages",
@@ -33,13 +34,13 @@ const RENDER_HELPER_NAMES = Object.freeze([
 ]);
 
 const ACTION_NAMES = Object.freeze([
-  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair', 'closeAiRepair', 'updateAiRepairField', 'persistAiRepairMask', 'runAiRepair',
-  'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
-  'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage',
-  'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode',
-  'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG',
-  'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
+  // Navigation, editing, and AI repair actions.
+  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair', 'closeAiRepair', 'updateAiRepairField', 'persistAiRepairMask', 'runAiRepair', 'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
+  // Section content, evaluation, and layer toolbar actions.
+  'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage', 'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode', 'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG', 'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
+  // Image insertion and remaining-section actions.
   'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert', 'closeImageInsert', 'applyImageInsert', 'updateImageInsertFolder', 'loadDetailDriveImages', 'connectImageInsertDrive', 'useDriveDetailImage', 'useCutDetailImage', 'setImageInsertError', 'requestRender',
+  ...PREVIEW_LAYER_ACTION_NAMES,
 ]);
 const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['setViewport', 'navigate', 'startGenerating']));
 
@@ -135,6 +136,7 @@ export function createPreviewMenu(capabilities = {}) {
 
   const imageInsertEvents = createPreviewImageInsertBridge({ getSnapshot, getOperationToken, readImageFileAsDataUrl: capabilities.readImageFileAsDataUrl, actions: menuActions, invokeAction });
   const aiRepairEvents = createPreviewAiRepairEvents({ getSnapshot, getOperationToken, actions: menuActions, callAction: (name, value, context) => invokeAction(name, value, context.isCurrent), createImage: capabilities.createImage, setTimeout: capabilities.setTimeout, clearTimeout: capabilities.clearTimeout, reportError });
+  const layerEvents = createPreviewLayerBridge({ getSnapshot, getOperationToken, runtimeCapabilities: capabilities, renderHelpers, actions: menuActions, invokeAction: (name, value, context) => invokeAction(name, value, context.isCurrent), reportError });
 
   contract = createMenuContract({
     version: MENU_CONTRACT_VERSION,
@@ -218,7 +220,12 @@ export function createPreviewMenu(capabilities = {}) {
       const listeners = { click: onClick, input: onInput }; for (const [type, handler] of Object.entries(listeners)) root?.addEventListener?.(type, handler);
       const imageInsertDispose = typeof root?.addEventListener === 'function' ? imageInsertEvents.bind(root, isCurrent) : () => undefined;
       let aiRepairDispose = typeof root?.addEventListener === 'function' ? aiRepairEvents.bind(root, isCurrent) : () => undefined;
-      activeRefresh = currentRoot => { if (currentRoot && currentRoot !== root) return undefined; aiRepairDispose?.(); aiRepairDispose = aiRepairEvents.bind(root, isCurrent); return aiRepairDispose; };
+      if (typeof root?.addEventListener === 'function') layerEvents.bind(root, isCurrent);
+      activeRefresh = currentRoot => {
+        if (currentRoot && currentRoot !== root) return undefined;
+        aiRepairDispose?.(); aiRepairDispose = aiRepairEvents.bind(root, isCurrent);
+        return layerEvents.refresh(root, isCurrent);
+      };
       const legacyBindings = [];
       if (typeof root?.addEventListener !== 'function') {
         const legacySpecs = [
@@ -242,7 +249,7 @@ export function createPreviewMenu(capabilities = {}) {
         if (disposed) return;
         disposed = true;
         for (const [type, handler] of Object.entries(listeners)) root?.removeEventListener?.(type, handler); imageInsertDispose?.();
-        aiRepairDispose?.(); activeRefresh = null;
+        aiRepairDispose?.(); layerEvents.dispose(root); activeRefresh = null;
         for (const disposeLegacy of legacyBindings.splice(0).reverse()) disposeLegacy();
         activeDisposers.delete(dispose);
         if (bindingByRoot.get(root) === dispose) bindingByRoot.delete(root);

@@ -1,6 +1,6 @@
 {
   "schema": "kuasangse.runtime.v1",
-  "buildId": "20260719-task7-ai-repair-v267",
+  "buildId": "20260719-task7-preview-layer-v268",
   "entry": "app.html",
   "loader": "src/app-loader.js",
   "bundle": "dist/app-runtime.bundle.js",
@@ -45,6 +45,7 @@
     "src/menus/sections-menu-a2-events.mjs",
     "src/menus/generating-menu.mjs",
     "src/menus/preview-menu-view.mjs",
+    "src/menus/preview-layer-events.mjs",
     "src/menus/preview-image-insert-events.mjs",
     "src/menus/preview-ai-repair-events.mjs",
     "src/menus/preview-menu.mjs",
