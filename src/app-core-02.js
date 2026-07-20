@@ -3555,7 +3555,6 @@ function factoryAssetLooksLikeLocalFallbackForRestore(asset = {}) {
 
 function findRestorableCurrentSizeFactoryAsset(target = {}) {
   const factory = target.factory || {};
-  const liveState = typeof window !== 'undefined' ? window.__kuasangseState : null;
   const targetProductKey = restoreTargetProductKey(target);
   const targetInputKey = restoreTargetInputImageKey(target);
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
@@ -3570,11 +3569,6 @@ function findRestorableCurrentSizeFactoryAsset(target = {}) {
       if (targetProductKey && assetProductKey && !restoreKeysCompatible(assetProductKey, targetProductKey)) return false;
       const assetInputKey = restoreAssetInputImageKey(item.asset);
       if (targetInputKey && assetInputKey && assetInputKey !== targetInputKey) return false;
-      if (typeof factoryAssetHasCurrentProductPayload === 'function' && liveState && target === liveState) {
-        try {
-          if (!factoryAssetHasCurrentProductPayload(item.asset, factory, { allowHtml: false })) return false;
-        } catch(e) {}
-      }
       return true;
     })
     .sort((a, b) => {
@@ -4052,10 +4046,7 @@ function lastWorkFilterProductCandidates(product = {}, targetKey = '') {
 function sanitizeLastWorkPayloadProductScope(payload = {}, options = {}) {
   if (!payload || typeof payload !== 'object') return payload;
   const out = options.mutate ? payload : cloneData(payload);
-  const activeState = typeof window !== 'undefined' && window.__kuasangseState && typeof window.__kuasangseState === 'object'
-    ? window.__kuasangseState
-    : null;
-  const targetName = String(options.targetName || lastWorkPayloadProductName(out) || activeState?.factory?.product?.productName || activeState?.productName || '').trim();
+  const targetName = String(options.targetName || lastWorkPayloadProductName(out) || '').trim();
   const targetKey = lastWorkNormalizeIdentityText(targetName);
   if (!targetKey) return out;
   let changed = false;
@@ -7647,8 +7638,6 @@ function loadPersistentSession() {
     s.activeBrandPresetId = typeof s.activeBrandPresetId === 'string' ? s.activeBrandPresetId : loadActiveBrandPresetId();
     s.optionSorter = normalizeOptionSorterState(s.optionSorter);
     s.factory = normalizeFactoryState(s.factory);
-    const factorySnapshot = loadFactoryLastSnapshot();
-    if (factorySnapshot && window.__kuasangseState) s.factory = mergeFactoryStoredImages(s.factory, factorySnapshot);
     if (typeof stripFactoryImages === 'function') s.factory = normalizeFactoryState(stripFactoryImages(s.factory));
     s.factory.cafe24FieldView = resolveCafe24FieldViewForLastWork(s.factory);
     persistCafe24FieldViewForLastWork(s.factory.cafe24FieldView);

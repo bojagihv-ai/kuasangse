@@ -792,16 +792,17 @@ test('Task 7 image generation testability is an explicit executor capability wit
 
 test('Task 7 retires mutable classic globals and publishes only frozen diagnostics and metadata', () => {
   // Given: every shell-owned classic, loader, and workspace authority boundary is inventoried.
+  const persistenceCore = source(CORE_02);
   const core = source(CORE_03);
   const factoryCore = source(CORE_05);
   const asyncCore = source(CORE_06);
   const loader = source(APP_LOADER);
   const lock = source(WORKSPACE_LOCK);
-  const classic = `${core}\n${factoryCore}\n${asyncCore}`;
+  const classic = `${persistenceCore}\n${core}\n${factoryCore}\n${asyncCore}`;
 
   // When/Then: live state, service, render, timing, rebinding, and writable test aliases are absent.
   const forbidden = Object.freeze({
-    stateAssignment: /window\s*\.\s*(?:state|__kuasangseState)\s*=/,
+    stateAssignment: /window\s*\.\s*(?:state|__kuasangseState)\s*=(?!=)/,
     legacyStateConsumption: /window\s*\.\s*__kuasangseState\b/,
     stateGetter: /Object\.defineProperty\(\s*window\s*,\s*['"]state['"]/,
     mutableFactoryFunction: /(?:^|\n)\s*(?:async\s+)?function\s+factoryState\s*\(/,
