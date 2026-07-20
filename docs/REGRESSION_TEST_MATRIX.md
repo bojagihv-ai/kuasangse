@@ -4,6 +4,7 @@
 
 - 매일 1회 권장: 저장소 루트의 `상세페이지_매일회귀테스트.cmd`를 더블클릭한다.
 - 빠른 단위 검사: `npm run verify:daily:fast`
+- 메뉴·상태·수명주기 구조 검사: `npm run verify:architecture`
 - 일상 전체 검사: `npm run verify:daily`
 - 넓은 장기 검사: `npm run verify:daily:full`
 - 최신 결과: `test-results/daily-regression/latest.md`
@@ -69,12 +70,26 @@
 11. 브라우저 회귀 실행기는 전용 `regression:*` 작업공간을 사용하고 실제 전역·작업공간별 마지막 작업 스냅샷의 SHA-256을 바꾸지 않는다.
 12. 작업파일의 `__stored_in_indexeddb__` 표식은 같은 섹션에 이미 복원된 로컬 아카이브 URL을 덮지 않는다. 실제 URL 15개가 있으면 저장·복원 뒤에도 15개 모두 표시 가능해야 한다.
 13. 같은 저장 작업은 한 창만 편집하며, 인계 뒤 이전 창의 autosave·pagehide·IndexedDB·서버·작업파일·아카이브 쓰기는 현재 fencing token과 revision 검증 전에 어떤 부작용도 만들면 안 된다.
+14. 메뉴와 조립공장 탭은 각각 등록된 target, 공개 API, 이벤트 수명주기를 소유하며 다른 메뉴 DOM이나 레거시 전역 상태를 직접 변경하지 않는다.
+15. 저장은 승인된 persistence 어댑터와 migration/CAS 경계만 통과하며, 브라우저 저장소·서버 전송을 메뉴에서 직접 호출하지 않는다.
+16. `src`의 모든 런타임 ESM은 manifest에 정확히 한 번 등록되고 순환 import가 없어야 하며, 생성 bundle은 반드시 manifest/source와 일치해야 한다.
+
+### Task 8 구조 회귀 게이트
+
+- `MENU-*`, `FACTORY-*`: 12개 사이드바 메뉴와 7개 조립공장 탭의 target·공개 명령·이벤트 소유권을 각각 검사한다.
+- `ARCH-TARGETS-01`, `ARCH-IMPORTS-01`, `ARCH-ENFORCE-01`: target 등록, import 순환 0건, 다른 메뉴 DOM·레거시 전역 상태·저장 경계 우회를 차단한다.
+- `ARCH-LIFECYCLE-01`: bind/dispose를 반복해도 listener와 timer가 누적되지 않아야 한다.
+- `SAVE-MIGRATION-01`, `SAVE-CONCURRENCY-01`: 오래된 작업파일 이관과 lease/fencing/CAS 충돌 방지를 함께 검증한다.
+- 모든 `src/**/*.mjs`는 `src/runtime-manifest.json`에 정확히 한 번 등록되고 런타임 모듈은 순수 코드 250줄 이하를 유지한다.
+- `dist/app-runtime.bundle.js`는 직접 편집하지 않고 `node tools/build_runtime_bundle.cjs`로 생성하며 `node tools/build_runtime_bundle.cjs --check`가 byte 단위 일치를 확인한다.
 
 ## 자동 채점 범위
 
 | 공정 | 대표 테스트 ID | 실제 검증 대상 | 합격 기준 |
 |---|---|---|---|
 | 공통 | `SYN-*`, `UNIT-FE-01`, `UNIT-FE-02`, `UNIT-BE-01` | 모든 분리 JS, 핵심 Python, 실제 브라우저 함수, 실제 archive 함수, 회귀 실행기 재시도 분류 | 문법 오류 0, 단위 계약 전부 통과, 제품 검증 실패는 재시도하지 않음 |
+| 공통 구조 | `ARCH-*` | ESM manifest, import graph, 모듈 크기, 전역 상태·저장 경계, listener/timer 수명주기, 생성 bundle | 누락·중복·순환·우회·누적·bundle 불일치 0건 |
+| 메뉴·조립공장 | `MENU-*`, `FACTORY-*` | 12개 메뉴와 7개 탭의 target·공개 API·이벤트 소유권 | 19개 모듈이 각각 독립 수명주기와 등록 gate 보유 |
 | 공통 동시 편집 | `UNIT-AUTH-01`, `AUTH-01` | 서버 lease/CAS, 브라우저 인계, stale writer, 작업파일 digest/revision, 작은 창 충돌 UI | 한 편집자만 허용, 409/428 안정 코드, stale 부작용 0건, 1280x480·390x600 복구 동작 모두 도달 |
 | 1 제품/DB | `SCOPE-*`, `DB-*` | 식별자 드리프트, 작업파일 분리, 후보 없음, DB/Cafe24 확정 | 타 상품 후보 0건 혼입, 새로고침 후 확정 유지 |
 | 2 대표이미지 | `IMG-01` | 기본 이미지 IndexedDB/작업파일 복원 | Ctrl+F5 뒤 동일 이미지 지문 유지 |
@@ -86,6 +101,7 @@
 | 공통 성능 | `PERF-01` | 96개 후보 렌더와 메모리 | 기존 성능 스크립트 임계값 전부 통과 |
 | 공통 성능 | `PERF-02` | 분석·상세생성 주기 갱신·조립공장 설명 줄바꿈 | 전용 진행 패널이 준비된 동안 full render 0회, `.factory-desc` 한국어 keep-all 유지 |
 | 7 저장/내보내기 | `SAVE-*` | 작업파일, 새 작업, Ctrl+F5, 로컬 아카이브 | 같은 파일은 복원, 다른 파일은 분리, 원본 삭제 0건 |
+| 7 저장 이관·동시성 | `SAVE-MIGRATION-01`, `SAVE-CONCURRENCY-01` | 이전 schema 이관, lease/fencing/CAS 병합 | 손실 없는 이관, stale writer 부작용 0건, revision 단조 증가 |
 
 ## 기능별 상세 정답지
 

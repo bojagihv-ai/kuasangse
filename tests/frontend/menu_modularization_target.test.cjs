@@ -5,9 +5,7 @@ const { pathToFileURL } = require('node:url');
 const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const TARGET_RED = process.env.KUASANGSE_MENU_TARGET_RED === '1';
-const futureTargetTest = TARGET_RED ? test : test.skip;
-
+const REGISTRY_URL = pathToFileURL(path.join(ROOT, 'src', 'modules', 'module-registry.mjs')).href;
 const TARGETS = [
   ['upload', 'src/menus/upload-menu.mjs', 'product-analysis', 'menu:v1 + product commands', 'MENU-UPLOAD'],
   ['analyzing', 'src/menus/analysis-menu.mjs', 'product-analysis', 'menu:v1 + analysis commands', 'MENU-ANALYSIS'],
@@ -54,6 +52,18 @@ test('target matrix는 12 sidebar route와 7 factory tab을 빠짐없이 한 번
   assert.ok(TARGETS.every(item => item.owner && item.api && item.gate));
 });
 
+for (const target of TARGETS) {
+  test(`${target.gate}: ${target.id} 경계는 전용 구현과 registry descriptor를 가진다`, async () => {
+    assert.equal(fs.existsSync(absolute(target.implementation)), true, `missing implementation: ${target.implementation}`);
+    const { moduleRegistry } = await import(REGISTRY_URL);
+    assert.deepEqual(moduleRegistry.get(target.id), {
+      ...target,
+      kind: target.id.startsWith('factory/') ? 'factory-tab' : 'sidebar',
+      order: TARGETS.filter(item => item.id.startsWith('factory/') === target.id.startsWith('factory/')).indexOf(target),
+    });
+  });
+}
+
 test('TARGET-MODULE-REGISTRY: 19개 경계는 구현을 위조하지 않고 owner/API/gate target descriptor를 제공한다', async () => {
   const registryPath = absolute('src/modules/module-registry.mjs');
   assert.equal(fs.existsSync(registryPath), true, 'missing module registry foundation');
@@ -73,6 +83,7 @@ test('TARGET-MISSING-OWNERSHIP-CONTRACT: immutable store와 exhaustive registry�
     'src/modules/menu-contracts.mjs',
     'src/modules/app-store.mjs',
     'src/modules/composition-commands.mjs',
+    'src/modules/module-targets.mjs',
     'src/modules/module-registry.mjs',
     'src/modules/state-ownership.mjs',
   ];
@@ -91,7 +102,7 @@ test('TARGET-MISSING-OWNERSHIP-CONTRACT: immutable store와 exhaustive registry�
   assert.match(contracts, /bind[\s\S]*dispos|onLeave/);
 });
 
-futureTargetTest('TARGET-MISSING-PERSISTENCE-GATEWAY: workspace 저장은 fencing metadata를 요구하는 단일 gateway로 모인다', () => {
+test('TARGET-PERSISTENCE-GATEWAY: workspace 저장은 fencing metadata를 요구하는 단일 gateway로 모인다', () => {
   const gateway = 'src/modules/workspace-persistence.mjs';
   assert.equal(fs.existsSync(absolute(gateway)), true, `missing persistence gateway: ${gateway}`);
   const gatewaySource = [
@@ -108,7 +119,7 @@ futureTargetTest('TARGET-MISSING-PERSISTENCE-GATEWAY: workspace 저장은 fencin
   assert.match(gatewaySource, /authoritative/i);
 });
 
-futureTargetTest('TARGET-MISSING-LOCK-CAS: server lease는 monotonic fence와 CAS 409/428을 강제한다', () => {
+test('TARGET-LOCK-CAS: server lease는 lock 안의 revision compare-and-swap과 409/428을 강제한다', () => {
   const required = [
     'backend/services/workspace_lock_service.py',
     'backend/routes/api_workspace_lock.py',
@@ -119,13 +130,18 @@ futureTargetTest('TARGET-MISSING-LOCK-CAS: server lease는 monotonic fence와 CA
   const backend = required.map(source).join('\n').toLowerCase();
   assert.match(backend, /lease/);
   assert.match(backend, /fencing[_ ]token/);
-  assert.match(backend, /compare[_ -]?and[_ -]?swap|\bcas\b/);
+  assert.match(backend, /with self\._locked\(\)/);
+  assert.match(backend, /def _require_revision/);
+  assert.match(backend, /expected_revision/);
+  assert.match(backend, /commit_mutation/);
   assert.match(backend, /takeover/);
   assert.match(backend, /\b409\b/);
   assert.match(backend, /\b428\b/);
 });
 
-test('failing-first target는 아직 normal regression manifest에 등록하지 않는다', () => {
-  const manifest = source('tools/regression_manifest.cjs');
-  assert.doesNotMatch(manifest, /menu_modularization_target\.test\.cjs/);
+test('완료된 target gate는 normal regression manifest에 등록된다', () => {
+  const { MODULE_TARGET_GATES, buildRegressionSteps } = require('../../tools/regression_manifest.cjs');
+  assert.deepEqual(MODULE_TARGET_GATES.map(item => item.id), TARGETS.map(item => item.gate));
+  const registeredIds = new Set(buildRegressionSteps('python').map(step => step.id));
+  assert.deepEqual(TARGETS.filter(item => !registeredIds.has(item.gate)), []);
 });

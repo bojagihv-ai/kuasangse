@@ -57,8 +57,42 @@ const MANUAL_EXTERNAL_GATES = [
   'GPT/Google/Cafe24 OAuth 재로그인: 저장된 인증 만료 시에만 API Hub 상태 확인 후 실행',
 ];
 
+const MODULE_TARGET_GATES = Object.freeze([
+  ['MENU-UPLOAD', '업로드 메뉴'],
+  ['MENU-ANALYSIS', '분석 메뉴'],
+  ['MENU-COMP', '경쟁사 메뉴'],
+  ['MENU-SECTIONS', '섹션 메뉴'],
+  ['MENU-GENERATE', '상세 생성 메뉴'],
+  ['MENU-PREVIEW', '미리보기 메뉴'],
+  ['MENU-CUTS', '이미지컷 메뉴'],
+  ['MENU-OPTIONS', '옵션분류기 메뉴'],
+  ['MENU-FACTORY', '조립공장 메뉴'],
+  ['MENU-AUTO', '자동화 메뉴'],
+  ['MENU-SETTINGS', '모델 설정 메뉴'],
+  ['MENU-MANUAL', '사용설명서 메뉴'],
+  ['FACTORY-START', '조립공장 시작 탭'],
+  ['FACTORY-DB', '조립공장 DB 탭'],
+  ['FACTORY-FIELDS', '조립공장 필수값 탭'],
+  ['FACTORY-COMP', '조립공장 경쟁사 탭'],
+  ['FACTORY-ASSETS', '조립공장 이미지 탭'],
+  ['FACTORY-SECTIONS', '조립공장 상세페이지 탭'],
+  ['FACTORY-PUBLISH', '조립공장 등록 탭'],
+].map(([id, title]) => Object.freeze({ id, title })));
+
 function nodeFile(id, area, title, file, tier = 'daily', timeoutMs = 360000) {
   return { id, area, title, tier, command: process.execPath, args: [file], timeoutMs };
+}
+
+function nodeTestPattern(id, area, title, file, pattern, tier = 'fast', timeoutMs = 120000) {
+  return {
+    id,
+    area,
+    title,
+    tier,
+    command: process.execPath,
+    args: ['--test', '--test-name-pattern', pattern, file],
+    timeoutMs,
+  };
 }
 
 function buildRegressionSteps(pythonExe) {
@@ -99,6 +133,57 @@ function buildRegressionSteps(pythonExe) {
       clearEnv: ['SSL_CERT_FILE'],
     },
     nodeFile('UNIT-ARCH-01', '공통/구조', '실행 기준·identity·revision 구조 계약', 'tests/frontend/architecture_source_contracts.test.cjs', 'fast'),
+    nodeFile('ARCH-TARGETS-01', '공통/구조', '19개 메뉴·탭 소유권과 저장·잠금 목표 계약', 'tests/frontend/menu_modularization_target.test.cjs', 'fast'),
+    nodeFile('ARCH-IMPORTS-01', '공통/구조', 'ESM import graph·전역·mutable export 계약', 'tests/frontend/import_graph_contracts.test.cjs', 'fast'),
+    nodeFile('ARCH-ENFORCE-01', '공통/구조', 'manifest·module size·저장 경계·bundle 통합 계약', 'tests/frontend/task8_architecture_gates.test.cjs', 'fast'),
+    {
+      id: 'ARCH-LIFECYCLE-01', area: '공통/구조', title: '메뉴·탭 listener와 disposer 독립 수명주기', tier: 'fast',
+      command: process.execPath,
+      args: [
+        '--test',
+        'tests/frontend/menu_contracts.test.cjs',
+        'tests/frontend/task5_low_coupling_menus.test.cjs',
+        'tests/frontend/task6_domain_route_modules.test.cjs',
+        'tests/frontend/task7_menu_event_ownership.test.cjs',
+        'tests/frontend/task7_factory_modules.test.cjs',
+        'tests/frontend/task7_shell_modules_unit.test.cjs',
+      ],
+      timeoutMs: 180000,
+    },
+    {
+      id: 'SAVE-MIGRATION-01', area: '공통/저장', title: 'legacy·IDB·server·archive·workfile migration 계약', tier: 'fast',
+      command: process.execPath,
+      args: [
+        '--test',
+        'tests/frontend/persistence_migration_contracts.test.cjs',
+        'tests/frontend/persistence_gateway_contracts.test.cjs',
+        'tests/frontend/persistence_destination_cas.test.cjs',
+      ],
+      timeoutMs: 180000,
+    },
+    {
+      id: 'SAVE-CONCURRENCY-01', area: '공통/동시 편집', title: '두 세션 stale writer·takeover·completion race 계약', tier: 'fast',
+      command: process.execPath,
+      args: [
+        '--test',
+        'tests/frontend/workspace_lock_contracts.test.cjs',
+        'tests/frontend/workspace_fencing_orchestrator.test.cjs',
+        'tests/frontend/workspace_midflight_fencing.test.cjs',
+        'tests/frontend/task7_workspace_lock_completion_races.test.cjs',
+        'tests/frontend/task7_workspace_lock_takeover_guards.test.cjs',
+        'tests/frontend/task7_workspace_lock_takeover_races.test.cjs',
+        'tests/frontend/task7_workspace_lock_transition_races.test.cjs',
+        'tests/frontend/task7_takeover_hydration_authority.test.cjs',
+      ],
+      timeoutMs: 180000,
+    },
+    ...MODULE_TARGET_GATES.map(({ id, title }) => nodeTestPattern(
+      id,
+      '공통/모듈 경계',
+      `${title} 전용 구현·registry gate`,
+      'tests/frontend/menu_modularization_target.test.cjs',
+      `^${id}:`,
+    )),
     nodeFile('UNIT-FE-01', '공통/데이터 격리', '프론트 실제 함수 단위 계약', 'tests/frontend/factory_core_contracts.test.cjs', 'fast'),
     nodeFile('UNIT-FE-02', '공통/실행 안정성', '브라우저 인프라 실패만 1회 재시도', 'tests/frontend/regression_runner_contracts.test.cjs', 'fast'),
     {
@@ -171,4 +256,10 @@ function buildRegressionSteps(pythonExe) {
   ];
 }
 
-module.exports = { FRONTEND_SOURCES, MANUAL_EXTERNAL_GATES, RUNTIME_SOURCES, buildRegressionSteps };
+module.exports = {
+  FRONTEND_SOURCES,
+  MANUAL_EXTERNAL_GATES,
+  MODULE_TARGET_GATES,
+  RUNTIME_SOURCES,
+  buildRegressionSteps,
+};
