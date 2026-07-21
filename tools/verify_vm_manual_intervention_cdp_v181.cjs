@@ -33,7 +33,7 @@ async function main() {
     await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.ensureCompMarketScrapeState)', 60000);
     await new Promise(resolve => setTimeout(resolve, 1500));
 
-    const result = await evaluate(cdp, `(() => {
+    const result = await evaluate(cdp, `(async () => {
       const factory = window.factoryState();
       window.state.step = 'factory';
       window.state.compPage = window.state.compPage || {};
@@ -70,7 +70,7 @@ async function main() {
         message: 'VM 상세수집은 추가 확인이 필요합니다. VM 상태와 로그인/보안확인을 확인해주세요.',
         time: '오후 02:00:00',
       }];
-      window.render();
+      await window.render();
       const panel = document.querySelector('[data-factory-manual-intervention]');
       const resume = panel?.querySelector('[data-factory-guide-action="resume-comp-market-detail"]');
       return {
@@ -97,7 +97,7 @@ async function main() {
     console.log(JSON.stringify(payload, null, 2));
     assertChecks(failures.map(message => ({ ok: false, message })));
   } finally {
-    try { cdp.close(); } catch (_) {}
+    try { await cdp.close(); } catch (_) {}
     await runtime.cleanup();
   }
 }

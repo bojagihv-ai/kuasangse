@@ -127,7 +127,7 @@ async function main() {
       hook: svgData('HOOK FAIL', '#dc2626'),
     };
 
-    const setup = await evaluate(cdp, `(() => {
+    const setup = await evaluate(cdp, `(async () => {
       const inputImage = ${JSON.stringify(inputImage)};
       const oldImages = ${JSON.stringify(oldImages)};
       const generatedImages = ${JSON.stringify(generatedImages)};
@@ -242,11 +242,18 @@ async function main() {
         pending: {},
         generatedImages,
         failImageFor: '',
+        originals: {
+          ensureCurrentProductAnalysisForGeneration,
+          hasImageConnection,
+          syncFixedSectionPlacementImage,
+          getLLMClient,
+          generateWithSelectedImageModel,
+        },
       };
-      window.ensureCurrentProductAnalysisForGeneration = () => true;
-      window.hasImageConnection = () => true;
-      window.syncFixedSectionPlacementImage = () => null;
-      window.getLLMClient = () => ({
+      ensureCurrentProductAnalysisForGeneration = () => true;
+      hasImageConnection = () => true;
+      syncFixedSectionPlacementImage = () => null;
+      getLLMClient = () => ({
         generateSectionContent: section => {
           window.__sectionRegenV214.calls.push(section.id);
           return new Promise(resolve => {
@@ -263,7 +270,7 @@ async function main() {
           });
         },
       });
-      window.generateWithSelectedImageModel = async prompt => {
+      generateWithSelectedImageModel = async prompt => {
         const sectionId = ['header', 'key_features', 'hook'].find(id => String(prompt || '').includes(id))
           || window.__sectionRegenV214.calls[window.__sectionRegenV214.calls.length - 1];
         window.__sectionRegenV214.imageCalls.push(sectionId);
@@ -271,7 +278,7 @@ async function main() {
         return window.__sectionRegenV214.generatedImages[sectionId];
       };
       window.state.step = 'sections';
-      window.render();
+      await Promise.resolve(window.render());
       return {
         build: window.__KUASANGSE_APP_BUILD_ID__ || '',
         productKey,
@@ -286,7 +293,46 @@ async function main() {
     // 헤더와 핵심 특징은 실제 버튼을 눌러 기존 2개 후보에 새 후보를 하나씩 추가한다.
     for (const sectionId of ['header', 'key_features']) {
       const clickState = await clickRegenerate(cdp, sectionId);
-      await waitFor(cdp, `window.__sectionRegenV214?.calls?.includes('${sectionId}')`, 5000);
+      try {
+        await waitFor(cdp, `window.__sectionRegenV214?.calls?.includes('${sectionId}')`, 5000);
+      } catch (error) {
+        let rootListeners = [];
+        try {
+          const rootObject = await cdp.send('Runtime.evaluate', {
+            expression: "document.getElementById('app')",
+            returnByValue: false,
+          });
+          const listenerResult = await cdp.send('DOMDebugger.getEventListeners', {
+            objectId: rootObject.result?.objectId,
+          });
+          rootListeners = (listenerResult.listeners || []).map(listener => ({
+            type: listener.type,
+            useCapture: listener.useCapture,
+            lineNumber: listener.lineNumber,
+            scriptId: listener.scriptId,
+          }));
+        } catch (_) {}
+        const diagnostics = await evaluate(cdp, `(() => ({
+          clickState: ${JSON.stringify(clickState)},
+          calls: window.__sectionRegenV214?.calls || [],
+          generating: window.state?.sectionGenerating?.['${sectionId}'] || '',
+          error: window.state?.error || '',
+          progressMsg: window.state?.progressMsg || '',
+          activeStep: window.state?.step || '',
+          buttonText: document.querySelector('[data-section-id="${sectionId}"] button[data-generate-section="${sectionId}"]')?.textContent || '',
+          lock: window.state?.sectionLocks?.['${sectionId}'] || false,
+          loadErrors: window.__KUASANGSE_LOAD_ERRORS__ || [],
+          appClickListeners: typeof getEventListeners === 'function'
+            ? (getEventListeners(document.getElementById('app'))?.click || []).length
+            : null,
+          buttonHasInlineHandler: !!document.querySelector('[data-section-id="${sectionId}"] button[data-generate-section="${sectionId}"]')?.onclick,
+          route: shellRuntimeComposition?.routeController?.currentRoute?.() || '',
+          menuRegistered: runtimeMenuModules?.has?.('sections') || false,
+          currentMenuToken: currentRuntimeMenuOperationToken(),
+        }))()`);
+        diagnostics.rootListeners = rootListeners;
+        throw new Error(`${error.message}\nDETAIL-03 click diagnostics: ${JSON.stringify(diagnostics)}`);
+      }
       runningStates[sectionId] = await readSectionState(cdp, sectionId);
       if (sectionId === 'header') await capture(cdp, RUNNING_PATH);
       await resolveSection(cdp, sectionId);

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { MANUAL_EXTERNAL_GATES, RUNTIME_SOURCES, buildRegressionSteps } = require('./regression_manifest.cjs');
 const {
   captureRuntimeSourceSnapshot,
@@ -142,14 +142,27 @@ function commandText(step) {
 }
 
 function isBrowserStep(step) {
-  return (step.args || []).some(value => /cdp/i.test(String(value)));
+  return step.browser === true || (step.args || []).some(value => /cdp/i.test(String(value)));
 }
 
 function isRetryableInfrastructureFailure(step, result) {
   if (result.passed || !isBrowserStep(step)) return false;
   const output = String(result.tail || '');
   if (/Factory browser verification failed/i.test(output)) return false;
-  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|waitFor timeout: !!\(window\./i.test(output);
+  if (result.timedOut === true) return true;
+  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET|SocketError: other side closed|waitFor timeout: !!\(window\./i.test(output);
+}
+
+function terminateProcessTree(child) {
+  if (!child?.pid) return;
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (!result.error) return;
+  }
+  try { child.kill('SIGKILL'); } catch (_) {}
 }
 
 function sourceMutationFailure(comparison) {
@@ -203,7 +216,7 @@ async function runStepAttempt(step, index, runDir, attempt = 1) {
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    try { child.kill('SIGKILL'); } catch (_) {}
+    terminateProcessTree(child);
   }, step.timeoutMs);
   const exitCode = await new Promise(resolve => {
     child.once('error', error => {

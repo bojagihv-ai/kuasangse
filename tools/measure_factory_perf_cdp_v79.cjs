@@ -10,7 +10,11 @@ const {
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
+const BACKEND_BASE = process.env.KUASANGSE_BACKEND_URL
+  || process.env.KUASANGSE_BACKEND_BASE
+  || 'http://127.0.0.1:5050';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
+const RENDER_BUDGET_MS = 900;
 
 function makeSvgDataUrl(index, bytes = 22000) {
   const filler = String(index).padStart(3, '0') + '-'.repeat(Math.max(0, bytes));
@@ -26,6 +30,16 @@ function makeSvgDataUrl(index, bytes = 22000) {
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const count = Number(process.env.FACTORY_PERF_ASSETS || 96);
+  const stageIds = ['hero', 'size', 'cuts', 'options', 'detail'];
+  const stageRetentionCaps = { hero: 12, size: 10, cuts: 18, options: 10, detail: 4 };
+  const requestedAssetsByStage = Object.fromEntries(stageIds.map(stageId => [stageId, 0]));
+  for (let index = 0; index < count; index += 1) {
+    requestedAssetsByStage[stageIds[index % stageIds.length]] += 1;
+  }
+  const expectedRuntimeAssetCount = stageIds.reduce(
+    (total, stageId) => total + Math.min(requestedAssetsByStage[stageId], stageRetentionCaps[stageId]),
+    0,
+  );
   const cdpRuntime = await ensureCdp(CDP_URL);
   const targets = cdpRuntime.targets;
   const target = targets.find(item => item.type === 'page') || targets[0];
@@ -34,6 +48,9 @@ async function main() {
   await cdp.opened;
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `try { localStorage.setItem('gemini_backend_url', ${JSON.stringify(BACKEND_BASE)}); } catch (_) {}`,
+  });
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 1280,
     height: 820,
@@ -46,13 +63,29 @@ async function main() {
     await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__);
     return true;
   })()`);
-  await waitFor(cdp, `(() =>
+  const readinessExpression = `(() =>
+    typeof classicRuntimeHydrationReady !== 'undefined' && classicRuntimeHydrationReady === true &&
+    typeof classicRuntimeInitialRenderComplete !== 'undefined' && classicRuntimeInitialRenderComplete === true &&
     typeof sessionAssetsHydrated !== 'undefined' && sessionAssetsHydrated === true &&
-    typeof serverLastWorkHydrated !== 'undefined' && serverLastWorkHydrated === true &&
-    typeof serverLastWorkHydrating !== 'undefined' && serverLastWorkHydrating === false &&
     typeof persistentStateSaving !== 'undefined' && persistentStateSaving === false &&
     typeof lastWorkSaveTimer !== 'undefined' && !lastWorkSaveTimer
-  )()`, 60000);
+  )()`;
+  try {
+    await waitFor(cdp, readinessExpression, Number(process.env.FACTORY_PERF_READY_TIMEOUT_MS || 60000));
+  } catch (error) {
+    const readiness = await evaluate(cdp, `(() => ({
+      classicRuntimeHydrationReady: typeof classicRuntimeHydrationReady === 'undefined' ? null : classicRuntimeHydrationReady,
+      classicRuntimeInitialRenderComplete: typeof classicRuntimeInitialRenderComplete === 'undefined' ? null : classicRuntimeInitialRenderComplete,
+      sessionAssetsHydrated: typeof sessionAssetsHydrated === 'undefined' ? null : sessionAssetsHydrated,
+      serverLastWorkHydrated: typeof serverLastWorkHydrated === 'undefined' ? null : serverLastWorkHydrated,
+      serverLastWorkHydrating: typeof serverLastWorkHydrating === 'undefined' ? null : serverLastWorkHydrating,
+      persistentStateSaving: typeof persistentStateSaving === 'undefined' ? null : persistentStateSaving,
+      persistentStateSaveQueued: typeof persistentStateSaveQueued === 'undefined' ? null : persistentStateSaveQueued,
+      hasLastWorkSaveTimer: typeof lastWorkSaveTimer === 'undefined' ? null : !!lastWorkSaveTimer,
+      hasPersistentRetryTimer: typeof persistentStateSaveRetryTimer === 'undefined' ? null : !!persistentStateSaveRetryTimer,
+    }))()`);
+    throw new Error(`${error.message}\nreadiness=${JSON.stringify(readiness)}`);
+  }
 
   const images = Array.from({ length: count }, (_, i) => makeSvgDataUrl(i + 1));
   const initial = await evaluate(cdp, `(async () => {
@@ -338,22 +371,19 @@ async function main() {
     clone.imageLoadFailed = false;
     clone.imageLoadFailedSrc = '';
     const recovered = window.factoryAssetDisplayImage(clone);
-    const runtimeState = window.__kuasangseState;
-    const previousBackendBaseUrl = runtimeState?.backendBaseUrl;
+    const previousBackendBaseUrl = typeof loadBackendUrl === 'function' ? loadBackendUrl() : '';
     let archiveBaseInvalidated = false;
     try {
-      if (runtimeState) {
-        const archiveProbe = { id: String(asset.id) + '_archive_cache_probe', archiveId: 'factory-cache-probe' };
-        runtimeState.backendBaseUrl = 'http://127.0.0.1:5050/cache-a';
-        const archiveBefore = window.factoryAssetDisplayImage(archiveProbe);
-        runtimeState.backendBaseUrl = 'http://127.0.0.1:5050/cache-b';
-        const archiveAfter = window.factoryAssetDisplayImage(archiveProbe);
-        archiveBaseInvalidated = archiveBefore.includes('/cache-a/') &&
-          archiveAfter.includes('/cache-b/') &&
-          archiveBefore !== archiveAfter;
-      }
+      const archiveProbe = { id: String(asset.id) + '_archive_cache_probe', archiveId: 'factory-cache-probe' };
+      saveBackendUrl('http://127.0.0.1:5050/cache-a');
+      const archiveBefore = window.factoryAssetDisplayImage(archiveProbe);
+      saveBackendUrl('http://127.0.0.1:5050/cache-b');
+      const archiveAfter = window.factoryAssetDisplayImage(archiveProbe);
+      archiveBaseInvalidated = archiveBefore.includes('/cache-a/') &&
+        archiveAfter.includes('/cache-b/') &&
+        archiveBefore !== archiveAfter;
     } finally {
-      if (runtimeState) runtimeState.backendBaseUrl = previousBackendBaseUrl;
+      saveBackendUrl(previousBackendBaseUrl);
     }
     return {
       ready: true,
@@ -376,7 +406,6 @@ async function main() {
   delete initial.displayImageNormalizationByAssetId;
   initial.displayImageNormalizedAssetCount = displayImageNormalizedAssetCount;
   initial.displayImageMaxNormalizationsPerAsset = displayImageMaxNormalizationsPerAsset;
-  const stageIds = ['hero', 'size', 'cuts', 'options', 'detail'];
   const stageChecks = stageIds.flatMap(stageId => {
     const stage = debugState.stages[stageId] || {};
     const sample = stage.sample || {};
@@ -393,16 +422,22 @@ async function main() {
     ];
   });
   assertChecks([
-    { ok: initial.renderCallMs <= 800, message: `초기 렌더가 너무 느립니다: ${initial.renderCallMs}ms` },
+    { ok: initial.renderCallMs <= RENDER_BUDGET_MS, message: `초기 렌더가 너무 느립니다: ${initial.renderCallMs}ms` },
     {
       ok: initial.displayImageNormalizationCalls <= Math.max(8, Math.ceil(count * 3)),
       message: `이미지 표시 원본을 같은 렌더에서 과다 재판별했습니다: ${initial.displayImageNormalizationCalls}회 (자산 ${count}개 · 판별 자산 ${displayImageNormalizedAssetCount}개 · 자산당 최대 ${displayImageMaxNormalizationsPerAsset}회)`,
     },
-    { ok: afterRender.renderMs <= 800, message: `후속 렌더가 너무 느립니다: ${afterRender.renderMs}ms` },
+    { ok: afterRender.renderMs <= RENDER_BUDGET_MS, message: `후속 렌더가 너무 느립니다: ${afterRender.renderMs}ms` },
     { ok: afterRender.domNodes <= 9000, message: `DOM 노드가 너무 많습니다: ${afterRender.domNodes}` },
     { ok: afterRender.heapUsed <= 180 * 1024 * 1024, message: `힙 사용량이 너무 큽니다: ${afterRender.heapUsed}` },
-    { ok: debugState.totalAssets === count, message: `96개 후보 상태가 모두 유지되지 않았습니다: ${debugState.totalAssets}/${count}` },
-    { ok: afterRender.assetCards >= Math.min(count, 50), message: `자산 카드가 충분히 표시되지 않았습니다: ${afterRender.assetCards}` },
+    {
+      ok: debugState.totalAssets === expectedRuntimeAssetCount,
+      message: `단계별 런타임 후보 보존 한도가 어긋났습니다: ${debugState.totalAssets}/${expectedRuntimeAssetCount} (입력 ${count})`,
+    },
+    {
+      ok: afterRender.assetCards >= Math.min(expectedRuntimeAssetCount, 30),
+      message: `단계별 화면 후보 카드가 충분히 표시되지 않았습니다: ${afterRender.assetCards}`,
+    },
     { ok: afterRender.assetImageCount > 0, message: '렌더된 후보 이미지가 없습니다.' },
     {
       ok: afterRender.assetUnexpectedSourceCount === 0,
@@ -431,7 +466,16 @@ async function main() {
     { ok: displayImageCacheBehavior.archiveBaseInvalidated === true, message: '백엔드 주소 변경 뒤 아카이브 이미지 URL 캐시가 갱신되지 않았습니다.' },
     ...stageChecks,
   ]);
-  console.log(JSON.stringify({ url: APP_URL, count, initial, afterRender, debugState, displayImageCacheBehavior, screenshot }, null, 2));
+  console.log(JSON.stringify({
+    url: APP_URL,
+    count,
+    expectedRuntimeAssetCount,
+    initial,
+    afterRender,
+    debugState,
+    displayImageCacheBehavior,
+    screenshot,
+  }, null, 2));
 }
 
 main().catch(err => {

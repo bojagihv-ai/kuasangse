@@ -170,7 +170,7 @@ async function main() {
       if (!asset) throw new Error(stageId + ' 후보 등록 실패');
       if (factory.stages[stageId]) factory.stages[stageId].selectedAssetIds = window.uniqueApiKeys([...(factory.stages[stageId].selectedAssetIds || []), asset.id]);
       const ok = await window.factoryQueueLocalArchiveAsset(asset, 'persistence-v81');
-      savedAssets.push({ stageId, ok, archiveId: asset.archiveId || asset.localArchive?.archiveId || '', imagePersistence: asset.imagePersistence || '', inlineImageLength: asset.inlineImageLength || 0 });
+      savedAssets.push({ stageId, assetId: asset.id, ok });
     }
 
     const sectionAsset = {
@@ -188,7 +188,7 @@ async function main() {
       sourceMap: { productName, productKey, currentRunId: runId, generationRunId: runId, inputImageFingerprint: inputFp, stageId: sectionStageId, sectionId: section.id, source: 'persistence-v81' },
     };
     const sectionOk = await window.factoryQueueLocalArchiveAsset(sectionAsset, 'persistence-v81-section');
-    savedAssets.push({ stageId: sectionStageId, ok: sectionOk, archiveId: sectionAsset.archiveId || sectionAsset.localArchive?.archiveId || '' });
+    savedAssets.push({ stageId: sectionStageId, assetId: sectionAsset.id, ok: sectionOk });
 
     const inputOk = await window.factoryArchiveCurrentInputImage({
       base64: inputBase64,
@@ -199,7 +199,22 @@ async function main() {
       uploadedAt: Date.now(),
     }, { reason: 'persistence-v81-input' });
 
+    if (typeof window.factoryRefreshLocalArchiveAssets === 'function') {
+      await window.factoryRefreshLocalArchiveAssets({ force: true, silent: true, limit: 180 });
+    }
     const latestFactory = window.factoryState();
+    const archiveRows = Array.isArray(latestFactory.archive?.localAssets) ? latestFactory.archive.localAssets : [];
+    savedAssets.forEach(item => {
+      const liveAsset = (latestFactory.assets || []).find(asset => String(asset?.id || '') === String(item.assetId || ''));
+      const archiveRow = archiveRows.find(row => (
+        String(row?.stageId || '') === String(item.stageId || '')
+        && String(row?.productKey || '') === productKey
+        && String(row?.currentRunId || '') === runId
+      ));
+      item.archiveId = liveAsset?.archiveId || liveAsset?.localArchive?.archiveId || archiveRow?.archiveId || '';
+      item.imagePersistence = liveAsset?.imagePersistence || '';
+      item.inlineImageLength = Number(liveAsset?.inlineImageLength || 0);
+    });
     if (typeof window.saveLastWorkNow === 'function') window.saveLastWorkNow({ deep: true });
     if (typeof window.saveFactoryLastSnapshot === 'function') window.saveFactoryLastSnapshot(latestFactory);
     await new Promise(resolve => setTimeout(resolve, 1700));
@@ -233,6 +248,11 @@ async function main() {
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     window.state.currentProjectId = expected.workspaceId;
     window.state.currentProjectName = expected.productName;
+    const authority = await window.ensureWorkspaceEditAuthority('project:' + expected.workspaceId, {
+      force: true,
+      confirmedTakeover: true,
+    });
+    if (authority?.mode !== 'editing') throw new Error('generated image restore authority acquisition failed');
     let factory = window.factoryState();
     const before = {
       productName: factory.product?.productName || window.state.productName || '',
@@ -343,7 +363,7 @@ async function main() {
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   const screenshot = path.join(OUT_DIR, 'factory-persistence-cdp-v81.png');
   fs.writeFileSync(screenshot, Buffer.from(shot.data, 'base64'));
-  cdp.close();
+  await cdp.close();
   await cdpRuntime.cleanup();
 
   const savedArchiveCount = [

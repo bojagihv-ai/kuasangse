@@ -74,7 +74,7 @@ function startupSeedScript(seed, origins = {}) {
     localStorage.removeItem('factory_last_snapshot_v1');
     const nativeFetch = window.fetch.bind(window);
     const allowed = new Set(${JSON.stringify([
-      `POST ${appOrigin}/api/workspace-lock/acquire`,
+      `POST ${backendOrigin}/api/workspace-lock/acquire`,
       `POST ${backendOrigin}/api/last-work`,
       `POST ${backendOrigin}/api/cafe24-control/start`,
       `POST ${apiHubOrigin}/api/invoke/cafe24_control_tower/refresh-token`,
@@ -126,7 +126,7 @@ function same(left, right, keys) {
 
 function mutationSignatures(expected) {
   return [
-    `POST ${expected.appOrigin}/api/workspace-lock/acquire`,
+    `POST ${expected.backendOrigin}/api/workspace-lock/acquire`,
     ...Array.from({ length: 4 }, () => `POST ${expected.backendOrigin}/api/last-work`),
     `POST ${expected.backendOrigin}/api/cafe24-control/start`,
     'POST http://127.0.0.1:4321/api/invoke/cafe24_control_tower/refresh-token',

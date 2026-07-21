@@ -203,7 +203,11 @@ async function main() {
       window.__detailProgressStatusCallsV184 = () => statusCalls;
       window.__detailProgressEndpointCallsV184 = () => endpointCalls.slice();
       window.render();
-      window.__detailProgressRunPromiseV184 = window.runCompMarketDetailCapture([candidate.id]);
+      return true;
+    })()`);
+
+    await evaluate(cdp, `(() => {
+      window.__detailProgressRunPromiseV184 = window.runCompMarketDetailCapture([window.__candidateV184.id]);
       return true;
     })()`);
 
@@ -216,7 +220,7 @@ async function main() {
     await capture(cdp, DURING_SCREENSHOT);
 
     const runResult = await evaluate(cdp, 'window.__detailProgressRunPromiseV184');
-    await evaluate(cdp, 'window.render(); true');
+    await evaluate(cdp, '(() => { window.render(); return true; })()');
     await new Promise(resolve => setTimeout(resolve, 120));
     const done = await readGoal(cdp);
     const finalState = await evaluate(cdp, `(() => {
@@ -244,14 +248,14 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 120));
     const layout = await evaluate(cdp, `(() => {
       const page = document.scrollingElement || document.documentElement;
-      const main = document.querySelector('.main');
+      const scrollRoot = document.querySelector('.app');
       const rail = document.querySelector('.factory-run-status-card');
       const logList = rail?.querySelector('[data-factory-goal-log-list]');
       const logStyle = logList ? getComputedStyle(logList) : null;
       return {
         viewport: { width: window.innerWidth, height: window.innerHeight },
         pageScrollable: !!page && page.scrollHeight > page.clientHeight + 1,
-        mainScrollable: !!main && main.scrollHeight > main.clientHeight + 1,
+        mainScrollable: !!scrollRoot && scrollRoot.scrollHeight > scrollRoot.clientHeight + 1,
         railScrollable: !!rail && rail.scrollHeight > rail.clientHeight + 1,
         logScrollable: !!logList && (logList.scrollHeight > logList.clientHeight + 1 || ['auto', 'scroll'].includes(logStyle?.overflowY || '')),
         horizontalOverflow: !!page && page.scrollWidth > page.clientWidth + 1,
@@ -275,7 +279,7 @@ async function main() {
       return true;
     })()`);
     await evaluate(cdp, 'window.__detailProgressFailurePromiseV184');
-    await evaluate(cdp, 'window.render(); true');
+    await evaluate(cdp, '(() => { window.render(); return true; })()');
     await new Promise(resolve => setTimeout(resolve, 120));
     const failure = await readGoal(cdp);
     const failureState = await evaluate(cdp, `(() => {
@@ -299,7 +303,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 120));
     const statusFailureStart = await readGoal(cdp);
     await evaluate(cdp, 'window.__detailProgressStatusFailurePromiseV184');
-    await evaluate(cdp, 'window.render(); true');
+    await evaluate(cdp, '(() => { window.render(); return true; })()');
     await new Promise(resolve => setTimeout(resolve, 120));
     const statusFailure = await readGoal(cdp);
     const statusFailureState = await evaluate(cdp, `(() => {

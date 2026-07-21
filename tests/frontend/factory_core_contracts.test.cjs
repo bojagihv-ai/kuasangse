@@ -491,7 +491,7 @@ test('현재 페이지 이미지 생성 토큰은 세션과 작업파일 저장�
   }
 });
 
-test('원본 이미지 404는 fallback 성공 시 경고하지 않고 fallback도 실패해야 현재 실패로 등록한다', async () => {
+test('로컬 보관 이미지 404는 fallback도 실패해도 자산을 훼손하지 않고 재연결 대상으로 남긴다', async () => {
   // Given: 원본 URL은 실패하지만 현재 제품 이미지 fallback은 있는 대표 후보를 준비한다.
   const result = await browser.call(() => {
     const stateBackup = structuredClone(state);
@@ -521,6 +521,8 @@ test('원본 이미지 404는 fallback 성공 시 경고하지 않고 fallback�
         failed: !!factoryRuntimeReadFactory().assets[0].imageLoadFailed,
         failedSrc: factoryRuntimeReadFactory().assets[0].imageLoadFailedSrc || '',
         activeDiagnostic: factoryRuntimeReadFactory().logs[0]?.activeDiagnostic === true,
+        retryDeferred: img.dataset.factoryAssetRetryDeferred || '',
+        title: img.title,
       };
       return { fallbackSrc, afterOriginalFailure, afterFallbackFailure };
     } finally {
@@ -533,14 +535,16 @@ test('원본 이미지 404는 fallback 성공 시 경고하지 않고 fallback�
       factoryRuntimeReplaceFactorySnapshot(factoryBackup, { reason: 'factory-core-fallback-contract-restore' });
     }
   });
-  // Then: 첫 실패는 fallback으로 해결되고, 두 번째 실패만 현재 진단이다.
+  // Then: 첫 실패는 fallback으로 해결되고, fallback 실패도 일시적인 보관 서버 단절로 취급한다.
   assert.match(result.afterOriginalFailure.src, /^data:image\/(?:gif|png);base64,R0lGODlhAQAB/);
   assert.equal(result.afterOriginalFailure.attempted, '1');
   assert.equal(result.afterOriginalFailure.failed, false);
   assert.equal(result.afterOriginalFailure.logs, 0);
-  assert.equal(result.afterFallbackFailure.failed, true);
-  assert.match(result.afterFallbackFailure.failedSrc, /^data:image\/(?:gif|png);base64,/);
-  assert.equal(result.afterFallbackFailure.activeDiagnostic, true);
+  assert.equal(result.afterFallbackFailure.failed, false);
+  assert.equal(result.afterFallbackFailure.failedSrc, '');
+  assert.equal(result.afterFallbackFailure.activeDiagnostic, false);
+  assert.equal(result.afterFallbackFailure.retryDeferred, '1');
+  assert.match(result.afterFallbackFailure.title, /다시 연결.*재시도/);
 });
 
 test('작업파일 가져오기 후 설정 동기화는 완료된 세션 커밋을 다시 실행하지 않는다', async () => {
@@ -858,6 +862,7 @@ test('다른 세션이 보유한 작업파일은 reset·hydrate·persist 전에 
         await importFactoryProjectFileBundle(bundle, {
           fileName: '다른세션보유.kuasangse',
           skipLeaveConfirm: true,
+          deferFinalRender: true,
         });
       } catch (error) {
         collision = { name: error?.name || '', message: error?.message || String(error) };
@@ -1580,13 +1585,13 @@ test('1280×620에서는 ESM DB 탭의 사이즈 생성 대기 카드와 버튼�
         const runButton = waitPanel?.querySelector('[data-factory-run-stage="size"]');
         const shell = document.querySelector('.factory-automation-shell');
         const body = document.querySelector('.factory-automation-body');
-        const main = document.querySelector('main.main');
+        const scrollRoot = document.querySelector('.app');
         waitPanel?.scrollIntoView({ block: 'center', inline: 'nearest' });
         const waitRect = waitPanel?.getBoundingClientRect();
         return {
           shell: shell ? { width: Math.round(shell.getBoundingClientRect().width), tabCount: shell.querySelectorAll('[data-factory-auto-tab]').length } : null,
           body: body ? { width: Math.round(body.getBoundingClientRect().width), scrollWidth: body.scrollWidth } : null,
-          main: main ? { scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: getComputedStyle(main).overflowY } : null,
+          scrollRoot: scrollRoot ? { scrollHeight: scrollRoot.scrollHeight, clientHeight: scrollRoot.clientHeight, overflowY: getComputedStyle(scrollRoot).overflowY } : null,
           wait: waitRect ? { inViewport: waitRect.top >= 0 && waitRect.bottom <= window.innerHeight, runButtonVisible: !!runButton && runButton.getBoundingClientRect().width > 0 } : null,
         };
       } finally {
@@ -1601,8 +1606,8 @@ test('1280×620에서는 ESM DB 탭의 사이즈 생성 대기 카드와 버튼�
   assert.ok((result.shell?.width || 0) > 0);
   assert.ok((result.body?.width || 0) > 0);
   assert.ok((result.body?.scrollWidth || 0) <= (result.body?.width || 0) + 1);
-  assert.equal(result.main?.overflowY, 'auto');
-  assert.ok((result.main?.scrollHeight || 0) > (result.main?.clientHeight || 0));
+  assert.equal(result.scrollRoot?.overflowY, 'auto');
+  assert.ok((result.scrollRoot?.scrollHeight || 0) > (result.scrollRoot?.clientHeight || 0));
   assert.equal(result.wait?.inViewport, true);
   assert.equal(result.wait?.runButtonVisible, true);
 });

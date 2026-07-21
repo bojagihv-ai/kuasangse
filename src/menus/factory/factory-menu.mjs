@@ -1,4 +1,9 @@
 import { MENU_CONTRACT_VERSION, createMenuContract } from '../../modules/menu-contracts.mjs';
+import {
+  bindFactoryMenuShell,
+  canonicalFactoryTab,
+  renderFactoryMenuShell,
+} from './factory-menu-shell.mjs';
 
 const FACTORY_TAB_VERSION = 'factory-tab:v1';
 const FACTORY_TAB_IDS = Object.freeze([
@@ -10,18 +15,6 @@ const FACTORY_TAB_IDS = Object.freeze([
   'factory/sections',
   'factory/publish',
 ]);
-
-const TAB_PRESENTATION = Object.freeze([
-  Object.freeze({ id: 'start', no: 1, label: '시작', desc: '제품 이미지와 제품명을 넣고 병렬 수집/생성을 시작합니다.' }),
-  Object.freeze({ id: 'db', no: 2, label: 'DB 확정', desc: '신화사DB와 Cafe24 후보 중 맞는 제품을 고릅니다.' }),
-  Object.freeze({ id: 'fields', no: 3, label: '필수값', desc: '상품등록값과 생성에 필요한 사이즈/소재/용도를 검수합니다.' }),
-  Object.freeze({ id: 'competitor', no: 4, label: '경쟁사', desc: 'VM 후보를 선택하고 상세페이지 수집/분석 이미지를 고릅니다.' }),
-  Object.freeze({ id: 'assets', no: 5, label: '생성컷 선택', desc: '대표이미지, 사이즈이미지, 색상옵션, 이미지컷 사용 컷을 확정합니다.' }),
-  Object.freeze({ id: 'sections', no: 6, label: '섹션 생성', desc: 'DB/경쟁사 소스 기준을 확인하고 상세페이지 섹션을 생성합니다.' }),
-  Object.freeze({ id: 'publish', no: 7, label: '전송', desc: '완성 체크 후 Cafe24/마켓플러스 전송 버튼을 누릅니다.' }),
-]);
-
-const TAB_ALIASES = Object.freeze({ materials: 'start', collect: 'db', generate: 'assets' });
 
 function clean(value) { return String(value ?? '').trim(); }
 
@@ -55,29 +48,11 @@ function ownValue(source, name) {
   return descriptor.value;
 }
 
-function escapeHtml(value) {
-  return clean(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
-}
-
-function canonicalTab(value) {
-  const raw = clean(value);
-  const shortId = raw.startsWith('factory/') ? raw.slice('factory/'.length) : raw;
-  const normalized = TAB_ALIASES[shortId] || shortId;
-  return TAB_PRESENTATION.some(tab => tab.id === normalized) ? normalized : 'start';
-}
-
 function registryTabId(value) {
   const raw = typeof value === 'string' ? value.trim() : '';
   const id = raw.startsWith('factory/') ? raw : `factory/${raw}`;
   if (!FACTORY_TAB_IDS.includes(id)) throw new Error(`unknown factory tab: ${raw || '<empty>'}`);
   return id;
-}
-
-function buttonTabId(button) {
-  const attribute = button?.getAttribute?.('data-factory-auto-tab');
-  if (attribute !== null && attribute !== undefined) return attribute;
-  const descriptor = button?.dataset && Object.getOwnPropertyDescriptor(button.dataset, 'factoryAutoTab');
-  return descriptor && !descriptor.get && !descriptor.set ? descriptor.value : '';
 }
 
 function staleOperationError(id) {
@@ -123,10 +98,6 @@ function validateTabs(tabs) {
   return tabs;
 }
 
-function shellButtons(activeId) {
-  return TAB_PRESENTATION.map(tab => `<button type="button" class="factory-automation-tab${activeId === tab.id ? ' active' : ''}" data-factory-auto-tab="${escapeHtml(tab.id)}" title="${escapeHtml(tab.desc)}" role="tab" aria-selected="${activeId === tab.id ? 'true' : 'false'}"><span class="factory-automation-tab-no">${tab.no}</span><span>${escapeHtml(tab.label)}</span></button>`).join('');
-}
-
 export function createFactoryMenu(capabilities = {}) {
   const getSnapshot = requiredFunction(capabilities, 'getSnapshot');
   const assertMutable = requiredFunction(capabilities, 'assertMutable');
@@ -135,7 +106,16 @@ export function createFactoryMenu(capabilities = {}) {
   const reportError = requiredFunction(capabilities, 'reportError');
   const actions = ownValue(capabilities, 'actions');
   const selectFactoryTab = actions?.selectFactoryTab;
+  const jumpFactoryStage = actions?.jumpFactoryStage;
+  const setFactoryStageLogFilter = actions?.setFactoryStageLogFilter;
+  const runFactoryShellGuideAction = actions?.runFactoryShellGuideAction;
   if (typeof selectFactoryTab !== 'function') throw new TypeError('factory menu action selectFactoryTab must be a function');
+  if (typeof jumpFactoryStage !== 'function') throw new TypeError('factory menu action jumpFactoryStage must be a function');
+  if (typeof setFactoryStageLogFilter !== 'function') throw new TypeError('factory menu action setFactoryStageLogFilter must be a function');
+  if (typeof runFactoryShellGuideAction !== 'function') throw new TypeError('factory menu action runFactoryShellGuideAction must be a function');
+  const renderHelpers = ownValue(capabilities, 'renderHelpers');
+  const renderFactoryAutomationRunStatus = requiredFunction(renderHelpers, 'renderFactoryAutomationRunStatus');
+  const renderFactoryWorkspacePanel = typeof renderHelpers?.renderFactoryWorkspacePanel === 'function' ? renderHelpers.renderFactoryWorkspacePanel : () => '';
   const tabs = validateTabs(ownValue(capabilities, 'tabs'));
   validateTabRegistry(ownValue(capabilities, 'tabRegistry'));
 
@@ -146,21 +126,28 @@ export function createFactoryMenu(capabilities = {}) {
 
   function reportAndThrow(error) { reportError(error); throw error; }
 
-  function selectTab(value) {
+  function executeFactoryAction(actionId, action, value) {
     let id;
     try {
-      id = registryTabId(value); assertMutable('factory');
+      id = actionId === 'selectTab' ? registryTabId(value) : clean(value);
+      if (!id) throw new Error(`factory menu ${actionId} value is required`);
+      assertMutable('factory');
       const token = getOperationToken();
       const verify = output => {
         const receipt = output?.schema === 'factory-runtime-command-receipt:v1' ? output : null;
         if (!isOperationCurrent(receipt?.operationToken || token)) throw staleOperationError(id);
         return receipt ? receipt.value : output;
       };
-      const result = selectFactoryTab.call(actions, id);
+      const result = action.call(actions, id);
       return result && typeof result.then === 'function'
         ? Promise.resolve(result).then(verify).catch(reportAndThrow) : verify(result);
     } catch (error) { return reportAndThrow(error); }
   }
+
+  const selectTab = value => executeFactoryAction('selectTab', selectFactoryTab, value);
+  const jumpStage = value => executeFactoryAction('jumpStage', jumpFactoryStage, value);
+  const setLogFilter = value => executeFactoryAction('setLogFilter', setFactoryStageLogFilter, value);
+  const runGuideAction = value => executeFactoryAction('runGuideAction', runFactoryShellGuideAction, value);
 
   function tabFor(id) {
     const tab = tabs.get(`factory/${id}`);
@@ -168,14 +155,12 @@ export function createFactoryMenu(capabilities = {}) {
     return tab;
   }
 
-  function snapshotTabId(snapshot) { return canonicalTab(snapshot?.factory?.automation?.activeTab); }
+  function snapshotTabId(snapshot) { return canonicalFactoryTab(snapshot?.factory?.automation?.activeTab); }
 
   function disposeBinding() {
     const binding = activeBinding;
     if (!binding) return false;
-    activeBinding = null;
-    binding.dispose();
-    return true;
+    activeBinding = null; binding.dispose(); return true;
   }
 
   function activate(id) {
@@ -200,7 +185,8 @@ export function createFactoryMenu(capabilities = {}) {
 
   function bindActive(root) {
     const tab = tabFor(activeTabId || 'start');
-    const dispose = tab.bind(root);
+    const tabRoot = root?.querySelector?.('.factory-automation-body') || root;
+    const dispose = tab.bind(tabRoot);
     if (typeof dispose !== 'function') throw new TypeError(`factory tab ${tab.id} bind must return a disposer`);
     let live = true;
     const wrapped = () => {
@@ -209,7 +195,7 @@ export function createFactoryMenu(capabilities = {}) {
       if (activeBinding?.dispose === wrapped) activeBinding = null;
       dispose();
     };
-    activeBinding = { root, dispose: wrapped };
+    activeBinding = { root, tabRoot, dispose: wrapped };
     return wrapped;
   }
 
@@ -219,7 +205,12 @@ export function createFactoryMenu(capabilities = {}) {
     routes: ['factory'],
     ownedSlices: ['factory'],
     capabilities: ['factory:write'],
-    commands: { selectTab: { capability: 'factory:write', execute: selectTab } },
+    commands: {
+      selectTab: { capability: 'factory:write', execute: selectTab },
+      jumpStage: { capability: 'factory:write', execute: jumpStage },
+      setLogFilter: { capability: 'factory:write', execute: setLogFilter },
+      runGuideAction: { capability: 'factory:write', execute: runGuideAction },
+    },
     select(rootSnapshot = getSnapshot()) {
       const snapshot = rootSnapshot || {};
       const shortId = snapshotTabId(snapshot);
@@ -229,45 +220,50 @@ export function createFactoryMenu(capabilities = {}) {
     },
     render(view = {}) {
       const fullId = clean(view.activeTabId);
-      const shortId = canonicalTab(fullId || activeTabId || 'start');
+      const shortId = canonicalFactoryTab(fullId || activeTabId || 'start');
       activate(shortId);
       const tabSnapshot = view.tabSnapshot === undefined ? freezeTree(tabFor(shortId).select(getSnapshot() || {})) : view.tabSnapshot;
       const tabMarkup = tabFor(shortId).render(tabSnapshot);
-      return `<section class="factory-section factory-automation-shell" id="factoryAutomationWizard"><div class="factory-section-head"><div><h3>조립공장 자동화 ver</h3><p>조립공장 공정은 상단 1~7 단계 탭을 기준으로 진행합니다.</p></div></div><div class="factory-automation-tabs" role="tablist" aria-label="조립공장 자동화 단계">${shellButtons(shortId)}</div><div class="factory-automation-body">${tabMarkup}</div></section>`;
+      const factory = getSnapshot()?.factory || {};
+      return `${renderFactoryWorkspacePanel(factory)}${renderFactoryMenuShell({
+        activeId: shortId,
+        statusMarkup: renderFactoryAutomationRunStatus(factory, { rail: true }),
+        tabMarkup,
+      })}`;
     },
     bind(root) {
       if (!activeTabId) activate(snapshotTabId(getSnapshot() || {}));
       if (rootBinding) return rootBinding.dispose;
       bindActive(root);
-      const listener = event => {
-        const button = event?.target?.closest?.('[data-factory-auto-tab]');
-        if (!button || root?.contains?.(button) === false) return;
-        event.preventDefault?.();
-        try {
-          const result = menu.invoke('selectTab', buttonTabId(button));
-          if (result && typeof result.catch === 'function') result.catch(() => {});
-        } catch {}
-      };
-      root?.addEventListener?.('click', listener);
+      const disposeShell = bindFactoryMenuShell(root, {
+        selectTab: value => menu.invoke('selectTab', value),
+        jumpStage: value => menu.invoke('jumpStage', value),
+        setLogFilter: value => menu.invoke('setLogFilter', value),
+        runGuideAction: value => menu.invoke('runGuideAction', value),
+      });
       let live = true;
       const dispose = () => {
         if (!live) return; live = false;
         if (rootBinding?.dispose === dispose) rootBinding = null;
-        root?.removeEventListener?.('click', listener); disposeBinding();
+        disposeShell(); disposeBinding();
       };
       rootBinding = { root, dispose }; return dispose;
+    },
+    refresh(root) {
+      if (!rootBinding) return;
+      const nextTabRoot = root?.querySelector?.('.factory-automation-body') || root;
+      if (activeBinding?.tabRoot === nextTabRoot && nextTabRoot?.isConnected !== false) return;
+      disposeBinding(); bindActive(rootBinding.root || root);
     },
     onEnter() {
       if (!activeTabId) activate(snapshotTabId(getSnapshot() || {}));
       if (entered) return;
-      tabFor(activeTabId).onEnter();
-      entered = true;
+      tabFor(activeTabId).onEnter(); entered = true;
     },
     onLeave() {
       if (rootBinding) rootBinding.dispose(); else disposeBinding();
       if (!entered) return;
-      entered = false;
-      tabFor(activeTabId).onLeave();
+      entered = false; tabFor(activeTabId).onLeave();
     },
     persistence: { reads: ['factory'], writes: ['factory'] },
   });

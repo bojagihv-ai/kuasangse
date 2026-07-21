@@ -467,6 +467,7 @@ test('FACTORY-MENU-COMPOSITION: registry descriptor로 active tab을 선택하�
   assert.deepEqual(Object.keys(menuNamespace).sort(), ['createFactoryMenu']);
   const menu = menuNamespace.createFactoryMenu({
     ...menuHarness.value,
+    renderHelpers: { renderFactoryAutomationRunStatus: () => '<div data-factory-goal-status="automation"></div>' },
     tabs,
     tabRegistry: descriptors,
   });
@@ -509,7 +510,12 @@ test('FACTORY-MENU-COMPOSITION: registry descriptor로 active tab을 선택하�
   const incompleteTabs = new Map(tabs);
   incompleteTabs.delete('factory/publish');
   assert.throws(
-    () => menuNamespace.createFactoryMenu({ ...menuHarness.value, tabs: incompleteTabs, tabRegistry: descriptors }),
+    () => menuNamespace.createFactoryMenu({
+      ...menuHarness.value,
+      renderHelpers: { renderFactoryAutomationRunStatus: () => '' },
+      tabs: incompleteTabs,
+      tabRegistry: descriptors,
+    }),
     /factory\/publish|tab registry|missing/i,
     'composition must not silently fall back to a wrapper or missing tab',
   );

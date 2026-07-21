@@ -51,15 +51,6 @@ async function main() {
     await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__);
     return true;
   })()`);
-  await waitFor(cdp, `(() =>
-    typeof sessionAssetsHydrated !== 'undefined' && sessionAssetsHydrated === true &&
-    typeof serverLastWorkHydrated !== 'undefined' && serverLastWorkHydrated === true &&
-    typeof serverLastWorkHydrating !== 'undefined' && serverLastWorkHydrating === false &&
-    typeof persistentStateSaving !== 'undefined' && persistentStateSaving === false &&
-    typeof persistentStateSaveRetryTimer !== 'undefined' && !persistentStateSaveRetryTimer &&
-    typeof lastWorkSaveTimer !== 'undefined' && !lastWorkSaveTimer
-  )()`, 60000);
-
   const proof = await evaluate(cdp, `(async () => {
     try {
     const img = ${JSON.stringify(svgDataUrl('kuasangse-file-v84', '#0f766e'))};

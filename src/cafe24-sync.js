@@ -3001,6 +3001,13 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
     return receipt.result;
   }
   const factory = options.factory;
+  const confirmSave = typeof options.confirm === 'function' ? options.confirm : confirm;
+  const requestCafe24 = typeof options.callCafe24Console === 'function'
+    ? options.callCafe24Console
+    : callCafe24Console;
+  const waitForProductEcho = typeof options.waitForProductEcho === 'function'
+    ? options.waitForProductEcho
+    : factoryWaitForCafe24ProductEcho;
   let model = factoryUpdateFinalDbFromFields(factory);
   const selectedFieldIds = Array.isArray(options.selectedFieldIds)
     ? Array.from(new Set(options.selectedFieldIds.map(value => String(value || '').trim()).filter(Boolean)))
@@ -3084,7 +3091,7 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
       ? '선택한 값만 Cafe24로 전송'
       : 'Cafe24 상품 기본 저장';
   if (!options.skipConfirm || requireSingleField) {
-    const ok = confirm(`${confirmTitle}: 상품 #${productNo}에 ${fieldNames.length}개 필드를 실제 저장하고 재조회로 반영 여부를 확인합니다.\n\n${singleFieldDetail || preview}${fieldNames.length > 18 ? ' ...' : ''}\n\n외부 Cafe24 데이터가 실제로 변경됩니다. 계속할까요?`);
+    const ok = confirmSave(`${confirmTitle}: 상품 #${productNo}에 ${fieldNames.length}개 필드를 실제 저장하고 재조회로 반영 여부를 확인합니다.\n\n${singleFieldDetail || preview}${fieldNames.length > 18 ? ' ...' : ''}\n\n외부 Cafe24 데이터가 실제로 변경됩니다. 계속할까요?`);
     if (!ok) return false;
   }
   factory.product.cafe24ApiStatus = `${requireSingleField ? 'Cafe24 1필드 왕복 검증 중' : 'Cafe24 저장 중'}: #${productNo} ${fieldNames.length}개 필드`;
@@ -3100,7 +3107,7 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
       factoryLog('Cafe24 저장: 상세페이지/이미지 HTML처럼 큰 값이 포함되어 변경안 저장소를 거치지 않고 직접 실행 경로를 사용합니다.', 'ok', factory);
     }
     emitSaveProgress(`Cafe24 저장 요청 전송 중: #${productNo} ${fieldNames.length}개 필드`, 30, 'info');
-    const body = await callCafe24Console('PUT', `/api/v2/admin/products/${encodeURIComponent(productNo)}`, {
+    const body = await requestCafe24('PUT', `/api/v2/admin/products/${encodeURIComponent(productNo)}`, {
       mallId: target?.mall_id || CAFE24_CONTROL_API.defaultMallId,
       body: { product },
       executeDirect: shouldExecuteDirect,
@@ -3139,7 +3146,7 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
     factoryLog(current.product.cafe24ApiStatus, 'ok', current);
     emitSaveProgress(current.product.cafe24ApiStatus, 70, 'info');
     try {
-      const echo = await factoryWaitForCafe24ProductEcho(productNo, target?.mall_id || CAFE24_CONTROL_API.defaultMallId, product, {
+      const echo = await waitForProductEcho(productNo, target?.mall_id || CAFE24_CONTROL_API.defaultMallId, product, {
         attempts: 30,
         delayMs: 1000,
         onProgress: ({ attempt, attempts, phase, verification }) => {

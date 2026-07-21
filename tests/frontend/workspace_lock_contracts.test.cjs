@@ -52,6 +52,26 @@ function harness() {
   return { root, requests, listeners, channels };
 }
 
+test('Ctrl+F5 뒤 같은 탭은 workspace lock session identity를 유지한다', async () => {
+  const { createWorkspaceLockCoordinator } = await loadLock();
+  const values = new Map();
+  let created = 0;
+  const root = {
+    crypto: { randomUUID: () => `session-${++created}` },
+    sessionStorage: {
+      getItem: key => values.get(key) || null,
+      setItem: (key, value) => values.set(key, String(value)),
+    },
+  };
+
+  const beforeReload = createWorkspaceLockCoordinator({ root, serverBases: () => [] });
+  const afterReload = createWorkspaceLockCoordinator({ root, serverBases: () => [] });
+
+  assert.equal(beforeReload.snapshot().sessionId, 'session-1');
+  assert.equal(afterReload.snapshot().sessionId, 'session-1');
+  assert.equal(created, 1);
+});
+
 test('server lease snapshot은 typed frozen state이고 stale heartbeat가 즉시 read-only 전환한다', async () => {
   const { createWorkspaceLockCoordinator } = await loadLock();
   const { root, channels } = harness();

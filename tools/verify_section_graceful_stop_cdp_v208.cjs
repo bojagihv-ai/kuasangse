@@ -42,7 +42,23 @@ async function main() {
       const imageBase64 = imageData.split(',')[1];
       const allSections = window.orderedSections().slice(0, 3);
       const factory = window.factoryState();
+      const originalWorkspaceLock = window.__KUASANGSE_WORKSPACE_LOCK__;
+      const stableDraftAuthority = Object.freeze({
+        ...(originalWorkspaceLock?.snapshot?.() || {}),
+        mode: 'offline-edit',
+        scopeId: 'draft:section-stop-v208',
+        fencingToken: 0,
+        reasonCode: 'TEST_DRAFT',
+      });
+      window.__KUASANGSE_WORKSPACE_LOCK__ = Object.freeze({
+        ...(originalWorkspaceLock || {}),
+        snapshot: () => stableDraftAuthority,
+        acquire: async () => stableDraftAuthority,
+        release: async () => stableDraftAuthority,
+      });
       factory.workspaceId = 'project_section_stop_v208';
+      factory.currentProjectId = '';
+      factory.workspace = { ...(factory.workspace || {}), id: '' };
       factory.product = {
         ...(factory.product || {}),
         userProductName: '섹션중지검증상품',
@@ -56,7 +72,7 @@ async function main() {
         imageMime: 'image/png',
         imagePreview: imageData,
       };
-      window.state.currentProjectId = 'project_section_stop_v208';
+      window.state.currentProjectId = '';
       window.state.currentProjectName = '섹션중지검증상품';
       window.state.productName = '섹션중지검증상품';
       window.state.imageBase64 = imageBase64;
@@ -176,7 +192,7 @@ async function main() {
         imageIds: Object.keys(window.state?.sectionImages || {}),
         error: window.state?.error || '',
       }))()`);
-      throw new Error(`${error.message}\n중단 대기 상태: ${JSON.stringify(stalled, null, 2)}`);
+      throw new Error(`${error.message}\n실행 화면: ${JSON.stringify(running, null, 2)}\n중단 요청 직후: ${JSON.stringify(requested, null, 2)}\n중단 대기 상태: ${JSON.stringify(stalled, null, 2)}`);
     }
     const runResult = await evaluate(cdp, 'window.__sectionStopV208.runPromise');
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -226,12 +242,12 @@ async function main() {
       if (notice) notice.scrollIntoView({ block: 'center', inline: 'nearest' });
       const rect = notice?.getBoundingClientRect() || null;
       const root = document.scrollingElement || document.documentElement;
-      const main = document.querySelector('.main');
+      const scrollRoot = document.querySelector('.app');
       return {
         viewport: { width: window.innerWidth, height: window.innerHeight },
         horizontalOverflow: root.scrollWidth > window.innerWidth + 1,
-        pageScrollable: root.scrollHeight > root.clientHeight + 1,
-        mainScrollable: !!main && main.scrollHeight > main.clientHeight + 1,
+        pageScrollable: !!scrollRoot && scrollRoot.scrollHeight > scrollRoot.clientHeight + 1,
+        mainScrollable: !!scrollRoot && scrollRoot.scrollHeight > scrollRoot.clientHeight + 1,
         noticeExists: !!notice,
         noticeReachable: !!rect && rect.top >= 0 && rect.bottom <= window.innerHeight,
         noticeRect: rect ? { top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: Math.round(rect.width) } : null,

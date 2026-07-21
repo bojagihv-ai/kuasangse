@@ -114,8 +114,8 @@ export function createServerLastWorkAdapter({
       if (result?.accepted === false) {
         const noOp = protectedServerNoop(result, envelope, context);
         if (noOp) {
-          context.assertCompletion?.();
-          context.assertAuthority?.();
+          if (typeof context.assertCompletion === 'function') context.assertCompletion();
+          else context.assertAuthority?.();
           return noOp;
         }
         throw new ServerPersistenceError(409, {
@@ -124,8 +124,8 @@ export function createServerLastWorkAdapter({
           error: result.reason || 'server kept the existing workspace snapshot',
         });
       }
-      context.assertCompletion?.();
-      context.assertAuthority?.();
+      if (typeof context.assertCompletion === 'function') context.assertCompletion();
+      else context.assertAuthority?.();
       return envelope;
     },
   });

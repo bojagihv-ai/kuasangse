@@ -20,7 +20,7 @@ test('DB-04 check boundary rejects non-exact fence and empty recovery evidence',
     normalizedDraftScope: 'draft::product::candidate-review', appWorkspaceId: 'project', factoryWorkspaceId: 'project', currentScope: scope,
     before: { token: { fence: 4 }, recovery, scopedBackend: backend, globalBackend: backend },
     after: { token: { version: 'factory-store:v1', workspaceId: 'project', revision: 0, fence: 5 }, recovery: { ...recovery }, scopedBackend: { ...backend }, globalBackend: { ...backend } },
-    sentinel: { recoverySha256: 'recovery', revisionsSha256: 'revisions' }, cleanup: { recoveryRestored: true, revisionsRestored: true },
+    sentinel: { recoverySha256: 'recovery', revisionsSha256: 'revisions' }, cleanup: { recoveryRestored: true, revisionsRestored: true, authorityReleased: true },
     db: [candidate, foreign], cafe24: [candidate, foreign],
     buttons: { dbDraft: { exists: true, disabled: false }, cafeDraft: { exists: true, disabled: false }, dbForeign: { exists: true, disabled: true }, cafeForeign: { exists: true, disabled: true } },
   };

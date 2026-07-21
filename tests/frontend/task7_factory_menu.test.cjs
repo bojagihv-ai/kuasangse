@@ -67,6 +67,9 @@ async function menuHarness({ readOnly = false, deferred = null } = {}) {
       calls.push(id);
       return deferred?.promise || Promise.resolve(id);
     },
+    jumpFactoryStage(id) { calls.push(`jump:${id}`); return Promise.resolve(id); },
+    setFactoryStageLogFilter(id) { calls.push(`filter:${id}`); return Promise.resolve(id); },
+    runFactoryShellGuideAction(id) { calls.push(`guide:${id}`); return Promise.resolve(id); },
   };
   const namespace = await import(`${pathToFileURL(path.join(ROOT, 'src/menus/factory/factory-menu.mjs')).href}?focused=${Date.now()}-${Math.random()}`);
   const menu = namespace.createFactoryMenu({
@@ -76,6 +79,7 @@ async function menuHarness({ readOnly = false, deferred = null } = {}) {
     isOperationCurrent: candidate => candidate === token,
     reportError: error => reports.push(error),
     actions,
+    renderHelpers: { renderFactoryAutomationRunStatus: () => '<div data-factory-goal-status="automation"></div>' },
     tabs,
     tabRegistry,
   });
@@ -85,7 +89,7 @@ async function menuHarness({ readOnly = false, deferred = null } = {}) {
 test('FACTORY-MENU owns seven shell tab clicks through selectTab', async () => {
   const fixture = await menuHarness();
   assert.deepEqual([...fixture.menu.capabilities], ['factory:write']);
-  assert.deepEqual(Object.keys(fixture.menu.commands), ['selectTab']);
+  assert.deepEqual(Object.keys(fixture.menu.commands), ['selectTab', 'jumpStage', 'setLogFilter', 'runGuideAction']);
   const root = fakeRoot();
   const dispose = fixture.menu.bind(root);
   for (const id of IDS) assert.equal(root.click(id.split('/')[1]), true);

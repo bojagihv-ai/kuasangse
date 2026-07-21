@@ -42,7 +42,7 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     };
   }
 
-  function authorityRejection(envelope, claimed = null) {
+  function authorityRejection(envelope, claimed = null, options = {}) {
     if (!authority?.snapshot) return null;
     const current = authority.snapshot();
     if (envelope.scopeId.startsWith('draft:') && current?.mode === 'offline-edit'
@@ -61,7 +61,11 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     if (claimedToken !== Number(current.fencingToken) || claimedLease !== String(current.leaseId || '')) {
       return new WorkspaceAuthorityError('STALE_FENCE', 'workspace fencing token is stale', current);
     }
-    if (Number(envelope.metadata.revision.counter) !== (Number(current.revision) || 0) + 1) {
+    const envelopeRevision = Number(envelope.metadata.revision.counter);
+    const currentRevision = Number(current.revision) || 0;
+    const revisionMatches = envelopeRevision === currentRevision + 1
+      || (options.allowCommittedRevision === true && envelopeRevision === currentRevision);
+    if (!revisionMatches) {
       return new WorkspaceAuthorityError('STALE_REVISION', 'workspace revision is stale', current);
     }
     return null;
@@ -75,10 +79,17 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     });
   }
 
-  function guardedContext(name, command, envelope) {
+  function guardedContext(name, command, envelope, operation) {
     const claimed = command.authority || null;
     const assertAuthority = () => {
-      const rejection = authorityRejection(envelope, claimed);
+      const rejection = authorityRejection(envelope, claimed, {
+        allowCommittedRevision: operation?.completed?.has('server') === true,
+      });
+      if (rejection) throw rejection;
+      return authority?.snapshot?.() || claimed;
+    };
+    const assertCompletion = () => {
+      const rejection = authorityRejection(envelope, claimed, { allowCommittedRevision: true });
       if (rejection) throw rejection;
       return authority?.snapshot?.() || claimed;
     };
@@ -86,7 +97,7 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     return {
       ...(command.context?.[name] || {}),
       assertAuthority,
-      assertCompletion: assertAuthority,
+      assertCompletion,
       currentAuthority: current,
       scopeId: envelope.scopeId,
       leaseId: current.leaseId || envelope.metadata.leaseId,
@@ -133,7 +144,7 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     const failures = [];
     if (managedProject && !operation.completed.has('server')) {
       try {
-        const serverOutcome = await adapters.server.write(envelope, guardedContext('server', command, envelope));
+        const serverOutcome = await adapters.server.write(envelope, guardedContext('server', command, envelope, operation));
         if (serverOutcome?.protectedNoOp === true) {
           operations.delete(envelope.metadata.operationId);
           return immutablePersistenceResult({
@@ -156,11 +167,13 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     }
     if (!operation.accepted) {
       try {
-        const rejection = authorityRejection(envelope, command.authority || null);
+        const rejection = authorityRejection(envelope, command.authority || null, {
+          allowCommittedRevision: managedProject && operation.completed.has('server'),
+        });
         if (rejection) throw rejection;
         await adapters[AUTHORITATIVE_ADAPTER].write(
           envelope,
-          managedProject ? guardedContext(AUTHORITATIVE_ADAPTER, command, envelope) : command.context?.[AUTHORITATIVE_ADAPTER],
+          managedProject ? guardedContext(AUTHORITATIVE_ADAPTER, command, envelope, operation) : command.context?.[AUTHORITATIVE_ADAPTER],
         );
         operation.accepted = true;
         operation.completed.add(AUTHORITATIVE_ADAPTER);
@@ -176,18 +189,22 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     for (const name of operation.required) {
       if (operation.completed.has(name)) continue;
       try {
-        const rejection = authorityRejection(envelope, command.authority || null);
+        const rejection = authorityRejection(envelope, command.authority || null, {
+          allowCommittedRevision: managedProject && operation.completed.has('server'),
+        });
         if (rejection) throw rejection;
         await adapters[name].write(
           envelope,
-          managedProject ? guardedContext(name, command, envelope) : command.context?.[name],
+          managedProject ? guardedContext(name, command, envelope, operation) : command.context?.[name],
         );
         operation.completed.add(name);
       } catch (error) {
         failures.push(createPersistenceFailure(name, error));
       }
     }
-    const completionRejection = authorityRejection(envelope, command.authority || null);
+    const completionRejection = authorityRejection(envelope, command.authority || null, {
+      allowCommittedRevision: managedProject && operation.completed.has('server'),
+    });
     if (completionRejection) failures.push(createPersistenceFailure('authority', completionRejection));
     const current = !completionRejection
       && (typeof command.isCurrent !== 'function' || command.isCurrent(envelope.digest) !== false);
@@ -231,15 +248,9 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
     }
     candidates.sort(comparePersistenceCandidates);
     const selected = candidates[0] || null;
-    return selected
-      ? Object.freeze({
-        source: selected.source,
-        snapshot: sanitizeWorkspaceSnapshot(selected.record.snapshot),
-        revision: selected.record.metadata?.revision
-          ? Object.freeze({ ...selected.record.metadata.revision })
-          : null,
-      })
-      : null;
+    if (!selected) return null;
+    const revision = selected.record.metadata?.revision;
+    return Object.freeze({ source: selected.source, snapshot: sanitizeWorkspaceSnapshot(selected.record.snapshot), revision: revision ? Object.freeze({ ...revision }) : null });
   }
 
   return Object.freeze({ commit, restore });

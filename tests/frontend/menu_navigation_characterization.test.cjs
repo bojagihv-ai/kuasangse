@@ -13,6 +13,7 @@ const CORE_06 = path.join(ROOT, 'src', 'app-core-06.js');
 const MODULE_REGISTRY = path.join(ROOT, 'src', 'modules', 'module-registry.mjs');
 const RENDER_LIFECYCLE = path.join(ROOT, 'src', 'shell', 'render-lifecycle.mjs');
 const FACTORY_MENU = path.join(ROOT, 'src', 'menus', 'factory', 'factory-menu.mjs');
+const FACTORY_MENU_SHELL = path.join(ROOT, 'src', 'menus', 'factory', 'factory-menu-shell.mjs');
 const FACTORY_DB_TAB = path.join(ROOT, 'src', 'menus', 'factory', 'tabs', 'db-tab.mjs');
 
 const SIDEBAR = [
@@ -188,13 +189,14 @@ test('bind lifecycle는 shell navigation을 router에 위임하고 ESM menu disp
 
 test('조립공장 ESM은 registry의 7개 탭 순서·표시·canonical fallback을 소유한다', async () => {
   const factoryMenuSource = source(FACTORY_MENU);
-  const tabs = extractArray(factoryMenuSource, 'const TAB_PRESENTATION =');
-  const canonicalSource = extractFunction(factoryMenuSource, 'canonicalTab');
+  const factoryShellSource = source(FACTORY_MENU_SHELL);
+  const tabs = extractArray(factoryShellSource, 'const TAB_PRESENTATION =');
+  const canonicalSource = extractFunction(factoryShellSource, 'canonicalFactoryTab');
   const canonical = Function(
     'TAB_ALIASES',
     'TAB_PRESENTATION',
     'clean',
-    `"use strict"; ${canonicalSource}; return canonicalTab;`,
+    `"use strict"; ${canonicalSource}; return canonicalFactoryTab;`,
   )({ materials: 'start', collect: 'db', generate: 'assets' }, tabs, value => String(value ?? '').trim());
   const { moduleRegistry } = await import(moduleUrl(MODULE_REGISTRY));
   const descriptors = moduleRegistry.list('factory-tab');
@@ -210,10 +212,10 @@ test('조립공장 ESM은 registry의 7개 탭 순서·표시·canonical fallbac
   assert.equal(canonical('generate'), 'assets');
   assert.equal(canonical('factory/publish'), 'publish');
   assert.equal(canonical('unknown'), 'start');
-  assert.match(factoryMenuSource, /data-factory-auto-tab="\$\{escapeHtml\(tab\.id\)\}"/);
-  assert.match(factoryMenuSource, /role="tablist" aria-label="조립공장 자동화 단계"/);
+  assert.match(factoryShellSource, /data-factory-auto-tab="\$\{escapeHtml\(tab\.id\)\}"/);
+  assert.match(factoryShellSource, /role="tablist" aria-label="조립공장 자동화 단계"/);
   assert.match(factoryMenuSource, /const tabMarkup = tabFor\(shortId\)\.render\(tabSnapshot\)/);
-  assert.match(factoryMenuSource, /const dispose = tab\.bind\(root\)/);
+  assert.match(factoryMenuSource, /const dispose = tab\.bind\(tabRoot\)/);
 });
 
 test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과 상태를 노출한다', () => {
@@ -238,12 +240,12 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
   assert.ok(shellMarkupSource.indexOf('renderGlobalDbSyncStatusStrip') < shellMarkupSource.indexOf('renderApiStatusStrip'));
 });
 
-test('작은 창 기준선은 main 우측 세로 스크롤과 반응형 workfile stack을 유지한다', () => {
+test('작은 창 기준선은 앱 전체 우측 단일 세로 스크롤과 반응형 workfile stack을 유지한다', () => {
   const html = source(APP_HTML);
-  assert.match(html, /\.app\{display:flex;height:100vh;min-height:100vh;overflow:hidden\}/);
-  assert.match(html, /\.main\{flex:1;min-width:0;padding:0 76px 104px 0;overflow-y:auto;scrollbar-gutter:stable(?:;overflow-anchor:none)?\}/);
-  assert.match(html, /@media\(max-width:900px\)[\s\S]*?\.main\{padding:0 54px 108px 0\}/);
-  assert.match(html, /\.sidebar\{[^}]*overflow-y:auto;overflow-x:hidden(?:;overflow-anchor:none)?\}/);
+  assert.match(html, /\.app\{display:flex;height:100vh;min-height:100vh;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable(?:;overflow-anchor:none)?\}/);
+  assert.match(html, /\.main\{flex:1;min-width:0;min-height:100vh;padding:0 76px 104px 0;overflow:visible(?:;overflow-anchor:none)?\}/);
+  assert.match(html, /@media\(max-width:900px\)[\s\S]*?\.main\{padding:0 0 108px\}/);
+  assert.match(html, /\.sidebar\{[^}]*min-height:100vh[^}]*overflow:visible(?:;overflow-anchor:none)?\}/);
   assert.match(html, /\.db-workfile-strip\{display:grid;grid-template-columns:/);
   assert.match(html, /\.db-workfile-actions\{[^}]*flex-wrap:wrap/);
   assert.match(html, /@media\(max-height:640px\)[\s\S]*?\.top-command-row\{position:static;display:block\}/);

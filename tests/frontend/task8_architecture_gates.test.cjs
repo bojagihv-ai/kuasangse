@@ -60,6 +60,7 @@ test('ARCH-PERSISTENCE-01: browser persistence primitive는 승인된 authority�
   const storageAllowed = new Set([
     'src/modules/workspace-persistence.mjs',
     'src/modules/workspace-revision.mjs',
+    'src/modules/workspace-lock.mjs',
     'src/modules/persistence/indexeddb-driver.mjs',
     'src/modules/persistence/session-storage-adapter.mjs',
     'src/modules/persistence/workfile-adapter.mjs',

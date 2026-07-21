@@ -6053,7 +6053,7 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
   const recoveryActionsHtml = !detailModel.canProceed
     ? `<button class="btn-sm" type="button" data-factory-guide-action="open-preview"><span class="material-icons-outlined" style="font-size:14px">visibility</span>미리보기 확인</button>
        <button class="btn-sm" type="button" data-factory-guide-action="go-tab:sections"><span class="material-icons-outlined" style="font-size:14px">view_list</span>섹션 설정으로 이동</button>
-       <button class="btn-sm" type="button" data-factory-run-stage="detail" onclick="return factoryRunStageButtonInline(this,event)"><span class="material-icons-outlined" style="font-size:14px">auto_mode</span>상세페이지 다시 만들기</button>`
+       <button class="btn-sm" type="button" data-factory-run-stage="detail"><span class="material-icons-outlined" style="font-size:14px">auto_mode</span>상세페이지 다시 만들기</button>`
     : `<button class="btn-sm" type="button" data-factory-guide-action="focus-materials"><span class="material-icons-outlined" style="font-size:14px">fact_check</span>DB/Cafe24 입력판 확인</button>
        <button class="btn-sm" type="button" data-factory-guide-action="go-tab:publish"><span class="material-icons-outlined" style="font-size:14px">send</span>전송 설정 다시 보기</button>`;
   const recoveryHelpText = !detailModel.canProceed
@@ -6776,6 +6776,8 @@ function renderFactoryOptionColorControls(factory = factoryRuntimeReadFactory(),
       <div class="factory-automation-actions" style="margin:0;justify-content:flex-end">
         <button class="btn-sm ${!disabled ? 'success' : ''}" type="button" data-factory-color-image-usage="use" title="색상이미지를 상세페이지 색상옵션 섹션에 사용할 수 있게 합니다.">색상이미지 사용</button>
         <button class="btn-sm ${disabled ? 'danger' : ''}" type="button" data-factory-color-image-usage="none" title="색상옵션 섹션과 기존 색상이미지 배치를 상세페이지 구성에서 제외합니다.">색상이미지 없이 진행</button>
+        <button class="btn-sm" type="button" data-factory-sync-db-options title="확정 DB의 색상/옵션 정보를 옵션분류기 입력으로 보냅니다.">DB 옵션 가져오기</button>
+        <button class="btn-sm" type="button" data-factory-sync-option-results title="옵션분류기에서 완성한 색상이미지를 현재 작업으로 가져옵니다.">옵션 결과 가져오기</button>
         <button class="btn-sm primary" type="button" data-factory-option-color-upload title="완성된 색상이미지/옵션표 파일을 직접 넣고 사용 선택합니다.">색상이미지 직접넣기</button>
         <input type="file" data-factory-option-color-file accept="image/*" multiple style="display:none">
       </div>
@@ -8859,9 +8861,10 @@ function factoryAutomationFieldValue(factory, fieldId, aliases = []) {
   }
   const reviewedField = factory.automation?.fieldReview?.[fieldId];
   const reviewedValue = String(reviewedField?.value || '').trim();
-  if (reviewedValue && factoryFieldReviewMatchesCurrentWork(reviewedField, factory)) {
+  if (reviewedField && factoryFieldReviewMatchesCurrentWork(reviewedField, factory)) {
     return { value: reviewedValue, source: '직접 확인' };
   }
+  if (reviewedField) return { value: '', source: '' };
 
   const sizeFields = typeof factoryCollectDbSizeFieldModels === 'function' ? factoryCollectDbSizeFieldModels(factory) : [];
   const sizeField = sizeFields.find(item => item.fieldId === fieldId);
@@ -10202,7 +10205,7 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
       <div class="factory-automation-actions" style="margin:0">
         ${stageId === 'options'
           ? `<button class="btn-sm" data-factory-open-optionsorter>옵션분류기/색상이미지로 이동</button>`
-          : `<button class="btn-sm" type="button" data-factory-run-stage="${escAttr(stageId)}" onclick="return factoryRunStageButtonInline(this,event)" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>${runButtonLabel}</button>`}
+          : `<button class="btn-sm" type="button" data-factory-run-stage="${escAttr(stageId)}" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>${runButtonLabel}</button>`}
         <button class="btn-sm" data-factory-guide-action="${escAttr(focusAction)}">컨베이어 카드로 이동</button>
       </div>
     </div>
@@ -14478,15 +14481,19 @@ function factoryClearForeignCompetitorRunCount(factory) {
   return true;
 }
 
-function compMarketClearForeignWorkPayload(market = {}, current = compMarketCurrentWorkScope()) {
+function compMarketClearForeignWorkPayload(market = {}, current = compMarketCurrentWorkScope(), options = {}) {
   const previousName = String(market.workProductName || market.productName || '').trim();
   const previousKey = String(market.factoryWorkKey || market.productKey || '').trim();
   try {
-    factoryRuntimeUpdateOwnedFactory(
-      'factory/runtime:clearForeignCompetitorRunCount',
-      'factory',
-      draft => factoryClearForeignCompetitorRunCount(draft),
-    );
+    if (options.factory) {
+      factoryClearForeignCompetitorRunCount(options.factory);
+    } else {
+      factoryRuntimeUpdateOwnedFactory(
+        'factory/runtime:clearForeignCompetitorRunCount',
+        'factory',
+        draft => factoryClearForeignCompetitorRunCount(draft),
+      );
+    }
   } catch(_) {}
   Object.assign(market, {
     factoryWorkKey: current.scopeKey || '',
@@ -14543,7 +14550,7 @@ function compMarketClearForeignWorkPayload(market = {}, current = compMarketCurr
   return market;
 }
 
-function ensureCompMarketScrapeState() {
+function ensureCompMarketScrapeState(options = {}) {
   const cp = state.compPage || {};
   const base = compMarketDefaultState();
   const raw = cp.marketScrape && typeof cp.marketScrape === 'object' ? cp.marketScrape : {};
@@ -14552,7 +14559,7 @@ function ensureCompMarketScrapeState() {
   let hiddenCandidateCount = 0;
   const foreignWorkPayload = !compMarketWorkScopeMatchesCurrent(next, currentScope);
   if (foreignWorkPayload) {
-    compMarketClearForeignWorkPayload(next, currentScope);
+    compMarketClearForeignWorkPayload(next, currentScope, options);
   } else {
     compMarketApplyCurrentWorkScope(next, currentScope);
   }

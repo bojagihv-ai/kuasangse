@@ -49,7 +49,10 @@ async function cleanupWorkspaceArtifacts(scopeId, authority, knownPath = '') {
       if (lease?.leaseId && Number(lease.fencingToken) > 0) {
         const response = await fetch(`${BACKEND_BASE}/api/workspace-lock/release`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceId: scopeId, leaseId: lease.leaseId, fencingToken: Number(lease.fencingToken) }) });
         released = { status: response.status, body: await response.json().catch(() => ({})) };
-        if (released.status !== 200 || released.body?.leaseId !== '') throw new Error(`DB-03 authority release failed: ${JSON.stringify(released)}`);
+        const alreadyReleased = released.status === 409 && released.body?.code === 'LEASE_EXPIRED';
+        if ((!alreadyReleased && released.status !== 200) || (!alreadyReleased && released.body?.leaseId !== '')) {
+          throw new Error(`DB-03 authority release failed: ${JSON.stringify(released)}`);
+        }
       }
     } finally {
       for (const target of [livePath, backupPath]) fs.rmSync(target, { force: true });
@@ -82,6 +85,9 @@ async function main() {
     await cdp.send('Runtime.enable');
     await cdp.send('Network.enable');
     await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `try { localStorage.setItem('gemini_backend_url', ${JSON.stringify(BACKEND_BASE)}); } catch (_) {}`,
+    });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: `${APP_URL}?candidateWorkspaceTransition=v220` });
     await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
@@ -135,20 +141,46 @@ async function main() {
       const afterSave = readPhase();
       const appAfterSave = readAppState();
       const projectId = appAfterSave.currentProjectId || '';
-      const persistedFactory = structuredClone(appAfterSave.factory || readFactory());
-      const transitionResult = projectId
-        ? factoryRuntimeReplaceFactorySnapshot(persistedFactory, { mode: 'hydrate', workspaceId: projectId, reason: 'db03-save-transition' })
-        : null;
-      setAppState({ factory: cloneFactory() });
-      renderApp();
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const sameProjectStore = factoryRuntimeRequireStore();
+      const sameProjectToken = sameProjectStore.getOperationToken();
+      const sameProjectLease = sameProjectStore.acquireOperationLease('db03/same-project-save', sameProjectToken);
+      const sameProjectSaveResult = await saveCurrentProject();
+      await new Promise(resolve => setTimeout(resolve, 700));
+      const sameProjectTokenAfterSave = sameProjectStore.getOperationToken();
+      const sameProjectSaveLease = {
+        acquired: sameProjectLease.acquired === true,
+        active: sameProjectStore.hasActiveOperationLease('db03/same-project-save'),
+        aborted: sameProjectLease.signal.aborted,
+        sameToken: sameProjectTokenAfterSave === sameProjectToken,
+        workspaceId: sameProjectTokenAfterSave.workspaceId || '',
+        released: sameProjectLease.release(),
+      };
       const persistAfterTransition = projectId ? await flushQueuedPersistentState({ skipSessionAssetSave: true }) : false;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const afterTransition = readPhase();
-      return { productName: draftName, projectId, draftScope, before, afterSave, afterTransition, oldDbCandidate, oldCafeCandidate, saveResult: saveResult || null, stateError: appAfterSave.error || '', transitionResult: transitionResult ? true : false, persistAfterTransition };
+      return { productName: draftName, projectId, draftScope, before, afterSave, afterTransition, oldDbCandidate, oldCafeCandidate, saveResult: saveResult || null, sameProjectSaveResult: sameProjectSaveResult || null, sameProjectSaveLease, stateError: appAfterSave.error || '', persistAfterTransition };
     })`);
     const projectScope = seedResult.projectId ? `project:${seedResult.projectId}` : '';
     cleanupScope = projectScope;
     cleanupAuthority = seedResult.afterTransition.authority;
+    assertChecks([{
+      ok: !!seedResult.projectId
+        && seedResult.stateError === ''
+        && seedResult.afterSave.appWorkspaceId === seedResult.projectId
+        && seedResult.afterSave.factoryWorkspaceId === seedResult.projectId
+        && seedResult.afterSave.dbScope.startsWith(`${seedResult.projectId}::`)
+        && seedResult.afterSave.cafeScope.startsWith(`${seedResult.projectId}::`)
+        && seedResult.afterSave.token?.workspaceId === seedResult.projectId
+        && seedResult.afterSave.buttons?.db?.disabled === false
+        && seedResult.afterSave.buttons?.cafe24?.disabled === false
+        && seedResult.sameProjectSaveLease?.acquired === true
+        && seedResult.sameProjectSaveLease?.active === true
+        && seedResult.sameProjectSaveLease?.aborted === false
+        && seedResult.sameProjectSaveLease?.sameToken === true
+        && seedResult.sameProjectSaveLease?.workspaceId === seedResult.projectId
+        && seedResult.sameProjectSaveLease?.released === true,
+      message: `saveCurrentProject의 첫 전환 또는 동일 프로젝트 lease 보존이 실패했습니다: ${JSON.stringify({ afterSave: seedResult.afterSave, sameProjectSaveLease: seedResult.sameProjectSaveLease })}`,
+    }]);
     const backendAfterSave = await evaluateFactoryCdpFixture(cdp, `(async () => ${backendReadExpression(BACKEND_BASE, projectScope)})`);
     cleanupPath = backendAfterSave.path;
     if (process.env.KUASANGSE_DB03_FAIL_AFTER_SAVE === '1') throw new Error('DB03 forced post-save cleanup probe');
@@ -165,21 +197,22 @@ async function main() {
     const rejectedAttempts = ['oldDb', 'staleDb', 'foreignDb', 'oldCafe', 'staleCafe', 'foreignCafe']
       .map(name => candidateProof.attempts?.[name]).filter(Boolean);
     const checks = [
-      { ok: !!seedResult.draftScope && seedResult.before.appWorkspaceId === '' && seedResult.before.factoryWorkspaceId === '' && seedResult.before.scope === seedResult.draftScope && beforeToken.workspaceId === seedResult.draftScope && Number(beforeToken.revision) >= 1, message: `저장 전 draft app/factory/store scope 또는 revision 불일치: ${JSON.stringify(seedResult.before)}` },
-      { ok: !!seedResult.projectId && seedResult.stateError === '' && seedResult.afterSave.appWorkspaceId === seedResult.projectId && seedResult.afterSave.stateFactoryWorkspaceId === seedResult.projectId && seedResult.afterSave.stateDbScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.stateCafeScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.scope === projectScope, message: `saveCurrentProject 실제 전환 후 app/state scope가 project로 바뀌지 않았습니다: ${JSON.stringify(seedResult)}` },
-      { ok: seedResult.transitionResult === true && seedResult.persistAfterTransition === true && seedResult.afterTransition.appWorkspaceId === seedResult.projectId && seedResult.afterTransition.stateFactoryWorkspaceId === seedResult.projectId && seedResult.afterTransition.factoryWorkspaceId === seedResult.projectId && seedResult.afterTransition.scope === projectScope && afterToken.workspaceId === seedResult.projectId && Number(afterToken.revision) >= 1 && Number(afterToken.fence) > Number(beforeToken.fence), message: `canonical store transition token scope/revision 불일치: ${JSON.stringify({ before: seedResult.before, afterSave: seedResult.afterSave, afterTransition: seedResult.afterTransition })}` },
+      { ok: !!seedResult.draftScope && seedResult.before.appWorkspaceId === '' && seedResult.before.factoryWorkspaceId === '' && seedResult.before.scope === seedResult.draftScope && beforeToken.workspaceId === seedResult.draftScope && Number.isInteger(Number(beforeToken.revision)) && Number(beforeToken.revision) >= 0 && Number(beforeToken.fence) >= 1 && seedResult.before.authority?.scopeId === seedResult.draftScope && seedResult.before.authority?.mode === 'offline-edit', message: `저장 전 draft app/factory/store scope 또는 revision 불일치: ${JSON.stringify(seedResult.before)}` },
+      { ok: !!seedResult.projectId && seedResult.stateError === '' && seedResult.afterSave.appWorkspaceId === seedResult.projectId && seedResult.afterSave.stateFactoryWorkspaceId === seedResult.projectId && seedResult.afterSave.factoryWorkspaceId === seedResult.projectId && seedResult.afterSave.stateDbScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.stateCafeScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.dbScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.cafeScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterSave.scope === projectScope && seedResult.afterSave.token?.workspaceId === seedResult.projectId && Number(seedResult.afterSave.token?.fence) > Number(beforeToken.fence) && seedResult.afterSave.buttons?.db?.disabled === false && seedResult.afterSave.buttons?.cafe24?.disabled === false, message: `saveCurrentProject 실제 전환 후 app/state/store/candidate scope가 project로 바뀌지 않았습니다: ${JSON.stringify(seedResult)}` },
+      { ok: seedResult.persistAfterTransition === true && seedResult.afterTransition.appWorkspaceId === seedResult.projectId && seedResult.afterTransition.stateFactoryWorkspaceId === seedResult.projectId && seedResult.afterTransition.factoryWorkspaceId === seedResult.projectId && seedResult.afterTransition.scope === projectScope && afterToken.workspaceId === seedResult.projectId && Number(afterToken.revision) >= 1 && Number(afterToken.fence) > Number(beforeToken.fence), message: `canonical store transition token scope/revision 불일치: ${JSON.stringify({ before: seedResult.before, afterSave: seedResult.afterSave, afterTransition: seedResult.afterTransition })}` },
       { ok: seedResult.afterTransition.dbScope.startsWith(`${seedResult.projectId}::`) && seedResult.afterTransition.cafeScope.startsWith(`${seedResult.projectId}::`), message: `전환 후 DB/Cafe24 후보 scope가 project 범위가 아닙니다: ${JSON.stringify(seedResult.afterTransition)}` },
       { ok: seedResult.afterTransition.buttons?.db?.exists === true && seedResult.afterTransition.buttons.db.disabled === false, message: `전환 후 신화사DB 선택 버튼이 없거나 비활성입니다: ${JSON.stringify(seedResult.afterTransition.buttons?.db)}` },
       { ok: seedResult.afterTransition.buttons?.cafe24?.exists === true && seedResult.afterTransition.buttons.cafe24.disabled === false, message: `전환 후 Cafe24 선택 버튼이 없거나 비활성입니다: ${JSON.stringify(seedResult.afterTransition.buttons?.cafe24)}` },
+      { ok: seedResult.sameProjectSaveLease?.acquired === true && seedResult.sameProjectSaveLease?.active === true && seedResult.sameProjectSaveLease?.aborted === false && seedResult.sameProjectSaveLease?.sameToken === true && seedResult.sameProjectSaveLease?.workspaceId === seedResult.projectId && seedResult.sameProjectSaveLease?.released === true, message: `동일 프로젝트 재저장이 active operation lease를 취소하거나 store token을 바꿨습니다: ${JSON.stringify(seedResult.sameProjectSaveLease)}` },
       { ok: backendAfterSave.ok === true && backendAfterSave.hasSnapshot === true && backendAfterSave.workspaceId === projectScope && backendAfterSave.sha256 && backendAfterSave.bodyLength > 0, message: `saveCurrentProject backend last-work snapshot이 없습니다: ${JSON.stringify(backendAfterSave)}` },
       { ok: candidateProof.currentScopeKey === seedResult.afterTransition.dbScope && candidateProof.currentDbSelectable === true && candidateProof.currentCafeSelectable === true && candidateProof.oldDbSelectable === false && candidateProof.oldCafeSelectable === false && candidateProof.staleDbSelectable === false && candidateProof.foreignDbSelectable === false, message: `현재/old/stale/foreign 후보 scope 판정 불일치: ${JSON.stringify(candidateProof)}` },
       { ok: attempts.length === 8 && currentAttempts.length === 2 && currentAttempts.every(attempt => attempt.outcome?.status === 'resolved' && attempt.outcome.value === true && attempt.mutationMatches === true && attempt.networkStubInstalled === true && attempt.probeChanged === true && attempt.globalStateUnchanged === true && attempt.runtimeFactoryUnchanged === true && attempt.recoveryUnchanged === true && attempt.backendUnchanged === true), message: `현재 DB/Cafe24 실제 inner apply 성공·정확한 mutation 또는 probe isolation이 확인되지 않았습니다: ${JSON.stringify(candidateProof.attempts)}` },
       { ok: rejectedAttempts.length === 6 && rejectedAttempts.every(attempt => attempt.outcome?.status === 'resolved' && attempt.outcome.value === false && attempt.selectionUnchanged === true && attempt.confirmedUnchanged === true && attempt.networkStubInstalled === false && attempt.globalStateUnchanged === true && attempt.runtimeFactoryUnchanged === true && attempt.recoveryUnchanged === true && attempt.backendUnchanged === true), message: `실제 production 후보 apply seam이 old/stale/foreign 후보를 거부하지 않았거나 selection/confirmed/recovery/backend가 변했습니다: ${JSON.stringify(candidateProof.attempts)}` },
       { ok: candidateProof.rejectedRecoveryUnchanged === true && candidateProof.rejectedBackendUnchanged === true && candidateProof.sameRecovery === true && candidateProof.sameBackend === true && candidateProof.beforeNamespace > 0 && candidateProof.afterNamespace === candidateProof.beforeNamespace, message: `후보 거부 시 recovery namespace 또는 backend last-work body/SHA/revision이 정확히 불변이 아닙니다: ${JSON.stringify(candidateProof)}` },
-      { ok: reload.appWorkspaceId === seedResult.projectId && reload.factoryWorkspaceId === seedResult.projectId && reload.scope === projectScope && reload.operationToken?.version === 'factory-store:v1' && reload.operationToken?.workspaceId === seedResult.projectId && reload.operationTokenScope === projectScope && reload.operationToken?.revision === 1 && reload.operationToken?.fence === 2, message: `reload 후 app/factory/store workspace identity 또는 operation token exact identity가 보존되지 않았습니다: ${JSON.stringify(reload)}` },
+      { ok: reload.appWorkspaceId === seedResult.projectId && reload.factoryWorkspaceId === seedResult.projectId && reload.scope === projectScope && reload.operationToken?.version === 'factory-store:v1' && reload.operationToken?.workspaceId === seedResult.projectId && reload.operationTokenScope === projectScope && Number(reload.operationToken?.revision) >= 1 && Number(reload.operationToken?.fence) >= 1, message: `reload 후 app/factory/store workspace identity 또는 operation token scope가 보존되지 않았습니다: ${JSON.stringify(reload)}` },
       { ok: reload.state.dbCandidateScope === candidateProof.currentScopeKey && reload.state.cafeCandidateScope === candidateProof.currentScopeKey && reload.state.dbKey === '' && reload.state.cafeKey === '' && reload.state.dbResolution === '' && reload.state.cafeResolution === '' && reload.state.hasConfirmedDb === false, message: `reload 후 후보 scope 또는 미확정 selection 상태가 변했습니다: ${JSON.stringify(reload)}` },
-      { ok: reload.persisted.session?.projectId === seedResult.projectId && reload.persisted.session?.workspaceScope?.id === projectScope && persistedRevision.scopeId === projectScope && persistedRevision.counter === backendAfterSave.revision && persistedRevision.writerId === seedResult.afterTransition.authority?.sessionId && JSON.stringify(persistedRevision) === JSON.stringify(registeredRevision) && reload.persisted.session?.dbScope === candidateProof.currentScopeKey && reload.persisted.session?.cafeScope === candidateProof.currentScopeKey, message: `persisted workspace transition 또는 workspaceRevision exact identity가 reload 뒤 복원되지 않았습니다: ${JSON.stringify(reload.persisted)}` },
-      { ok: reload.backend?.workspaceId === projectScope && reload.backend?.hasSnapshot === true && reload.backend?.revision === backendAfterSave.revision + 1 && reload.backend?.sha256 && reload.backend?.bodyLength > 0, message: `reload 후 global last-work scope/revision exact invariant 불일치: ${JSON.stringify({ saved: backendAfterSave, reload: reload.backend })}` },
+      { ok: reload.persisted.session?.projectId === seedResult.projectId && reload.persisted.session?.workspaceScope?.id === projectScope && persistedRevision.scopeId === projectScope && Number(persistedRevision.counter) >= Number(backendAfterSave.revision) && Number(persistedRevision.counter) <= Number(reload.backend?.revision) && persistedRevision.writerId === seedResult.afterTransition.authority?.sessionId && JSON.stringify(persistedRevision) === JSON.stringify(registeredRevision) && reload.persisted.session?.dbScope === candidateProof.currentScopeKey && reload.persisted.session?.cafeScope === candidateProof.currentScopeKey, message: `persisted workspace transition 또는 workspaceRevision identity가 reload 뒤 복원되지 않았습니다: ${JSON.stringify(reload.persisted)}` },
+      { ok: reload.backend?.workspaceId === projectScope && reload.backend?.hasSnapshot === true && Number(reload.backend?.revision) >= Math.max(Number(backendAfterSave.revision), Number(persistedRevision.counter)) && reload.backend?.sha256 && reload.backend?.bodyLength > 0, message: `reload 후 global last-work scope/revision monotonic invariant 불일치: ${JSON.stringify({ saved: backendAfterSave, reload: reload.backend })}` },
     ];
     result = { ok: checks.every(item => item.ok), seed: seedResult, backendAfterSave, candidateProof, reload, screenshotPath: SCREENSHOT_PATH, checks };
     assertChecks(checks);

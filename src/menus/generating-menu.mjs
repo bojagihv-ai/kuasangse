@@ -24,6 +24,8 @@ export function createGeneratingMenu(capabilities = {}) {
   let active = false;
   let generation = 0;
   let contract;
+  const activeDisposers = new Set();
+  const bindingByRoot = new WeakMap();
 
   function runCommand(action, value) {
     const operationToken = getOperationToken();
@@ -75,6 +77,7 @@ export function createGeneratingMenu(capabilities = {}) {
       return renderGeneratingView(view, renderHelpers);
     },
     bind(root) {
+      bindingByRoot.get(root)?.dispose?.();
       const bindings = [];
       const bindProperty = (node, property, handler) => {
         if (!node) return;
@@ -112,11 +115,21 @@ export function createGeneratingMenu(capabilities = {}) {
         });
       }
       let disposed = false;
-      return () => {
+      const dispose = () => {
         if (disposed) return;
         disposed = true;
         for (const dispose of bindings.splice(0).reverse()) dispose();
+        activeDisposers.delete(dispose);
+        if (bindingByRoot.get(root)?.dispose === dispose) bindingByRoot.delete(root);
       };
+      activeDisposers.add(dispose);
+      bindingByRoot.set(root, { dispose });
+      return dispose;
+    },
+    refresh(root) {
+      if (!active) return;
+      bindingByRoot.get(root)?.dispose?.();
+      contract.bind(root);
     },
     onEnter() {
       active = true;
@@ -126,6 +139,7 @@ export function createGeneratingMenu(capabilities = {}) {
       void getOperationToken();
     },
     onLeave() {
+      for (const dispose of [...activeDisposers].reverse()) dispose();
       active = false;
       generation += 1;
     },

@@ -136,6 +136,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('ARCH-TARGETS-01', '공통/구조', '19개 메뉴·탭 소유권과 저장·잠금 목표 계약', 'tests/frontend/menu_modularization_target.test.cjs', 'fast'),
     nodeFile('ARCH-IMPORTS-01', '공통/구조', 'ESM import graph·전역·mutable export 계약', 'tests/frontend/import_graph_contracts.test.cjs', 'fast'),
     nodeFile('ARCH-ENFORCE-01', '공통/구조', 'manifest·module size·저장 경계·bundle 통합 계약', 'tests/frontend/task8_architecture_gates.test.cjs', 'fast'),
+    nodeFile('UI-CJK-01', '공통/화면', '작은 창 한글 단어·조립공장 탭 라벨 가시성 계약', 'tests/frontend/task8_responsive_cjk.test.cjs', 'fast'),
     {
       id: 'ARCH-LIFECYCLE-01', area: '공통/구조', title: '메뉴·탭 listener와 disposer 독립 수명주기', tier: 'fast',
       command: process.execPath,
@@ -184,7 +185,10 @@ function buildRegressionSteps(pythonExe) {
       'tests/frontend/menu_modularization_target.test.cjs',
       `^${id}:`,
     )),
-    nodeFile('UNIT-FE-01', '공통/데이터 격리', '프론트 실제 함수 단위 계약', 'tests/frontend/factory_core_contracts.test.cjs', 'fast'),
+    {
+      ...nodeFile('UNIT-FE-01', '공통/데이터 격리', '프론트 실제 함수 단위 계약', 'tests/frontend/factory_core_contracts.test.cjs', 'fast'),
+      browser: true,
+    },
     nodeFile('UNIT-FE-02', '공통/실행 안정성', '브라우저 인프라 실패만 1회 재시도', 'tests/frontend/regression_runner_contracts.test.cjs', 'fast'),
     {
       id: 'UNIT-AUTH-01', area: '공통/동시 편집', title: 'lease·fence·작업파일·명령 차단 단위 계약', tier: 'fast',

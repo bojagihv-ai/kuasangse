@@ -47,6 +47,7 @@ async function main() {
       window.state.currentProjectName = productName;
       window.state.currentProjectCreatedAt = Date.now();
       window.state.productName = productName;
+      await window.ensureWorkspaceEditAuthority('project:' + projectId, { force: true });
       window.state.factory = window.normalizeFactoryState({});
       const factory = window.factoryState();
       window.factoryStampWorkspaceIdentity(factory, { projectId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
@@ -60,10 +61,12 @@ async function main() {
       factory.goalRun.currentRunId = runId;
       factory.automation.activeTab = 'fields';
       factory.product.dbCandidates = [{ jcode: 2482, product_name: productName }];
-      factory.product.selectedDbCandidateKey = window.factorySinhwaCandidateKey(factory.product.dbCandidates[0]);
+      const selectedDbCandidateKey = window.factorySinhwaCandidateKey(factory.product.dbCandidates[0]);
+      factory.product.selectedDbCandidateKey = selectedDbCandidateKey;
       factory.product.confirmedDb = { jcode: 2482, product_name: productName };
       factory.product.cafe24Candidates = [{ product_no: '2534', product_code: 'P0000DTM', product_name: productName, mall_id: 'sinhwasa' }];
-      factory.product.selectedCafe24CandidateKey = window.factoryCafe24CandidateKey(factory.product.cafe24Candidates[0]);
+      const selectedCafe24CandidateKey = window.factoryCafe24CandidateKey(factory.product.cafe24Candidates[0]);
+      factory.product.selectedCafe24CandidateKey = selectedCafe24CandidateKey;
 
       // 선택 전송 후보가 되는 실제 필드값을 현재 작업 범위에 확정한다.
       window.factoryCommitAutomationWizardFieldValue('sale_price', '12000', '판매가', false);
@@ -87,19 +90,14 @@ async function main() {
       ]);
 
       // 외부 데이터는 건드리지 않고 네트워크 경계만 모의해 실제 버튼 함수의 payload를 검사한다.
-      const originalConfirm = window.confirm;
-      const originalPutSinhwaDirect = window.putSinhwaDirect;
-      const originalFetchSinhwaDirect = window.fetchSinhwaDirect;
-      const originalCallCafe24Console = window.callCafe24Console;
-      const originalWaitForCafe24ProductEcho = window.factoryWaitForCafe24ProductEcho;
       const sinhwaCalls = [];
       const cafe24Calls = [];
-      window.confirm = () => true;
-      window.putSinhwaDirect = async (requestPath, body) => {
+      const confirmMock = () => true;
+      const putSinhwaMock = async (requestPath, body) => {
         sinhwaCalls.push({ method: 'PUT', path: requestPath, body });
         return { ...body };
       };
-      window.fetchSinhwaDirect = async requestPath => {
+      const fetchSinhwaMock = async requestPath => {
         sinhwaCalls.push({ method: 'GET', path: requestPath });
         if (/cost-profile/.test(requestPath)) return { spec: { width_mm: 48 } };
         if (/usage-profile/.test(requestPath)) return { purposes: ['선물 포장', '답례품'] };
@@ -108,13 +106,17 @@ async function main() {
       const sinhwaMockResult = await window.factorySendSelectedFieldsToSinhwa([
         { id: 'width_mm', label: '가로', value: '4.8cm', sinhwa: true },
         { id: 'usage', label: '사용용도', value: '선물 포장, 답례품', sinhwa: true },
-      ]);
+      ], null, {
+        confirm: confirmMock,
+        putSinhwaDirect: putSinhwaMock,
+        fetchSinhwaDirect: fetchSinhwaMock,
+      });
 
-      window.callCafe24Console = async (method, requestPath, payload) => {
+      const callCafe24Mock = async (method, requestPath, payload) => {
         cafe24Calls.push({ method, path: requestPath, payload });
         return {};
       };
-      window.factoryWaitForCafe24ProductEcho = async (productNo, mallId, expected) => ({
+      const waitForCafe24ProductEchoMock = async (productNo, mallId, expected) => ({
         detail: { product_no: productNo, mall_id: mallId, ...expected },
         verification: { checked: Object.keys(expected).length, matched: Object.keys(expected).length, missing: [], mismatches: [] },
         attempts: 1,
@@ -129,6 +131,9 @@ async function main() {
         applyFinalRegistrationSettings: false,
         skipConfirm: true,
         forceName: productName + '_선택밖',
+        confirm: confirmMock,
+        callCafe24Console: callCafe24Mock,
+        waitForProductEcho: waitForCafe24ProductEchoMock,
       });
       window.factoryState().product.selectedCafe24CandidateKey = explicitCafe24Key;
       const cafe24MockResult = await window.factorySaveCafe24ProductFromFinalDb({
@@ -136,12 +141,10 @@ async function main() {
         applyFinalRegistrationSettings: false,
         skipConfirm: true,
         forceName: productName + '_선택밖',
+        confirm: confirmMock,
+        callCafe24Console: callCafe24Mock,
+        waitForProductEcho: waitForCafe24ProductEchoMock,
       });
-      window.confirm = originalConfirm;
-      window.putSinhwaDirect = originalPutSinhwaDirect;
-      window.fetchSinhwaDirect = originalFetchSinhwaDirect;
-      window.callCafe24Console = originalCallCafe24Console;
-      window.factoryWaitForCafe24ProductEcho = originalWaitForCafe24ProductEcho;
 
       const selectionResult = window.factorySetFieldTransferSelection(['sale_price', 'width_mm', 'usage']);
       const selectedBeforeScopeChange = window.factoryFieldTransferState(window.factoryState()).selectedFieldIds.slice();

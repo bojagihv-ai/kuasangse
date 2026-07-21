@@ -92,13 +92,14 @@ async function capture(cdp, fileName) {
 
 async function layoutProof(cdp) {
   return evaluate(cdp, `(() => {
+    const scrollRoot = document.querySelector('.app');
     const main = document.querySelector('.main');
     const banner = document.querySelector('.workspace-authority-banner');
     const actions = [...document.querySelectorAll('[data-workspace-authority-action]')];
-    const before = main.scrollTop;
-    main.scrollTop = main.scrollHeight;
-    const reachedBottom = Math.ceil(main.scrollTop + main.clientHeight) >= main.scrollHeight;
-    main.scrollTop = before;
+    const before = scrollRoot.scrollTop;
+    scrollRoot.scrollTop = scrollRoot.scrollHeight;
+    const reachedBottom = Math.ceil(scrollRoot.scrollTop + scrollRoot.clientHeight) >= scrollRoot.scrollHeight;
+    scrollRoot.scrollTop = before;
     const viewportWidth = document.documentElement.clientWidth;
     const owner = banner?.querySelector('.workspace-authority-owner');
     const ownerStyle = owner ? getComputedStyle(owner) : null;
@@ -112,7 +113,7 @@ async function layoutProof(cdp) {
       actionTextClipped: actions.some(item => item.scrollWidth > item.clientWidth + 1),
       horizontalOverflow: document.documentElement.scrollWidth - viewportWidth,
       mainHorizontalOverflow: main.scrollWidth - main.clientWidth,
-      mainScrollable: main.scrollHeight > main.clientHeight,
+      mainScrollable: scrollRoot.scrollHeight > scrollRoot.clientHeight,
       reachedBottom,
       loadErrorCount: (window.__KUASANGSE_LOAD_ERRORS__ || []).length,
       brokenImageCount: [...document.images].filter(image => image.complete && image.naturalWidth === 0).length,

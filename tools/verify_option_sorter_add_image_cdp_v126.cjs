@@ -59,7 +59,7 @@ async function main() {
       return true;
     })()`);
 
-    await evaluate(cdp, `(() => {
+    await evaluate(cdp, `(async () => {
       window.scheduleLastWorkSave = () => {};
       window.saveLastWorkNow = () => {};
       const base = window.defaultOptionSorterState();
@@ -71,7 +71,7 @@ async function main() {
         pool: [],
         previewImageId: null,
       });
-      window.render();
+      await window.render();
       window.__optionSorterUploadProof = { inputClickCount: 0 };
       const input = document.getElementById('optFileInput');
       input?.addEventListener('click', () => { window.__optionSorterUploadProof.inputClickCount += 1; });
@@ -168,20 +168,20 @@ async function main() {
       });
       await evaluate(cdp, `(() => {
         window.scrollTo(0, 0);
-        const main = document.querySelector('.main');
-        if (main) main.scrollTop = 0;
+        const scrollRoot = document.querySelector('.app');
+        if (scrollRoot) scrollRoot.scrollTop = 0;
         return true;
       })()`);
       await new Promise(resolve => setTimeout(resolve, 100));
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       fs.writeFileSync(SCREENSHOT_PATHS[key], Buffer.from(shot.data, 'base64'));
       await evaluate(cdp, `(() => {
-        const main = document.querySelector('.main');
+        const scrollRoot = document.querySelector('.app');
         const pool = document.getElementById('optPoolList');
-        if (!main || !pool) return false;
-        const mainRect = main.getBoundingClientRect();
+        if (!scrollRoot || !pool) return false;
+        const rootRect = scrollRoot.getBoundingClientRect();
         const poolRect = pool.getBoundingClientRect();
-        main.scrollTop += poolRect.top - mainRect.top - 120;
+        scrollRoot.scrollTop += poolRect.top - rootRect.top - 120;
         return true;
       })()`);
       await new Promise(resolve => setTimeout(resolve, 100));

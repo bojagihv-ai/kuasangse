@@ -27,6 +27,15 @@ test('브라우저가 시작되기 전 발생한 CDP 연결 실패만 재시도 
   assert.equal(retryable, true);
 });
 
+test('격리 Chrome HTTP 소켓이 응답 전에 닫히면 브라우저 인프라 실패로 한 번 재시도한다', () => {
+  const result = {
+    passed: false,
+    tail: "TypeError: fetch failed\nSocketError: other side closed\ncode: 'UND_ERR_SOCKET'",
+  };
+
+  assert.equal(isRetryableInfrastructureFailure(browserStep, result), true);
+});
+
 test('앱 전역 객체 준비 전 타임아웃은 초기 로드 실패로 분류한다', () => {
   // Given: 격리 Chrome에서 앱 전역 객체가 만들어지기 전에 준비 대기가 끝났다.
   const result = {
@@ -53,6 +62,11 @@ test('실제 브라우저 제품 검증 실패는 재시도로 숨기지 않는�
 
   // Then: 제품 회귀는 즉시 실패로 남겨야 하므로 재시도하면 안 된다.
   assert.equal(retryable, false);
+});
+
+test('브라우저 단계 프로세스 타임아웃은 새 격리 브라우저로 한 번 재시도한다', () => {
+  const result = { passed: false, timedOut: true, tail: 'test worker stopped before summary' };
+  assert.equal(isRetryableInfrastructureFailure(browserStep, result), true);
 });
 
 test('브라우저 검사가 아닌 단계는 같은 오류 문구가 있어도 재시도하지 않는다', () => {

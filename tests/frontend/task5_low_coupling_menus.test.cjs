@@ -65,6 +65,8 @@ test('MENU-MANUAL activation/render: 주입 capability만으로 기존 한국어
   assert.match(html, /제품 분석 화면으로/);
   assert.match(html, /사진 &lt;분석&gt;/);
   assert.doesNotMatch(html, /사진 <분석>/);
+  assert.match(html, /data-manual-nav="analyzing"/);
+  assert.doesNotMatch(html, /data-nav="analyzing"/);
 });
 
 test('MENU-MANUAL owner/save-reload/read-only: 읽기 전용 메뉴는 상태를 쓰거나 저장하지 않는다', async () => {

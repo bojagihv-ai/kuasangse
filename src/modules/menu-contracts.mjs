@@ -64,6 +64,46 @@ function requiredFunction(definition, field) {
   return definition[field];
 }
 
+function createDefaultBindingLifecycle(originalBind, menuId) {
+  let active = null;
+
+  function install(record, args) {
+    const dispose = originalBind(...args);
+    if (typeof dispose !== 'function') throw new TypeError(`menu ${menuId} bind must return a disposer`);
+    record.args = args;
+    record.disposeCurrent = dispose;
+  }
+
+  function bind(...args) {
+    active?.dispose();
+    const record = { args, disposeCurrent: null, disposed: false, dispose: null };
+    record.dispose = () => {
+      if (record.disposed) return;
+      record.disposed = true;
+      const dispose = record.disposeCurrent;
+      record.disposeCurrent = null;
+      dispose?.();
+      if (active === record) active = null;
+    };
+    install(record, args);
+    active = record;
+    return record.dispose;
+  }
+
+  function refresh(...args) {
+    const record = active;
+    if (!record || record.disposed) return;
+    const nextArgs = [...record.args];
+    args.forEach((value, index) => { nextArgs[index] = value; });
+    const dispose = record.disposeCurrent;
+    record.disposeCurrent = null;
+    dispose?.();
+    install(record, nextArgs);
+  }
+
+  return Object.freeze({ bind, refresh });
+}
+
 export function createMenuContract(definition) {
   if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
     throw new TypeError('menu contract must be an object');
@@ -82,6 +122,9 @@ export function createMenuContract(definition) {
   const capabilities = new Set(uniqueStrings(definition.capabilities || [], 'capabilities', { allowEmpty: true }));
   const commands = commandContracts(definition.commands, capabilities);
   const originalBind = requiredFunction(definition, 'bind');
+  const defaultBinding = typeof definition.refresh === 'function'
+    ? null
+    : createDefaultBindingLifecycle(originalBind, id);
 
   const contract = {
     version: MENU_CONTRACT_VERSION,
@@ -92,9 +135,9 @@ export function createMenuContract(definition) {
     select: requiredFunction(definition, 'select'),
     commands,
     render: requiredFunction(definition, 'render'),
-    refresh: typeof definition.refresh === 'function' ? definition.refresh : undefined,
+    refresh: typeof definition.refresh === 'function' ? definition.refresh : defaultBinding.refresh,
     bind(...args) {
-      const dispose = originalBind(...args);
+      const dispose = defaultBinding ? defaultBinding.bind(...args) : originalBind(...args);
       if (typeof dispose !== 'function') throw new TypeError(`menu ${id} bind must return a disposer`);
       let disposed = false;
       return () => {

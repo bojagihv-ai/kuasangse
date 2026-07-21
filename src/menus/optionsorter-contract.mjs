@@ -55,7 +55,7 @@ export function createOptionSorterCommands(dependencies) {
 }
 
 export function createOptionSorterContract(dependencies) {
-  const { getSnapshot, commands, render, bind, onEnter, onLeave } = dependencies;
+  const { getSnapshot, commands, render, refresh, bind, onEnter, onLeave } = dependencies;
   return createMenuContract({
     version: MENU_CONTRACT_VERSION,
     id: 'optionsorter',
@@ -69,6 +69,7 @@ export function createOptionSorterContract(dependencies) {
     },
     commands,
     render,
+    refresh,
     bind,
     onEnter,
     onLeave,

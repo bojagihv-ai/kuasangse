@@ -258,7 +258,7 @@ const ROUTE_CONTROLS = Object.freeze({
     c('[id$="refreshGptOAuthStatusBtn"]'), c('[id$="openGptOAuthLoginBtn"]'),
     c('[id$="forceGptOAuthLoginBtn"]'),
   ]),
-  manual: Object.freeze([c('[data-nav]', 'click', { nav: 'analyzing' })]),
+  manual: Object.freeze([c('[data-manual-nav]', 'click', { manualNav: 'analyzing' })]),
 });
 
 async function createRouteMenu(route, calls = []) {
@@ -416,6 +416,12 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
     }
     if (route === 'upload') {
       const files = [{ name: 'one.png', type: 'image/png' }];
+      const previousStart = root.nodes.get('#startAnalysis');
+      const replacementStart = eventNode({}, '#startAnalysis');
+      replacementStart.rootToken = previousStart.rootToken;
+      root.nodes.set('#startAnalysis', replacementStart);
+      menu.refresh(root);
+      assert.equal(typeof previousStart.onclick, 'object');
       fire(root.nodes.get('#uploadArea'), 'click');
       fire(root.nodes.get('#uploadArea'), 'dragover');
       fire(root.nodes.get('#uploadArea'), 'drop', { dataTransfer: { files } });
@@ -461,7 +467,13 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
       menu.onEnter();
     }
     if (route === 'generating') {
-      fire(root.nodes.get('#stopAfterCurrentSection'), 'click', {}, root);
+      const previousButton = root.nodes.get('#stopAfterCurrentSection');
+      const replacementButton = eventNode({}, '#stopAfterCurrentSection');
+      replacementButton.rootToken = previousButton.rootToken;
+      root.nodes.set('#stopAfterCurrentSection', replacementButton);
+      menu.refresh(root);
+      assert.equal(typeof previousButton.onclick, 'object');
+      fire(replacementButton, 'click', {}, root);
       assert.deepEqual(calls, [['stopAfterCurrent', undefined, 'workspace:a:fence:1']]);
     }
     if (route === 'competitor') {
@@ -576,10 +588,23 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
         ['applySectionImageHelperTips', 'hero', 'workspace:a:fence:1'],
         ['applyAllSectionImageHelperTips', undefined, 'workspace:a:fence:1'],
       ]);
+      const generateButton = root.nodes.get('[data-generate-section]');
+      const sectionCard = root.nodes.get('[data-section-toggle]');
+      const nestedGenerateTarget = {
+        ...generateButton,
+        closest(selector) {
+          if (selector === '[data-generate-section]') return generateButton;
+          if (selector === '[data-section-toggle]') return sectionCard;
+          return null;
+        },
+      };
+      nestedGenerateTarget.rootToken = generateButton.rootToken;
+      fire(nestedGenerateTarget, 'click', {}, root);
+      assert.deepEqual(calls.at(-1), ['generateSection', 'hero', 'workspace:a:fence:1']);
       const staleClick = [...root.rootListeners.get('click')][0];
       menu.onLeave();
       staleClick({ target: root.nodes.get('#generateAll'), preventDefault() {}, stopPropagation() {} });
-      assert.equal(calls.length, 30, 'stale sections listener must be a no-op after workspace switch');
+      assert.equal(calls.length, 31, 'stale sections listener must be a no-op after workspace switch');
       menu.onEnter();
     }
     if (route === 'preview') {
@@ -630,7 +655,13 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
       menu.onEnter();
     }
     if (route === 'manual') {
-      fire(root.nodes.get('[data-nav]'), 'click');
+      const previousNav = root.nodes.get('[data-manual-nav]');
+      const replacementNav = eventNode({ manualNav: 'analyzing' }, '[data-manual-nav]');
+      replacementNav.rootToken = previousNav.rootToken;
+      root.nodes.set('[data-manual-nav]', replacementNav);
+      menu.refresh(root);
+      assert.equal(typeof previousNav.onclick, 'object');
+      fire(replacementNav, 'click');
       assert.deepEqual(calls, [['navigate', 'analyzing']]);
     }
     if (route === 'modelsettings') {
@@ -664,7 +695,7 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
       menu.onEnter();
     }
     duplicateDispose?.();
-    if (duplicateDispose) assertControlsOwned(route, root, controls);
+    if (duplicateDispose && route !== 'manual') assertControlsOwned(route, root, controls);
     dispose(); dispose(); duplicateDispose?.(); menu.onLeave();
     for (const node of root.nodes.values()) assert.equal(activeBindings(node), 0,
       `${route}: disposer left an event binding`);

@@ -6,6 +6,8 @@ const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const core05 = fs.readFileSync(path.join(root, 'src', 'app-core-05.js'), 'utf8');
 const core06 = fs.readFileSync(path.join(root, 'src', 'app-core-06.js'), 'utf8');
+const core03 = fs.readFileSync(path.join(root, 'src', 'app-core-03.js'), 'utf8');
+const competitorMenu = fs.readFileSync(path.join(root, 'src', 'menus', 'competitor-menu.mjs'), 'utf8');
 
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
@@ -205,9 +207,14 @@ assert.match(detailCapture, /compMarketBeginDetailOperation/);
 assert.match(detailCapture, /compMarketAssertDetailOperationCurrent/);
 assert.match(detailCapture, /await factoryYieldToPaint\(\)/);
 assert.match(
-  core06,
-  /tab === 'competitor'[\s\S]{0,500}compMarketMaybeAutoRecoverDetailImages/,
-  '경쟁사 탭을 열면 완료된 현재 작업의 VM 상세 이미지 자동 복구를 다시 시도해야 합니다.'
+  competitorMenu,
+  /bind\(root\)[\s\S]*call\('maybeRecoverDetailImages'\)/,
+  '경쟁사 메뉴가 활성 DOM을 바인딩하면 현재 작업의 VM 상세 이미지 자동 복구를 다시 시도해야 합니다.'
+);
+assert.match(
+  core03,
+  /maybeRecoverDetailImages\(\)\s*{\s*return compMarketMaybeAutoRecoverDetailImages\(\);\s*}/,
+  '메뉴 소유 복구 명령은 기존 상세 이미지 복구 구현에 연결되어야 합니다.'
 );
 
 console.log(JSON.stringify({

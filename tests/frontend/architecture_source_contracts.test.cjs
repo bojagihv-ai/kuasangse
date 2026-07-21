@@ -11,26 +11,7 @@ const APP_HTML = path.join(ROOT, 'app.html');
 const APP_LOADER = path.join(ROOT, 'src', 'app-loader.js');
 const RUNTIME_MANIFEST = path.join(ROOT, 'src', 'runtime-manifest.json');
 const WORKSPACE_REVISION_MODULE = path.join(ROOT, 'src', 'modules', 'workspace-revision.mjs');
-const REQUIRED_FOUNDATIONS = [
-  'src/modules/state-ownership.mjs',
-  'src/modules/menu-contracts.mjs',
-  'src/modules/app-store.mjs',
-  'src/modules/composition-commands.mjs',
-  'src/modules/module-registry.mjs',
-  'src/modules/persistence/contracts.mjs',
-  'src/modules/persistence/fencing.mjs',
-  'src/modules/persistence/indexeddb-driver.mjs',
-  'src/modules/persistence/migrations.mjs',
-  'src/modules/persistence/serialization.mjs',
-  'src/modules/persistence/file-publish.mjs',
-  'src/modules/persistence/session-storage-adapter.mjs',
-  'src/modules/persistence/indexeddb-adapter.mjs',
-  'src/modules/persistence/server-last-work-adapter.mjs',
-  'src/modules/persistence/workfile-adapter.mjs',
-  'src/modules/persistence/archive-adapter.mjs',
-  'src/modules/workspace-mutations.mjs',
-  'src/modules/workspace-persistence.mjs',
-];
+const RUNTIME_MODULE_IDS = path.join(ROOT, 'src', 'modules', 'runtime-module-ids.mjs');
 
 function source(file) {
   return fs.readFileSync(file, 'utf8');
@@ -75,7 +56,7 @@ test('앱 로더는 전체 소스를 문자열로 합쳐 eval하지 않는다', 
   assert.match(loader, /manifest\.bundle/);
 });
 
-test('런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다', () => {
+test('런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 안전한 순서로 선언한다', async () => {
   // Given: canonical runtime manifest 경로를 준비한다.
   // When: 파일 존재 여부와 JSON 계약을 확인한다.
   assert.equal(fs.existsSync(RUNTIME_MANIFEST), true, 'src/runtime-manifest.json이 필요합니다.');
@@ -84,65 +65,8 @@ test('런타임 매니페스트가 모든 실제 ESM foundation을 발견하고 
   // Then: 앱 엔트리, classic sources, native modules가 모두 명시되어야 한다.
   assert.equal(manifest.entry, 'app.html');
   assert.ok(Array.isArray(manifest.scripts) && manifest.scripts.length >= 12);
-  const foundations = [
-    'src/modules/workspace-revision.mjs',
-    ...REQUIRED_FOUNDATIONS,
-  ];
-  assert.deepEqual(manifest.modules.slice(0, foundations.length), foundations);
-  assert.deepEqual(manifest.modules.slice(foundations.length), [
-    'src/domains/cafe24/fields.mjs',
-    'src/domains/cafe24/options.mjs',
-    'src/domains/cafe24/payload.mjs',
-    'src/domains/cafe24/api.mjs',
-    'src/domains/cafe24/sync.mjs',
-    'src/domains/cafe24/ui.mjs',
-    'src/domains/cafe24/index.mjs',
-    'src/menus/manual-menu.mjs',
-    'src/menus/modelsettings-menu.mjs',
-    'src/menus/automation-menu.mjs',
-    'src/menus/imagecuts-menu.mjs',
-    'src/menus/optionsorter-menu.mjs',
-    'src/menus/upload-menu.mjs',
-    'src/menus/analysis-menu.mjs',
-    'src/menus/sections-menu-cards-view.mjs',
-    'src/menus/sections-menu-view.mjs',
-    'src/menus/sections-menu.mjs',
-    'src/menus/sections-menu-a2-events.mjs',
-    'src/menus/generating-menu.mjs',
-    'src/menus/preview-menu-view.mjs',
-    'src/menus/preview-layer-events.mjs',
-    'src/menus/preview-image-insert-events.mjs',
-    'src/menus/preview-ai-repair-events.mjs',
-    'src/menus/preview-menu.mjs',
-    'src/menus/competitor-menu-report-view.mjs',
-    'src/menus/competitor-menu-plan-view.mjs',
-    'src/menus/competitor-menu-view.mjs',
-    'src/menus/competitor-menu.mjs',
-    'src/modules/factory-store.mjs',
-    'src/menus/factory/factory-tab-contract.mjs',
-    'src/menus/factory/tabs/start-tab.mjs',
-    'src/menus/factory/tabs/db-tab.mjs',
-    'src/menus/factory/tabs/fields-tab-render.mjs',
-    'src/menus/factory/tabs/fields-tab.mjs',
-    'src/menus/factory/tabs/competitor-tab-model.mjs',
-    'src/menus/factory/tabs/competitor-tab-analysis.mjs',
-    'src/menus/factory/tabs/competitor-tab-candidates.mjs',
-    'src/menus/factory/tabs/competitor-tab-images.mjs',
-    'src/menus/factory/tabs/competitor-tab-view.mjs',
-    'src/menus/factory/tabs/competitor-tab-events.mjs',
-    'src/menus/factory/tabs/competitor-tab.mjs',
-    'src/menus/factory/tabs/assets-tab-render.mjs',
-    'src/menus/factory/tabs/assets-tab-bind.mjs',
-    'src/menus/factory/tabs/assets-tab.mjs',
-    'src/menus/factory/tabs/sections-tab.mjs',
-    'src/menus/factory/tabs/publish-tab-render.mjs',
-    'src/menus/factory/tabs/publish-tab.mjs',
-    'src/menus/factory/factory-menu.mjs',
-    'src/shell/render-lifecycle.mjs',
-    'src/shell/route-controller.mjs',
-    'src/shell/legacy-diagnostic-bridge.mjs',
-    'src/shell/bootstrap.mjs',
-  ]);
+  const moduleIds = await import(`${pathToFileURL(RUNTIME_MODULE_IDS).href}?architecture=${Date.now()}`);
+  assert.deepEqual(manifest.modules, Array.from(moduleIds.KNOWN_FOUNDATION_MODULE_IDS));
   for (const modulePath of manifest.modules) {
     const absolutePath = path.join(ROOT, modulePath);
     assert.equal(fs.existsSync(absolutePath), true, `missing runtime module: ${modulePath}`);
@@ -229,6 +153,21 @@ test('검증된 작업파일만 revision 없는 내장 자산을 명시적으로
   assert.match(stateSource, /validatedProjectFileRestore:\s*true/);
 });
 
+test('검증된 대용량 작업파일은 제품 이미지와 경쟁사 상태를 중복 복원하지 않는다', () => {
+  // Given: 작업파일 payload와 assetPayload에는 같은 제품 이미지 백업이 함께 들어갈 수 있다.
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const stateSource = source(path.join(ROOT, 'src', 'app-core-03.js'));
+
+  // When/Then: 자산 복원 중 시장 동기화는 마지막 단일 동기화까지 미루고, 같은 백업은 두 번 적용하지 않는다.
+  assert.match(persistence, /applyProductImageBackupPayload\(assets\.productImageBackup,[\s\S]{0,260}syncMarket:\s*false/);
+  assert.match(persistence, /options\.syncMarket\s*!==\s*false\s*&&\s*typeof ensureCompMarketScrapeState/);
+  assert.match(stateSource, /next\.productImageBackup\s*&&\s*!workspaceAssetPayload\?\.productImageBackup/);
+
+  // And: JSON.parse·검증·준비를 끝낸 전용 payload를 다시 20MB 전체 직렬화하지 않는다.
+  assert.match(stateSource, /options\.payloadAlreadyDetached\s*===\s*true\s*\?\s*payload\s*:\s*cloneData\(payload\)/);
+  assert.match(stateSource, /validatedProjectFileRestore:\s*true,[\s\S]{0,100}payloadAlreadyDetached:\s*true/);
+});
+
 test('작업 편집권 UI는 표시 의미가 없는 revision 변화로 전체 화면을 다시 그리지 않는다', () => {
   // Given: 편집권 구독과 작업파일 복원 상태를 연결하는 UI 코드를 읽는다.
   const uiSource = source(path.join(ROOT, 'src', 'app-core-06.js'));
@@ -266,6 +205,16 @@ test('메뉴 비동기 작업 identity는 저장 revision이 아니라 작업 �
   assert.match(functionSource, /authority\?\.fencingToken/);
   assert.doesNotMatch(functionSource, /workspaceRevision|authority\?\.fence(?:\W|$)/);
   assert.doesNotMatch(uiSource, /authority\?\.fence(?:\W|$)/);
+
+  const currentCheckSource = extractFunction(uiSource, 'factoryRuntimeIsOperationCurrent');
+  const isCurrent = new Function(
+    'currentRuntimeMenuOperationToken',
+    'factoryRuntimeRequireStore',
+    `${currentCheckSource}; return factoryRuntimeIsOperationCurrent;`,
+  )(() => 'project-a:project:project-a:7', () => ({ isOperationCurrent: token => token?.revision === 3 }));
+  assert.equal(isCurrent('project-a:project:project-a:7'), true);
+  assert.equal(isCurrent('project-a:project:project-a:8'), false);
+  assert.equal(isCurrent({ revision: 3 }), true);
 });
 
 test('작업파일 복원은 시각 검증과 server IndexedDB session commit을 각각 한 번만 끝낸다', () => {
@@ -309,6 +258,89 @@ test('OAuth 백그라운드 상태 완료는 작업파일 복원 렌더를 끼�
   assert.match(autoRefresh, /factoryRuntimeUpdateOwnedFactory\([\s\S]*?'product-db'/);
   assert.equal((autoRefresh.match(/factoryRenderAfterBackgroundStatusUpdate\(\)/g) || []).length, 1);
   assert.doesNotMatch(autoRefresh, /\n\s+render\(\);/);
+});
+
+test('Cafe24 참조목록 자동 로딩은 경쟁사·생성·섹션 탭의 작업 토큰에 끼어들지 않는다', () => {
+  // Given: 조립공장 이벤트 바인더는 모든 탭 렌더 뒤 실행된다.
+  const uiSource = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const bindFactoryEvents = extractFunction(uiSource, 'bindFactoryEvents');
+
+  // When/Then: Cafe24 목록이 필요한 탭에서만 네트워크 갱신을 시작해야 한다.
+  assert.match(bindFactoryEvents, /new Set\(\['db', 'fields', 'publish'\]\)/);
+  assert.match(bindFactoryEvents, /cafe24ReferenceTabs\.has\(String\(factory\.automation\?\.activeTab \|\| ''\)\)[\s\S]*factoryEnsureCafe24ReferenceLists\(\)/);
+  assert.doesNotMatch(bindFactoryEvents, /bindFactoryCriticalActions\(\);\s*try\s*\{\s*factoryEnsureCafe24ReferenceLists\(\)/);
+});
+
+test('모듈 소유 탭의 생성 버튼은 레거시 인라인 핸들러와 이벤트를 이중 소유하지 않는다', () => {
+  // Given: assets/publish 탭은 각 ESM binder가 data-factory-run-stage 클릭을 소유한다.
+  const uiSource = source(path.join(ROOT, 'src', 'app-core-05.js'));
+  const assetChooser = extractFunction(uiSource, 'renderFactoryAutomationAssetChooser');
+  const finalRegistration = extractFunction(uiSource, 'renderFactoryFinalRegistrationPanel');
+
+  // When/Then: 해당 탭 마크업이 레거시 inline handler로 bubbling을 가로막으면 안 된다.
+  assert.doesNotMatch(assetChooser, /factoryRunStageButtonInline/);
+  assert.doesNotMatch(finalRegistration, /factoryRunStageButtonInline/);
+  assert.match(source(path.join(ROOT, 'src', 'menus', 'factory', 'tabs', 'assets-tab-bind.mjs')), /fire\('runStage'/);
+  assert.match(source(path.join(ROOT, 'src', 'menus', 'factory', 'tabs', 'publish-tab.mjs')), /data-factory-run-stage/);
+});
+
+test('장시간 생성 렌더는 현재 명령 draft를 읽고 렌더 동기화로 revision을 중첩 증가시키지 않는다', () => {
+  // Given: 이미지 생성 명령은 하나의 store draft를 장시간 소유한 채 진행 상태를 렌더한다.
+  const runtime = source(path.join(ROOT, 'src', 'app-core-03.js'));
+  const factoryUi = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const renderScope = extractFunction(runtime, 'factoryRuntimeRenderWithOwnedDraft');
+  const readFactory = extractFunction(runtime, 'factoryRuntimeReadFactory');
+  const updateFactory = extractFunction(runtime, 'factoryRuntimeUpdateOwnedFactory');
+  const runImageStageStart = factoryUi.indexOf('async function factoryGenerateImageCutsBackedStage(');
+  const runImageStageEnd = factoryUi.indexOf('async function factoryGenerateImageStage(', runImageStageStart);
+  const runStageStart = factoryUi.indexOf('async function factoryRunStage(');
+  const runStageEnd = factoryUi.indexOf('function factorySendAssetToStage(', runStageStart);
+  assert.ok(runImageStageStart >= 0 && runImageStageEnd > runImageStageStart);
+  assert.ok(runStageStart >= 0 && runStageEnd > runStageStart);
+  const runImageStage = factoryUi.slice(runImageStageStart, runImageStageEnd);
+  const runStage = factoryUi.slice(runStageStart, runStageEnd);
+
+  // When/Then: 렌더 호출 중에는 동일 draft를 읽고 렌더 전용 세 명령만 그 draft에 합쳐야 한다.
+  assert.match(renderScope, /factoryRuntimeOwnedRenderDraft\s*=\s*factory/);
+  assert.match(renderScope, /finally[\s\S]*factoryRuntimeOwnedRenderDraft\s*=\s*previous/);
+  assert.match(readFactory, /if \(factoryRuntimeOwnedRenderDraft\) return factoryRuntimeOwnedRenderDraft/);
+  assert.match(updateFactory, /FACTORY_RUNTIME_OWNED_RENDER_COMMANDS\.has\(commandName\)[\s\S]*mutator\(factoryRuntimeOwnedRenderDraft\)/);
+  for (const command of [
+    'factory/runtime:updateFromInputs',
+    'factory/runtime:preserveDetailHtml',
+    'factory/runtime:saveSnapshotMetadata',
+  ]) {
+    assert.match(runtime, new RegExp(command.replace('/', '\\/')));
+  }
+
+  // And: 생성 진행 및 최종 성공 렌더가 모두 명령 소유 범위 안에서 실행되어야 한다.
+  assert.match(runImageStage, /factoryRuntimeRenderWithOwnedDraft\(factory\)/);
+  assert.match(runStage, /factoryRuntimeRenderWithOwnedDraft\(done\)/);
+});
+
+test('섹션 작업 범위는 퇴역한 state.factory 대신 canonical runtime snapshot을 읽는다', () => {
+  // Given: 섹션 결과에 상품·실행·입력 이미지 범위를 찍는 실제 함수를 읽는다.
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const scopeMeta = extractFunction(persistence, 'sectionWorkScopeMeta');
+
+  // When/Then: 명시적 source가 없으면 store 소유 factory snapshot을 기준으로 삼아야 한다.
+  assert.match(scopeMeta, /!source\s*&&\s*typeof factoryRuntimeReadFactory === 'function'/);
+  assert.match(scopeMeta, /factory\s*=\s*factoryRuntimeReadFactory\(\)/);
+  assert.match(scopeMeta, /catch\(e\)/, 'runtime store 선언 전 startup 호출은 bootstrap state로 안전하게 폴백해야 합니다.');
+  assert.doesNotMatch(scopeMeta, /const factory = live\?\.factory \|\| \{\}/);
+});
+
+test('섹션 일괄 생성 중지 명령은 인자 없이 호출해도 저장 옵션을 안전하게 처리한다', () => {
+  // Given: 생성 화면 버튼이 인자 없이 호출하는 실제 중지 명령을 읽는다.
+  const uiSource = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const start = uiSource.indexOf('function requestSectionBatchStopAfterCurrent(');
+  const end = uiSource.indexOf('function finishSectionBatchAfterStop(', start);
+  assert.ok(start >= 0 && end > start);
+  const stopAfterCurrent = uiSource.slice(start, end);
+
+  // When/Then: 선택적 저장 옵션은 기본 객체를 가져 ReferenceError를 만들지 않아야 한다.
+  assert.match(stopAfterCurrent, /function requestSectionBatchStopAfterCurrent\(options\s*=\s*\{\}\)/);
+  assert.match(stopAfterCurrent, /options\.save\s*!==\s*false/);
 });
 
 test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지 않는다', () => {
@@ -361,4 +393,28 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
 
   // And: 과거에 범위 필드만 빠진 저장본은 revision scope로 안전 복구한다.
   assert.match(loadSession, /workspaceSnapshotRevision\(s\)\?\.scopeId/);
+});
+
+test('초기 세션 정규화는 state 선언 전에도 백엔드 URL을 안전하게 계산한다', () => {
+  // Given: 저장 세션은 전역 state가 만들어지기 전에 정규화된다.
+  const runtime = source(path.join(ROOT, 'src', 'app-core-03.js'));
+  const baseUrlResolver = extractFunction(runtime, 'factoryRuntimeBackendBaseUrl');
+  const sessionLoadIndex = runtime.indexOf('const _savedSession = loadPersistentSession();');
+  const stateDeclarationIndex = runtime.indexOf('const state = {');
+
+  // When/Then: resolver가 TDZ의 lexical state를 직접 읽으면 초기 복원이 통째로 실패한다.
+  assert.ok(sessionLoadIndex >= 0 && stateDeclarationIndex > sessionLoadIndex);
+  assert.doesNotMatch(baseUrlResolver, /\bstate\s*\??\./);
+  assert.doesNotMatch(baseUrlResolver, /window\.__kuasangseState/);
+  assert.match(baseUrlResolver, /loadBackendUrl\(\)/);
+
+  const resolveBeforeState = new Function(
+    'window',
+    'loadBackendUrl',
+    `${baseUrlResolver}\nreturn factoryRuntimeBackendBaseUrl();`,
+  );
+  assert.equal(
+    resolveBeforeState({}, () => 'http://127.0.0.1:15061/'),
+    'http://127.0.0.1:15061',
+  );
 });

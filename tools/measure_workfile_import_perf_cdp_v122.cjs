@@ -23,6 +23,26 @@ const MAX_SAVE_PREP_MS = Number(process.env.KUASANGSE_SAVE_PREP_MAX_TOTAL_MS || 
 const WAIT_TIMEOUT_MS = Number(process.env.KUASANGSE_IMPORT_WAIT_TIMEOUT_MS || 30000);
 const MAX_TRANSPORT_ATTEMPTS = Math.max(1, Number(process.env.KUASANGSE_CDP_TRANSPORT_ATTEMPTS || 2) || 2);
 
+function createIsolatedWorkfile(attemptNumber) {
+  const sourceText = fs.readFileSync(WORKFILE, 'utf8');
+  const sourceBundle = JSON.parse(sourceText);
+  const sourceProjectId = String(
+    sourceBundle?.project?.id || sourceBundle?.currentProjectId || sourceBundle?.workspaceId || '',
+  ).trim();
+  if (!sourceProjectId) throw new Error('Workfile project identity is missing.');
+  const isolatedProjectId = `verify_import_perf_${Date.now()}_${process.pid}_${attemptNumber}`;
+  const isolatedText = sourceText.split(sourceProjectId).join(isolatedProjectId);
+  const isolatedDirectory = path.join(OUT_DIR, `workfile-import-perf-v122-${process.pid}-${attemptNumber}`);
+  const isolatedPath = path.join(isolatedDirectory, path.basename(WORKFILE));
+  fs.mkdirSync(isolatedDirectory, { recursive: true });
+  fs.writeFileSync(isolatedPath, isolatedText, 'utf8');
+  return Object.freeze({
+    filePath: isolatedPath,
+    fileBytes: Buffer.byteLength(isolatedText),
+    projectId: isolatedProjectId,
+  });
+}
+
 function reserveEphemeralCdpUrl() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -43,6 +63,7 @@ function reserveEphemeralCdpUrl() {
 async function runAttempt(attemptNumber) {
   if (!fs.existsSync(WORKFILE)) throw new Error(`Workfile not found: ${WORKFILE}`);
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  const isolatedWorkfile = createIsolatedWorkfile(attemptNumber);
   const cdpUrl = CONFIGURED_CDP_URL || await reserveEphemeralCdpUrl();
   const runtime = await ensureCdp(cdpUrl);
   let cdp = null;
@@ -68,16 +89,51 @@ async function runAttempt(attemptNumber) {
       await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
         const isolatedBackend = ${JSON.stringify(ISOLATED_BACKEND_URL)};
         localStorage.setItem('gemini_backend_url', isolatedBackend);
+        window.__workspaceAcquireDiagnostics = [];
+        window.__reloadWarnings = [];
+        const nativeWarn = console.warn.bind(console);
+        console.warn = (...args) => {
+          window.__reloadWarnings.push(args.map(value => String(value?.stack || value?.message || value)).join(' | '));
+          nativeWarn(...args);
+        };
         const nativeFetch = window.fetch.bind(window);
-        window.fetch = (input, init = {}) => {
+        window.fetch = async (input, init = {}) => {
           const rawUrl = typeof input === 'string' ? input : input?.url;
           const url = new URL(rawUrl, window.location.href);
           const defaultBackend = ['127.0.0.1', 'localhost'].includes(url.hostname) && url.port === '5050';
           const sameOriginApi = url.origin === window.location.origin && url.pathname.startsWith('/api/');
-          if (!defaultBackend && !sameOriginApi) return nativeFetch(input, init);
-          const target = isolatedBackend + url.pathname + url.search;
-          if (typeof input === 'string') return nativeFetch(target, init);
-          return nativeFetch(new Request(target, input), init);
+          const target = defaultBackend || sameOriginApi
+            ? isolatedBackend + url.pathname + url.search
+            : url.href;
+          const isWorkspaceAcquire = url.pathname.endsWith('/api/workspace-lock/acquire');
+          const record = isWorkspaceAcquire ? {
+            startedAt: Math.round(performance.now()),
+            sourceUrl: url.href,
+            targetUrl: target,
+            body: (() => { try { return JSON.parse(init?.body || '{}'); } catch (_) { return init?.body || ''; } })(),
+            stack: String(new Error().stack || '').split('\\n').slice(1, 8).map(line => line.trim()),
+            status: 0,
+            error: '',
+          } : null;
+          if (record) window.__workspaceAcquireDiagnostics.push(record);
+          try {
+            const response = defaultBackend || sameOriginApi
+              ? (typeof input === 'string'
+                  ? await nativeFetch(target, init)
+                  : await nativeFetch(new Request(target, input), init))
+              : await nativeFetch(input, init);
+            if (record) {
+              record.finishedAt = Math.round(performance.now());
+              record.status = Number(response.status || 0);
+            }
+            return response;
+          } catch (error) {
+            if (record) {
+              record.finishedAt = Math.round(performance.now());
+              record.error = String(error?.stack || error?.message || error);
+            }
+            throw error;
+          }
         };
       })()` });
     }
@@ -94,11 +150,13 @@ async function runAttempt(attemptNumber) {
         startedAt: 0,
         finishedAt: 0,
         timings: {},
+        timingDetails: {},
         renderCalls: [],
         renderDetails: [],
         sectionImageCheckpoints: [],
         longTasks: [],
         eventLoopGaps: [],
+        lastTickAt: 0,
         errors: [],
         warnings: [],
         savePersistentCalls: [],
@@ -128,14 +186,23 @@ async function runAttempt(attemptNumber) {
       const perf = window.__workfileImportPerf;
       try {
         new PerformanceObserver(list => {
-          perf.longTasks.push(...list.getEntries().map(entry => Math.round(entry.duration)));
+          const startedAt = Number(perf.startedAt || 0);
+          const finishedAt = Number(perf.finishedAt || 0);
+          if (!startedAt) return;
+          perf.longTasks.push(...list.getEntries()
+            .filter(entry => entry.startTime >= startedAt && (!finishedAt || entry.startTime <= finishedAt))
+            .map(entry => Math.round(entry.duration)));
         }).observe({ type: 'longtask', buffered: true });
       } catch (_) {}
-      let previousTick = performance.now();
       perf.tickTimer = setInterval(() => {
         const now = performance.now();
+        if (!perf.startedAt || perf.finishedAt) {
+          perf.lastTickAt = now;
+          return;
+        }
+        const previousTick = Number(perf.lastTickAt || perf.startedAt || now);
         perf.eventLoopGaps.push(Math.round(now - previousTick));
-        previousTick = now;
+        perf.lastTickAt = now;
       }, 50);
       const wrap = (name, isAsync) => {
         const original = window[name];
@@ -158,13 +225,22 @@ async function runAttempt(attemptNumber) {
             })),
           };
         };
+        const recordTiming = started => {
+          const duration = Math.round(performance.now() - started);
+          perf.timings[name] = duration;
+          const current = perf.timingDetails[name] || { count: 0, totalMs: 0, maxMs: 0 };
+          current.count += 1;
+          current.totalMs += duration;
+          current.maxMs = Math.max(current.maxMs, duration);
+          perf.timingDetails[name] = current;
+        };
         if (isAsync) {
           window[name] = async function(...args) {
             const started = performance.now();
             const beforeSectionImages = sectionImageSnapshot();
             try { return await original.apply(this, args); }
             finally {
-              perf.timings[name] = Math.round(performance.now() - started);
+              recordTiming(started);
               if (trackSectionImages) {
                 perf.sectionImageCheckpoints.push({ name, beforeSectionImages, afterSectionImages: sectionImageSnapshot() });
               }
@@ -188,7 +264,7 @@ async function runAttempt(attemptNumber) {
             }
             try { return original.apply(this, args); }
             finally {
-              perf.timings[name] = Math.round(performance.now() - started);
+              recordTiming(started);
               if (trackSectionImages) {
                 perf.sectionImageCheckpoints.push({ name, beforeSectionImages, afterSectionImages: sectionImageSnapshot() });
               }
@@ -243,13 +319,39 @@ async function runAttempt(attemptNumber) {
             throw error;
           } finally {
             perf.operation.settledAt = performance.now();
-            if (!perf.finishedAt) perf.finishedAt = perf.operation.settledAt;
+            if (!perf.finishedAt) {
+              const previousTick = Number(perf.lastTickAt || perf.startedAt || perf.operation.settledAt);
+              perf.eventLoopGaps.push(Math.round(perf.operation.settledAt - previousTick));
+              perf.lastTickAt = perf.operation.settledAt;
+              perf.finishedAt = perf.operation.settledAt;
+            }
           }
         };
       }
       wrap('hydrateWorkspacePayloadImageBackup', true);
       wrap('applyWorkspacePayload', false);
+      wrap('validateFactoryProjectFileBundle', false);
+      wrap('prepareFactoryProjectFilePayload', false);
+      wrap('factoryProjectFileBuildManifest', false);
+      wrap('resetLiveWorkspaceForProjectFileReplacement', false);
+      wrap('factoryPrimeCurrentAssetVisualValidation', false);
+      wrap('factoryWaitForVisualValidationOperation', true);
+      wrap('prepareFactoryProjectBundlePersistence', false);
+      wrap('compactWorkspacePayloadForStorage', false);
+      wrap('selectLocalSessionPayload', false);
       wrap('applySessionAssetsPayload', false);
+      wrap('sanitizeLastWorkPayloadProductScope', false);
+      wrap('cloneData', false);
+      wrap('normalizeFactoryState', false);
+      wrap('applyProductImageBackupPayload', false);
+      wrap('restoreSpecificationSizeImageFromFactory', false);
+      wrap('repairRestoredSessionIdentityDrift', false);
+      wrap('factoryRuntimeReplaceFactorySnapshot', false);
+      wrap('factoryRuntimeInitialSnapshot', false);
+      wrap('factoryRuntimeDetachedValue', false);
+      wrap('factoryRecoverRestoredReviewCandidateWorkspaceScope', false);
+      wrap('normalizeOptionSorterState', false);
+      wrap('applyCompAnalysisSnapshot', false);
       wrap('restoreProjectFileFactoryAssetsFromPayload', false);
       wrap('syncProductImageAcrossWorkspaces', false);
       wrap('currentProductImagePayload', false);
@@ -323,11 +425,15 @@ async function runAttempt(attemptNumber) {
     await evaluate(cdp, `(() => {
       const perf = window.__workfileImportPerf;
       perf.startedAt = performance.now();
+      perf.finishedAt = 0;
+      perf.longTasks = [];
+      perf.eventLoopGaps = [];
+      perf.lastTickAt = perf.startedAt;
       perf.operation.status = 'dispatched';
       perf.operation.dispatchedAt = perf.startedAt;
       return true;
     })()`);
-    await cdp.send('DOM.setFileInputFiles', { files: [WORKFILE], nodeId: selected.nodeId });
+    await cdp.send('DOM.setFileInputFiles', { files: [isolatedWorkfile.filePath], nodeId: selected.nodeId });
     let fileChangeObserved = true;
     cdpStage = 'wait-file-change';
     cdp.close();
@@ -381,9 +487,6 @@ async function runAttempt(attemptNumber) {
         pollIntervalMs: 100,
       });
       cdp = completionObservation.cdp;
-      // Reinstall the isolated-backend bootstrap on the reconnected CDP session
-      // so the following real Page.navigate uses the same owned backend.
-      await cdp.send('Page.enable');
     } catch (error) {
       let terminalState = { diagnosticUnavailable: true };
       try {
@@ -403,6 +506,7 @@ async function runAttempt(attemptNumber) {
           inputEventFallbackUsed: !!window.__workfileImportPerf?.inputEventFallbackUsed,
           operation: window.__workfileImportPerf?.operation || null,
           timings: window.__workfileImportPerf?.timings || {},
+          timingDetails: window.__workfileImportPerf?.timingDetails || {},
         }))()`);
         const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(shot.data, 'base64'));
@@ -458,9 +562,10 @@ async function runAttempt(attemptNumber) {
       const maxEventLoopGapMs = Math.max(0, ...perf.eventLoopGaps) - 50;
       return {
         fileName: ${JSON.stringify(path.basename(WORKFILE))},
-        fileBytes: ${fs.statSync(WORKFILE).size},
+        fileBytes: ${isolatedWorkfile.fileBytes},
         totalMs: Math.round(perf.finishedAt - perf.startedAt),
         timings: perf.timings,
+        timingDetails: perf.timingDetails,
         renderCallCount: perf.renderCalls.length,
         renderDetails: perf.renderDetails,
         sectionImageCheckpoints: perf.sectionImageCheckpoints,
@@ -565,33 +670,6 @@ async function runAttempt(attemptNumber) {
         afterScopeId: String(after?.scopeId || ''),
       };
     })()`);
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
-      window.__workspaceAcquireDiagnostics = [];
-      window.__reloadWarnings = [];
-      const nativeWarn = console.warn.bind(console);
-      console.warn = (...args) => {
-        window.__reloadWarnings.push(args.map(value => String(value?.stack || value?.message || value)).join(' | '));
-        nativeWarn(...args);
-      };
-      const nativeFetch = window.fetch.bind(window);
-      window.fetch = async (input, init = {}) => {
-        const rawUrl = typeof input === 'string' ? input : input?.url;
-        const url = new URL(rawUrl, window.location.href);
-        if (!url.pathname.endsWith('/api/workspace-lock/acquire')) return nativeFetch(input, init);
-        const record = {
-          startedAt: Math.round(performance.now()),
-          body: (() => { try { return JSON.parse(init?.body || '{}'); } catch (_) { return init?.body || ''; } })(),
-          stack: String(new Error().stack || '').split('\\n').slice(1, 8).map(line => line.trim()),
-          status: 0,
-        };
-        window.__workspaceAcquireDiagnostics.push(record);
-        const response = await nativeFetch(input, init);
-        record.finishedAt = Math.round(performance.now());
-        record.status = Number(response.status || 0);
-        return response;
-      };
-    })()` });
-
     cdpStage = 'reload-after-import';
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, '!!(window.state && window.render && window.factoryVisibleFactoryLogs)', 60000);
@@ -664,6 +742,34 @@ async function runAttempt(attemptNumber) {
           .filter(node => node.getClientRects().length > 0)
           .map(node => String(node.innerText || node.textContent || '').trim()),
       },
+      restoreRefDiagnostic: (() => {
+        const inline = (item, keys) => !!item && keys.some(key => !!item[key]);
+        const variants = Object.values(window.state.sectionVariants || {}).flatMap(items => Array.isArray(items) ? items : []);
+        const undoItems = Object.values(window.state.aiRepairUndoStack || {}).flatMap(items => Array.isArray(items) ? items : []);
+        const factory = typeof factoryRuntimeReadFactory === 'function'
+          ? factoryRuntimeReadFactory()
+          : (window.state.factory || {});
+        const sorter = window.state.optionSorter || {};
+        return {
+          reported: typeof countSessionAssetRestoreRefs === 'function' ? countSessionAssetRestoreRefs() : -1,
+          step: String(window.state.step || ''),
+          appImageBase64Length: String(window.state.imageBase64 || '').length,
+          appImagePreviewLength: String(window.state.imagePreview || '').length,
+          factoryProductHasImage: factory.product?.hasImage === true,
+          factoryProductImageBase64Length: String(factory.product?.imageBase64 || '').length,
+          factoryProductImagePreviewLength: String(factory.product?.imagePreview || '').length,
+          factoryProductImageUrlLength: String(factory.product?.imageUrl || '').length,
+          analysis: (window.state.analysisImages || []).filter(item => item?.hasImageData && !inline(item, ['base64', 'preview'])).length,
+          detailBlocks: (window.state.detailImageBlocks || []).filter(item => item?.hasDataUrl && !item.dataUrl).length,
+          variants: variants.filter(item => item?.hasImage && !item.image).length,
+          undo: undoItems.filter(item => item?.hasImage && !item.image).length,
+          sorterImages: (sorter.images || []).filter(item => item?.hasImageData && !inline(item, ['base64', 'preview', 'dataUrl'])).length,
+          sorterResults: (sorter.optionResults || []).filter(item => item?.hasImage && !item.image).length,
+          factoryInputs: (factory.product?.inputImages || []).filter(item => item?.hasImage && !inline(item, ['base64', 'preview'])).length,
+          factoryAssets: (factory.assets || []).filter(item => item?.hasImage && !item.image).length,
+          factoryAssetsWithAlternateSource: (factory.assets || []).filter(item => item?.hasImage && !item.image && inline(item, ['imageUrl', 'preview', 'base64', 'dataUrl', 'result'])).length,
+        };
+      })(),
       staleFactoryDiagnosticLogs: window.factoryVisibleFactoryLogs(window.state.factory || {})
         .filter(log => /이미지 원본을 표시할 수 없어 기본 후보에서 분리|현재 작업키가 맞는 생성 결과 .*색상 차이가 있어도 기본 후보에 유지|색상 검수 (?:완료|확인 실패).*(?:현재 작업 후보로 유지|후보는 현재 작업 기준으로 유지)|(?:자동 로컬 보관|로컬 보관 목록|제품 원본 로컬 보관).*(?:Failed to fetch|fetch failed|network error)|Cafe24 OAuth.*(?:access 토큰이 만료|재연결이 필요)/i.test(String(log?.message || '')))
         .map(log => ({ message: log.message || '', type: log.type || '', stageId: log.stageId || '' })),
@@ -730,6 +836,14 @@ async function runAttempt(attemptNumber) {
         error: window.state?.error || '',
         backendBaseUrl: window.state?.backendBaseUrl || '',
         authority: typeof currentWorkspaceAuthority === 'function' ? currentWorkspaceAuthority() : null,
+        projectBusy: !!window.state?.projectBusy,
+        restoreState: window.state?.workfileRestoreState || '',
+        currentProjectId: window.state?.currentProjectId || '',
+        currentProjectName: window.state?.currentProjectName || '',
+        operation: window.__workfileImportPerf?.operation || null,
+        timings: window.__workfileImportPerf?.timings || {},
+        timingDetails: window.__workfileImportPerf?.timingDetails || {},
+        renderDetails: window.__workfileImportPerf?.renderDetails || [],
       })`) : null;
     } catch (_) {}
     try {

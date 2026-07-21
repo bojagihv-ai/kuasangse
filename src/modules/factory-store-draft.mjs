@@ -90,7 +90,7 @@ export function createFactoryDraftUpdater({
         const detachedResult = immutableCopy(result);
         const nextSnapshot = clonePlainData(getSnapshot());
         writePath(nextSnapshot, draftPath, mutableSlice);
-        const committed = commit(nextSnapshot, 'update-draft', ownership.owner);
+        const committed = commit(nextSnapshot, 'update-draft', ownership.owner, normalizedCommandName);
         return Object.freeze({ snapshot: committed, result: detachedResult, assignments });
       } finally {
         revoke();

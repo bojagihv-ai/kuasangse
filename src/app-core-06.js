@@ -3649,8 +3649,8 @@ function factoryBeginStandaloneGoalOperation(label = '작업', options = {}) {
     factory,
   });
   factoryLog(`${label} 시작: 실제 처리 중입니다. 완료될 때까지 화면의 진행 상태가 갱신됩니다.`, 'info', factory);
-  scheduleLastWorkSave(1200);
-  render();
+  saveLastWorkNow({ sync: false, factory });
+  factoryRuntimeRenderWithOwnedDraft(factory);
   const heartbeat = factoryStartGoalHeartbeat(stage, progress, 96, 5000, { factory });
   return { operationId, label, heartbeat };
 }
@@ -3681,8 +3681,8 @@ function factoryFinishStandaloneGoalOperation(operation = null, result = null, f
     goal.progress = Math.max(factoryGoalProgressClamp(goal.progress), 80);
   }
   factoryPatchGoalRunStatusInPlace(factory);
-  saveLastWorkNow();
-  render();
+  saveLastWorkNow({ sync: false, factory });
+  factoryRuntimeRenderWithOwnedDraft(factory);
 }
 
 async function factoryRunStandaloneGoalOperation(label, action, options = {}) {
@@ -4233,7 +4233,7 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
     factory,
   });
   scheduleLastWorkSave(1200);
-  render();
+  factoryRuntimeRenderWithOwnedDraft(factory);
   await factoryYieldToPaint();
   requireCurrent();
   const heartbeat = factoryStartGoalHeartbeat('VM 경쟁사 후보 수집 중', 34, 50, 5000, { factory });
@@ -4549,7 +4549,7 @@ async function factoryRunHeroAndCutsForOneClick(options = {}) {
   const requestedCutPromptCount = factoryAutomationStartRunCountForExecution('cuts', cutMax, cutMax, factory);
   factorySetGoalRunProgress(55, '대표이미지/이미지컷 생성 준비', '대표이미지와 이미지컷 생성 준비를 시작합니다.', 'info', { render: false, factory });
   scheduleLastWorkSave(1200);
-  render();
+  factoryRuntimeRenderWithOwnedDraft(factory);
   await factoryYieldToPaint();
   let heroOk = true;
   if (heroPromptCount <= 0) {
@@ -4562,7 +4562,7 @@ async function factoryRunHeroAndCutsForOneClick(options = {}) {
     factorySetStageStatus('hero', 'running', `대표이미지 프롬프트 ${heroPromptCount}/${heroMax}개 생성 시작`, factory);
     factorySetGoalRunProgress(58, '대표이미지 생성 중', `대표이미지 프롬프트 ${heroPromptCount}개 생성을 시작합니다.`, 'info', { render: false, factory });
     scheduleLastWorkSave(1200);
-    render();
+    factoryRuntimeRenderWithOwnedDraft(factory);
     await factoryYieldToPaint();
     try {
       heroOk = await factoryRunStage('hero', { factory });
@@ -4577,7 +4577,7 @@ async function factoryRunHeroAndCutsForOneClick(options = {}) {
   const cutPromptCount = factorySyncCutPromptsForOneClick(requestedCutPromptCount, factory);
   factorySetGoalRunProgress(70, '이미지컷 생성 준비', '', 'info', { render: false, factory });
   scheduleLastWorkSave(1200);
-  render();
+  factoryRuntimeRenderWithOwnedDraft(factory);
   await factoryYieldToPaint();
   let cutsOk = true;
   if (cutPromptCount <= 0) {
@@ -4589,7 +4589,7 @@ async function factoryRunHeroAndCutsForOneClick(options = {}) {
     factorySetStageStatus('cuts', 'running', `이미지컷 프롬프트 ${cutPromptCount}/${cutMax}개 생성 시작`, factory);
     factorySetGoalRunProgress(74, '이미지컷 생성 중', `이미지컷 프롬프트 ${cutPromptCount}개 생성을 시작합니다.`, 'info', { render: false, factory });
     scheduleLastWorkSave(1200);
-    render();
+    factoryRuntimeRenderWithOwnedDraft(factory);
     await factoryYieldToPaint();
     try {
       cutsOk = await factoryRunStage('cuts', { factory });
@@ -4609,8 +4609,8 @@ async function factoryRunHeroAndCutsForOneClick(options = {}) {
   }
   factoryLog(`대표이미지와 이미지컷 실행 완료: 대표 ${heroPromptCount}/${heroMax}개, 이미지컷 ${cutPromptCount}/${cutMax}개 기준으로 처리했습니다.`, 'ok', factory);
   factorySetGoalRunProgress(92, '대표이미지/이미지컷 생성 완료', '', 'ok', { render: false, factory });
-  saveLastWorkNow();
-  render();
+  saveLastWorkNow({ factory });
+  factoryRuntimeRenderWithOwnedDraft(factory);
   return { ok: true, label: '대표/이미지컷' };
 }
 
@@ -4851,7 +4851,7 @@ async function factoryRunCurrentProductImageAnalysisOnly(options = {}) {
     factory,
   });
   scheduleLastWorkSave(1200);
-  render();
+  factoryRuntimeRenderWithOwnedDraft(factory);
   await factoryYieldToPaint();
   if (!store.isOperationCurrent(operationToken)) {
     throw factoryRuntimeStaleActionError('factory/db:runCurrentProductAnalysisOnly');
@@ -4958,7 +4958,7 @@ async function factoryRunDbCompetitorHeroCutsFlow(options = {}) {
     factory,
   });
   scheduleLastWorkSave(1200);
-  render();
+  factoryRuntimeRenderWithOwnedDraft(factory);
   await factoryYieldToPaint();
   requireCurrent();
 
@@ -5005,7 +5005,7 @@ async function factoryRunDbCompetitorHeroCutsFlow(options = {}) {
       await factoryYieldToPaint(delayMs);
       factorySetGoalRunProgress(taskProgress[label] || 20, `${label} 시작`, `${label} 시작`, 'info', { render: false, factory });
       scheduleLastWorkSave(1200);
-      render();
+      factoryRuntimeRenderWithOwnedDraft(factory);
       await factoryYieldToPaint();
       return action();
     })();
@@ -5041,8 +5041,8 @@ async function factoryRunDbCompetitorHeroCutsFlow(options = {}) {
     done.goalRun.finishedAt = Date.now();
     if (store.isOperationCurrent(operationToken)) {
       factoryPatchGoalRunStatusInPlace(done);
-      saveLastWorkNow();
-      render();
+      saveLastWorkNow({ factory: done });
+      factoryRuntimeRenderWithOwnedDraft(done);
     }
   }
 }
@@ -5152,8 +5152,7 @@ async function factoryRunDbVmCandidatesOnlyFlow(options = {}) {
   }
 }
 
-function factoryBuildImagePrompt(stageId, preset, countIndex = 0) {
-  const factory = factoryRuntimeReadFactory();
+function factoryBuildImagePrompt(stageId, preset, countIndex = 0, factory = factoryRuntimeReadFactory()) {
   const productName = factory.product.productName || state.productName || state.analysis?.product_name || '제품';
   const rawAnalysis = factory.product.analysis || state.analysis || {};
   const analysis = rawAnalysis && typeof rawAnalysis === 'object' && (
@@ -5254,7 +5253,7 @@ function factoryImageCutPresetListForStage(stageId, factory = factoryRuntimeRead
       return {
         id: preset.id,
         label: preset.label,
-        prompt: factoryBuildImagePrompt('size', preset, index),
+        prompt: factoryBuildImagePrompt('size', preset, index, factory),
       };
     });
   }
@@ -5399,20 +5398,19 @@ function factoryRestoreImageStageSnapshot(stageId = '', snapshot = null, reason 
       : `새 생성 실패 · 보존할 기존 후보 없음`), factory);
   if (reason) factoryLog(`${factoryStageLabel(normalizedStage)} 새 생성 실패, 기존 상태 복구: ${reason}`, preservedCount ? 'warn' : 'error', factory);
   savePrompts();
-  saveLastWorkNow();
+  saveLastWorkNow({ factory });
   return true;
 }
 
 async function factoryPrepareImageCutsEditor(stageId, options = {}) {
   const factory = options.factory || factoryRuntimeReadFactory();
-  factoryUpdateFromInputs(factory);
   if (stageId === 'cuts') factoryClearStageInputsFromStages('cuts', ['hero', 'size'], factory);
   const source = await factoryEnsureSourceImagePart(stageId, { factory });
   if (!source?.base64) {
     factorySetStageStatus(stageId, 'blocked', '현재 업로드 사진 원본을 찾지 못했습니다. 제품 사진을 다시 올려주세요.', factory);
     factoryLog(`${factoryStageLabel(stageId)} → 이미지컷 편집 중단: 현재 업로드 사진 원본 없음`, 'error', factory);
-    saveLastWorkNow();
-    render();
+    saveLastWorkNow({ factory });
+    factoryRuntimeRenderWithOwnedDraft(factory);
     return false;
   }
   const presetPrompts = factoryImageCutPresetListForStage(stageId, factory);
@@ -5429,7 +5427,7 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
     state.cuts.sizePrompts = prompts.map((preset, index) => {
       const existing = previousSizePrompts[index] || {};
       const keepResult = cutPromptResultMatchesCurrentSource(existing, 'size') && (
-        !factoryShouldRequireCutPromptJob('size') || cutPromptMatchesCurrentFactoryJob(existing, 'size')
+        !factoryShouldRequireCutPromptJob('size', factory) || cutPromptMatchesCurrentFactoryJob(existing, 'size', factory)
       );
       if (!keepResult && existing.result) {
         existing.staleResult = true;
@@ -5456,7 +5454,7 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
         productImageKey: existing.productImageKey || existing.inputImageFingerprint || '',
         staleResult: !keepResult && existing.result ? true : false,
         staleResultReason: !keepResult && existing.result ? '현재 작업 기준과 맞지 않아 후보에서 제외했습니다.' : '',
-      }, 'size');
+      }, 'size', factory);
     });
     if (!state.cuts.sizePrompts.length) {
       state.cuts.sizePrompts = previousSizePrompts.map((existing, index) => {
@@ -5465,7 +5463,7 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
       const shouldFill = !currentPrompt || isFactorySizeCutPrompt(existing);
       if (!preset || !shouldFill) {
         markStaleCutPromptResult(existing, 'size');
-        return stampCutPromptSource(existing, 'size');
+        return stampCutPromptSource(existing, 'size', factory);
       }
       return stampCutPromptSource({
         ...existing,
@@ -5474,7 +5472,7 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
         prompt: preset.prompt || existing.prompt || '',
         result: existing.result || null,
         generating: false,
-      }, 'size');
+      }, 'size', factory);
     });
     }
     state.cuts.sizeFactoryStageId = 'size';
@@ -5487,7 +5485,7 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
       const existing = previousPrompts[index] || {};
       const matchedExisting = factoryCutPromptMatchesStage(existing, stageId) ? existing : {};
       const keepResult = cutPromptResultMatchesCurrentSource(matchedExisting, stageId) && (
-        !factoryShouldRequireCutPromptJob(stageId) || cutPromptMatchesCurrentFactoryJob(matchedExisting, stageId)
+        !factoryShouldRequireCutPromptJob(stageId, factory) || cutPromptMatchesCurrentFactoryJob(matchedExisting, stageId, factory)
       );
       if (!keepResult && matchedExisting.result) {
         matchedExisting.staleResult = true;
@@ -5514,16 +5512,16 @@ async function factoryPrepareImageCutsEditor(stageId, options = {}) {
       productImageKey: matchedExisting.productImageKey || matchedExisting.inputImageFingerprint || '',
       staleResult: !keepResult && matchedExisting.result ? true : false,
       staleResultReason: !keepResult && matchedExisting.result ? '현재 작업 기준과 맞지 않아 후보에서 제외했습니다.' : '',
-    }, stageId);
+    }, stageId, factory);
     });
     factorySetStageStatus(stageId, 'idle', `이미지컷 생성 탭으로 프롬프트 ${state.cuts.prompts.length}개를 보냈습니다.`, factory);
   }
   factoryLog(`${factoryStageLabel(stageId)} 설정을 ${stageId === 'size' ? '사이즈컷 전용 영역' : '기존 이미지컷 생성 탭'}으로 보냈습니다.`, 'ok', factory);
   savePrompts();
-  saveLastWorkNow();
+  saveLastWorkNow({ factory });
   if (options.navigate !== false) {
     state.step = 'imagecuts';
-    render();
+    factoryRuntimeRenderWithOwnedDraft(factory);
   }
   return true;
 }
@@ -5967,7 +5965,7 @@ function factoryRejectLocalFallbackAssetsForStage(stageId = '', generationRunId 
   return rejected;
 }
 
-function factoryStagePromptResultRows(stageId = '', generationRunId = '') {
+function factoryStagePromptResultRows(stageId = '', generationRunId = '', factory = factoryRuntimeReadFactory()) {
   const normalizedStage = factoryNormalizeCutPromptStage(stageId) || String(stageId || '').trim();
   const sourcePrompts = normalizedStage === 'size'
     ? (state.cuts?.sizePrompts || [])
@@ -5976,10 +5974,10 @@ function factoryStagePromptResultRows(stageId = '', generationRunId = '') {
     .map((cut, index) => ({ cut, index }))
     .filter(row => factoryCutPromptMatchesStage(row.cut, normalizedStage))
     .filter(row => !clearLocalFallbackCutPromptResult(row.cut, normalizedStage))
-    .filter(row => factoryCutPromptResultDisplaySrc(row.cut, normalizedStage, { requireCurrent: true, requireJob: true }))
+    .filter(row => factoryCutPromptResultDisplaySrc(row.cut, normalizedStage, { requireCurrent: true, requireJob: true, factory }))
     .filter(row => !cutPromptHasLocalFallbackResult(row.cut))
     .map(row => {
-      factoryStampFreshGeneratedCutResult(row.cut, normalizedStage, generationRunId, factoryRuntimeReadFactory());
+      factoryStampFreshGeneratedCutResult(row.cut, normalizedStage, generationRunId, factory);
       return row;
     });
 }
@@ -6297,6 +6295,7 @@ function factoryRestoreCutPromptResultsFromAssets(stageId = '', options = {}) {
     if (row.asset?.id) usedAssetIds.add(row.asset.id);
     const linkOptions = {
       image: row.image,
+      factory,
       ...(restoredFromExactCurrentAssets || restoredFromLooseCurrentAssets || row.lenient
         ? { matchOverrides: { requireRunId: false, strictRunId: false } }
         : {}),
@@ -6393,13 +6392,13 @@ function factoryImportImageCutsResults(stageId, options = {}) {
       localFallbackCount += 1;
       return;
     }
-    if (cut?.result && !factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: false, requireJob: false })) {
+    if (cut?.result && !factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: false, requireJob: false, factory })) {
       if (factoryMarkCutPromptImageLoadFailed(stageId, index, cut.result, '이미지 후보 표시 불가')) {
         localFallbackCount += 1;
       }
       return;
     }
-    if (cut?.result && factoryShouldRequireCutPromptJob(stageId) && !cutPromptMatchesCurrentFactoryJob(cut, stageId)) {
+    if (cut?.result && factoryShouldRequireCutPromptJob(stageId, factory) && !cutPromptMatchesCurrentFactoryJob(cut, stageId, factory)) {
       if (factoryRememberCutResultAsPrevious(cut, stageId, '현재 작업키와 다른 이미지컷 결과', factory)) staleCount += 1;
       cut.staleResult = true;
       cut.staleResultReason = '현재 작업 기준과 다른 결과라 이전 작업 결과로 분리했습니다.';
@@ -6416,7 +6415,7 @@ function factoryImportImageCutsResults(stageId, options = {}) {
     .map((cut, index) => ({ cut, index }))
     .filter(row => stagePrompts.includes(row.cut))
     .filter(row => {
-      return !!factoryCutPromptResultDisplaySrc(row.cut, stageId, { requireCurrent: true, requireJob: true });
+      return !!factoryCutPromptResultDisplaySrc(row.cut, stageId, { requireCurrent: true, requireJob: true, factory });
     });
   let added = 0;
   cuts.forEach(({ cut, index }) => {
@@ -6433,7 +6432,7 @@ function factoryImportImageCutsResults(stageId, options = {}) {
         factoryAssetCompatibleWithCurrentProduct(asset, identityMeta.productIdentityKey)
       )
     );
-    const incomingImage = factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: true, requireJob: true });
+    const incomingImage = factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: true, requireJob: true, factory });
     if (existing && !factoryAssetMatchesCurrentJob(existing, stageId, factory).ok) {
       factoryRememberPreviousAsset(existing, '같은 컷 ID의 이전 작업 결과', factory);
       factory.assets = (factory.assets || []).filter(asset => asset?.id !== existing.id);
@@ -6512,7 +6511,7 @@ function factoryImportImageCutsResults(stageId, options = {}) {
       };
       existing.currentProductHidden = false;
       factoryClearAssetSupersededMarker(existing);
-      factoryLinkCutPromptToAsset(cut, existing, stageId, { image: incomingImage });
+      factoryLinkCutPromptToAsset(cut, existing, stageId, { image: incomingImage, factory });
       return;
     }
     const registered = factoryRegisterAsset(stageId, cut.result, {
@@ -6552,7 +6551,7 @@ function factoryImportImageCutsResults(stageId, options = {}) {
       factory,
     });
     if (registered) {
-      factoryLinkCutPromptToAsset(cut, registered, stageId, { image: incomingImage });
+      factoryLinkCutPromptToAsset(cut, registered, stageId, { image: incomingImage, factory });
       added += 1;
     }
   });
@@ -7290,7 +7289,7 @@ function factoryForceImportFreshCutResults(stageId, generationRunId = '', factor
     .filter(row => !cutPromptHasLocalFallbackResult(row.cut))
     .forEach(({ cut, index }) => {
       factoryStampFreshGeneratedCutResult(cut, stageId, generationRunId, factory);
-      if (factoryShouldRequireCutPromptJob(stageId) && !cutPromptMatchesCurrentFactoryJob(cut, stageId)) {
+      if (factoryShouldRequireCutPromptJob(stageId, factory) && !cutPromptMatchesCurrentFactoryJob(cut, stageId, factory)) {
         factoryRememberCutResultAsPrevious(cut, stageId, '현재 작업키와 다른 강제 가져오기 후보', factory);
         cut.staleResult = true;
         cut.staleResultReason = '현재 작업 기준과 다른 결과라 이전 작업 결과로 분리했습니다.';
@@ -7298,7 +7297,7 @@ function factoryForceImportFreshCutResults(stageId, generationRunId = '', factor
       }
       cut.staleResult = false;
       cut.staleResultReason = '';
-      const incomingImage = factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: true, requireJob: true });
+      const incomingImage = factoryCutPromptResultDisplaySrc(cut, stageId, { requireCurrent: true, requireJob: true, factory });
       if (!incomingImage) {
         factoryMarkCutPromptImageLoadFailed(stageId, index, cut.result, '강제 가져오기 이미지 표시 불가');
         return;
@@ -7367,7 +7366,7 @@ function factoryForceImportFreshCutResults(stageId, generationRunId = '', factor
           existing.metadata = { ...existing.metadata };
           delete existing.metadata.visualValidation;
         }
-        factoryLinkCutPromptToAsset(cut, existing, stageId, { image: incomingImage });
+        factoryLinkCutPromptToAsset(cut, existing, stageId, { image: incomingImage, factory });
       } else {
         const registered = factoryRegisterAsset(stageId, incomingImage, {
           title: cut.label || factoryStageLabel(stageId),
@@ -7382,7 +7381,7 @@ function factoryForceImportFreshCutResults(stageId, generationRunId = '', factor
           factory,
         });
         if (!registered) return;
-        factoryLinkCutPromptToAsset(cut, registered, stageId, { image: incomingImage });
+        factoryLinkCutPromptToAsset(cut, registered, stageId, { image: incomingImage, factory });
       }
       imported += 1;
   });
@@ -7536,16 +7535,16 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
     if (!sizeReview.ok) {
       factorySetStageStatus('size', 'blocked', sizeReview.message || '사이즈이미지 생성 전 DB 사이즈값을 확인해주세요.', commandFactory);
       factoryLog(sizeReview.logMessage || '사이즈이미지 생성 중단: DB 사이즈 확인이 필요합니다.', 'warn', commandFactory);
-      saveLastWorkNow();
-      render();
+      saveLastWorkNow({ factory: commandFactory });
+      factoryRuntimeRenderWithOwnedDraft(commandFactory);
       return false;
     }
   }
   if (stageId === 'size' && !factoryHasSizeFacts(commandFactory)) {
     factorySetStageStatus('size', 'blocked', '확정 DB에서 실제 사이즈를 찾지 못했습니다. DB를 확정하거나 수동 규격을 입력해주세요.', commandFactory);
     factoryLog('사이즈이미지 자동 생성 중단: DB 사이즈 값 없음', 'error', commandFactory);
-    saveLastWorkNow();
-    render();
+    saveLastWorkNow({ factory: commandFactory });
+    factoryRuntimeRenderWithOwnedDraft(commandFactory);
     return false;
   }
   const previousSnapshot = factorySnapshotImageStageState(stageId, commandFactory);
@@ -7589,7 +7588,7 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
       cut.currentRunId = generationRunId;
       cut.factoryGenerationRunId = generationRunId;
       cut.generationRunId = generationRunId;
-      stampCutPromptSource(cut, stageId);
+      stampCutPromptSource(cut, stageId, factory);
     }
   });
   const target = stagePrompts.length;
@@ -7608,8 +7607,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
     : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`, factory);
   const [progressBase, progressMax] = factoryStageGoalProgressRange(stageId);
   factorySetGoalRunProgress(progressBase, `${factoryStageLabel(stageId)} 생성 중`, `${factoryStageLabel(stageId)} ${target}개 생성을 시작합니다.`, 'info', { render: false, factory });
-  saveLastWorkNow();
-  render();
+  saveLastWorkNow({ factory });
+  factoryRuntimeRenderWithOwnedDraft(factory);
   const heartbeat = factoryStartGoalHeartbeat(`${factoryStageLabel(stageId)} 생성 중`, progressBase, Math.max(progressBase, progressMax - 2), 5000, { factory });
   try {
     const generated = isSizeStage
@@ -7623,7 +7622,7 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
     generatedPrompts.filter(cut => factoryCutPromptMatchesStage(cut, stageId)).forEach(cut => {
       if (cut?.result) factoryStampFreshGeneratedCutResult(cut, stageId, generationRunId, factory);
     });
-    const resultRows = factoryStagePromptResultRows(stageId, generationRunId);
+    const resultRows = factoryStagePromptResultRows(stageId, generationRunId, factory);
     const resultCount = resultRows.length;
     if (!resultCount) throw new Error(state.error || '이미지컷 생성 결과가 없습니다.');
     const partialGenerated = resultCount < target;
@@ -7644,8 +7643,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
         factorySetStageStatus(stageId, 'running', `${importedCurrentCount}개 생성됨 · 현재 제품 색상 검수 중`, factory);
         factoryLog(`${factoryStageLabel(stageId)} 현재 작업키가 일치한 생성 결과 ${importedCurrentCount}개를 색상 검수 중입니다.`, 'warn', factory);
         factoryClearTransientFactoryCutSources(stageId, { log: false });
-        saveLastWorkNow();
-        render();
+        saveLastWorkNow({ factory });
+        factoryRuntimeRenderWithOwnedDraft(factory);
         return true;
       }
       const fallbackCount = await factoryCreateCurrentProductFallbackAsset(stageId, {
@@ -7665,8 +7664,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
           ? `${factoryStageLabel(stageId)} 생성 결과를 후보 카드로 가져오지 못해 현재 제품 원본 임시후보를 표시했습니다.`
           : `${factoryStageLabel(stageId)} 생성 결과를 후보 카드로 가져오지 못해 현재 제품 기준 임시후보를 만들고 검수 중입니다.`, 'warn', factory);
         factoryClearTransientFactoryCutSources(stageId, { log: false });
-        saveLastWorkNow();
-        render();
+        saveLastWorkNow({ factory });
+        factoryRuntimeRenderWithOwnedDraft(factory);
         return true;
       }
       throw new Error(`${resultCount}개 생성됐지만 현재 제품 후보 카드로 가져오지 못했습니다. 입력 이미지 기준표식이 맞는지 확인이 필요합니다.`);
@@ -7683,8 +7682,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
       ? `${factoryStageLabel(stageId)} 생성 완료: ${usableCount}개 후보가 선택 화면에 표시됩니다.`
       : `${factoryStageLabel(stageId)} 부분 완료: ${usableCount}/${target}개 후보가 표시됩니다.`, completedAll ? 'ok' : 'warn', factory);
     factorySetGoalRunProgress(progressMax, completedAll ? `${factoryStageLabel(stageId)} 생성 완료` : `${factoryStageLabel(stageId)} 부분 완료`, completedAll ? '' : `${usableCount}/${target}개 표시`, completedAll ? 'ok' : 'warn', { render: false, factory });
-    saveLastWorkNow();
-    render();
+    saveLastWorkNow({ factory });
+    factoryRuntimeRenderWithOwnedDraft(factory);
     return true;
   } catch(e) {
     factoryStopGoalHeartbeat(heartbeat);
@@ -7696,8 +7695,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
       : previousSnapshot;
     factoryRestoreImageStageSnapshot(stageId, guardedSnapshot, e.message || String(e), factory);
     factorySetGoalRunProgress(progressMax, `${factoryStageLabel(stageId)} 생성 실패`, '기존 후보/선택은 보존했습니다.', 'error', { render: false, factory });
-    saveLastWorkNow();
-    render();
+    saveLastWorkNow({ factory });
+    factoryRuntimeRenderWithOwnedDraft(factory);
     return false;
   } finally {
     if (typeof stageId !== 'undefined' && typeof generationRunId !== 'undefined') {
@@ -7747,7 +7746,7 @@ async function factoryGenerateImageStage(stageId, presets, options = {}) {
   try {
     for (let i = 0; i < target; i += 1) {
       const preset = presets[i % presets.length];
-      const prompt = factoryBuildImagePrompt(stageId, preset, i);
+      const prompt = factoryBuildImagePrompt(stageId, preset, i, factory);
       factoryLog(`${factoryStageLabel(stageId)} 생성 ${i + 1}/${target}: ${preset?.label || '기본'}`, 'info', factory);
       const image = await generateWithSelectedImageModel(prompt, source.base64, source.mime, [], {
         promptIntro: 'Create a Korean e-commerce detail page production asset.',
@@ -7917,7 +7916,7 @@ async function factoryGenerateCutsStage(options = {}) {
     sourceImageKey: inputImageKey,
     inputImageKey,
     productImageKey: inputImageKey,
-  })).map(cut => stampCutPromptSource(cut, 'cuts'));
+  })).map(cut => stampCutPromptSource(cut, 'cuts', factory));
   state.cuts.promptSlotCount = state.cuts.prompts.length;
   savePrompts();
   factorySetStageStatus('cuts', 'running', `${target}개 이미지컷 생성 중`, factory);
@@ -7971,7 +7970,7 @@ async function factoryGenerateCutsStage(options = {}) {
         inputImageFingerprint: inputImageKey,
         inputImageKey,
       });
-      if (asset) factoryLinkCutPromptToAsset(cut, asset, 'cuts', { image: resultImage });
+      if (asset) factoryLinkCutPromptToAsset(cut, asset, 'cuts', { image: resultImage, factory });
     });
     factorySetStageStatus('cuts', 'done', `${resultCount}개 이미지컷 생성`, factory);
     factoryLog('이미지컷 생성 완료', 'ok', factory);
@@ -8263,7 +8262,6 @@ async function factoryGenerateDetailStage(options = {}) {
 async function factoryRunStage(stageId, options = {}) {
   const factory = options.factory;
   if (!factory) throw new Error('factory stage runner requires an owned draft');
-  factoryUpdateFromInputs(factory);
   if (stageId === 'db') return factoryRunDbStage({ factory });
   const isImageStage = ['hero', 'size', 'cuts'].includes(stageId);
   const runStage = () => {
@@ -8307,8 +8305,8 @@ async function factoryRunStage(stageId, options = {}) {
         done.goalRun.currentStage = completed ? `${label} 생성 완료` : `${label} 생성 확인 필요`;
         done.goalRun.progress = completed ? 100 : Math.max(factoryGoalProgressClamp(done.goalRun.progress), 80);
         factoryPatchGoalRunStatusInPlace(done);
-        saveLastWorkNow();
-        render();
+        saveLastWorkNow({ factory: done });
+        factoryRuntimeRenderWithOwnedDraft(done);
       }
     }
   }
@@ -8439,11 +8437,11 @@ function factoryCutPromptAt(stageId = '', index = -1) {
   return Number.isFinite(slot) && slot >= 0 ? list[slot] : null;
 }
 
-function factoryShouldRequireCutPromptJob(stageId = '') {
+function factoryShouldRequireCutPromptJob(stageId = '', factory = factoryRuntimeReadFactory()) {
   const normalizedStage = factoryNormalizeCutPromptStage(stageId);
   if (!['hero', 'size', 'cuts'].includes(normalizedStage)) return false;
   if (typeof factoryCurrentJobKey !== 'function') return false;
-  const expected = factoryCurrentJobKey(normalizedStage, factoryRuntimeReadFactory());
+  const expected = factoryCurrentJobKey(normalizedStage, factory);
   return !!(expected?.currentRunId && expected?.inputImageFingerprint && expected?.stageId);
 }
 
@@ -8476,7 +8474,8 @@ function factoryCutPromptResultDisplaySrc(cut = {}, stageId = '', options = {}) 
 
   if (cutPromptHasLocalFallbackResult(cut)) return '';
   if (options.requireCurrent !== false && !cutPromptResultMatchesCurrentSource(cut, stageId)) return '';
-  if (options.requireJob !== false && factoryShouldRequireCutPromptJob(stageId) && !cutPromptMatchesCurrentFactoryJob(cut, stageId)) return '';
+  const factory = options.factory || factoryRuntimeReadFactory();
+  if (options.requireJob !== false && factoryShouldRequireCutPromptJob(stageId, factory) && !cutPromptMatchesCurrentFactoryJob(cut, stageId, factory)) return '';
   return src;
 }
 
@@ -8579,8 +8578,8 @@ function factoryMarkAssetImageLoadFailed(assetId = '', src = '', reason = '이�
   return true;
 }
 
-function factoryAssetRenderedImageFallback(assetId = '', failedSrc = '') {
-  const factory = factoryRuntimeReadFactory();
+function factoryAssetRenderedImageFallback(assetId = '', failedSrc = '', options = {}) {
+  const factory = options.factory || factoryRuntimeReadFactory();
   const asset = (factory.assets || []).find(item => String(item?.id || '') === String(assetId || ''));
   if (!asset) return '';
   const fallback = typeof factoryCurrentProductImageDataUrl === 'function'
@@ -8590,6 +8589,22 @@ function factoryAssetRenderedImageFallback(assetId = '', failedSrc = '') {
   if (!display) return '';
   const failed = String(failedSrc || '').trim();
   return failed && display === failed ? '' : display;
+}
+
+function factoryAssetHasRetryableArchiveReference(assetId = '', originalSrc = '') {
+  const factory = factoryRuntimeReadFactory();
+  const asset = (factory.assets || []).find(item => String(item?.id || '') === String(assetId || ''));
+  if (!asset) return false;
+  const archiveId = String(
+    asset.archiveId || asset.localArchive?.archiveId || asset.metadata?.localArchiveId ||
+    asset.metadata?.sourceArchiveId || asset.sourceMap?.localArchiveId || asset.sourceMap?.sourceArchiveId || '',
+  ).trim();
+  const sources = [
+    originalSrc, asset.imageUrl, asset.thumbnailUrl, asset.localArchive?.imageUrl,
+    asset.metadata?.imageUrl, asset.metadata?.thumbnailUrl,
+    asset.sourceMap?.imageUrl, asset.sourceMap?.thumbnailUrl,
+  ];
+  return !!archiveId || sources.some(source => /\/api\/local-archive\/assets\//i.test(String(source || '')));
 }
 
 function factoryHandleRenderedImageError(img) {
@@ -8619,6 +8634,14 @@ function factoryHandleRenderedImageError(img) {
       img.src = fallback;
       return;
     }
+  }
+  const originalSrc = img.dataset?.factoryOriginalImageSrc || '';
+  if (factoryAssetHasRetryableArchiveReference(assetId, originalSrc)) {
+    img.dataset.factoryAssetRetryDeferred = '1';
+    img.title = '로컬 보관 이미지 서버에 다시 연결하면 원본 표시를 재시도합니다.';
+    const card = img.closest?.('[data-factory-asset-id]');
+    if (card) card.setAttribute('data-load-deferred', '1');
+    return;
   }
   const card = img.closest?.('[data-factory-asset-id]');
   if (card) {
@@ -8962,7 +8985,7 @@ async function factoryRunAuto(options = {}) {
     factory.goalRun.currentStage = factoryStageLabel(stages[i]);
     factory.goalRun.progress = Math.round((i / stages.length) * 100);
     saveLastWorkNow();
-    render();
+    factoryRuntimeRenderWithOwnedDraft(factory);
     const ok = await factoryRunStage(stages[i], {
       factory,
       operationToken,
@@ -9941,6 +9964,23 @@ function factoryCurrentWorkfileArchiveIdentity(factory = factoryRuntimeReadFacto
   };
 }
 
+function factoryWorkfileArchiveRequestIsCurrent(identity = {}, authorityScope = '', fencingToken = null) {
+  const currentIdentity = factoryCurrentWorkfileArchiveIdentity(factoryRuntimeReadFactory());
+  if (
+    currentIdentity.workspaceId !== String(identity.workspaceId || '').trim() ||
+    currentIdentity.productKey !== String(identity.productKey || '').trim() ||
+    currentIdentity.inputImageFingerprint !== String(identity.inputImageFingerprint || '').trim()
+  ) {
+    return false;
+  }
+  const authority = currentWorkspaceAuthority();
+  if (authority?.mode !== 'editing' || String(authority.scopeId || '').trim() !== String(authorityScope || '').trim()) {
+    return false;
+  }
+  const expectedFence = Number(fencingToken);
+  return !Number.isInteger(expectedFence) || expectedFence <= 0 || Number(authority.fencingToken) === expectedFence;
+}
+
 function factoryAdoptWorkfileArchiveStageRuns(stageRunIds = {}, factory) {
   if (!factory.archive) factory.archive = {};
   const archiveRuns = factory.archive.stageRunIds && typeof factory.archive.stageRunIds === 'object'
@@ -10017,7 +10057,8 @@ async function factoryBootstrapCurrentWorkfileArchive(options = {}) {
   }
   const authorityScope = workspacePersistenceApi().normalizeProjectScope(identity.workspaceId);
   const authority = await ensureWorkspaceEditAuthority(authorityScope);
-  if (!store.isOperationCurrent(operationToken)) {
+  const fencingToken = Number(authority?.fencingToken);
+  if (!factoryWorkfileArchiveRequestIsCurrent(identity, authorityScope, fencingToken)) {
     return { ok: false, skipped: 'workspace-changed', assets: [], stageScopes: {} };
   }
   if (authority?.mode !== 'editing') {
@@ -10047,7 +10088,7 @@ async function factoryBootstrapCurrentWorkfileArchive(options = {}) {
       requestOptions,
     );
     const data = await response.json().catch(() => ({}));
-    if (!store.isOperationCurrent(operationToken)) {
+    if (!factoryWorkfileArchiveRequestIsCurrent(identity, authorityScope, fencingToken)) {
       return { ok: false, skipped: 'workspace-changed', assets: [], stageScopes: {} };
     }
     if (!response.ok || data.ok === false) {
@@ -10084,7 +10125,7 @@ async function factoryBootstrapCurrentWorkfileArchive(options = {}) {
     }
     return { ...data, ok: true, assets, stageScopes };
   } catch (error) {
-    if (!store.isOperationCurrent(operationToken)) {
+    if (!factoryWorkfileArchiveRequestIsCurrent(identity, authorityScope, fencingToken)) {
       return { ok: false, skipped: 'workspace-changed', assets: [], stageScopes: {} };
     }
     if (explicitFactory) {
@@ -10518,7 +10559,14 @@ async function factoryLoadLocalArchiveAsset(archiveId = '', options = {}) {
         : (typeof factoryImageOnlySectionContent === 'function'
           ? factoryImageOnlySectionContent(resolvedProductName)
           : { headline: '', subheadline: '', body_text: '', extra_elements: [], imageOnlyFromLocalArchive: true });
-      applySectionContent(sectionId, content, image || undefined, 'local-archive', record.title || '로컬 보관 자산');
+      applySectionContent(
+        sectionId,
+        content,
+        image || undefined,
+        'local-archive',
+        record.title || '로컬 보관 자산',
+        { persist: false },
+      );
       factory.archive.localStatus = `섹션으로 가져왔습니다: ${record.title || sectionId}`;
       return true;
     }
@@ -10548,7 +10596,19 @@ async function factoryLoadLocalArchiveAsset(archiveId = '', options = {}) {
       const setAt = Date.parse(record.savedAt || record.createdAt || '') || Date.now();
       const targetFactory = factory;
       const lockedKey = typeof factoryStampLockedInputImage === 'function'
-        ? factoryStampLockedInputImage(targetFactory, { base64, mime, preview, name, productName: inputProductName, productKey: inputProductKey }, { name, setAt, productName: inputProductName, productKey: inputProductKey })
+        ? factoryStampLockedInputImage(
+          targetFactory,
+          { base64, mime, preview, name, productName: inputProductName, productKey: inputProductKey },
+          {
+            name,
+            setAt,
+            productName: inputProductName,
+            productKey: inputProductKey,
+            currentRunId: resolvedRunId,
+            preserveWorkflowRun: true,
+            deferPeerState: true,
+          },
+        )
         : '';
       targetFactory.product.imageBase64 = base64;
       targetFactory.product.imageMime = mime;
@@ -10766,7 +10826,7 @@ function factoryRestoreLocalArchiveAssetFast(item = {}, factory) {
       : (typeof factoryImageOnlySectionContent === 'function'
         ? factoryImageOnlySectionContent(productName)
         : { headline: '', subheadline: '', body_text: '', extra_elements: [], imageOnlyFromLocalArchive: true });
-    applySectionContent(sectionId, content, image, 'local-archive', title);
+    applySectionContent(sectionId, content, image, 'local-archive', title, { persist: false });
     return true;
   }
   const stageId = factoryNormalizeStageScope(rawStageId) || rawStageId || 'cuts';
@@ -11084,7 +11144,7 @@ async function factoryRestoreLocalArchiveToCurrentWork(options = {}) {
         render: false,
       }),
     );
-    saveLastWorkNow({ sync: false });
+    await saveLastWorkNow({ sync: false });
     if (options.silent !== true && options.render !== false) factoryRenderLocalArchivePanel(options);
     return receipt.result;
   }
@@ -11561,8 +11621,8 @@ function compMarketNow() {
   return new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function compMarketLog(message, type = 'info') {
-  const market = ensureCompMarketScrapeState();
+function compMarketLog(message, type = 'info', options = {}) {
+  const market = ensureCompMarketScrapeState(options);
   market.logs = [{ time: compMarketNow(), message: String(message || ''), type }, ...(market.logs || [])].slice(0, 80);
   market.lastUpdatedAt = Date.now();
 }
@@ -11794,28 +11854,33 @@ function compMarketStoreCandidateSource(market, source, rows, grouped) {
   return market;
 }
 
-function compMarketSave() {
+function compMarketSave(options = {}) {
   try {
     if (typeof compMarketPersistCandidateSnapshot === 'function') {
-      compMarketPersistCandidateSnapshot(ensureCompMarketScrapeState());
+      compMarketPersistCandidateSnapshot(ensureCompMarketScrapeState(options));
     }
   } catch(_) {}
   try {
     if (typeof compMarketPersistImageSelection === 'function') {
-      compMarketPersistImageSelection(ensureCompMarketScrapeState());
+      compMarketPersistImageSelection(ensureCompMarketScrapeState(options));
     }
   } catch(_) {}
-  saveCompAnalysis(state.compPage.analysisResult, state.compPage.sectionPlan, state.compPage.planEdits);
-  saveLastWorkNow();
+  saveCompAnalysis(
+    state.compPage.analysisResult,
+    state.compPage.sectionPlan,
+    state.compPage.planEdits,
+    { skipPersistentState: options.savePersistentState === false },
+  );
+  if (options.saveLastWork !== false) saveLastWorkNow();
 }
 
-function compMarketSetStatus(status, phase = null, type = 'info') {
-  const market = ensureCompMarketScrapeState();
+function compMarketSetStatus(status, phase = null, type = 'info', options = {}) {
+  const market = ensureCompMarketScrapeState(options);
   market.status = status || '';
   if (phase) market.phase = phase;
   market.lastUpdatedAt = Date.now();
-  if (status) compMarketLog(status, type);
-  compMarketSave();
+  if (status) compMarketLog(status, type, options);
+  compMarketSave(options);
 }
 
 function compMarketFinalizeResults(picked, grouped, collectionContext = null) {
@@ -11880,7 +11945,7 @@ function compMarketFinalizeResults(picked, grouped, collectionContext = null) {
   if (typeof compMarketSetCandidateSource === 'function') {
     compMarketSetCandidateSource(market, source, results, scopedGrouped);
   }
-  compMarketSave();
+  compMarketSave(options);
   return true;
 }
 
@@ -15331,7 +15396,8 @@ function compMarketMarkDetailSelectionChanged(market = {}, message = '') {
 }
 
 async function runCompMarketDetailCapture(productIds = null, options = {}) {
-  let market = ensureCompMarketScrapeState();
+  const ensureDetailMarketState = () => ensureCompMarketScrapeState({ factory: options.factory });
+  let market = ensureDetailMarketState();
   const runtime = options.runtime === 'local' ? 'local' : 'vm';
   const ids = (Array.isArray(productIds) && productIds.length ? productIds : market.selectedIds || []).map(String).filter(Boolean);
   if (!ids.length) {
@@ -15365,12 +15431,24 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
           stableTargetKey,
         }),
       );
+      render();
       return receipt.result;
     } finally {
       lease.release();
     }
   }
   const factory = options.factory;
+  const renderDetailProgress = () => {
+    render();
+    factoryPatchGoalRunStatusInPlace(factory);
+  };
+  const saveDetailState = () => compMarketSave({ saveLastWork: false, savePersistentState: false, factory });
+  const setDetailStatus = (status, phase = null, type = 'info') => compMarketSetStatus(
+    status,
+    phase,
+    type,
+    { saveLastWork: false, savePersistentState: false, factory },
+  );
   const factoryDetailScope = runtime === 'vm'
     ? (typeof factoryCompetitorCandidateScopePayload === 'function'
       ? factoryCompetitorCandidateScopePayload('competitors', factory)
@@ -15380,7 +15458,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
     const missingIdentityFields = ['currentRunId', 'productKey', 'inputImageFingerprint', 'stageId']
       .filter(field => !String(factoryDetailScope?.[field] || '').trim());
     if (missingIdentityFields.length) {
-      compMarketSetStatus(`VM 상세수집을 시작할 수 없습니다. 현재 작업 식별자 누락: ${missingIdentityFields.join(', ')}`, 'detail-identity-missing', 'error');
+      setDetailStatus(`VM 상세수집을 시작할 수 없습니다. 현재 작업 식별자 누락: ${missingIdentityFields.join(', ')}`, 'detail-identity-missing', 'error');
       render();
       return;
     }
@@ -15478,18 +15556,18 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       factory,
     },
   );
-  compMarketSetStatus(
+  setDetailStatus(
     actionLabel + ' 상세수집 준비 중... ' + detailStartSummary,
     runtime === 'local' ? 'detail-local' : 'detail-vm',
     'info'
   );
   compMarketLog(actionLabel + ' 상세수집 준비: ' + detailStartSummary + ' · 이 선택만 수집합니다.', 'info');
-  market = ensureCompMarketScrapeState();
-  render();
+  market = ensureDetailMarketState();
+  renderDetailProgress();
   await factoryYieldToPaint();
   requireCurrent();
   try {
-    market = ensureCompMarketScrapeState();
+    market = ensureDetailMarketState();
     compMarketAssertDetailOperationCurrent(market, detailOperation);
     let result = null;
     const findSelectedItem = id => selectedItemById.get(String(id)) || null;
@@ -15518,7 +15596,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
     if (runtime === 'vm') {
       await compMarketEnsureVmDetailCaptureReady();
       requireCurrent();
-      market = ensureCompMarketScrapeState();
+      market = ensureDetailMarketState();
       compMarketAssertDetailOperationCurrent(market, detailOperation);
       if (market.detailOperation?.id === detailOperation.id) {
         market.detailOperation.status = 'connected';
@@ -15531,7 +15609,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       const detailJobs = [];
       for (const [searchId, groupIds] of idsBySearch.entries()) {
         try {
-          market = ensureCompMarketScrapeState();
+          market = ensureDetailMarketState();
           compMarketAssertDetailOperationCurrent(market, detailOperation);
           const selectedIdsForApi = groupIds.map(id => {
             const item = findSelectedItem(id) || {};
@@ -15586,7 +15664,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
             30000
           );
           requireCurrent();
-          market = ensureCompMarketScrapeState();
+          market = ensureDetailMarketState();
           compMarketAssertDetailOperationCurrent(market, detailOperation);
           const createdPayload = created?.body || created?.data || created;
           const jobId = createdPayload?.job_id || createdPayload?.id;
@@ -15594,19 +15672,19 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
           compMarketLog(runtime === 'vm'
             ? `VM 상세 스크래핑 작업 시작: 선택 카드 URL ${selectedProductsForApi.length}건`
             : `상세 스크래핑 작업 시작: ${searchId} / ${selectedIdsForApi.length}건`, 'info');
-          market = ensureCompMarketScrapeState();
+          market = ensureDetailMarketState();
           market.detailJobId = jobId;
           if (market.detailOperation?.id === detailOperation.id) {
             market.detailOperation.status = 'running';
             market.detailOperation.jobIds = [...new Set([...(market.detailOperation.jobIds || []), jobId])];
           }
-          compMarketSave();
+          saveDetailState();
           let lastStatusPayload = null;
           let manualStatusDetected = false;
           for (let i = 0; i < 120; i++) {
             await new Promise(resolve => setTimeout(resolve, 2000));
             requireCurrent();
-            market = ensureCompMarketScrapeState();
+            market = ensureDetailMarketState();
             compMarketAssertDetailOperationCurrent(market, detailOperation);
             const status = await compMarketInvokeV1(
               JEPUM_MARKET_API.endpoints.detailStatus,
@@ -15614,7 +15692,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
               15000
             );
             requireCurrent();
-            market = ensureCompMarketScrapeState();
+            market = ensureDetailMarketState();
             compMarketAssertDetailOperationCurrent(market, detailOperation);
             const statusPayload = status?.body || status?.data || status;
             lastStatusPayload = statusPayload || null;
@@ -15627,16 +15705,16 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
               if (market.detailOperation?.id === detailOperation.id) {
                 market.detailOperation.status = 'manual-required';
               }
-              compMarketSave();
-              render();
+              saveDetailState();
+              renderDetailProgress();
               compMarketLog(compMarketDetailJobWaitMessage(compMarketDetailJobInfo(statusPayload), 'VM 화면 확인이 필요한 상세수집 상태입니다.'), 'warn');
               break;
             }
             if (i % 5 === 0) {
               const info = compMarketDetailJobInfo(statusPayload || {});
               market.status = compMarketDetailJobWaitMessage(info, `VM 상세 스크래핑 대기 ${i + 1}/120 (${groupIds.length}건)`);
-              compMarketSave();
-              render();
+              saveDetailState();
+              renderDetailProgress();
             }
           }
           const detailResult = manualStatusDetected
@@ -15647,7 +15725,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
               30000
             );
           requireCurrent();
-          market = ensureCompMarketScrapeState();
+          market = ensureDetailMarketState();
           compMarketAssertDetailOperationCurrent(market, detailOperation);
           if (manualStatusDetected) {
             compMarketRememberManualIntervention(market, detailResult || {}, jobId);
@@ -15675,7 +15753,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
         }
       }
       if (detailJobs.length) {
-        market = ensureCompMarketScrapeState();
+        market = ensureDetailMarketState();
         compMarketAssertDetailOperationCurrent(market, detailOperation);
         market.detailJobId = detailJobs.map(job => job.jobId).join(', ');
         result = detailJobs.length === 1 ? detailJobs[0].result : { ok: true, jobs: detailJobs };
@@ -15685,7 +15763,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       try {
         result = await compMarketTryVmScrapeDetails(market, ids);
         requireCurrent();
-        market = ensureCompMarketScrapeState();
+        market = ensureDetailMarketState();
         compMarketAssertDetailOperationCurrent(market, detailOperation);
       } catch(e) {
         if (factoryRunOperationIsStale(e)) throw e;
@@ -15699,7 +15777,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
         body: JSON.stringify({ session_id: market.sessionId, selected_ids: ids }),
       }, 360000);
       requireCurrent();
-      market = ensureCompMarketScrapeState();
+      market = ensureDetailMarketState();
       compMarketAssertDetailOperationCurrent(market, detailOperation);
       if (result?.error) throw new Error(result.error);
       market.route = `${market.route || '본컴 검색'} + /api/scrape_details`;
@@ -15709,7 +15787,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
         ? 'VM 상세페이지 수집 결과를 받지 못했습니다.'
         : '본컴 상세페이지 수집 결과를 받지 못했습니다.');
     }
-    market = ensureCompMarketScrapeState();
+    market = ensureDetailMarketState();
     compMarketAssertDetailOperationCurrent(market, detailOperation);
     market.detailResults = result || null;
     compMarketRememberManualIntervention(market, market.detailResults || {}, market.detailJobId);
@@ -15741,11 +15819,11 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       compMarketLog(`중복 상세페이지 이미지 ${duplicateDetailImages}장을 합쳐 한 번만 표시합니다.`, 'warn');
     }
     if (hiddenDetailImages > 0 || unselectedDetailImages > 0 || duplicateDetailImages > 0) {
-      market = ensureCompMarketScrapeState();
+      market = ensureDetailMarketState();
     }
     if (!market.scrapedImages.length) {
       compMarketLog('선택 후보 결과가 0장이라 이전 상세수집 결과를 자동으로 불러오지 않습니다.', 'warn');
-      market = ensureCompMarketScrapeState();
+      market = ensureDetailMarketState();
     }
     const detailInfo = compMarketDetailJobInfo(market.detailResults || {});
     const detailFailureEntries = detailInfo.entries.filter(entry => detailFailureStatuses.has(entry.status));
@@ -15765,10 +15843,10 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
     }
     if (detailHasFailure) {
       compMarketLog(detailFailureMessage, 'error');
-      compMarketSetStatus(detailFailureMessage + ' 실패한 후보는 다시 수집하거나 로그인/보안확인을 확인해주세요.', 'detail-error', 'error');
+      setDetailStatus(detailFailureMessage + ' 실패한 후보는 다시 수집하거나 로그인/보안확인을 확인해주세요.', 'detail-error', 'error');
     } else if (market.scrapedImages.length) {
       compMarketLog(`상세페이지 이미지 ${market.scrapedImages.length}장 표시 준비`, 'ok');
-      compMarketSetStatus(
+      setDetailStatus(
         detailInfo.manual
           ? `경쟁사 이미지 ${market.scrapedImages.length}장을 찾았습니다. 일부 후보는 VM 화면에서 로그인/보안확인 후 다시 수집해야 합니다.`
           : `선택 후보 상세페이지를 수집했고 경쟁사 이미지 ${market.scrapedImages.length}장을 찾았습니다.`,
@@ -15777,10 +15855,10 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       );
     } else if (detailInfo.active || detailInfo.manual) {
       compMarketLog(compMarketDetailJobWaitMessage(detailInfo, 'VM 상세수집이 완료되지 않았습니다.'), 'warn');
-      compMarketSetStatus(compMarketDetailJobWaitMessage(detailInfo, 'VM 상세수집이 완료되지 않았습니다.'), detailInfo.manual ? 'detail-manual' : 'detail-running', 'warn');
+      setDetailStatus(compMarketDetailJobWaitMessage(detailInfo, 'VM 상세수집이 완료되지 않았습니다.'), detailInfo.manual ? 'detail-manual' : 'detail-running', 'warn');
     } else {
       compMarketLog('상세 결과에서 이미지 추출 0장: URL/base64/로컬 스크린샷 경로를 찾지 못했습니다.', 'warn');
-      compMarketSetStatus('선택 후보 상세페이지 결과는 저장했지만 이미지 목록을 찾지 못했습니다. VM에서 다시 수집하거나 최근 상세페이지 이미지를 불러와주세요.', 'detail-done', 'warn');
+      setDetailStatus('선택 후보 상세페이지 결과는 저장했지만 이미지 목록을 찾지 못했습니다. VM에서 다시 수집하거나 최근 상세페이지 이미지를 불러와주세요.', 'detail-done', 'warn');
     }
     const currentOperationImageCount = market.scrapedImages
       .filter(image => image?.detailOperationId === detailOperation.id)
@@ -15806,7 +15884,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
           ' · 이번 ' + currentOperationImageCount + '장 · 이전 누적 ' + previousAccumulatedImageCount + '장',
           'ok'
         );
-        compMarketSetStatus(
+        setDetailStatus(
           actionLabel + ' 상세수집 완료: ' + (selectedLabel || ('선택 후보 ' + ids.length + '건')) +
           '만 수집했습니다. 이번 ' + currentOperationImageCount + '장, 이전 누적 ' + previousAccumulatedImageCount + '장입니다.',
           'detail-done',
@@ -15824,7 +15902,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
           ' 결과 이미지 0장. 이전 누적 결과는 이번 수집 결과로 섞지 않았습니다.',
           'warn'
         );
-        compMarketSetStatus(
+        setDetailStatus(
           actionLabel + ' 상세수집은 끝났지만 이번 선택 후보의 이미지가 0장입니다. 이전 누적 결과는 이번 수집 결과로 섞지 않았습니다.',
           'detail-done',
           'warn'
@@ -15845,33 +15923,33 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       };
     }
     finishDetailGoal(detailGoalOutcome);
-    render();
+    renderDetailProgress();
   } catch(e) {
     if (factoryRunOperationIsStale(e)) {
       factoryStopGoalHeartbeat(detailGoalHeartbeat);
       throw e;
     }
     if (e?.compMarketStaleDetailOperation) {
-      const currentMarket = ensureCompMarketScrapeState();
+      const currentMarket = ensureDetailMarketState();
       if (currentMarket.detailOperation?.id === detailOperation.id) {
         currentMarket.loading = false;
         currentMarket.detailOperation.status = 'selection-changed';
         currentMarket.detailOperation.finishedAt = Date.now();
         compMarketLog('선택 후보가 바뀌어 이전 상세수집 결과는 현재 목록에 반영하지 않았습니다. 새 선택으로 다시 수집할 수 있습니다.', 'warn');
-        compMarketSetStatus('선택 후보가 바뀌어 이전 상세수집 결과를 현재 목록에 반영하지 않았습니다. 새 선택으로 다시 수집하세요.', 'detail-selection-changed', 'warn');
+        setDetailStatus('선택 후보가 바뀌어 이전 상세수집 결과를 현재 목록에 반영하지 않았습니다. 새 선택으로 다시 수집하세요.', 'detail-selection-changed', 'warn');
         finishDetailGoal({
           stage: '선택 변경으로 상세페이지 수집 중단',
           message: '선택 후보가 바뀌어 이전 상세수집을 현재 작업에 반영하지 않았습니다.',
           type: 'warn',
           stageStatus: 'review',
         });
-        render();
+        renderDetailProgress();
       }
       return;
     }
     market.loading = false;
     market.error = e.message || String(e);
-    compMarketSetStatus(`상세 스크래핑 실패: ${market.error}`, 'detail-error', 'error');
+    setDetailStatus(`상세 스크래핑 실패: ${market.error}`, 'detail-error', 'error');
     finishDetailGoal({
       stage: `${actionLabel} 상세페이지 수집 실패`,
       message: `${actionLabel} 상세수집 실패: ${market.error}`,
@@ -15879,7 +15957,7 @@ async function runCompMarketDetailCapture(productIds = null, options = {}) {
       failureReason: market.error,
       stageStatus: 'error',
     });
-    render();
+    renderDetailProgress();
   }
 }
 
@@ -17823,7 +17901,7 @@ function sectionBatchStopRequested() {
   );
 }
 
-function requestSectionBatchStopAfterCurrent() {
+function requestSectionBatchStopAfterCurrent(options = {}) {
   const run = state.sectionBatchRun;
   if (!run || run.status !== 'running') return false;
   if (run.stopRequested) return true;
@@ -24620,7 +24698,15 @@ function factoryClearRestoredImageGenerationRuntimeOwned(factory, options = {}) 
   }
 
   if (!changed) return false;
-  if (factory.goalRun?.running && !factory.goalRun.activeOperationId && !factoryActiveImageStageRunKeys.size) {
+  const recoveredGoal = factory.goalRun || {};
+  const looksLikeInterruptedImageRun = !String(recoveredGoal.failureReason || '').trim()
+    && /이미지|대표|사이즈|옵션|컷/.test(String(recoveredGoal.currentStage || ''))
+    && /생성\s*중|재생성\s*요청|응답\s*대기|검수\s*중/.test(String(recoveredGoal.currentStage || ''));
+  if (
+    (recoveredGoal.running || looksLikeInterruptedImageRun)
+    && !recoveredGoal.activeOperationId
+    && !factoryActiveImageStageRunKeys.size
+  ) {
     factory.goalRun.running = false;
     factory.goalRun.stopRequested = false;
     factory.goalRun.failureReason = factory.goalRun.failureReason || '이전 이미지 생성이 화면 복원 중 끊겨 진행 표시를 해제했습니다. 기존 후보와 저장 이미지는 유지했습니다.';
@@ -25484,6 +25570,9 @@ async function generateCut(idx, workImgOverride, options = {}) {
   }
   const p = c.prompts[idx];
   if (!factoryLockedStage) restoreCutImagePayloadsFromPreview(c);
+  const renderCutProgress = () => factoryLockedStage
+    ? factoryRuntimeRenderWithOwnedDraft(factory, renderPreservingMainScroll)
+    : renderPreservingMainScroll();
   if (!p) {
     return cutsSetBlockingError(`컷 ${idx + 1} 정보를 찾지 못했습니다. 지시칸을 다시 확인해주세요.`);
   }
@@ -25518,7 +25607,7 @@ async function generateCut(idx, workImgOverride, options = {}) {
     metadata: cloneData(p.metadata || {}),
   } : null;
   const generationStartedAt = Date.now();
-  stampCutPromptSource(p, c.factoryStageId || 'cuts');
+  stampCutPromptSource(p, c.factoryStageId || 'cuts', factory);
   const currentFactoryStage = factoryNormalizeCutPromptStage(c.factoryStageId || 'cuts');
   const currentStageRunId = ['hero', 'cuts'].includes(currentFactoryStage) ? factoryCurrentStageRunId(currentFactoryStage, factory) : '';
   const factoryGenerationRunId = currentStageRunId || c.factoryGenerationRunId || p.currentRunId || p.factoryGenerationRunId || p.generationRunId || '';
@@ -25560,7 +25649,7 @@ async function generateCut(idx, workImgOverride, options = {}) {
   cutsAppendRunLog(`컷 ${idx + 1} 생성 시작`, 'info', `${p.label || `컷 ${idx + 1}`} · 프롬프트 ${String(p.prompt || '').trim().length}자`);
   savePrompts();
   cutsScheduleLightSave(900);
-  renderPreservingMainScroll();
+  renderCutProgress();
   await cutsYieldAfterRender(60);
   requireCurrent();
 
@@ -25656,7 +25745,7 @@ ${sizeHint}`;
       return false;
     }
 
-    stampCutPromptSource(p, c.factoryStageId || 'cuts');
+    stampCutPromptSource(p, c.factoryStageId || 'cuts', factory);
     const persistedResult = await factoryPersistGeneratedCutPromptResult(
       currentFactoryStage,
       idx,
@@ -25718,7 +25807,7 @@ ${sizeHint}`;
     cutsAppendRunLog(`컷 ${idx + 1} 생성 완료`, 'ok', currentPrompt.label || p.label || '');
     savePrompts();
     cutsScheduleLightSave(700);
-    renderPreservingMainScroll();
+    renderCutProgress();
     if (sessionAssetsHydrated && options.deferHeavySave !== true) cutsScheduleAssetPersistence();
     return true;
   } catch(e) {
@@ -25770,7 +25859,7 @@ ${sizeHint}`;
     savePrompts();
     cutsScheduleLightSave(700);
     if (sessionAssetsHydrated && options.deferHeavySave !== true) cutsScheduleAssetPersistence();
-    renderPreservingMainScroll();
+    renderCutProgress();
     return false;
   }
 }
@@ -25820,6 +25909,9 @@ async function generateAllCuts(options = {}) {
   syncCutPromptsFromDom({ save: true });
   const factoryStageId = factoryNormalizeCutPromptStage(c.factoryStageId || 'cuts');
   const factoryLockedStage = ['hero', 'cuts'].includes(String(c.factoryStageId || ''));
+  const renderAllCutsProgress = () => factoryLockedStage
+    ? factoryRuntimeRenderWithOwnedDraft(factory, renderPreservingMainScroll)
+    : renderPreservingMainScroll();
   if (factoryLockedStage) {
     await factorySyncCutsSourceToCurrentProductAsync(c.factoryStageId, {
       log: false,
@@ -25876,7 +25968,7 @@ async function generateAllCuts(options = {}) {
       p.generationRunId = generationRunId;
       p.error = '';
       p.warning = '';
-      stampCutPromptSource(p, factoryStageId);
+      stampCutPromptSource(p, factoryStageId, factory);
     });
     factoryTouchImageStageRun(factoryStageId, generationRunId, {
       status: 'running',
@@ -25904,7 +25996,7 @@ async function generateAllCuts(options = {}) {
   cutsAppendRunLog(`${targets.length}개 컷 전체 생성 요청 수신`, 'info', '프롬프트를 먼저 저장한 뒤 실행합니다.');
   savePrompts();
   cutsScheduleLightSave(900);
-  renderPreservingMainScroll();
+  renderAllCutsProgress();
   await cutsYieldAfterRender(80);
   requireCurrent();
   let successCount = 0;
@@ -26011,7 +26103,7 @@ async function generateAllCuts(options = {}) {
     cutsAppendRunLog(state.error, 'error');
     savePrompts();
     cutsScheduleLightSave(700);
-    renderPreservingMainScroll();
+    renderAllCutsProgress();
     return false;
   }
   if (!successCount) {
@@ -26020,7 +26112,7 @@ async function generateAllCuts(options = {}) {
     finishOwnedStageRun();
     state.error = state.error || '전체 생성이 완료되지 않았습니다. 작업 로그와 API 연결을 확인해주세요.';
     cutsAppendRunLog(state.error, 'error');
-    renderPreservingMainScroll();
+    renderAllCutsProgress();
     return false;
   }
   c.runBusy = false;
@@ -26049,7 +26141,7 @@ async function generateAllCuts(options = {}) {
   savePrompts();
   cutsScheduleLightSave(700);
   if (sessionAssetsHydrated) cutsScheduleAssetPersistence();
-  renderPreservingMainScroll();
+  renderAllCutsProgress();
   return true;
 }
 
@@ -26261,12 +26353,13 @@ function clearSizeCutResultCache(c = state.cuts) {
 }
 
 function commitSizeCutResult(index, result, meta = {}) {
+  const factory = meta.factory || factoryRuntimeReadFactory();
   const c = state.cuts;
   c.sizePromptSlotCount = normalizeCutPromptSlotCount(c.sizePromptSlotCount, c.sizePrompts?.length || CUTS_DEFAULT_PROMPT_COUNT);
   c.sizePrompts = normalizeCutPrompts(c.sizePrompts, { count: c.sizePromptSlotCount });
   const prompt = c.sizePrompts[index] || normalizeCutPromptItem(null, index);
-  stampCutPromptSource(prompt, 'size');
-  const factoryGenerationRunId = factoryCurrentStageRunId('size', factoryRuntimeReadFactory()) ||
+  stampCutPromptSource(prompt, 'size', factory);
+  const factoryGenerationRunId = factoryCurrentStageRunId('size', factory) ||
     c.sizeFactoryGenerationRunId ||
     meta.currentRunId ||
     meta.generationRunId ||
@@ -26332,6 +26425,9 @@ function setSizeCutPromptSlotCount(nextCount) {
 
 async function generateSizeCut(idx, options = {}) {
   const factory = options.factory || factoryRuntimeReadFactory();
+  const renderSizeCutProgress = () => options.factory
+    ? factoryRuntimeRenderWithOwnedDraft(factory, renderPreservingMainScroll)
+    : renderPreservingMainScroll();
   const requireCurrent = () => {
     if (!options.operationToken) return true;
     return factoryRequireCurrentRunOperation(
@@ -26410,7 +26506,7 @@ async function generateSizeCut(idx, options = {}) {
     metadata: cloneData(p.metadata || {}),
   } : null;
   p.generating = true;
-  stampCutPromptSource(p, 'size');
+  stampCutPromptSource(p, 'size', factory);
   const factoryGenerationRunId = factoryCurrentStageRunId('size', factory) ||
     c.sizeFactoryGenerationRunId ||
     p.currentRunId ||
@@ -26444,7 +26540,7 @@ async function generateSizeCut(idx, options = {}) {
   );
   savePrompts();
   cutsScheduleLightSave(900);
-  renderPreservingMainScroll();
+  renderSizeCutProgress();
   await cutsYieldAfterRender(60);
   requireCurrent();
 
@@ -26532,6 +26628,7 @@ ${sizeHint}`;
     );
     requireCurrent();
     const committed = commitSizeCutResult(idx, persistedResult.result || persistedResult.imageUrl || cutImage, {
+      factory,
       keepRunBusy: options.keepRunBusy === true,
       archiveId: persistedResult.archiveId || p.archiveId || '',
       localArchiveId: persistedResult.localArchiveId || p.localArchiveId || '',
@@ -26543,7 +26640,7 @@ ${sizeHint}`;
     cutsAppendRunLog(`사이즈컷 ${idx + 1} 생성 완료`, 'ok', committed.label || '');
     savePrompts();
     cutsScheduleLightSave(700);
-    renderPreservingMainScroll();
+    renderSizeCutProgress();
     if (sessionAssetsHydrated && options.deferHeavySave !== true) cutsScheduleAssetPersistence();
     return true;
   } catch(e) {
@@ -26597,7 +26694,7 @@ ${sizeHint}`;
     savePrompts();
     cutsScheduleLightSave(700);
     if (sessionAssetsHydrated && options.deferHeavySave !== true) cutsScheduleAssetPersistence();
-    renderPreservingMainScroll();
+    renderSizeCutProgress();
     return false;
   }
 }
@@ -26643,6 +26740,7 @@ async function generateAllSizeCuts(options = {}) {
   }
   const factory = options.factory;
   if (!factory) throw new Error('factory size cuts generation requires an owned draft');
+  const renderAllSizeCutsProgress = () => factoryRuntimeRenderWithOwnedDraft(factory, renderPreservingMainScroll);
   const c = state.cuts;
   syncCutPromptsFromDom({ save: true });
   await factorySyncCutsSourceToCurrentProductAsync('size', {
@@ -26701,7 +26799,7 @@ async function generateAllSizeCuts(options = {}) {
     p.generationRunId = generationRunId;
     p.error = '';
     p.warning = '';
-    stampCutPromptSource(p, 'size');
+    stampCutPromptSource(p, 'size', factory);
   });
   factoryTouchImageStageRun('size', generationRunId, {
     status: 'running',
@@ -26728,7 +26826,7 @@ async function generateAllSizeCuts(options = {}) {
   cutsAppendRunLog(`${targets.length}개 사이즈컷 전체 생성 요청 수신`, 'info', '사이즈컷 프롬프트를 먼저 저장한 뒤 실행합니다.');
   savePrompts();
   cutsScheduleLightSave(900);
-  renderPreservingMainScroll();
+  renderAllSizeCutsProgress();
   await cutsYieldAfterRender(80);
   requireCurrent();
   let successCount = 0;
@@ -26831,7 +26929,7 @@ async function generateAllSizeCuts(options = {}) {
     cutsAppendRunLog(state.error, 'error');
     savePrompts();
     cutsScheduleLightSave(700);
-    renderPreservingMainScroll();
+    renderAllSizeCutsProgress();
     return false;
   }
   c.sizeRunBusy = false;
@@ -26840,7 +26938,7 @@ async function generateAllSizeCuts(options = {}) {
     finishOwnedStageRun();
     state.error = state.error || '사이즈컷 전체 생성이 완료되지 않았습니다. 작업 로그와 API 연결을 확인해주세요.';
     cutsAppendRunLog(state.error, 'error');
-    renderPreservingMainScroll();
+    renderAllSizeCutsProgress();
     return false;
   }
   const runId = generationRunId || factoryCurrentStageRunId('size', factory) || '';
@@ -26866,7 +26964,7 @@ async function generateAllSizeCuts(options = {}) {
   savePrompts();
   cutsScheduleLightSave(700);
   if (sessionAssetsHydrated) cutsScheduleAssetPersistence();
-  renderPreservingMainScroll();
+  renderAllSizeCutsProgress();
   return true;
 }
 
@@ -27491,10 +27589,10 @@ function cutPromptJobKey(cut = {}, stageId = '') {
   };
 }
 
-function cutPromptMatchesCurrentFactoryJob(cut = {}, stageId = '') {
+function cutPromptMatchesCurrentFactoryJob(cut = {}, stageId = '', factory = factoryRuntimeReadFactory()) {
   const targetStage = factoryNormalizeCutPromptStage(stageId);
   if (!['hero', 'size', 'cuts'].includes(targetStage)) return true;
-  const expected = factoryCurrentJobKey(targetStage, factoryRuntimeReadFactory());
+  const expected = factoryCurrentJobKey(targetStage, factory);
   const actual = cutPromptJobKey(cut, targetStage);
   const expectedRunId = String(expected.currentRunId || '').trim();
   const actualRunId = String(actual.currentRunId || '').trim();
@@ -27573,9 +27671,8 @@ function markStaleCutPromptResult(cut = {}, stageId = '') {
   return true;
 }
 
-function stampCutPromptSource(cut = {}, stageId = '') {
+function stampCutPromptSource(cut = {}, stageId = '', factory = factoryRuntimeReadFactory()) {
   const normalizedStage = factoryNormalizeCutPromptStage(stageId) || String(stageId || '').trim();
-  const factory = factoryRuntimeReadFactory();
   const existingRunId = cut.currentRunId || cut.factoryGenerationRunId || cut.generationRunId || '';
   const job = factoryCurrentJobKey(normalizedStage, factory, { currentRunId: existingRunId || factoryCurrentStageRunId(normalizedStage, factory) });
   cut.factoryStageId = normalizedStage;
@@ -28274,8 +28371,12 @@ function factoryRefreshCafe24DedicatedActionButtons() {
   );
 }
 
-function factoryScheduleRunStageFeedbackSave(delay = 700) {
+function factoryScheduleRunStageFeedbackSave(delay = 700, factory = null) {
   try {
+    if (factory) {
+      saveLastWorkNow({ sync: false, factory });
+      return;
+    }
     if (typeof scheduleLastWorkSave === 'function') {
       scheduleLastWorkSave(delay);
       return;
@@ -28370,6 +28471,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
           operationSignal: lease.signal,
         }),
       );
+      saveLastWorkNow({ sync: false });
+      render();
       return receipt.result;
     } finally {
       lease.release();
@@ -28383,7 +28486,7 @@ async function factoryHandleRunStageButton(btn, options = {}) {
         factorySetStageStatus(stageId, 'blocked', `${label} 생성 버튼이 아직 비활성 상태입니다. 필요한 입력값을 먼저 확인해주세요.`, currentFactory);
         factoryLog(`${label} 생성 대기: 버튼이 비활성 상태입니다.`, 'warn', currentFactory);
         requireCurrent();
-        render();
+        factoryRuntimeRenderWithOwnedDraft(currentFactory);
       }
       return false;
     }
@@ -28394,8 +28497,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
         factorySetStageStatus('size', 'blocked', review.message || '사이즈이미지 생성 전 DB 사이즈값을 먼저 확인해주세요.', currentFactory);
         factoryLog(review.logMessage || '사이즈이미지 생성 중단: DB 사이즈 확인이 필요합니다.', 'warn', currentFactory);
         requireCurrent();
-        render();
-        factoryScheduleRunStageFeedbackSave();
+        factoryRuntimeRenderWithOwnedDraft(currentFactory);
+        factoryScheduleRunStageFeedbackSave(700, currentFactory);
         return false;
       }
       if (review.autoConfirmed) {
@@ -28425,8 +28528,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
     factorySetStageStatus(stageId, 'running', `${label} 재생성 요청됨. 기존 생성 엔진을 호출합니다.`, currentFactory);
     factoryLog(`${label} 재생성 버튼 클릭: 실행을 시작합니다.`, 'info', currentFactory);
     requireCurrent();
-    render();
-    factoryScheduleRunStageFeedbackSave();
+    factoryRuntimeRenderWithOwnedDraft(currentFactory);
+    factoryScheduleRunStageFeedbackSave(700, currentFactory);
     await factoryYieldToPaint(80);
     requireCurrent();
     const ok = await factoryRunStage(stageId, {
@@ -28441,8 +28544,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
       if (!stage.status || stage.status === 'running') {
         factorySetStageStatus(stageId, 'error', `${label} 재생성이 완료되지 않았습니다. 로그의 실패 원인을 확인해주세요.`, currentFactory);
         requireCurrent();
-        render();
-        factoryScheduleRunStageFeedbackSave();
+        factoryRuntimeRenderWithOwnedDraft(currentFactory);
+        factoryScheduleRunStageFeedbackSave(700, currentFactory);
       }
     }
     if (standaloneGoalRun) {
@@ -28460,9 +28563,9 @@ async function factoryHandleRunStageButton(btn, options = {}) {
         done.goalRun.failureReason = ok ? '' : (done.goalRun.failureReason || `${label} 생성 결과 확인이 필요합니다.`);
       }
       done.goalRun.stopRequested = false;
-      factoryPatchGoalRunStatusInPlace();
+      factoryPatchGoalRunStatusInPlace(done);
       requireCurrent();
-      factoryScheduleRunStageFeedbackSave();
+      factoryScheduleRunStageFeedbackSave(700, currentFactory);
     }
     return !!ok;
   } catch(error) {
@@ -28478,10 +28581,10 @@ async function factoryHandleRunStageButton(btn, options = {}) {
       done.goalRun.currentStage = `${label} 생성 실패`;
       done.goalRun.progress = Math.max(factoryGoalProgressClamp(done.goalRun.progress), 80);
       done.goalRun.failureReason = message;
-      factoryPatchGoalRunStatusInPlace();
+      factoryPatchGoalRunStatusInPlace(done);
     }
-    render();
-    factoryScheduleRunStageFeedbackSave();
+    factoryRuntimeRenderWithOwnedDraft(currentFactory);
+    factoryScheduleRunStageFeedbackSave(700, currentFactory);
     return false;
   }
 }
@@ -28513,14 +28616,14 @@ function factoryFieldTransferScopeMatches(saved = {}, current = factoryRuntimeRe
   });
 }
 
-function factoryFieldTransferState(current) {
+function factoryFieldTransferState(current, options = {}) {
   if (!current) throw new Error('factory field transfer state requires an owned draft or detached render value');
-  current.automation = current.automation || {};
-  const existing = current.automation.fieldTransfer && typeof current.automation.fieldTransfer === 'object'
-    ? current.automation.fieldTransfer
+  const automation = current.automation && typeof current.automation === 'object' ? current.automation : {};
+  const existing = automation.fieldTransfer && typeof automation.fieldTransfer === 'object'
+    ? automation.fieldTransfer
     : null;
-  if (!existing || !factoryFieldTransferScopeMatches(existing.scope, current)) {
-    current.automation.fieldTransfer = {
+  const transfer = !existing || !factoryFieldTransferScopeMatches(existing.scope, current)
+    ? {
       scope: factoryFieldTransferScope(current),
       selectedFieldIds: [],
       status: 'idle',
@@ -28528,14 +28631,21 @@ function factoryFieldTransferState(current) {
       message: '',
       results: {},
       updatedAt: Date.now(),
-    };
+    }
+    : existing;
+  const normalized = {
+    ...transfer,
+    selectedFieldIds: Array.isArray(transfer.selectedFieldIds)
+      ? Array.from(new Set(transfer.selectedFieldIds.map(value => String(value || '').trim()).filter(Boolean)))
+      : [],
+    results: transfer.results && typeof transfer.results === 'object' ? transfer.results : {},
+  };
+  if (options.mutable === true) {
+    current.automation = automation;
+    current.automation.fieldTransfer = normalized;
+    return current.automation.fieldTransfer;
   }
-  const transfer = current.automation.fieldTransfer;
-  transfer.selectedFieldIds = Array.isArray(transfer.selectedFieldIds)
-    ? Array.from(new Set(transfer.selectedFieldIds.map(value => String(value || '').trim()).filter(Boolean)))
-    : [];
-  transfer.results = transfer.results && typeof transfer.results === 'object' ? transfer.results : {};
-  return transfer;
+  return normalized;
 }
 
 function factoryFieldTransferDescriptor(fieldId = '') {
@@ -28578,8 +28688,16 @@ function factoryFieldTransferRows(current = factoryRuntimeReadFactory(), summary
     });
 }
 
-function factorySetFieldTransferSelection(fieldIds = [], current = factoryRuntimeReadFactory()) {
-  const transfer = factoryFieldTransferState(current);
+function factorySetFieldTransferSelection(fieldIds = [], current = null) {
+  if (!current) {
+    const receipt = factoryRuntimeUpdateOwnedFactory(
+      'factory/fields:setFieldTransferSelection',
+      'product-db',
+      draft => factorySetFieldTransferSelection(fieldIds, draft),
+    );
+    return receipt.result;
+  }
+  const transfer = factoryFieldTransferState(current, { mutable: true });
   const allowed = new Set(factoryFieldTransferRows(current).filter(row => row.value && (row.sinhwa || row.cafe24)).map(row => row.id));
   transfer.selectedFieldIds = Array.from(new Set((fieldIds || []).map(value => String(value || '').trim()).filter(value => allowed.has(value))));
   transfer.updatedAt = Date.now();
@@ -28694,12 +28812,23 @@ function factoryFieldTransferPatchUi() {
   if (!patched) render();
 }
 
-async function factorySendSelectedFieldsToSinhwa(rows = factoryFieldTransferSelectedRows()) {
-  const current = factoryRuntimeReadFactory();
-  const transfer = factoryFieldTransferState(current);
+async function factorySendSelectedFieldsToSinhwa(rows = null, current = null, options = {}) {
+  if (!current) {
+    const receipt = await factoryRuntimeUpdateOwnedFactory(
+      'factory/fields:executeSelectedFieldTransfer',
+      'product-db',
+      draft => factorySendSelectedFieldsToSinhwa(rows, draft, options),
+    );
+    factoryFieldTransferPatchUi();
+    return receipt.result;
+  }
+  const transfer = factoryFieldTransferState(current, { mutable: true });
   const target = factorySinhwaSelectedTransferTarget(current);
-  const selectedRows = (rows || []).filter(row => row.sinhwa !== false);
+  const selectedRows = (rows || factoryFieldTransferSelectedRows(current)).filter(row => row.sinhwa !== false);
   const payloads = factoryBuildSinhwaSelectedFieldPayloads(selectedRows);
+  const confirmTransfer = typeof options.confirm === 'function' ? options.confirm : confirm;
+  const putTransfer = typeof options.putSinhwaDirect === 'function' ? options.putSinhwaDirect : putSinhwaDirect;
+  const fetchTransfer = typeof options.fetchSinhwaDirect === 'function' ? options.fetchSinhwaDirect : fetchSinhwaDirect;
   const supportedCount = Object.keys(payloads.spec).length + Object.keys(payloads.usage).length;
   if (!target || !supportedCount) {
     transfer.status = 'error';
@@ -28708,26 +28837,24 @@ async function factorySendSelectedFieldsToSinhwa(rows = factoryFieldTransferSele
       ? '확정한 신화사DB 상품이 없습니다. 2번 DB 확정에서 상품을 먼저 고르세요.'
       : '선택한 값 중 신화사DB 안전 쓰기 계약으로 전송할 수 있는 항목이 없습니다.';
     transfer.updatedAt = Date.now();
-    factoryFieldTransferPatchUi();
     return false;
   }
   const labels = selectedRows.filter(row => factoryFieldTransferDescriptor(row.id).sinhwa).map(row => `${row.label}: ${row.value}`);
-  if (!confirm(`선택한 값만 신화사DB #${target.jcode} ${target.name || ''}에 전송합니다.\n\n${labels.join('\n')}\n\n외부 신화사DB 데이터가 실제로 변경됩니다. 계속할까요?`)) return false;
+  if (!confirmTransfer(`선택한 값만 신화사DB #${target.jcode} ${target.name || ''}에 전송합니다.\n\n${labels.join('\n')}\n\n외부 신화사DB 데이터가 실제로 변경됩니다. 계속할까요?`)) return false;
   transfer.status = 'running';
   transfer.target = 'sinhwa';
   transfer.message = `신화사DB #${target.jcode}에 선택 ${supportedCount}개 전송 중...`;
   transfer.updatedAt = Date.now();
-  factoryFieldTransferPatchUi();
   try {
     if (Object.keys(payloads.spec).length) {
-      await putSinhwaDirect(`/api/products/${encodeURIComponent(target.jcode)}/spec`, payloads.spec);
+      await putTransfer(`/api/products/${encodeURIComponent(target.jcode)}/spec`, payloads.spec);
     }
     if (Object.keys(payloads.usage).length) {
-      await putSinhwaDirect(`/api/products/${encodeURIComponent(target.jcode)}/usage-profile`, payloads.usage);
+      await putTransfer(`/api/products/${encodeURIComponent(target.jcode)}/usage-profile`, payloads.usage);
     }
     const [costProfile, usageProfile] = await Promise.all([
-      Object.keys(payloads.spec).length ? fetchSinhwaDirect(`/api/products/${encodeURIComponent(target.jcode)}/cost-profile`) : null,
-      Object.keys(payloads.usage).length ? fetchSinhwaDirect(`/api/products/${encodeURIComponent(target.jcode)}/usage-profile`) : null,
+      Object.keys(payloads.spec).length ? fetchTransfer(`/api/products/${encodeURIComponent(target.jcode)}/cost-profile`) : null,
+      Object.keys(payloads.usage).length ? fetchTransfer(`/api/products/${encodeURIComponent(target.jcode)}/usage-profile`) : null,
     ]);
     const specEcho = costProfile?.spec || {};
     const mismatches = [
@@ -28738,26 +28865,30 @@ async function factorySendSelectedFieldsToSinhwa(rows = factoryFieldTransferSele
     transfer.status = 'done';
     transfer.message = `신화사DB 전송 완료 · #${target.jcode} · ${supportedCount}/${supportedCount}개 재조회 일치`;
     transfer.results.sinhwa = { ok: true, target, count: supportedCount, fieldIds: selectedRows.map(row => row.id), checkedAt: Date.now() };
-    factoryLog(transfer.message, 'ok');
-    saveLastWorkNow();
-    factoryFieldTransferPatchUi();
+    factoryLog(transfer.message, 'ok', current);
     return true;
   } catch(error) {
     transfer.status = 'error';
     transfer.message = `신화사DB 전송 실패: ${error?.message || error}`;
     transfer.results.sinhwa = { ok: false, target, error: error?.message || String(error), checkedAt: Date.now() };
-    factoryLog(transfer.message, 'error');
-    saveLastWorkNow();
-    factoryFieldTransferPatchUi();
+    factoryLog(transfer.message, 'error', current);
     return false;
   }
 }
 
-async function factorySendSelectedFieldsToCafe24(rows = factoryFieldTransferSelectedRows()) {
-  const current = factoryRuntimeReadFactory();
-  const transfer = factoryFieldTransferState(current);
+async function factorySendSelectedFieldsToCafe24(rows = null, current = null, options = {}) {
+  if (!current) {
+    const receipt = await factoryRuntimeUpdateOwnedFactory(
+      'factory/fields:executeSelectedFieldTransfer',
+      'product-db',
+      draft => factorySendSelectedFieldsToCafe24(rows, draft, options),
+    );
+    factoryFieldTransferPatchUi();
+    return receipt.result;
+  }
+  const transfer = factoryFieldTransferState(current, { mutable: true });
   const target = factoryCafe24SelectedTransferTarget(current);
-  const fieldIds = (rows || []).filter(row => row.cafe24).map(row => row.id);
+  const fieldIds = (rows || factoryFieldTransferSelectedRows(current)).filter(row => row.cafe24).map(row => row.id);
   if (!target || !fieldIds.length) {
     transfer.status = 'error';
     transfer.target = 'cafe24';
@@ -28765,48 +28896,51 @@ async function factorySendSelectedFieldsToCafe24(rows = factoryFieldTransferSele
       ? '확정한 Cafe24 상품이 없습니다. 2번 DB 확정에서 Cafe24 상품을 먼저 고르세요.'
       : '선택한 값 중 Cafe24 기본 상품 API로 안전하게 전송할 수 있는 항목이 없습니다.';
     transfer.updatedAt = Date.now();
-    factoryFieldTransferPatchUi();
     return false;
   }
   transfer.status = 'running';
   transfer.target = 'cafe24';
   transfer.message = `Cafe24 상품 #${target.productNo}에 선택 ${fieldIds.length}개 전송 준비 중...`;
   transfer.updatedAt = Date.now();
-  factoryFieldTransferPatchUi();
   const result = await factorySaveCafe24ProductFromFinalDb({
     selectedFieldIds: fieldIds,
     applyFinalRegistrationSettings: false,
+    ...options.cafe24SaveOptions,
+    factory: current,
+    render: false,
   });
-  const refreshed = factoryFieldTransferState(factoryRuntimeReadFactory());
+  const refreshed = factoryFieldTransferState(current, { mutable: true });
   if (!result) {
     refreshed.status = 'error';
     refreshed.message = `Cafe24 선택 전송이 취소되었거나 실패했습니다. 상품 #${target.productNo}`;
     refreshed.results.cafe24 = { ok: false, target, fieldIds, checkedAt: Date.now() };
-    saveLastWorkNow();
-    factoryFieldTransferPatchUi();
     return false;
   }
-  const verification = factoryRuntimeReadFactory().product?.cafe24LastSaveVerification || {};
+  const verification = current.product?.cafe24LastSaveVerification || {};
   const verified = !verification.error && !verification.verification?.missing?.length && !verification.verification?.mismatches?.length;
   refreshed.status = verified ? 'done' : 'error';
   refreshed.message = verified
     ? `Cafe24 전송 완료 · 상품 #${target.productNo} · 선택 ${fieldIds.length}개 재조회 확인`
     : `Cafe24 전송 후 재조회 확인 필요 · 상품 #${target.productNo}`;
   refreshed.results.cafe24 = { ok: verified, target, fieldIds, verification, checkedAt: Date.now() };
-  saveLastWorkNow();
-  factoryFieldTransferPatchUi();
   return verified;
 }
 
-async function factoryExecuteSelectedFieldTransfer(target) {
-  const current = factoryRuntimeReadFactory();
-  const transfer = factoryFieldTransferState(current);
+async function factoryExecuteSelectedFieldTransfer(target, current = null) {
+  if (!current) {
+    return target === 'sinhwa'
+      ? factorySendSelectedFieldsToSinhwa()
+      : target === 'cafe24'
+        ? factorySendSelectedFieldsToCafe24()
+        : false;
+  }
+  const transfer = factoryFieldTransferState(current, { mutable: true });
   if (transfer.status === 'running') return false;
   const rows = factoryFieldTransferSelectedRows(current);
   return target === 'sinhwa'
-    ? factorySendSelectedFieldsToSinhwa(rows)
+    ? factorySendSelectedFieldsToSinhwa(rows, current)
     : target === 'cafe24'
-      ? factorySendSelectedFieldsToCafe24(rows)
+      ? factorySendSelectedFieldsToCafe24(rows, current)
       : false;
 }
 
@@ -29218,10 +29352,15 @@ registerBindEventExtension(function bindFactoryEvents() {
   };
 
   bindFactoryCriticalActions();
-  try {
-    factoryEnsureCafe24ReferenceLists();
-  } catch(e) {
-    console.warn('factoryEnsureCafe24ReferenceLists failed:', e);
+  const cafe24ReferenceTabs = new Set(['db', 'fields', 'publish']);
+  const factoryOperationActive = typeof factoryRuntimeRequireStore === 'function'
+    && factoryRuntimeRequireStore().hasActiveOperationLease();
+  if (!factoryOperationActive && cafe24ReferenceTabs.has(String(factory.automation?.activeTab || ''))) {
+    try {
+      factoryEnsureCafe24ReferenceLists();
+    } catch(e) {
+      console.warn('factoryEnsureCafe24ReferenceLists failed:', e);
+    }
   }
 
   const factoryDropClickShouldOpenFile = (event, drop) => {
@@ -30786,32 +30925,39 @@ async function runClassicRuntimeHydration(envelope) {
   installClassicRuntimeLifecycle();
   try {
     if (hasGeminiConnection()) gemini = createGeminiClient();
-    const hydrationWorkspaceScope = getCurrentLastWorkWorkspaceScope();
-    const hydrationProjectId = String(state.currentProjectId || '').trim();
-    const hydrationIdentityIsCurrent = () => getCurrentLastWorkWorkspaceScope() === hydrationWorkspaceScope
-      && String(state.currentProjectId || '').trim() === hydrationProjectId;
+    const readHydrationIdentity = () => Object.freeze({
+      scopeId: getCurrentLastWorkWorkspaceScope(),
+      projectId: String(state.currentProjectId || '').trim(),
+    });
+    const hydrationIdentityIsCurrent = identity => getCurrentLastWorkWorkspaceScope() === identity.scopeId
+      && String(state.currentProjectId || '').trim() === identity.projectId;
+    const initialHydrationIdentity = readHydrationIdentity();
     const hydrationResult = stale => Object.freeze({
       schema: envelope.schema,
       version: envelope.version,
       hydrated: true,
       stale,
     });
-    const initialWorkspaceAuthority = hydrationIdentityIsCurrent()
-      ? ensureWorkspaceEditAuthority(hydrationWorkspaceScope).catch(() => null)
+    const initialWorkspaceAuthority = hydrationIdentityIsCurrent(initialHydrationIdentity)
+      ? ensureWorkspaceEditAuthority(initialHydrationIdentity.scopeId).catch(() => null)
       : Promise.resolve(null);
     try { markSessionAssetFingerprintSaved(); } catch(e) {}
     loadCutsArchiveFolderStatus({ render: false }).catch(() => {});
     refreshWorkspaceLists().catch(() => {});
     await hydratePersistentSessionAssets().catch(() => {});
-    await initialWorkspaceAuthority;
-    if (!hydrationIdentityIsCurrent()) return hydrationResult(true);
-    await ensureWorkspaceEditAuthority(hydrationWorkspaceScope).catch(() => null);
-    if (!hydrationIdentityIsCurrent()) return hydrationResult(true);
+    let activeHydrationIdentity = initialHydrationIdentity;
+    let initialAuthority = await initialWorkspaceAuthority;
+    if (!hydrationIdentityIsCurrent(activeHydrationIdentity)) {
+      activeHydrationIdentity = readHydrationIdentity();
+      initialAuthority = await ensureWorkspaceEditAuthority(activeHydrationIdentity.scopeId).catch(() => null);
+    }
+    if (!hydrationIdentityIsCurrent(activeHydrationIdentity)
+      || (initialAuthority?.scopeId && initialAuthority.scopeId !== activeHydrationIdentity.scopeId)) return hydrationResult(true);
     await hydrateServerLastWorkSnapshot().catch(() => {});
     if (typeof factoryRestoreCurrentWorkfileLocalArchive === 'function') {
       await factoryRestoreCurrentWorkfileLocalArchive({ silent: true }).catch(() => null);
     }
-    const factoryProduct = state.factory?.product || {};
+    const factoryProduct = factoryRuntimeReadFactory()?.product || {};
     const hasProductWork = !!(
       state.productName ||
       state.imageBase64 ||
@@ -30824,8 +30970,10 @@ async function runClassicRuntimeHydration(envelope) {
     if (hasProductWork && typeof hydrateLastProductImageBackup === 'function') {
       await hydrateLastProductImageBackup({ restoreInline: true }).catch(() => false);
     }
+    if (state.step !== 'upload' && typeof showImageRestoreWarningIfNeeded === 'function') {
+      showImageRestoreWarningIfNeeded();
+    }
     await new Promise(resolve => setTimeout(resolve, 0));
-    if (factoryRuntimeStore) factoryRuntimeHydrateStoreFromBootstrap();
     return hydrationResult(false);
   } catch (error) {
     disposeClassicRuntimeLifecycle();

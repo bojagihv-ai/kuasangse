@@ -174,7 +174,7 @@ export function renderModelSettingsView(view = {}, capabilities) {
       </div>
 
       <!-- 픽셀 입력 (custom 모드에서만 활성화) -->
-      <div ${cfg.imageSizeMode!=='custom' ? 'title="custom px 모드를 선택하면 직접 입력할 수 있습니다."' : ''} style="display:flex;gap:12px;align-items:flex-end;${cfg.imageSizeMode!=='custom'?'opacity:.4':''}">
+      <div class="model-size-input-row ${cfg.imageSizeMode!=='custom' ? 'is-disabled' : ''}" ${cfg.imageSizeMode!=='custom' ? 'title="custom px 모드를 선택하면 직접 입력할 수 있습니다."' : ''}>
         <div class="input-group" style="margin-bottom:0;flex:1">
           <label class="label">가로 (W) px</label>
           <input type="number" class="input" id="imgWidthInput"
@@ -182,9 +182,9 @@ export function renderModelSettingsView(view = {}, capabilities) {
             placeholder="860" style="font-family:monospace"
             ${disabledAttr(cfg.imageSizeMode!=='custom', 'custom px 모드를 선택하면 가로 픽셀을 직접 입력할 수 있습니다.')}>
         </div>
-        <div style="padding-bottom:10px;color:var(--text-m);font-size:18px">×</div>
+        <div class="model-size-multiply">×</div>
         <div class="input-group" style="margin-bottom:0;flex:1">
-          <label class="label">세로 (H) px <span style="font-weight:400;color:var(--text-m)">(비워두면 비율 유지)</span></label>
+          <label class="label">세로 (H) px <span class="model-size-keep-ratio-note">(비워두면 비율 유지)</span></label>
           <input type="number" class="input" id="imgHeightInput"
             value="${cfg.imageHeight || ''}" min="64" max="4096" step="1"
             placeholder="비율 유지" style="font-family:monospace"
@@ -193,11 +193,11 @@ export function renderModelSettingsView(view = {}, capabilities) {
       </div>
 
       ${cfg.imageSizeMode === 'custom' ? `
-      <div style="margin-top:10px;padding:8px 12px;background:rgba(6,182,212,.08);border:1px solid rgba(6,182,212,.2);border-radius:6px;font-size:12px;color:var(--cyan)">
+      <div class="model-size-summary is-custom">
         📐 설정됨: ${cfg.imageWidth}px × ${cfg.imageHeight ? cfg.imageHeight+'px' : '(비율 유지)'}
         — AI 생성 후 Canvas로 정확히 리사이즈됩니다
       </div>` : `
-      <div style="margin-top:10px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-m)">
+      <div class="model-size-summary is-auto">
         🔄 auto 모드 — AI가 자유롭게 크기를 결정합니다
       </div>`}
     </div>

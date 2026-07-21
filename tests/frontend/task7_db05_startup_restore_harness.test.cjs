@@ -28,7 +28,7 @@ function validProof(token, seed) {
     fencingToken: 7, ownerId: 'DB05 owner', sessionId: 'db05-session', revision: 4,
   };
   const mutations = [
-    { method: 'POST', origin: appOrigin, path: '/api/workspace-lock/acquire' },
+    { method: 'POST', origin: backendOrigin, path: '/api/workspace-lock/acquire' },
     ...Array.from({ length: 4 }, () => ({ method: 'POST', origin: backendOrigin, path: '/api/last-work' })),
     { method: 'POST', origin: backendOrigin, path: '/api/cafe24-control/start' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },

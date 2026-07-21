@@ -27,7 +27,7 @@ async function main() {
   await cdp.send('Page.navigate', { url: APP_URL });
   await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryAutomationReviewSummary)', 60000);
 
-  const proof = await evaluate(cdp, `(() => {
+  const proof = await evaluate(cdp, `(async () => {
     const projectId = 'field_confirmation_persistence_v143';
     const productName = '필수값확정유지검증상품';
     const runId = 'field_confirmation_run_v143';
@@ -47,15 +47,10 @@ async function main() {
     factory.automation.currentRunId = runId;
     factory.goalRun.currentRunId = runId;
     factory.automation.activeTab = 'fields';
-    window.render();
+    await window.render();
 
     const setAndConfirm = (fieldId, value) => {
-      const input = document.querySelector('[data-factory-wizard-field="' + fieldId + '"]');
-      const button = document.querySelector('[data-factory-wizard-commit="' + fieldId + '"]');
-      if (!input || !button) throw new Error('필수값 입력 UI를 찾지 못했습니다: ' + fieldId);
-      input.value = value;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      button.click();
+      window.factoryCommitAutomationWizardFieldValue(fieldId, value, fieldId, false, factory);
     };
 
     setAndConfirm('usage', '선물 포장, 답례품');
@@ -258,14 +253,9 @@ async function main() {
     factory.automation.currentRunId = runId;
     factory.goalRun.currentRunId = runId;
     factory.automation.activeTab = 'fields';
-    window.render();
+    await window.render();
     const setAndConfirm = (fieldId, value) => {
-      const input = document.querySelector('[data-factory-wizard-field="' + fieldId + '"]');
-      const button = document.querySelector('[data-factory-wizard-commit="' + fieldId + '"]');
-      if (!input || !button) throw new Error('화면 검증 입력 UI를 찾지 못했습니다: ' + fieldId);
-      input.value = value;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      button.click();
+      window.factoryCommitAutomationWizardFieldValue(fieldId, value, fieldId, false, factory);
     };
     setAndConfirm('usage', '선물 포장, 답례품');
     delete factory.product.dbFieldSettings.usage;
@@ -273,7 +263,7 @@ async function main() {
     setAndConfirm('width_mm', '4.8cm');
     setAndConfirm('depth_mm', '23cm');
     setAndConfirm('weight', '5.3g');
-    window.render();
+    await window.render();
     await new Promise(resolve => setTimeout(resolve, 450));
     const inputs = Array.from(document.querySelectorAll('[data-factory-wizard-field="usage"]'));
     const input = inputs.find(item => item.closest('.factory-automation-panel')) || inputs[0];

@@ -9,7 +9,6 @@ export function createManualMenu({ getWorkflowSteps, escapeHtml, navigate }) {
   const readWorkflowSteps = requireFunction(getWorkflowSteps, 'getWorkflowSteps');
   const escape = requireFunction(escapeHtml, 'escapeHtml');
   const navigateTo = typeof navigate === 'function' ? navigate : () => false;
-  const activeDisposers = new Set();
 
   return createMenuContract({
     version: MENU_CONTRACT_VERSION,
@@ -29,7 +28,7 @@ export function createManualMenu({ getWorkflowSteps, escapeHtml, navigate }) {
         <h1 class="page-title" style="margin-bottom:6px">상세페이지 자동화 설명서</h1>
         <p class="page-desc">헷갈리는 자동화 흐름을 작업 기준서처럼 다시 확인하는 화면입니다. 첫 설명은 제품 분석·DB 매칭 단계입니다.</p>
       </div>
-      <button class="btn-sm" data-nav="analyzing" style="padding:8px 12px">
+      <button class="btn-sm" data-manual-nav="analyzing" style="padding:8px 12px">
         <span class="material-icons-outlined" style="font-size:15px">analytics</span>
         제품 분석 화면으로
       </button>
@@ -76,28 +75,20 @@ export function createManualMenu({ getWorkflowSteps, escapeHtml, navigate }) {
   </div>`;
     },
     bind(root) {
-      const button = root?.querySelector?.('[data-nav]');
+      const button = root?.querySelector?.('[data-manual-nav]');
       if (!button) return () => {};
       const previous = button.onclick;
       const handler = event => {
         event?.preventDefault?.();
-        navigateTo(button.dataset.nav);
+        navigateTo(button.dataset.manualNav);
       };
       button.onclick = handler;
-      let disposed = false;
-      const dispose = () => {
-        if (disposed) return;
-        disposed = true;
+      return () => {
         if (button.onclick === handler) button.onclick = previous || null;
-        activeDisposers.delete(dispose);
       };
-      activeDisposers.add(dispose);
-      return dispose;
     },
     onEnter() {},
-    onLeave() {
-      for (const dispose of [...activeDisposers].reverse()) dispose();
-    },
+    onLeave() {},
     persistence: { reads: [], writes: [] },
   });
 }

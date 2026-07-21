@@ -406,7 +406,7 @@ function factoryNormalizeAssetImageReference(asset = {}) {
 }
 
 function factoryRuntimeBackendBaseUrl() {
-  const candidates = [state?.backendBaseUrl];
+  const candidates = [];
   try {
     if (typeof loadBackendUrl === 'function') candidates.push(loadBackendUrl());
   } catch (_) {}
@@ -506,7 +506,7 @@ function factoryAssetDisplayImageCacheMatches(asset, cached) {
     cached.metadataImageLoadFailed === metadata.imageLoadFailed &&
     cached.metadataImageLoadFailedAt === metadata.imageLoadFailedAt &&
     cached.metadataImageLoadFailedSrc === metadata.imageLoadFailedSrc &&
-    cached.backendBaseUrl === state?.backendBaseUrl;
+    cached.backendBaseUrl === factoryRuntimeBackendBaseUrl();
 }
 
 function factoryRememberAssetDisplayImage(asset, image) {
@@ -541,7 +541,7 @@ function factoryRememberAssetDisplayImage(asset, image) {
     metadataImageLoadFailed: metadata.imageLoadFailed,
     metadataImageLoadFailedAt: metadata.imageLoadFailedAt,
     metadataImageLoadFailedSrc: metadata.imageLoadFailedSrc,
-    backendBaseUrl: state?.backendBaseUrl,
+    backendBaseUrl: factoryRuntimeBackendBaseUrl(),
     value: image,
   };
   factoryAssetDisplayImageCache.set(asset, cached);
@@ -3123,16 +3123,21 @@ async function compactWorkspaceExistingImagePayloads(projects = [], snapshots = 
 }
 
 function buildWorkspacePayload(options = {}) {
+  const factorySnapshot = cloneData(
+    options.factorySnapshot
+      || (typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : state.factory)
+      || {},
+  );
   try {
-    if (state.currentProjectId && state.factory) {
-      factoryStampWorkspaceIdentity(state.factory, {
+    if (state.currentProjectId) {
+      factoryStampWorkspaceIdentity(factorySnapshot, {
         projectId: state.currentProjectId,
         projectName: state.currentProjectName || deriveProjectName(),
         createdAt: state.currentProjectCreatedAt || null,
       });
     }
     if (typeof factoryEnsureCurrentDetailHtmlAsset === 'function') {
-      factoryEnsureCurrentDetailHtmlAsset(state.factory || (typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : {}));
+      factoryEnsureCurrentDetailHtmlAsset(factorySnapshot);
     }
   } catch(e) {
     console.warn('Detail preview preserve before workspace payload failed:', e);
@@ -3200,8 +3205,8 @@ function buildWorkspacePayload(options = {}) {
     hiddenSectionIds: cloneData(state.hiddenSectionIds || []),
     customSections: cloneData(state.customSections || []),
     compPage: state.compPage || {},
-    factory: state.factory || {},
-    assetPayload: currentSessionAssetsPayload({ includeImages: false }),
+    factory: factorySnapshot,
+    assetPayload: currentSessionAssetsPayload({ includeImages: false, factorySnapshot }),
     savedAt: Date.now(),
   };
   const payload = buildLightweightSessionPayload(rawPayload);
@@ -3273,6 +3278,7 @@ function restoreProjectFileFactoryAssetsFromPayload(workspaceAssetPayload = {}, 
     mode: 'hydrate',
     reason: 'project-file-factory-assets',
     workspaceId: projectId,
+    normalized: true,
   });
   return true;
 }
@@ -3307,7 +3313,7 @@ function persistAppliedWorkspacePayloadSideEffects(options = {}) {
 
 function applyWorkspacePayload(payload, options = {}) {
   if (!payload) return;
-  const next = cloneData(payload);
+  const next = options.payloadAlreadyDetached === true ? payload : cloneData(payload);
   state.currentProjectId = options.projectId !== undefined ? options.projectId : (state.currentProjectId || '');
   state.currentProjectName = next.name || '';
   state.currentProjectCreatedAt = options.createdAt || state.currentProjectCreatedAt || Date.now();
@@ -3420,6 +3426,7 @@ function applyWorkspacePayload(payload, options = {}) {
     mode: 'hydrate',
     reason: 'workspace-payload',
     workspaceId: state.currentProjectId,
+    normalized: true,
   });
   const workspaceAssetPayload = next.assetPayload || next.sessionAssets || next.assetsPayload || null;
   if (workspaceAssetPayload) {
@@ -3443,7 +3450,7 @@ function applyWorkspacePayload(payload, options = {}) {
       });
     }
   }
-  if (next.productImageBackup) {
+  if (next.productImageBackup && !workspaceAssetPayload?.productImageBackup) {
     applyProductImageBackupPayload(next.productImageBackup, { restoreInline: true, force: true });
   }
   if (options.skipSideEffects !== true) persistAppliedWorkspacePayloadSideEffects();
@@ -3483,11 +3490,17 @@ async function refreshWorkspaceLists(renderAfter = true) {
 }
 
 async function saveCurrentProject() {
+  await settleWorkspaceScopeTransitionPersistence();
+  workspaceScopeTransitionInProgress = true;
   state.projectBusy = true;
   render();
   try {
-    const previousWorkspaceId = factoryWorkspaceIdentityFromSource(state.factory).id;
-    const previousCandidateWorkspaceId = factoryCurrentWorkspaceId(state.factory);
+    const currentFactory = factoryRuntimeNormalizeFactorySnapshot(factoryRuntimeReadFactory());
+    const previousWorkspaceId = factoryWorkspaceIdentityFromSource(currentFactory).id;
+    const previousCandidateWorkspaceId = factoryCurrentWorkspaceId(currentFactory);
+    const previousStoreWorkspaceId = String(
+      factoryRuntimeStore?.getOperationToken?.()?.workspaceId || previousCandidateWorkspaceId,
+    ).trim();
     const id = state.currentProjectId || uid('project');
     const existing = state.currentProjectId ? await workspaceGet(WORKSPACE_DB.projects, id) : null;
     const name = deriveProjectName();
@@ -3499,6 +3512,20 @@ async function saveCurrentProject() {
     state.currentProjectId = id;
     state.currentProjectName = name;
     state.currentProjectCreatedAt = createdAt;
+    factoryStampWorkspaceIdentity(currentFactory, { projectId: id, projectName: name, createdAt });
+    factoryMigrateReviewCandidateWorkspaceScope(currentFactory, previousCandidateWorkspaceId, id);
+    factoryStampFactoryItemsWorkspaceIdentity(currentFactory, id, {
+      previousWorkspaceId,
+      force: !previousWorkspaceId || previousWorkspaceId === id || !existing,
+    });
+    if (previousStoreWorkspaceId !== id) {
+      factoryRuntimeReplaceFactorySnapshot(currentFactory, {
+        mode: 'hydrate',
+        workspaceId: id,
+        reason: 'project-save-workspace-transition',
+        normalized: true,
+      });
+    }
     if (state.factory) {
       factoryStampWorkspaceIdentity(state.factory, { projectId: id, projectName: name, createdAt });
       factoryMigrateReviewCandidateWorkspaceScope(state.factory, previousCandidateWorkspaceId, id);
@@ -3550,8 +3577,12 @@ async function saveCurrentProject() {
   } catch (e) {
     state.error = `작업 저장 실패: ${e.message}`;
   } finally {
+    const persistAfterTransition = persistentStateSaveQueued;
+    workspaceScopeTransitionInProgress = false;
+    persistentStateSaveQueued = false;
     state.projectBusy = false;
     render();
+    if (persistAfterTransition) savePersistentState();
   }
 }
 
@@ -4200,15 +4231,18 @@ function validateFactoryProjectFileBundle(bundle) {
 
 async function buildFactoryProjectFileBundle(options = {}) {
   const identity = factoryEnsureCurrentProjectIdentityForFile(options.name);
+  const factorySnapshot = cloneData(factoryRuntimeReadFactory());
   const inlineProductImageBackup = compactProductImageBackupPayload() || null;
   const payload = buildWorkspacePayload({
     productImageBackup: inlineProductImageBackup || productImageBackupReferencePayload(),
+    factorySnapshot,
   });
   payload.assetPayload = currentSessionAssetsPayload({
     includeImages: true,
     preserveSectionImages: true,
     preserveRecentWorkingImages: true,
     preserveSelectedFactoryImages: true,
+    factorySnapshot,
   });
   payload.fixedDetailImages = cloneData(state.fixedDetailImages || loadFixedDetailImages());
   payload.productImageBackup = inlineProductImageBackup || payload.assetPayload?.productImageBackup || payload.productImageBackup;
@@ -4510,6 +4544,10 @@ function parseFactoryProjectFileBundle(text = '') {
 
 async function importFactoryProjectFileBundle(bundle, options = {}) {
   const startedAt = performance.now();
+  let preflightStateBackup = null;
+  try {
+    if (typeof structuredClone === 'function') preflightStateBackup = structuredClone(state);
+  } catch (_) {}
   state.workfileRestoreState = 'loading';
   state.workfileRestoreMessage = '';
   state.workfileRestoreDurationMs = null;
@@ -4534,10 +4572,27 @@ async function importFactoryProjectFileBundle(bundle, options = {}) {
   let visualValidationBatch = null;
   try {
     state.workfileRestoreState = 'validating';
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => setTimeout(resolve, 0));
     const validation = validateFactoryProjectFileBundle(bundle);
     const project = bundle.project;
     const projectId = validation.projectId;
+    targetScope = workspacePersistenceApi().normalizeWorkspaceScope(`project:${projectId}`);
+    previousAuthority = currentWorkspaceAuthority();
+    const targetAuthority = await ensureWorkspaceEditAuthority(targetScope);
+    const currentTargetAuthority = currentWorkspaceAuthority();
+    const targetAuthorityIsEditable = targetAuthority?.mode === 'editing'
+      && targetAuthority.scopeId === targetScope
+      && currentTargetAuthority?.mode === 'editing'
+      && currentTargetAuthority.scopeId === targetScope;
+    if (!targetAuthorityIsEditable) {
+      if (previousAuthority?.scopeId && previousAuthority.scopeId !== targetScope
+        && ['editing', 'offline-edit'].includes(previousAuthority.mode)) {
+        await ensureWorkspaceEditAuthority(previousAuthority.scopeId).catch(() => null);
+      }
+      throw new Error('이 작업은 다른 창에서 편집 중입니다. 편집권을 가져온 뒤 다시 불러오세요.');
+    }
+    targetAuthorityAcquired = previousAuthority?.mode !== 'editing'
+      || previousAuthority.scopeId !== targetScope;
     const restoredWorkfile = await workspacePersistenceApi().restore({
       scopeId: `project:${projectId}`,
       explicitWorkfile: bundle,
@@ -4554,7 +4609,7 @@ async function importFactoryProjectFileBundle(bundle, options = {}) {
       currentProjectCreatedAt: createdAt,
     });
     const payload = prepareFactoryProjectFilePayload(hydratedPayload, validation.manifest);
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    await new Promise(resolve => setTimeout(resolve, 0));
     const preparedManifest = factoryProjectFileBuildManifest(payload, { id: projectId, name });
     payload.projectFileManifest = preparedManifest;
     const stagedBundle = {
@@ -4569,18 +4624,7 @@ async function importFactoryProjectFileBundle(bundle, options = {}) {
     liveStateBackup = structuredClone(state);
     factoryStoreBackup = factoryRuntimeDetachedValue(factoryStore.getSnapshot());
     factoryOperationBackup = factoryStore.getOperationToken();
-    previousAuthority = currentWorkspaceAuthority();
-    targetScope = workspacePersistenceApi().normalizeWorkspaceScope(`project:${projectId}`);
-    const targetAuthority = await ensureWorkspaceEditAuthority(targetScope);
-    const currentTargetAuthority = currentWorkspaceAuthority();
-    if (targetAuthority?.mode !== 'editing'
-      || targetAuthority.scopeId !== targetScope
-      || currentTargetAuthority?.mode !== 'editing'
-      || currentTargetAuthority.scopeId !== targetScope) {
-      throw new Error('이 작업은 다른 창에서 편집 중입니다. 편집권을 가져온 뒤 다시 불러오세요.');
-    }
-    targetAuthorityAcquired = previousAuthority?.mode !== 'editing'
-      || previousAuthority.scopeId !== targetScope;
+    await new Promise(resolve => setTimeout(resolve, 0));
     liveMutationStarted = true;
     if (typeof markWorkspaceBlankResetBoundary === 'function') {
       markWorkspaceBlankResetBoundary();
@@ -4596,18 +4640,22 @@ async function importFactoryProjectFileBundle(bundle, options = {}) {
       skipSideEffects: true,
       replaceWorkspace: true,
       validatedProjectFileRestore: true,
+      payloadAlreadyDetached: true,
     });
     factoryEnsureCurrentProjectIdentityForFile(name, {
       projectId,
       previousWorkspaceId: factoryWorkspaceIdentityFromSource(factoryRuntimeReadFactory()).id,
       createdAt,
     });
-    const importOperationToken = factoryRuntimeRequireStore().getOperationToken();
+    await new Promise(resolve => setTimeout(resolve, 0));
     factoryPrimeCurrentAssetVisualValidation(factoryRuntimeDetachedValue(factoryRuntimeReadFactory()));
     await factoryWaitForVisualValidationOperation(visualValidationBatch.token);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const importOperationToken = factoryRuntimeRequireStore().getOperationToken();
     const authorityBeforePersist = currentWorkspaceAuthority();
     if (authorityBeforePersist?.mode !== 'editing'
       || authorityBeforePersist.scopeId !== targetScope
+      || (targetAuthority?.fencingToken && authorityBeforePersist.fencingToken !== targetAuthority.fencingToken)
       || !factoryRuntimeRequireStore().isOperationCurrent(importOperationToken)) {
       throw new Error('작업파일을 적용하는 동안 편집권이 변경되었습니다. 현재 작업은 이전 상태로 복원됩니다.');
     }
@@ -4640,6 +4688,10 @@ async function importFactoryProjectFileBundle(bundle, options = {}) {
     return { projectId, name, createdAt };
   } catch (error) {
     let rollbackFailure = null;
+    if (!liveMutationStarted && preflightStateBackup) {
+      Object.keys(state).forEach(key => { delete state[key]; });
+      Object.assign(state, preflightStateBackup);
+    }
     if (liveMutationStarted && liveStateBackup && factoryStoreBackup && factoryOperationBackup && !durableCommitCompleted) {
       Object.keys(state).forEach(key => { delete state[key]; });
       Object.assign(state, liveStateBackup);
@@ -5006,6 +5058,7 @@ async function resetActiveWorkspaceDocumentCore() {
     mode: 'hydrate',
     reason: 'blank-workspace-reset',
     workspaceId: draftScope,
+    blankDraftReset: true,
   });
   state.step = 'factory';
   saveSectionInstructions({});
@@ -5189,7 +5242,7 @@ function captureCurrentSectionVariant(sectionId, source = 'baseline', label = ''
   return rememberSectionVariant(sectionId, state.sectionContents[sectionId], state.sectionImages[sectionId] || null, source, label);
 }
 
-function applySectionContent(sectionId, content, imageData, source = 'variant', label = '') {
+function applySectionContent(sectionId, content, imageData, source = 'variant', label = '', options = {}) {
   const effectiveImage = imageData === undefined ? (state.sectionImages[sectionId] || null) : imageData;
   const scopedContent = cloneData(content);
   if (typeof stampSectionContentWorkScope === 'function') {
@@ -5204,7 +5257,7 @@ function applySectionContent(sectionId, content, imageData, source = 'variant', 
   if (typeof queueSectionContentLocalArchive === 'function') {
     queueSectionContentLocalArchive(sectionId, state.sectionContents[sectionId], effectiveImage, source, label);
   }
-  markContentChanged();
+  markContentChanged(options.persist !== false);
 }
 
 function applySectionVariant(sectionId, variantId) {
@@ -7360,7 +7413,33 @@ function factoryRuntimeFreezeDetachedValue(value, seen = new WeakSet()) {
   return Object.freeze(value);
 }
 
+var factoryRuntimeOwnedRenderDraft = null;
+const FACTORY_RUNTIME_OWNED_RENDER_COMMANDS = new Set([
+  'factory/runtime:updateFromInputs',
+  'factory/runtime:preserveDetailHtml',
+  'factory/runtime:saveSnapshotMetadata',
+]);
+const FACTORY_RUNTIME_DEFER_DURING_OPERATION_COMMANDS = new Set([
+  'factory/runtime:updateFromInputs',
+  'factory/runtime:preserveDetailHtml',
+  'factory/runtime:saveSnapshotMetadata',
+  'factory/runtime:completeVisualValidation',
+  'factory/runtime:clearForeignCompetitorRunCount',
+]);
+
+function factoryRuntimeRenderWithOwnedDraft(factory, renderer = render) {
+  if (!factory || typeof factory !== 'object') return renderer();
+  const previous = factoryRuntimeOwnedRenderDraft;
+  factoryRuntimeOwnedRenderDraft = factory;
+  try {
+    return renderer();
+  } finally {
+    factoryRuntimeOwnedRenderDraft = previous;
+  }
+}
+
 function factoryRuntimeReadFactory() {
+  if (factoryRuntimeOwnedRenderDraft) return factoryRuntimeOwnedRenderDraft;
   if (factoryRuntimeStore) {
     const current = factoryRuntimeStore.getSnapshot()?.factory;
     return current && typeof current === 'object' ? current : Object.freeze({});
@@ -7368,6 +7447,15 @@ function factoryRuntimeReadFactory() {
   return factoryRuntimeFreezeDetachedValue(factoryRuntimeDetachedValue(
     factoryRuntimeBootstrapFactory || state.factory || {},
   ));
+}
+
+function factoryRuntimeReadViewSnapshot() {
+  const snapshot = factoryRuntimeRequireStore().getSnapshot();
+  if (!factoryRuntimeOwnedRenderDraft) return snapshot;
+  return Object.freeze({
+    ...snapshot,
+    factory: factoryRuntimeFreezeDetachedValue(factoryRuntimeDetachedValue(factoryRuntimeOwnedRenderDraft)),
+  });
 }
 
 function factoryRuntimeNormalizeFactorySnapshot(value) {
@@ -7381,10 +7469,12 @@ function factoryRuntimeNormalizeFactorySnapshot(value) {
   return initialFactory;
 }
 
-function factoryRuntimeInitialSnapshot(factory = factoryRuntimeBootstrapFactory || state.factory || {}) {
-  const initialFactory = factoryRuntimeNormalizeFactorySnapshot(factory);
+function factoryRuntimeInitialSnapshot(factory = factoryRuntimeBootstrapFactory || state.factory || {}, options = {}) {
+  const initialFactory = options.normalized === true
+    ? factory
+    : factoryRuntimeNormalizeFactorySnapshot(factory);
   const product = initialFactory.product || {};
-  return factoryRuntimeDetachedValue({
+  const snapshot = {
     factory: initialFactory,
     productDb: { product },
     competitors: { compPage: state.compPage || {} },
@@ -7404,14 +7494,20 @@ function factoryRuntimeInitialSnapshot(factory = factoryRuntimeBootstrapFactory 
       syncResults: product.cafe24SyncResults || {},
       openMarketSync: initialFactory.openMarketSync || {},
     },
-  });
+  };
+  return options.detach === false ? snapshot : factoryRuntimeDetachedValue(snapshot);
 }
 
 function factoryRuntimeReplaceFactorySnapshot(value, options = {}) {
-  const nextFactory = factoryRuntimeNormalizeFactorySnapshot(value);
+  const nextFactory = options.normalized === true
+    ? value
+    : factoryRuntimeNormalizeFactorySnapshot(value);
+  if (!nextFactory || typeof nextFactory !== 'object') {
+    throw new TypeError('factory snapshot must be an object');
+  }
   if (!factoryRuntimeStore) {
-    factoryRuntimeBootstrapFactory = nextFactory;
-    return nextFactory;
+    factoryRuntimeBootstrapFactory = factoryRuntimeDetachedValue(nextFactory);
+    return factoryRuntimeBootstrapFactory;
   }
   const store = factoryRuntimeRequireStore();
   const operationToken = store.getOperationToken();
@@ -7422,13 +7518,18 @@ function factoryRuntimeReplaceFactorySnapshot(value, options = {}) {
     const takeoverIdentity = options.takeoverAuthority
       ? workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority)
       : null;
-    if (!takeoverIdentity) store.assertMutable('factory');
     const workspaceId = String(
       options.workspaceId || state.currentProjectId || nextFactory.workspace?.id || operationToken.workspaceId,
     ).trim() || operationToken.workspaceId;
+    const blankDraftReset = options.blankDraftReset === true
+      && typeof workspaceBlankResetInProgress !== 'undefined'
+      && workspaceBlankResetInProgress === true
+      && /^draft:/.test(workspaceId)
+      && !String(state.currentProjectId || '').trim();
+    if (!takeoverIdentity && !blankDraftReset) store.assertMutable('factory');
     const revision = operationToken.workspaceId === workspaceId ? operationToken.revision + 1 : 0;
     store.switchWorkspace(workspaceId, {
-      snapshot: factoryRuntimeInitialSnapshot(nextFactory),
+      snapshot: factoryRuntimeInitialSnapshot(nextFactory, { normalized: true, detach: false }),
       revision,
     });
   } else {
@@ -7442,6 +7543,13 @@ function factoryRuntimeReplaceFactorySnapshot(value, options = {}) {
 
 function factoryRuntimeUpdateOwnedFactory(commandName, owner, mutator) {
   if (typeof mutator !== 'function') throw new TypeError('factory owned update requires a mutator');
+  if (factoryRuntimeOwnedRenderDraft && FACTORY_RUNTIME_OWNED_RENDER_COMMANDS.has(commandName)) {
+    return Object.freeze({
+      snapshot: Object.freeze({ factory: factoryRuntimeOwnedRenderDraft }),
+      result: mutator(factoryRuntimeOwnedRenderDraft),
+      assignments: Object.freeze([]),
+    });
+  }
   if (!factoryRuntimeStore) {
     const factory = factoryRuntimeNormalizeFactorySnapshot(factoryRuntimeBootstrapFactory || state.factory || {});
     const result = mutator(factory);
@@ -7452,6 +7560,13 @@ function factoryRuntimeUpdateOwnedFactory(commandName, owner, mutator) {
     });
   }
   const store = factoryRuntimeRequireStore();
+  if (store.hasActiveOperationLease() && FACTORY_RUNTIME_DEFER_DURING_OPERATION_COMMANDS.has(commandName)) {
+    return Object.freeze({
+      snapshot: store.getSnapshot(),
+      result: false,
+      assignments: Object.freeze([]),
+    });
+  }
   const operationToken = store.getOperationToken();
   return store.updateDraft(
     mutator,
@@ -7471,18 +7586,10 @@ function factoryRuntimeRequireStore() {
   return factoryRuntimeStore;
 }
 
-function factoryRuntimeHydrateStoreFromBootstrap() {
-  const store = factoryRuntimeRequireStore();
-  const current = store.getOperationToken();
-  const workspaceId = factoryRuntimeWorkspaceId();
-  const revision = current.workspaceId === workspaceId ? current.revision + 1 : 0;
-  return store.switchWorkspace(workspaceId, {
-    snapshot: factoryRuntimeInitialSnapshot(),
-    revision,
-  });
-}
-
 function factoryRuntimeIsOperationCurrent(operationToken) {
+  if (typeof operationToken === 'string') {
+    return operationToken === currentRuntimeMenuOperationToken();
+  }
   return factoryRuntimeRequireStore().isOperationCurrent(operationToken);
 }
 
@@ -7514,6 +7621,9 @@ function factoryRuntimeCreateCommandPolicies() {
     'automation.skippedTasks', 'automation.startRunCounts', 'automation.lastWizardActionAt',
   ]);
   const factoryUpdatedAt = part('factory', ['automation.updatedAt']);
+  const factoryFieldUpdatedAt = part('factory', [
+    'automation.lastWizardActionAt', 'automation.updatedAt',
+  ]);
   const factoryWorkflow = part('factory', [
     'automation', 'goalRun', 'logs', 'logStageId', 'activeStage', 'uiPanels',
   ]);
@@ -7543,6 +7653,7 @@ function factoryRuntimeCreateCommandPolicies() {
   const factoryWorkflowAssets = part('factory-assets', [
     'stages', 'assets', 'previousAssets', 'detailPlacement', 'archive',
     'assetListExpanded', 'previousAssetsExpanded',
+    'runtimeAssetPrunedAt', 'runtimeAssetPrunedCount',
   ]);
   const detailDocument = part('detail-document', [
     'automation.sectionPromptPlan',
@@ -7683,7 +7794,7 @@ function factoryRuntimeCreateCommandPolicies() {
     part('factory', ['logs', 'logStageId']),
   ]);
   add(['factory/runtime:archiveCurrentInputImage'], 'factory-assets', [
-    part('factory-assets', ['archive']),
+    part('factory-assets', ['assets', 'archive', 'runtimeAssetPrunedAt', 'runtimeAssetPrunedCount']),
     part('factory', ['logs', 'logStageId']),
   ]);
   add([
@@ -7925,6 +8036,14 @@ function factoryRuntimeCreateCommandPolicies() {
   ]);
 
   add(['factory:selectFactoryTab'], 'factory', [factoryNavigation, factoryUpdatedAt]);
+  add(['factory:jumpFactoryStage'], 'factory', [
+    factoryNavigation,
+    factoryUpdatedAt,
+    part('factory', ['activeStage']),
+  ]);
+  add(['factory:setFactoryStageLogFilter'], 'factory', [
+    part('factory', ['stageLogFilter']),
+  ]);
   add([
     'factory/start:setStartCount', 'factory/start:confirmTask', 'factory/start:skipTask',
   ], 'factory', [factoryStart, factoryUpdatedAt]);
@@ -7937,7 +8056,12 @@ function factoryRuntimeCreateCommandPolicies() {
   add(['factory/start:setProductImage'], 'factory', [
     product, factoryWorkflowAssets, factoryAssetStatus,
   ]);
-  add(['factory/start:runDb'], 'factory', [factoryWorkflow, product, factoryWorkflowAssets]);
+  add(['factory/start:runDb'], 'factory', [
+    factoryWorkflow,
+    product,
+    factoryWorkflowAssets,
+    part('cafe24', ['openMarketSync']),
+  ]);
 
   add(['factory/db:rerunDbVmOnly'], 'product-db', [factoryWorkflow, product]);
   add(['factory/db:runDb'], 'product-db', [factoryWorkflow, product, factoryWorkflowAssets]);
@@ -7961,9 +8085,13 @@ function factoryRuntimeCreateCommandPolicies() {
   add([
     'factory/fields:setFieldDraft', 'factory/fields:commitField',
     'factory/fields:commitAllFields', 'factory/fields:editField',
+  ], 'product-db', [product, productDbUi, factoryFieldUpdatedAt]);
+  add([
     'factory/fields:setFieldTransferSelection', 'factory/fields:clearFieldTransferSelection',
+  ], 'product-db', [productDbUi]);
+  add([
     'factory/fields:executeSelectedFieldTransfer',
-  ], 'product-db', [product, productDbUi, factoryUpdatedAt]);
+  ], 'product-db', [product, productDbUi, factoryAssetLogStatus]);
   add([
     'factory/fields:guide:go-tab:assets', 'factory/fields:guide:open-field-review',
     'factory/fields:guide:focus-missing-field-source', 'factory/fields:guide:run-size-now',
@@ -8043,7 +8171,10 @@ function factoryRuntimeCreateCommandPolicies() {
     'factory/assets:addFactoryCompletedFiles', 'factory/assets:openFactoryOptionSorter',
   ], 'factory-assets', [factoryAssets, factoryAssetStatus, product, productDbUi, factoryUpdatedAt]);
   add(['factory/assets:archiveFactoryAsset'], 'factory-assets', [
-    part('factory-assets', ['assets', 'archive']), factoryAssetLogStatus,
+    part('factory-assets', [
+      'assets', 'archive', 'runtimeAssetPrunedAt', 'runtimeAssetPrunedCount',
+    ]),
+    factoryAssetLogStatus,
   ]);
   add(['factory/source:promoteCutsInputFile'], 'factory-assets', [
     product,
@@ -8119,6 +8250,29 @@ function factoryRuntimeBridgeAction(actionName, operationContext, execute, optio
     : finishWrite(transaction);
 }
 
+function factoryRuntimeWithOperationLease(operationKey, operationContext, execute) {
+  if (typeof execute !== 'function') throw new TypeError('factory runtime leased action requires execute');
+  const store = factoryRuntimeRequireStore();
+  const operationToken = operationContext?.operationToken || store.getOperationToken();
+  const lease = store.acquireOperationLease(operationKey, operationToken);
+  if (!lease.acquired) return false;
+  const release = () => lease.release();
+  try {
+    const result = execute(Object.freeze({
+      operationToken,
+      operationSignal: lease.signal,
+    }));
+    if (result && typeof result.then === 'function') {
+      return Promise.resolve(result).finally(release);
+    }
+    release();
+    return result;
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
 function factoryRuntimeFollowupCommandReceipt(receipt, value) {
   return Object.freeze({
     ...receipt,
@@ -8143,7 +8297,7 @@ function factoryRuntimeReportError(error) {
 
 function factoryRuntimeCapabilities(actions, renderHelpers, owner = 'factory') {
   return {
-    getSnapshot: () => factoryRuntimeRequireStore().getSnapshot(),
+    getSnapshot: factoryRuntimeReadViewSnapshot,
     assertMutable: requestedOwner => factoryRuntimeRequireStore().assertMutable(requestedOwner || owner),
     getOperationToken: () => factoryRuntimeRequireStore().getOperationToken(),
     isOperationCurrent: factoryRuntimeIsOperationCurrent,
@@ -8185,38 +8339,94 @@ function selectFactoryTab(fullId, operationContext) {
   );
 }
 
+const FACTORY_STAGE_TAB_MAP = Object.freeze({
+  db: 'db',
+  hero: 'assets',
+  size: 'assets',
+  options: 'assets',
+  cuts: 'assets',
+  detail: 'sections',
+  export: 'publish',
+});
+
+function jumpFactoryStage(stageId, operationContext) {
+  const id = String(stageId || '').trim();
+  const tabId = FACTORY_STAGE_TAB_MAP[id];
+  if (!tabId) throw new Error(`unknown factory stage jump: ${id || '<empty>'}`);
+  return factoryRuntimeBridgeAction('factory:jumpFactoryStage', operationContext, draft => {
+    factoryRuntimeApplyTabSelection(draft, `factory/${tabId}`);
+    draft.activeStage = id;
+    if (tabId === 'assets') {
+      draft.uiPanels = draft.uiPanels && typeof draft.uiPanels === 'object' ? draft.uiPanels : {};
+      draft.uiPanels.assets = true;
+    }
+    const selector = tabId === 'assets'
+      ? `#factoryAutomationAssetChooser_${id}`
+      : '.factory-automation-body';
+    setTimeout(() => document.querySelector(selector)?.scrollIntoView?.({ behavior: 'auto', block: 'start' }), 0);
+    return id;
+  }, { render: true });
+}
+
+function setFactoryStageLogFilter(filter, operationContext) {
+  const value = String(filter || '').trim();
+  const allowed = new Set(['all', 'db', 'hero', 'size', 'options', 'cuts', 'detail', 'export', 'general']);
+  if (!allowed.has(value)) throw new Error(`unknown factory stage log filter: ${value || '<empty>'}`);
+  return factoryRuntimeBridgeAction('factory:setFactoryStageLogFilter', operationContext, draft => {
+    draft.stageLogFilter = value;
+    return value;
+  }, { render: true });
+}
+
+function runFactoryShellGuideAction(action) {
+  const value = String(action || '').trim();
+  if (value === 'open-vm-capture') return compMarketOpenVisibleVmCapture();
+  if (value === 'resume-comp-market-detail') return compMarketResumeDetailJob();
+  throw new Error(`unknown factory shell guide action: ${value || '<empty>'}`);
+}
+
 function factoryRuntimeStartActions() {
   return {
     runDb(value = {}, operationContext) {
-      const operationToken = operationContext?.operationToken || factoryRuntimeRequireStore().getOperationToken();
-      let promotionResult = null;
-      const transaction = factoryRuntimeBridgeAction('factory/start:runDb', { ...operationContext, operationToken }, async draft => {
-        const current = draft;
-        factorySetCurrentProductIdentity(value.productName || '', { factory: current, syncDom: true, syncFinal: true });
-        current.product.naturalHint = String(value.naturalHint || '');
-        promotionResult = await factoryPromoteStoredProductCandidateToInput({
-          quiet: true,
-          render: false,
-          save: false,
-          requireInputSource: true,
-          factory: current,
-          operationToken,
+      return factoryRuntimeWithOperationLease('factory/start:runDb', operationContext, operation => {
+        let promotionResult = null;
+        const transaction = factoryRuntimeBridgeAction(
+          'factory/start:runDb',
+          { ...operationContext, operationToken: operation.operationToken },
+          async draft => {
+            const current = draft;
+            factorySetCurrentProductIdentity(value.productName || '', { factory: current, syncDom: true, syncFinal: true });
+            current.product.naturalHint = String(value.naturalHint || '');
+            promotionResult = await factoryPromoteStoredProductCandidateToInput({
+              quiet: true,
+              render: false,
+              save: false,
+              requireInputSource: true,
+              factory: current,
+              operationToken: operation.operationToken,
+            });
+            current.automation.activeTab = 'db';
+            current.automation.activeTaskId = 'db-select';
+            current.automation.lastWizardActionAt = Date.now();
+            scheduleLastWorkSave(1200);
+            return factoryRunDbCompetitorHeroCutsFlow({
+              factory: draft,
+              operationToken: operation.operationToken,
+              operationSignal: operation.operationSignal,
+            });
+          },
+          { render: true },
+        );
+        return Promise.resolve(transaction).then(receipt => {
+          if (promotionResult?.ok && typeof factoryFinalizeStoredProductPromotion === 'function') {
+            factoryFinalizeStoredProductPromotion(promotionResult, {
+              operationToken: receipt.operationToken,
+              render: false,
+              save: false,
+            });
+          }
+          return receipt;
         });
-        current.automation.activeTab = 'db';
-        current.automation.activeTaskId = 'db-select';
-        current.automation.lastWizardActionAt = Date.now();
-        scheduleLastWorkSave(1200);
-        return factoryRunDbCompetitorHeroCutsFlow({ factory: draft, operationToken });
-      }, { render: true });
-      return Promise.resolve(transaction).then(receipt => {
-        if (promotionResult?.ok && typeof factoryFinalizeStoredProductPromotion === 'function') {
-          factoryFinalizeStoredProductPromotion(promotionResult, {
-            operationToken: receipt.operationToken,
-            render: false,
-            save: false,
-          });
-        }
-        return receipt;
       });
     },
     focusProductPanel(_value, operationContext) {
@@ -8593,8 +8803,8 @@ function factoryRuntimeFieldsActions() {
       return factoryRuntimeBridgeAction('factory/fields:executeSelectedFieldTransfer', operationContext, draft => {
         const target = String(value.target || '').trim();
         if (!['sinhwa', 'cafe24'].includes(target)) throw new Error(`unknown field transfer target: ${target || '<empty>'}`);
-        return factoryExecuteSelectedFieldTransfer(target);
-      });
+        return factoryExecuteSelectedFieldTransfer(target, draft);
+      }, { render: true });
     },
     runGuideAction(value = {}, operationContext) {
       const action = String(value.action || '').trim();
@@ -8953,7 +9163,18 @@ function factoryRuntimeAssetsActions() {
       });
     },
     runFactoryStage(stageId, operationContext) {
-      return factoryRuntimeBridgeAction('factory/assets:runFactoryStage', operationContext, draft => factoryRunStage(String(stageId || '').trim(), { factory: draft }), );
+      return factoryRuntimeWithOperationLease('factory/assets:runFactoryStage', operationContext, operation => (
+        factoryRuntimeBridgeAction(
+          'factory/assets:runFactoryStage',
+          operationContext,
+          draft => factoryRunStage(String(stageId || '').trim(), {
+            factory: draft,
+            operationToken: operation.operationToken,
+            operationSignal: operation.operationSignal,
+          }),
+          { render: true },
+        )
+      ));
     },
     addFactoryStageInputFiles(stageId, files, operationContext) {
       return factoryRuntimeBridgeAction('factory/assets:addFactoryStageInputFiles', operationContext, draft => factoryAddStageInputFiles(String(stageId || '').trim(), files || [], { factory: draft }), );
@@ -9121,10 +9342,16 @@ function factoryRuntimeSectionsActions() {
     runFactoryGuideAction: factoryRuntimeSectionsGuideAction,
     runFactoryStage(value, operationContext) {
       const stageId = String(value || '').trim();
-      return factoryRuntimeBridgeAction('factory/sections:runFactoryStage', operationContext, draft => {
-        if (stageId !== 'detail') throw new Error(`unsupported factory sections stage: ${stageId || '<empty>'}`);
-        return factoryRunStage(stageId, { factory: draft });
-      });
+      return factoryRuntimeWithOperationLease('factory/sections:runFactoryStage', operationContext, operation => (
+        factoryRuntimeBridgeAction('factory/sections:runFactoryStage', operationContext, draft => {
+          if (stageId !== 'detail') throw new Error(`unsupported factory sections stage: ${stageId || '<empty>'}`);
+          return factoryRunStage(stageId, {
+            factory: draft,
+            operationToken: operation.operationToken,
+            operationSignal: operation.operationSignal,
+          });
+        }, { render: true })
+      ));
     },
   };
 }
@@ -9318,7 +9545,18 @@ function installFactoryRuntimeStart(moduleNamespaces) {
     reportError: error => factoryRuntimeRequireStore().reportError(
       error instanceof Error ? error : new Error(String(error || 'factory runtime error')),
     ),
-    actions: Object.freeze({ selectFactoryTab }),
+    actions: Object.freeze({
+      selectFactoryTab,
+      jumpFactoryStage,
+      setFactoryStageLogFilter,
+      runFactoryShellGuideAction,
+    }),
+    renderHelpers: Object.freeze({
+      renderFactoryAutomationRunStatus,
+      renderFactoryWorkspacePanel: typeof renderFactoryWorkspacePanel === 'function'
+        ? renderFactoryWorkspacePanel
+        : () => '',
+    }),
     tabs,
     tabRegistry,
   }));
@@ -11117,7 +11355,7 @@ function renderActiveRuntimeMenu(menu, snapshot) {
     return '<div class="analysis-box" role="status">메뉴 모듈을 불러오는 중입니다.</div>';
   }
   const source = menu.id === 'factory' && factoryRuntimeStore
-    ? factoryRuntimeStore.getSnapshot()
+    ? factoryRuntimeReadViewSnapshot()
     : (snapshot === undefined ? state : snapshot);
   const view = menu.select(source);
   return menu.render(view);
@@ -11197,6 +11435,9 @@ function renderShellFrame(input) {
   if (menu?.ownedSlices?.includes('detail-document')
     && typeof syncFixedSectionPlacementImages === 'function') {
     syncFixedSectionPlacementImages({ savePlacement: false });
+  }
+  if (typeof showImageRestoreWarningIfNeeded === 'function') {
+    showImageRestoreWarningIfNeeded();
   }
   const renderStartedAt = Date.now();
   patchAppHtml(root, renderShellMarkup(activation.activeMenuHtml, menu));
@@ -11345,7 +11586,7 @@ function renderUiNotice() {
 function renderMobileStepBanner() {
   return `<div class="mobile-step-banner">
     <span class="material-icons-outlined" style="font-size:16px;color:var(--primary-h)">near_me</span>
-    <span>현재 화면: <b>${escapeHtml(getCurrentStepLabel())}</b></span>
+    <span class="mobile-step-copy">현재 화면: <b>${escapeHtml(getCurrentStepLabel())}</b></span>
   </div>`;
 }
 
@@ -11654,23 +11895,23 @@ function renderSidebar() {
       }).join('')}
     </nav>
     <!-- 현재 모델 표시 -->
-    <div style="padding:8px 12px;border-top:1px solid var(--border);font-size:10px;color:var(--text-m);line-height:1.45">
-      <div style="margin-bottom:7px">
+    <div class="sidebar-model-status">
+      <div class="sidebar-model-card" data-compact-label="LLM" tabindex="0" role="status" title="${escAttr(`분석 LLM · ${llmInfo.providerLabel} · ${mdl?.label || cfg.llmModel} · ${llmInfo.route}`)}">
         <div style="font-weight:800;color:var(--text-d)">분석 LLM</div>
         <div style="color:${cfg.llmProvider==='gpt_oauth'?'var(--ok)':(cfg.llmProvider==='openai'?'#10a37f':'var(--primary-h)')};font-weight:900;word-break:keep-all">${escapeHtml(llmInfo.providerLabel)} · ${escapeHtml(mdl?.label||cfg.llmModel)}</div>
         <div style="font-family:Consolas,monospace;color:var(--text-m)">${escapeHtml(cfg.llmModel)}</div>
         <div style="color:var(--text-m)">${escapeHtml(llmInfo.route)}</div>
       </div>
-      <div>
+      <div class="sidebar-model-card" data-compact-label="IMG" tabindex="0" role="status" title="${escAttr(`이미지 모델 · ${imageInfo.providerLabel} · ${imgMdl?.label || cfg.imageModel} · ${imageInfo.route}`)}">
         <div style="font-weight:800;color:var(--text-d)">이미지 모델</div>
         <div style="color:var(--orange);font-weight:900">${escapeHtml(imageInfo.providerLabel)} · ${escapeHtml(imgMdl?.label||cfg.imageModel)}</div>
         <div style="font-family:Consolas,monospace;color:var(--text-m)">${escapeHtml(cfg.imageModel)}</div>
         <div style="color:var(--text-m)">${escapeHtml(imageInfo.route)}</div>
       </div>
     </div>
-    <div style="padding:12px 16px;border-top:1px solid var(--border)">
-      <button class="btn-sm" id="changeApiKey" style="width:100%;justify-content:center">
-        <span class="material-icons-outlined" style="font-size:14px">key</span> API 키 변경
+    <div class="sidebar-api-actions">
+      <button class="btn-sm" id="changeApiKey" title="API 키 변경" aria-label="API 키 변경">
+        <span class="material-icons-outlined" style="font-size:14px">key</span><span class="sidebar-api-label">API 키 변경</span>
       </button>
     </div>
   </aside>`;
@@ -12191,6 +12432,8 @@ function factoryStampLockedInputImage(factory, payload = {}, meta = {}) {
   const previousFingerprint = String(product.lockedInputImageFingerprint || product.inputImageFingerprint || '').trim();
   const fingerprintChanged = !!(previousFingerprint && fingerprint && previousFingerprint !== fingerprint);
   let currentRunId = String(
+    meta.currentRunId ||
+    meta.generationRunId ||
     product.currentRunId ||
     factory?.automation?.currentRunId ||
     factory?.goalRun?.currentRunId ||
@@ -12198,7 +12441,11 @@ function factoryStampLockedInputImage(factory, payload = {}, meta = {}) {
     ''
   ).trim();
   // 기본 이미지가 바뀌면 이전 작업 통로와 섞이지 않도록 새 run identity를 발급한다.
-  if ((fingerprintChanged || !currentRunId) && typeof factoryStartNewWorkflowRun === 'function') {
+  if (
+    (fingerprintChanged || !currentRunId) &&
+    meta.preserveWorkflowRun !== true &&
+    typeof factoryStartNewWorkflowRun === 'function'
+  ) {
     currentRunId = factoryStartNewWorkflowRun(factory) || currentRunId;
   }
   if (fingerprintChanged) {

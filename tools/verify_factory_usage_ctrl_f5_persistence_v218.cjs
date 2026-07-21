@@ -5,6 +5,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -12,6 +14,7 @@ const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
 const SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-usage-ctrl-f5-persistence-v218.png');
+const RESULT_PATH = path.join(OUT_DIR, 'factory-usage-ctrl-f5-persistence-v218.json');
 
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -32,22 +35,24 @@ async function main() {
       mobile: false,
     });
     await cdp.send('Page.navigate', { url: APP_URL });
-    await waitFor(cdp, '!!(window.state && window.factoryState && window.render && window.saveLastWorkNow)', 60000);
+    await waitFor(cdp, `${factoryCdpFixtureReadyExpression()} && typeof saveLastWorkNow === 'function'`, 60000);
 
     const seed = String(Date.now());
-    const proofBeforeReload = await evaluate(cdp, `(async () => {
+    const proofBeforeReload = await evaluateFactoryCdpFixture(cdp, `async ({ setAppState, readFactory, replaceFactory, renderApp }) => {
       const projectId = 'usage_ctrl_f5_persistence_v218_' + ${JSON.stringify(seed)};
       const productName = '사용용도복원검증상품' + ${JSON.stringify(seed)};
       const runId = 'usage_ctrl_f5_run_v218_' + ${JSON.stringify(seed)};
       const imageFingerprint = 'usage_ctrl_f5_image_v218_' + ${JSON.stringify(seed)};
-      window.state.step = 'factory';
-      window.state.currentProjectId = projectId;
-      window.state.currentProjectName = productName;
-      window.state.currentProjectCreatedAt = Date.now();
-      window.state.productName = productName;
-      window.state.factory = window.normalizeFactoryState({});
-      const factory = window.factoryState();
-      window.factoryStampWorkspaceIdentity(factory, { projectId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
+      const createdAt = Date.now();
+      setAppState({
+        step: 'factory',
+        currentProjectId: projectId,
+        currentProjectName: productName,
+        currentProjectCreatedAt: createdAt,
+        productName,
+      });
+      let factory = normalizeFactoryState({});
+      factoryStampWorkspaceIdentity(factory, { projectId, projectName: productName, createdAt });
       factory.product.productName = productName;
       factory.product.userProductName = productName;
       factory.product.currentRunId = runId;
@@ -57,9 +62,10 @@ async function main() {
       factory.automation.currentRunId = runId;
       factory.goalRun.currentRunId = runId;
       factory.automation.activeTab = 'fields';
-      const authority = await window.ensureWorkspaceEditAuthority('project:' + projectId);
+      replaceFactory(factory, { reason: 'field-01-seed' });
+      const authority = await ensureWorkspaceEditAuthority('project:' + projectId);
       if (authority?.mode !== 'editing') throw new Error('usage persistence authority acquisition failed');
-      window.render();
+      renderApp();
 
       const input = document.querySelector('[data-factory-wizard-field="usage"]');
       const button = document.querySelector('[data-factory-wizard-commit="usage"]');
@@ -67,6 +73,8 @@ async function main() {
       input.value = '선물 포장, 답례품';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       button.click();
+      await Promise.resolve();
+      factory = structuredClone(readFactory());
 
       // v218 이전에 확인한 값은 수동 설정에 scope가 없을 수 있다.
       // 같은 작업 범위의 확인 기록이 정확히 일치할 때만 scope를 이행한다.
@@ -80,18 +88,20 @@ async function main() {
       // 같은 작업파일의 이전 DB 후보만 오래된 제품명을 가진 상황을 재현한다.
       // 후보/원격 데이터는 분리하되, 사용자가 직접 확정한 값은 보존되어야 한다.
       factory.product.finalDb = { product_name: '이전제품후보' + ${JSON.stringify(seed)} };
-      window.repairFactoryProductIdentityDrift(factory);
-      const summary = window.factoryAutomationReviewSummary(factory, window.factoryAutomationCounts(factory));
+      repairFactoryProductIdentityDrift(factory);
+      replaceFactory(factory, { reason: 'field-01-identity-repair' });
+      const summary = factoryAutomationReviewSummary(factory, factoryAutomationCounts(factory));
       const usage = summary.fields.find(field => field.id === 'usage') || {};
-      const saveResults = await window.saveLastWorkNow({ force: true, deep: true });
-      const scopeId = window.getCurrentLastWorkWorkspaceScope();
+      const saveResults = await saveLastWorkNow({ force: true, deep: true });
+      const scopeId = getCurrentLastWorkWorkspaceScope();
       const localSession = JSON.parse(localStorage.getItem('pdp_session') || '{}');
-      const indexedEnvelope = await window.workspaceGet('sessionAssets', 'workspace-envelope:' + scopeId);
+      const indexedEnvelope = await workspaceGet('sessionAssets', 'workspace-envelope:' + scopeId);
       const serverRecord = await fetch('http://127.0.0.1:5050/api/last-work?workspaceId=' + encodeURIComponent(scopeId), { cache: 'no-store' }).then(response => response.json());
       return {
         projectId,
         productName,
         imageFingerprint,
+        activeTab: factory.automation?.activeTab || '',
         usageStatus: usage.status || '',
         usageValue: usage.value || '',
         manualValue: factory.product.dbFieldSettings?.usage?.manualValue || '',
@@ -106,7 +116,7 @@ async function main() {
           revision: serverRecord.revision || 0,
         },
       };
-    })()`);
+    }`);
 
     assertChecks([
       { ok: proofBeforeReload.usageStatus === 'done', message: `이전 DB 후보 분리 후 사용용도 완료 상태가 사라졌습니다: ${proofBeforeReload.usageStatus}` },
@@ -117,13 +127,13 @@ async function main() {
     ]);
 
     await cdp.send('Page.reload', { ignoreCache: true });
-    await waitFor(cdp, '!!(window.state && window.factoryState && window.render)', 60000);
-    await waitFor(cdp, `window.state.currentProjectId === ${JSON.stringify(proofBeforeReload.projectId)}`, 15000);
-    const proofAfterReload = await evaluate(cdp, `(() => {
-      const factory = window.factoryState();
-      factory.automation.activeTab = 'fields';
-      window.render();
-      const summary = window.factoryAutomationReviewSummary(factory, window.factoryAutomationCounts(factory));
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
+    await waitFor(cdp, `state.currentProjectId === ${JSON.stringify(proofBeforeReload.projectId)}`, 15000);
+    await waitFor(cdp, `document.querySelector('[data-factory-auto-tab="fields"][aria-selected="true"]')
+      && document.querySelector('[data-factory-wizard-field="usage"]')`, 15000);
+    const proofAfterReload = await evaluateFactoryCdpFixture(cdp, `({ readAppState, readFactory }) => {
+      const factory = readFactory();
+      const summary = factoryAutomationReviewSummary(factory, factoryAutomationCounts(factory));
       const usage = summary.fields.find(field => field.id === 'usage') || {};
       const inputs = Array.from(document.querySelectorAll('[data-factory-wizard-field="usage"]'));
       const input = inputs.find(item => item.closest('.factory-automation-panel')) || inputs[0];
@@ -131,20 +141,33 @@ async function main() {
       row?.scrollIntoView({ block: 'center', behavior: 'auto' });
       const rect = row?.getBoundingClientRect();
       return {
-        projectId: window.state.currentProjectId,
+        projectId: readAppState().currentProjectId,
+        appStep: readAppState().step,
+        route: typeof shellRuntimeComposition !== 'undefined' ? shellRuntimeComposition?.routeController?.currentRoute?.() || '' : '',
+        runtimeMenuId: typeof runtimeMenuModules !== 'undefined' ? runtimeMenuModules.get(readAppState().step)?.id || '' : '',
+        factoryWizardCount: document.querySelectorAll('#factoryAutomationWizard').length,
+        factoryTabButtonCount: document.querySelectorAll('[data-factory-auto-tab]').length,
         usageStatus: usage.status || '',
         usageValue: usage.value || '',
         manualValue: factory.product.dbFieldSettings?.usage?.manualValue || '',
+        activeTab: factory.automation?.activeTab || '',
+        selectedTabs: Array.from(document.querySelectorAll('[data-factory-auto-tab][aria-selected="true"]'))
+          .map(item => item.getAttribute('data-factory-auto-tab')),
+        visibleFactoryHeadings: Array.from(document.querySelectorAll('.factory-section-head h3'))
+          .slice(-5).map(item => String(item.textContent || '').trim()),
         inputValue: input?.value || '',
         cardText: String(row?.textContent || '').trim(),
         inputVisible: !!rect && rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight,
       };
-    })()`);
+    }`);
 
     await new Promise(resolve => setTimeout(resolve, 350));
 
     await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
       .then(result => fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(result.data, 'base64')));
+    const result = { proofBeforeReload, proofAfterReload, screenshot: SCREENSHOT_PATH };
+    fs.writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2));
+    console.log(JSON.stringify({ ...result, resultPath: RESULT_PATH }, null, 2));
     assertChecks([
       { ok: proofBeforeReload.saveResults?.[0]?.value === true, message: `최신 세션 저장이 durable commit되지 않았습니다: ${JSON.stringify(proofBeforeReload.saveResults)}` },
       { ok: proofBeforeReload.storedUsage?.local === '선물 포장, 답례품', message: `Ctrl+F5 직전 로컬 저장값이 비었습니다: ${JSON.stringify(proofBeforeReload.storedUsage)}` },
@@ -155,7 +178,6 @@ async function main() {
       { ok: proofAfterReload.inputValue === '선물 포장, 답례품', message: `Ctrl+F5 뒤 화면 입력값이 비었습니다: ${proofAfterReload.inputValue}` },
       { ok: proofAfterReload.inputVisible && proofAfterReload.cardText.includes('사용용도'), message: 'Ctrl+F5 뒤 사용용도 확인 카드가 화면에 보이지 않습니다.' },
     ]);
-    console.log(JSON.stringify({ proofBeforeReload, proofAfterReload, screenshot: SCREENSHOT_PATH }, null, 2));
   } finally {
     cdp.close();
     await runtime.cleanup();

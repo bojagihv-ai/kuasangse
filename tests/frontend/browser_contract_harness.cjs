@@ -56,7 +56,7 @@ async function openBrowserContractHarness() {
       await evaluate(cdp, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     },
     async close() {
-      cdp.close();
+      await cdp.close();
       await runtime.cleanup?.();
     },
   };

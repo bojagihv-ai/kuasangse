@@ -143,7 +143,7 @@ async function readSmallViewport(cdp) {
     const waitPanel = document.querySelector('[data-factory-candidate-size-wait]');
     const layout = document.querySelector('.factory-page-layout');
     const rail = document.querySelector('.factory-run-status-rail');
-    const main = document.querySelector('main.main');
+    const main = document.querySelector('.app');
     waitPanel?.scrollIntoView({ block: 'center', inline: 'nearest' });
     const scrollableAncestors = [];
     for (let node = waitPanel?.parentElement; node; node = node.parentElement) {

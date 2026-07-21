@@ -1,6 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const { assertChecks, connectCdp, ensureCdp, evaluate, waitFor } = require('./factory_cdp_test_utils.cjs');
+const {
+  assertChecks,
+  connectCdp,
+  ensureCdp,
+  evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
+  waitFor,
+} = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9343';
@@ -10,18 +18,18 @@ const RESULT_PATH = path.join(OUT_DIR, 'factory-stage-jump-cuts-v171.json');
 
 function imageCutJumpState() {
   return `(() => {
-    const factory = window.factoryState?.() || {};
-    const main = document.querySelector('main.main');
+    const factory = typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : {};
+    const scrollRoot = document.querySelector('.app');
     const target = document.querySelector('#factoryAutomationAssetChooser_cuts');
-    const mainRect = main?.getBoundingClientRect();
+    const rootRect = scrollRoot?.getBoundingClientRect();
     const targetRect = target?.getBoundingClientRect();
-    const targetVisible = !!(mainRect && targetRect && targetRect.bottom > mainRect.top && targetRect.top < mainRect.bottom);
+    const targetVisible = !!(rootRect && targetRect && targetRect.bottom > rootRect.top && targetRect.top < rootRect.bottom);
     return {
       activeTab: String(factory.automation?.activeTab || ''),
       assetsOpen: factory.uiPanels?.assets === true,
       targetExists: !!target,
       targetVisible,
-      mainScrollTop: Number(main?.scrollTop || 0),
+      rootScrollTop: Number(scrollRoot?.scrollTop || 0),
       missingPositionLogs: (factory.logs || [])
         .map(log => log?.message || log?.text || String(log || ''))
         .filter(message => message.includes('이미지컷 위치를 아직 찾지 못했습니다.')),
@@ -46,19 +54,20 @@ async function main() {
       mobile: false,
     });
     await cdp.send('Page.navigate', { url: `${APP_URL}?verifyStageJump=${Date.now()}` });
-    await waitFor(cdp, '!!(window.render && window.factoryState)', 60000);
-    const before = await evaluate(cdp, `(() => {
-      const factory = window.factoryState();
-      window.state.step = 'factory';
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
+    const before = await evaluateFactoryCdpFixture(cdp, `async ({ setAppState, cloneFactory, replaceFactory, renderApp }) => {
+      const factory = cloneFactory();
+      setAppState({ step: 'factory' });
       factory.automation = { ...(factory.automation || {}), activeTab: 'start' };
       factory.uiPanels = { ...(factory.uiPanels || {}), assets: false };
       factory.activeStage = 'db';
       factory.logs = [];
-      window.render();
+      replaceFactory(factory);
+      await renderApp();
       const button = document.querySelector('[data-factory-stage-jump="cuts"]');
       if (!button) throw new Error('image-cut stage jump button not found');
       return { buttonText: String(button.textContent || '').trim(), ...(${imageCutJumpState()}) };
-    })()`);
+    }`);
     const click = await evaluate(cdp, `(() => {
       const button = document.querySelector('[data-factory-stage-jump="cuts"]');
       if (!button) throw new Error('image-cut stage jump button disappeared');
@@ -97,7 +106,7 @@ async function main() {
     console.log(JSON.stringify({ ...payload, resultPath: RESULT_PATH }, null, 2));
     assertChecks(checks);
   } finally {
-    try { cdp.close(); } catch (_) {}
+    try { await cdp.close(); } catch (_) {}
     await runtime.cleanup();
   }
 }

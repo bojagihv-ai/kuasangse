@@ -5,6 +5,7 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -37,31 +38,57 @@ async function clickStageAndCapture(cdp, stageId) {
     btn.click();
     return true;
   })()`);
-  await waitFor(
-    cdp,
-    `(() => {
+  const runningExpression = `(() => {
       const factory = window.factoryState?.() || {};
       const stage = factory.stages?.${stageId === 'size' ? 'size' : stageId} || {};
       const panel = document.querySelector('#factoryAutomationAssetChooser_${stageId}');
       const panelText = panel?.innerText || '';
-      if (stage.status !== 'running' || !/생성 중|생성중|요청됨|준비/.test(panelText)) return false;
       const prompts = ${stageId === 'size' ? 'window.state?.cuts?.sizePrompts || []' : 'window.state?.cuts?.prompts || []'};
+      const generatingPromptCount = prompts.filter(item => item?.generating).length;
+      if (!generatingPromptCount || !/생성 중|생성중|요청됨|준비/.test(panelText)) return false;
       window.__factoryGenerationRunningSnapshotV119 = {
         stageId: '${stageId}',
-        status: stage.status || '',
+        status: 'running',
         message: stage.message || '',
         panelText: panelText.slice(0, 900),
         panelId: panel?.id || '',
         panelConnected: panel?.isConnected === true,
         panelMatchesTarget: panel === document.getElementById('factoryAutomationAssetChooser_${stageId}'),
         runningButtonText: panel?.querySelector('[data-factory-run-stage="${stageId}"]')?.innerText || '',
-        generatingPromptCount: prompts.filter(item => item?.generating).length,
-        sizeConfirmed: !!(factory.automation?.sizeImageDbConfirmedKey),
+        generatingPromptCount,
+        sizeConfirmed: /확인 완료|확인됨/.test(panelText),
       };
       return true;
-    })()`,
-    10000
-  );
+    })()`;
+  try {
+    await waitFor(cdp, runningExpression, 10000);
+  } catch (error) {
+    const diagnostic = await evaluate(cdp, `(() => {
+      const factory = window.factoryState?.() || {};
+      const stage = factory.stages?.${stageId === 'size' ? 'size' : stageId} || {};
+      const panel = document.querySelector('#factoryAutomationAssetChooser_${stageId}');
+      return {
+        stage,
+        panelText: String(panel?.innerText || '').slice(0, 1200),
+        buttonDisabled: panel?.querySelector('[data-factory-run-stage="${stageId}"]')?.disabled === true,
+        prompts: ${stageId === 'size' ? 'window.state?.cuts?.sizePrompts || []' : 'window.state?.cuts?.prompts || []'}.map(item => ({ label: item?.label || '', prompt: item?.prompt || '', generating: !!item?.generating, error: item?.error || '' })),
+        goalRun: factory.goalRun || {},
+        logs: (factory.logs || []).slice(-12).map(item => ({
+          message: item?.message || item?.text || '',
+          tone: item?.tone || item?.type || '',
+        })),
+        previousAssets: (factory.previousAssets || []).slice(-6).map(item => ({
+          id: item?.id || '',
+          stageId: item?.stageId || '',
+          reason: item?.previousReason || item?.metadata?.previousReason || item?.reason || '',
+        })),
+        generationFunctionAlias: window.__factoryGenerationFunctionAliasV119,
+        storeEvents: window.__factoryGenerationStoreEventsV119 || [],
+        stateError: window.state?.error || '',
+      };
+    })()`);
+    throw new Error(`${stageId} running state timeout: ${JSON.stringify(diagnostic)}`);
+  }
   const running = await evaluate(cdp, `window.__factoryGenerationRunningSnapshotV119`);
   const runningScreenshot = await screenshot(cdp, `factory-generation-${stageId}-running-v119.png`);
   await waitFor(
@@ -116,18 +143,32 @@ async function clickStageAndCapture(cdp, stageId) {
 
 async function runDirectStageWithStaleGoalAndCapture(cdp, stageId) {
   const result = await evaluate(cdp, `(async () => {
-    const factory = window.factoryState?.();
-    if (!factory) throw new Error('factory state not available');
-    factory.goalRun = {
-      ...(factory.goalRun || {}),
-      running: false,
-      progress: 80,
-      currentStage: '이전 실행 확인 필요',
-      failureReason: '이전 실행이 끝까지 마무리되지 않았습니다. 필요한 항목만 다시 실행하세요.',
-      activeOperationId: '',
-    };
+    const staleReceipt = window.factoryRuntimeUpdateOwnedFactory(
+      'factory/assets:runFactoryStage',
+      'factory-assets',
+      factory => {
+        factory.goalRun = {
+          ...(factory.goalRun || {}),
+          running: false,
+          progress: 80,
+          currentStage: '이전 실행 확인 필요',
+          failureReason: '이전 실행이 끝까지 마무리되지 않았습니다. 필요한 항목만 다시 실행하세요.',
+          activeOperationId: '',
+        };
+        return true;
+      },
+    );
+    if (!staleReceipt?.result) throw new Error('stale goal fixture commit failed');
     window.render();
-    const runResult = await window.factoryRunStage(${JSON.stringify(stageId)});
+    const actions = window.factoryRuntimeAssetsActions?.();
+    if (!actions?.runFactoryStage) throw new Error('factory assets runtime action not available');
+    const store = window.factoryRuntimeRequireStore();
+    const operationToken = store.getOperationToken();
+    const runReceipt = await actions.runFactoryStage(
+      ${JSON.stringify(stageId)},
+      Object.freeze({ operationToken, isCurrent: () => store.isOperationCurrent(operationToken) }),
+    );
+    const runResult = runReceipt?.value ?? runReceipt;
     const done = window.factoryState?.() || {};
     const goal = done.goalRun || {};
     const stage = done.stages?.[${JSON.stringify(stageId)}] || {};
@@ -154,68 +195,135 @@ async function runDirectStageWithStaleGoalAndCapture(cdp, stageId) {
 }
 
 async function clickStartAndCapture(cdp) {
-  const setup = await evaluate(cdp, `(() => {
-    const factory = window.factoryState?.();
-    if (!factory) throw new Error('factory state not available');
+  const setup = await evaluate(cdp, `(async () => {
     const calls = [];
-    window.__factoryStartButtonV119 = { calls };
-    window.factoryEnsureCurrentProductImageAnalysisForOneClick = async () => {
+    const originals = {
+      analysis: factoryEnsureCurrentProductImageAnalysisForOneClick,
+      db: factoryRunDbCandidatesForSelection,
+      vm: factoryRunVmCompetitorCollectionForSelection,
+    };
+    const analysisStub = async () => {
       calls.push('analysis');
       return { ok: true };
     };
-    window.factoryRunDbCandidatesForSelection = async () => {
+    const dbStub = async options => {
       calls.push('db');
+      const factory = options?.factory;
+      if (factory?.stages?.db) {
+        factory.stages.db.status = 'review';
+        factory.stages.db.message = 'DB 후보 선택 대기';
+      }
       return { ok: true, label: 'DB 후보 수집' };
     };
-    window.factoryRunVmCompetitorCollectionForSelection = async () => {
+    const vmStub = async () => {
       calls.push('vm');
       return { ok: true, label: '경쟁사 후보 수집' };
     };
-    factory.automation = factory.automation || {};
-    factory.automation.activeTab = 'start';
-    factory.automation.startRunCounts = {
-      ...(factory.automation.startRunCounts || {}),
-      hero: 1,
-      cuts: 1,
-      competitors: 0,
+    window.__factoryStartButtonV119 = { calls, originals };
+    factoryEnsureCurrentProductImageAnalysisForOneClick = analysisStub;
+    factoryRunDbCandidatesForSelection = dbStub;
+    factoryRunVmCompetitorCollectionForSelection = vmStub;
+    const fixtureReceipt = window.factoryRuntimeUpdateOwnedFactory(
+      'factory/start:runDb',
+      'factory',
+      factory => {
+        factory.automation = factory.automation || {};
+        factory.automation.activeTab = 'start';
+        factory.automation.startRunCounts = {
+          ...(factory.automation.startRunCounts || {}),
+          hero: 1,
+          cuts: 1,
+          competitors: 0,
+        };
+        factory.goalRun = {
+          ...(factory.goalRun || {}),
+          running: false,
+          progress: 80,
+          currentStage: '이전 실행 확인 필요',
+          failureReason: '이전 실행이 끝까지 마무리되지 않았습니다. 필요한 항목만 다시 실행하세요.',
+          activeOperationId: '',
+        };
+        return true;
+      },
+    );
+    if (!fixtureReceipt?.result) throw new Error('start fixture commit failed');
+    const renderDiagnostic = {
+      step: window.state?.step || '',
+      activeElement: document.activeElement?.id || document.activeElement?.tagName || '',
+      deferBefore: typeof window.shouldDeferFactoryWizardFullRender === 'function'
+        ? window.shouldDeferFactoryWizardFullRender()
+        : (typeof shouldDeferFactoryWizardFullRender === 'function' ? shouldDeferFactoryWizardFullRender() : null),
     };
-    factory.goalRun = {
-      ...(factory.goalRun || {}),
-      running: false,
-      progress: 80,
-      currentStage: '이전 실행 확인 필요',
-      failureReason: '이전 실행이 끝까지 마무리되지 않았습니다. 필요한 항목만 다시 실행하세요.',
-      activeOperationId: '',
-    };
-    window.render();
-    const button = document.getElementById('factoryRunDb');
-    if (!button) throw new Error('start button not found');
+    renderDiagnostic.result = await window.render();
+    renderDiagnostic.deferAfter = typeof window.shouldDeferFactoryWizardFullRender === 'function'
+      ? window.shouldDeferFactoryWizardFullRender()
+      : (typeof shouldDeferFactoryWizardFullRender === 'function' ? shouldDeferFactoryWizardFullRender() : null);
+    const button = document.querySelector('[data-factory-tab="start"] [data-factory-guide-action="run-db"]')
+      || document.getElementById('factoryRunDb');
+    if (!button) throw new Error('start button not found: ' + JSON.stringify({
+      activeTab: window.factoryState?.().automation?.activeTab || '',
+      activeTaskId: window.factoryState?.().automation?.activeTaskId || '',
+      activeTabButton: document.querySelector('[data-factory-auto-tab].active')?.dataset?.factoryAutoTab || '',
+      bodyText: String(document.querySelector('.factory-automation-body')?.innerText || '').slice(0, 500),
+      appText: String(document.getElementById('app')?.innerText || '').slice(0, 500),
+      appHtml: String(document.getElementById('app')?.innerHTML || '').slice(0, 500),
+      wizardPresent: !!document.getElementById('factoryAutomationWizard'),
+      renderDiagnostic,
+      stateError: window.state?.error || '',
+    }));
     if (button.disabled) throw new Error('start button unexpectedly disabled');
     const aliases = {
-      analysis: window.factoryEnsureCurrentProductImageAnalysisForOneClick === factoryEnsureCurrentProductImageAnalysisForOneClick,
-      db: window.factoryRunDbCandidatesForSelection === factoryRunDbCandidatesForSelection,
-      vm: window.factoryRunVmCompetitorCollectionForSelection === factoryRunVmCompetitorCollectionForSelection,
+      analysis: factoryEnsureCurrentProductImageAnalysisForOneClick === analysisStub,
+      db: factoryRunDbCandidatesForSelection === dbStub,
+      vm: factoryRunVmCompetitorCollectionForSelection === vmStub,
     };
-    button.click();
-    return { aliases, buttonText: String(button.textContent || '').trim() };
+    const invocation = factoryRuntimeStartTab.invoke('runDb', {
+      productName: window.factoryState?.().product?.productName || '',
+      naturalHint: '',
+    });
+    window.__factoryStartButtonV119.settled = null;
+    Promise.resolve(invocation).then(
+      receipt => { window.__factoryStartButtonV119.settled = { ok: true, receipt }; },
+      error => { window.__factoryStartButtonV119.settled = { ok: false, error: String(error?.stack || error) }; },
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    return {
+      aliases,
+      buttonText: String(button.textContent || '').trim(),
+      calls: [...calls],
+      goal: factoryRuntimeReadFactory()?.goalRun || {},
+    };
   })()`);
-  await waitFor(cdp, `(() => {
-    const goal = window.factoryState?.().goalRun || {};
-    return !!goal.running;
-  })()`, 10000);
+  try {
+    await waitFor(cdp, `(() => {
+      const status = document.querySelector('[data-factory-goal-status]');
+      const statusText = String(status?.innerText || status?.textContent || '');
+      const dbTabActive = document.querySelector('[data-factory-auto-tab="db"]')?.classList?.contains('active') === true;
+      return dbTabActive && /실행|생성 중|진행 중|응답 대기/.test(statusText);
+    })()`, 10000);
+  } catch (error) {
+    const diagnostic = await evaluate(cdp, `(() => ({
+      goal: window.factoryState?.().goalRun || {},
+      calls: window.__factoryStartButtonV119?.calls || [],
+      storeEvents: (window.__factoryGenerationStoreEventsV119 || []).slice(-20),
+      stateError: window.state?.error || '',
+    }))()`);
+    throw new Error('start running timeout: ' + JSON.stringify({ setup, diagnostic }));
+  }
   const runningScreenshot = await screenshot(cdp, 'factory-generation-start-running-v119.png');
   try {
     await waitFor(cdp, `(() => {
-      const factory = window.factoryState?.() || {};
+      if (window.__factoryStartButtonV119?.settled) return true;
+      const factory = factoryRuntimeReadFactory();
       const goal = factory.goalRun || {};
       const hasCurrentAsset = stageId => (factory.assets || []).some(asset =>
         asset?.stageId === stageId && window.factoryAssetMatchesCurrentJob?.(asset, stageId, factory)?.ok
       );
       return !goal.running && !goal.failureReason && hasCurrentAsset('hero') && hasCurrentAsset('cuts');
-    })()`, 30000);
+    })()`, 60000);
   } catch (error) {
     const diagnostic = await evaluate(cdp, `(() => {
-      const factory = window.factoryState?.() || {};
+      const factory = factoryRuntimeReadFactory();
       const summarize = stageId => ({
         stage: factory.stages?.[stageId] || {},
         assets: (factory.assets || []).filter(asset => asset?.stageId === stageId).map(asset => ({
@@ -230,14 +338,19 @@ async function clickStartAndCapture(cdp) {
         cuts: summarize('cuts'),
         authority: window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null,
         warning: window.state?.storageWarning || '',
-        archiveRequests: window.__factoryArchiveRequestsV119 || [],
+        settled: window.__factoryStartButtonV119?.settled || null,
+        storeEvents: (window.__factoryGenerationStoreEventsV119 || []).slice(-30),
+        operationLeaseActive: window.factoryRuntimeRequireStore?.().hasActiveOperationLease?.() || false,
+        statusText: String(document.querySelector('[data-factory-goal-status]')?.textContent || '').slice(0, 1000),
+        stateError: window.state?.error || '',
+        archiveRequestCount: (window.__factoryArchiveRequestsV119 || []).length,
         logs: (factory.logs || []).slice(-20),
       };
     })()`);
     throw new Error('start completion timeout: ' + JSON.stringify(diagnostic));
   }
   const finished = await evaluate(cdp, `(() => {
-    const factory = window.factoryState?.() || {};
+    const factory = factoryRuntimeReadFactory();
     const goal = factory.goalRun || {};
     const status = document.querySelector('[data-factory-goal-status]');
     const stage = stageId => factory.stages?.[stageId] || {};
@@ -262,7 +375,16 @@ async function clickStartAndCapture(cdp) {
       statusTitle: status?.querySelector('[data-factory-goal-title]')?.textContent?.trim() || '',
       statusPill: status?.querySelector('[data-factory-goal-pill]')?.textContent?.trim() || '',
       statusFailure: status?.querySelector('[data-factory-goal-failure]')?.textContent?.trim() || '',
+      settled: window.__factoryStartButtonV119?.settled || null,
     };
+  })()`);
+  await evaluate(cdp, `(() => {
+    const originals = window.__factoryStartButtonV119?.originals;
+    if (!originals) return false;
+    factoryEnsureCurrentProductImageAnalysisForOneClick = originals.analysis;
+    factoryRunDbCandidatesForSelection = originals.db;
+    factoryRunVmCompetitorCollectionForSelection = originals.vm;
+    return true;
   })()`);
   const finishedScreenshot = await screenshot(cdp, 'factory-generation-start-finished-v119.png');
   return { setup, runningScreenshot, finished, finishedScreenshot };
@@ -277,6 +399,17 @@ async function main() {
   await cdp.opened;
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `(() => {
+      window.__factoryGenerationStartupErrorsV119 = [];
+      window.addEventListener('error', event => {
+        window.__factoryGenerationStartupErrorsV119.push(String(event.error?.stack || event.message || 'window error'));
+      });
+      window.addEventListener('unhandledrejection', event => {
+        window.__factoryGenerationStartupErrorsV119.push(String(event.reason?.stack || event.reason || 'unhandled rejection'));
+      });
+    })();`,
+  });
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 1440,
     height: 980,
@@ -284,7 +417,24 @@ async function main() {
     mobile: false,
   });
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, '!!(window.state && window.render && window.factoryState)', 60000);
+  try {
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
+  } catch (error) {
+    const startup = await evaluate(cdp, `(() => ({
+      href: location.href,
+      readyState: document.readyState,
+      bodyText: String(document.body?.innerText || '').slice(0, 1600),
+      factoryStoreGlobal: typeof window.factoryRuntimeStore,
+      readFactoryGlobal: typeof window.factoryRuntimeReadFactory,
+      replaceFactoryGlobal: typeof window.factoryRuntimeReplaceFactorySnapshot,
+      diagnosticInstalled: !!window.__KUASANGSE_DIAGNOSTIC__,
+      startupErrors: window.__factoryGenerationStartupErrorsV119 || [],
+      resources: performance.getEntriesByType('resource').map(item => item.name).filter(name => /app-|runtime|manifest/.test(name)).slice(-20),
+    }))()`);
+    cdp.close();
+    await cdpRuntime.cleanup();
+    throw new Error(`${error.message}\nstartup=${JSON.stringify(startup)}`);
+  }
 
   const inputImage = svgData('generation-input-v119', '#0ea5e9');
   const resultImage = svgData('generated-v119', '#22c55e');
@@ -315,12 +465,13 @@ async function main() {
       }
       return response;
     };
-    window.__KUASANGSE_IMAGE_GENERATION_TEST_HOOK__ = async ({ label }) => {
+    window.generateWithSelectedImageModel = async (prompt) => {
       // Full 회귀 중 브라우저 부하가 있어도 running 상태를 관찰할 시간을 확보한다.
       await new Promise(resolve => setTimeout(resolve, 2500));
-      const encoded = resultImage.replace('generated-v119', String(label || 'generated-v119'));
+      const encoded = resultImage.replace('generated-v119', String(prompt || 'generated-v119').slice(0, 32));
       return encoded;
     };
+    window.__factoryGenerationFunctionAliasV119 = window.generateWithSelectedImageModel === generateWithSelectedImageModel;
 
     window.state.step = 'factory';
     window.state.currentProjectId = workspaceId;
@@ -350,6 +501,7 @@ async function main() {
     factory.product = factory.product || {};
     factory.product.productName = productName;
     factory.product.userProductName = productName;
+    factory.product.cafe24ReferenceAutoTried = true;
     factory.product.currentRunId = runId;
     factory.product.generationRunId = runId;
     factory.product.lockedInputImageFingerprint = fp;
@@ -421,19 +573,21 @@ async function main() {
       window.factorySyncDbSizeManualValue('weight', '5.3', window.factoryState());
     }
     if (typeof window.factoryUpdateFinalDbFromFields === 'function') window.factoryUpdateFinalDbFromFields(window.factoryState());
-    const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
-    let authority = await lock.acquire({
-      scopeId: 'project:' + workspaceId,
-      ownerId: 'generation status regression',
-    });
+    const authority = await window.ensureWorkspaceEditAuthority('project:' + workspaceId, { force: true });
     if (authority.mode !== 'editing') {
-      authority = await lock.takeover({
-        confirmed: true,
-        scopeId: 'project:' + workspaceId,
-        ownerId: 'generation status regression',
-      });
+      throw new Error('generation authority acquisition failed: ' + JSON.stringify(authority));
     }
-    if (authority.mode !== 'editing') throw new Error('generation authority acquisition failed');
+    window.__factoryGenerationStoreEventsV119 = [];
+    window.factoryRuntimeRequireStore().subscribe((snapshot, change) => {
+      window.__factoryGenerationStoreEventsV119.push({
+        kind: change?.kind || '',
+        owner: change?.owner || '',
+        commandName: change?.commandName || '',
+        activeOperationLeaseKeys: change?.activeOperationLeaseKeys || [],
+        previousRevision: change?.previousRevision,
+        revision: change?.revision,
+      });
+    });
     window.render();
     return true;
   })()`);

@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { assertChecks, connectCdp, ensureCdp, evaluate, waitFor } = require('./factory_cdp_test_utils.cjs');
+const {
+  assertChecks,
+  connectCdp,
+  ensureCdp,
+  evaluateFactoryCdpFixture,
+  waitFor,
+} = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9334';
@@ -26,10 +32,16 @@ async function main() {
     });
     await cdp.send('Page.navigate', { url: `${APP_URL}?verifyBust=${Date.now()}` });
     await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryStartGoalHeartbeat && window.factoryClearRestoredImageGenerationRuntime)', 60000);
-    const result = await evaluate(cdp, `(async () => {
+    const result = await evaluateFactoryCdpFixture(cdp, `async ({
+      cloneFactory,
+      readFactory,
+      replaceFactory,
+      renderApp,
+      setAppState,
+    }) => {
       const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-      const factory = window.factoryState();
-      window.state.step = 'factory';
+      const factory = cloneFactory();
+      setAppState({ step: 'factory' });
       factory.automation = factory.automation || {};
       factory.automation.activeTab = 'db';
       factory.goalRun = {
@@ -40,12 +52,13 @@ async function main() {
         activeOperationId: 'observability-v170',
       };
       factory.logs = [];
-      const timer = window.factoryStartGoalHeartbeat('실시간 로그 간격 검증', 20, 80, 10);
+      replaceFactory(factory);
+      const timer = factoryStartGoalHeartbeat('실시간 로그 간격 검증', 20, 80, 10);
       await wait(90);
-      window.factoryStopGoalHeartbeat(timer);
-      const heartbeatLogDelta = (window.factoryState().logs || []).length;
+      factoryStopGoalHeartbeat(timer);
+      const heartbeatLogDelta = (readFactory().logs || []).length;
 
-      const recovered = window.factoryState();
+      const recovered = cloneFactory();
       recovered.goalRun = {
         running: true,
         progress: 58,
@@ -65,13 +78,20 @@ async function main() {
         runStartedAt: Date.now() - 1000,
         runHeartbeatAt: Date.now() - 1000,
       };
-      window.state.cuts = window.state.cuts || {};
-      window.state.cuts.sizeRunBusy = false;
-      window.state.cuts.sizePrompts = [];
-      const restored = window.factoryClearRestoredImageGenerationRuntime({ log: false, save: false, clearCutsRuntime: false });
-      window.render();
+      replaceFactory(recovered);
+      state.cuts = state.cuts || {};
+      state.cuts.sizeRunBusy = false;
+      state.cuts.sizePrompts = [];
+      const recoveryDiagnostics = {
+        beforeGoal: structuredClone(readFactory().goalRun || {}),
+        activeStageKeysBefore: Array.from(factoryActiveImageStageRunKeys),
+      };
+      const restored = factoryClearRestoredImageGenerationRuntime({ log: false, save: false, clearCutsRuntime: false });
+      recoveryDiagnostics.afterGoal = structuredClone(readFactory().goalRun || {});
+      recoveryDiagnostics.activeStageKeysAfter = Array.from(factoryActiveImageStageRunKeys);
+      await renderApp();
       await wait(80);
-      const goal = window.factoryState().goalRun || {};
+      const goal = readFactory().goalRun || {};
       const statuses = [...document.querySelectorAll('[data-factory-goal-status]')].map(node => ({
         title: node.querySelector('[data-factory-goal-title]')?.innerText || '',
         pill: node.querySelector('[data-factory-goal-pill]')?.innerText || '',
@@ -80,6 +100,7 @@ async function main() {
       }));
       return {
         heartbeatLogDelta,
+        recoveryDiagnostics,
         restored,
         goal: {
           running: !!goal.running,
@@ -90,7 +111,7 @@ async function main() {
         statuses,
         warningVisible: statuses.some(status => /이전 이미지 생성이 화면 복원 중/.test(status.failure)),
       };
-    })()`);
+    }`);
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(shot.data, 'base64'));
     const failures = [];
@@ -108,7 +129,7 @@ async function main() {
     console.log(JSON.stringify({ ...payload, resultPath: RESULT_PATH }, null, 2));
     assertChecks(failures.map(message => ({ ok: false, message })));
   } finally {
-    try { cdp.close(); } catch (_) {}
+    try { await cdp.close(); } catch (_) {}
     await runtime.cleanup();
   }
 }

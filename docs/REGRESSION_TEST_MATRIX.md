@@ -80,6 +80,7 @@
 - `ARCH-TARGETS-01`, `ARCH-IMPORTS-01`, `ARCH-ENFORCE-01`: target 등록, import 순환 0건, 다른 메뉴 DOM·레거시 전역 상태·저장 경계 우회를 차단한다.
 - `ARCH-LIFECYCLE-01`: bind/dispose를 반복해도 listener와 timer가 누적되지 않아야 한다.
 - `SAVE-MIGRATION-01`, `SAVE-CONCURRENCY-01`: 오래된 작업파일 이관과 lease/fencing/CAS 충돌 방지를 함께 검증한다.
+- `UI-CJK-01`: 작은 창에서도 한글 단어를 음절 중간에서 자르지 않고 조립공장 7개 탭의 전체 라벨을 보존한다.
 - 모든 `src/**/*.mjs`는 `src/runtime-manifest.json`에 정확히 한 번 등록되고 런타임 모듈은 순수 코드 250줄 이하를 유지한다.
 - `dist/app-runtime.bundle.js`는 직접 편집하지 않고 `node tools/build_runtime_bundle.cjs`로 생성하며 `node tools/build_runtime_bundle.cjs --check`가 byte 단위 일치를 확인한다.
 
@@ -89,6 +90,7 @@
 |---|---|---|---|
 | 공통 | `SYN-*`, `UNIT-FE-01`, `UNIT-FE-02`, `UNIT-BE-01` | 모든 분리 JS, 핵심 Python, 실제 브라우저 함수, 실제 archive 함수, 회귀 실행기 재시도 분류 | 문법 오류 0, 단위 계약 전부 통과, 제품 검증 실패는 재시도하지 않음 |
 | 공통 구조 | `ARCH-*` | ESM manifest, import graph, 모듈 크기, 전역 상태·저장 경계, listener/timer 수명주기, 생성 bundle | 누락·중복·순환·우회·누적·bundle 불일치 0건 |
+| 공통 반응형 | `UI-CJK-01`, `UI-RESP-01` | 작은 창 한글 줄바꿈, 조립공장 탭 전체 라벨, 주 스크롤 도달성 | 음절 중간 분리·라벨 잘림·수평 overflow 0건 |
 | 메뉴·조립공장 | `MENU-*`, `FACTORY-*` | 12개 메뉴와 7개 탭의 target·공개 API·이벤트 소유권 | 19개 모듈이 각각 독립 수명주기와 등록 gate 보유 |
 | 공통 동시 편집 | `UNIT-AUTH-01`, `AUTH-01` | 서버 lease/CAS, 브라우저 인계, stale writer, 작업파일 digest/revision, 작은 창 충돌 UI | 한 편집자만 허용, 409/428 안정 코드, stale 부작용 0건, 1280x480·390x600 복구 동작 모두 도달 |
 | 1 제품/DB | `SCOPE-*`, `DB-*` | 식별자 드리프트, 작업파일 분리, 후보 없음, DB/Cafe24 확정 | 타 상품 후보 0건 혼입, 새로고침 후 확정 유지 |

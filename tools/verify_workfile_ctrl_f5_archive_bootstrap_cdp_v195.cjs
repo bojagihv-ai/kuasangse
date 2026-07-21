@@ -5,11 +5,14 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
-const API_ROOT = process.env.KUASANGSE_BACKEND_URL || 'http://127.0.0.1:5050';
+const API_ROOT = process.env.KUASANGSE_BACKEND_URL
+  || process.env.KUASANGSE_BACKEND_BASE
+  || 'http://127.0.0.1:5050';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9365';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
 const SCREENSHOT_PATH = path.join(OUT_DIR, 'workfile-ctrl-f5-archive-bootstrap-v195.png');
@@ -107,11 +110,17 @@ async function saveArchiveAsset(scope, stageId, currentRunId, title, image) {
 }
 
 async function reloadAndRead(cdp, expectedStageRuns) {
+  const previousTimeOrigin = await evaluate(cdp, 'performance.timeOrigin');
   await cdp.send('Page.reload', { ignoreCache: true });
+  await waitFor(cdp, `performance.timeOrigin !== ${JSON.stringify(previousTimeOrigin)}`, 60000);
   await waitFor(cdp, '!!(window.__kuasangseState && window.factoryState && window.factoryRestoreCurrentWorkfileLocalArchive)', 60000);
+  await waitFor(cdp, factoryCdpFixtureReadyExpression(), 120000);
+  const hydration = await evaluate(cdp, `(async () => (
+    await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__).catch(error => ({ error: String(error) }))
+  ))()`);
   try {
     await waitFor(cdp, `(() => {
-      const factory = window.factoryState();
+      const factory = factoryRuntimeReadFactory();
       const expected = ${JSON.stringify(expectedStageRuns)};
       const assets = Array.isArray(factory.assets) ? factory.assets : [];
       return Object.entries(expected).every(([stageId, runId]) =>
@@ -123,12 +132,77 @@ async function reloadAndRead(cdp, expectedStageRuns) {
           (asset.localArchive?.archiveId || asset.metadata?.localArchiveId || asset.sourceMap?.localArchiveId)
         ))
       );
-    })()`, 60000);
+    })()`, 15000);
   } catch (error) {
-    const diagnostics = await evaluate(cdp, `(() => {
+    const diagnostics = await evaluate(cdp, `(async () => {
+      let retry = null;
+      try {
+        retry = await factoryRestoreCurrentWorkfileLocalArchive({ silent: true });
+      } catch (retryError) {
+        retry = { error: String(retryError?.stack || retryError) };
+      }
       const state = window.__kuasangseState;
-      const factory = window.factoryState();
+      const factory = factoryRuntimeReadFactory();
+      const persistenceRead = (() => {
+        try {
+          const raw = workspaceSessionGetItem('pdp_session');
+          const value = raw ? JSON.parse(raw) : null;
+          const scopeId = value?.workspaceScope?.id || '';
+          return {
+            rawLength: String(raw || '').length,
+            currentProjectId: value?.currentProjectId || '',
+            scopeId,
+            candidate: value?.workspaceRevision || null,
+            current: window.__KUASANGSE_WORKSPACE_REVISION__?.current?.(scopeId) || null,
+            allowed: scopeId ? workspaceRevisionAllowsSnapshot(value, { scopeId, allowEqual: true }) : false,
+          };
+        } catch (readError) {
+          return { error: String(readError?.stack || readError) };
+        }
+      })();
+      const liveLoad = (() => {
+        try {
+          const value = loadPersistentSession();
+          return value ? {
+            currentProjectId: value.currentProjectId || '',
+            workspaceScope: value.workspaceScope || '',
+            revision: value.workspaceRevision || null,
+          } : null;
+        } catch (loadError) {
+          return { error: String(loadError?.stack || loadError) };
+        }
+      })();
+      const readSessionRecord = key => {
+        try {
+          const stored = JSON.parse(localStorage.getItem(key) || 'null');
+          const value = stored?.schema === 'kuasangse.recovery.v1'
+            ? JSON.parse(stored.value || 'null')
+            : stored;
+          return value ? {
+            schema: stored?.schema || value?.persistenceEnvelope?.schema || '',
+            workspaceScope: value.workspaceScope || value.workspaceId || '',
+            currentProjectId: value.currentProjectId || '',
+            currentProjectName: value.currentProjectName || '',
+            revision: value.workspaceRevision || value.persistenceAuthority?.revision || null,
+          } : null;
+        } catch (storageError) {
+          return { error: String(storageError) };
+        }
+      };
       return {
+        retry,
+        session: readSessionRecord('pdp_session'),
+        bootstrap: readSessionRecord('pdp_last_work_bootstrap_v1'),
+        rawSessionLength: String(localStorage.getItem('pdp_session') || '').length,
+        loadedSession: typeof _savedSession === 'object' && _savedSession ? {
+          currentProjectId: _savedSession.currentProjectId || '',
+          workspaceScope: _savedSession.workspaceScope || '',
+          revision: _savedSession.workspaceRevision || null,
+        } : null,
+        persistenceRead,
+        liveLoad,
+        hydration: ${JSON.stringify(hydration)},
+        authority: window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null,
         projectId: state.currentProjectId || '',
         productName: state.productName || '',
         productKey: window.factoryCurrentProductKey?.(factory) || '',
@@ -151,7 +225,7 @@ async function reloadAndRead(cdp, expectedStageRuns) {
   await new Promise(resolve => setTimeout(resolve, 1000));
   return evaluate(cdp, `(() => {
     const state = window.__kuasangseState;
-    const factory = window.factoryState();
+    const factory = factoryRuntimeReadFactory();
     return {
       projectId: state.currentProjectId || '',
       productName: state.productName || '',
@@ -172,6 +246,23 @@ async function reloadAndRead(cdp, expectedStageRuns) {
         (factory.product?.imagePreview && factory.product.imagePreview !== '__stored_in_indexeddb__')
       ),
       localStatus: factory.archive?.localStatus || '',
+      storageWarning: state.storageWarning || '',
+      persisted: (() => {
+        try {
+          const value = JSON.parse(localStorage.getItem('pdp_session') || 'null');
+          return {
+            currentProjectId: value?.currentProjectId || '',
+            scopeId: value?.workspaceScope?.id || value?.persistenceEnvelope?.scopeId || '',
+            revision: value?.workspaceRevision || value?.persistenceEnvelope?.metadata?.revision || null,
+          };
+        } catch (_) {
+          return null;
+        }
+      })(),
+      revisionRegistry: (() => {
+        try { return JSON.parse(localStorage.getItem('kuasangse_workspace_revisions_v1') || '{}'); }
+        catch (_) { return {}; }
+      })(),
     };
   })()`);
 }
@@ -233,6 +324,7 @@ async function main() {
     });
     await cdp.send('Page.navigate', { url: `${APP_URL}?verifyCtrlF5ArchiveBootstrap=${seed}` });
     await waitFor(cdp, '!!(window.__kuasangseState && window.factoryState && window.saveSessionAssetsToDb)', 60000);
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 120000);
 
     const prepared = await evaluate(cdp, `(async () => {
       await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__).catch(() => null);
@@ -358,7 +450,12 @@ async function main() {
     })()`);
 
     const first = await reloadAndRead(cdp, expectedStageRuns);
-    const second = await reloadAndRead(cdp, expectedStageRuns);
+    let second;
+    try {
+      second = await reloadAndRead(cdp, expectedStageRuns);
+    } catch (error) {
+      throw new Error(`${error.message}\nfirst reload diagnostics: ${JSON.stringify(first)}`);
+    }
     const oldHeroPresent = second.assets.some(asset => asset.archiveId === oldHero.archiveId);
     await evaluate(cdp, `(() => {
       const factory = window.factoryState();

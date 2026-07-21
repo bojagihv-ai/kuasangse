@@ -133,11 +133,12 @@ async function verifyGroup(cdp, state, viewport) {
       window.render();
       await document.fonts.ready;
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const scrollRoot = document.querySelector('.app');
       const main = document.querySelector('.main');
       const banner = document.querySelector('.workspace-authority-banner');
       const actions = [...document.querySelectorAll('[data-workspace-authority-action]')];
       const owner = banner?.querySelector('.workspace-authority-owner');
-      main.scrollTop = 0;
+      scrollRoot.scrollTop = 0;
       banner?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       const ownerStyle = owner ? getComputedStyle(owner) : null;
       const ownerRect = owner?.getBoundingClientRect();
@@ -160,18 +161,18 @@ async function verifyGroup(cdp, state, viewport) {
       };
       const fabRect = agentFab?.getBoundingClientRect();
       const takeoverRect = takeover?.getBoundingClientRect();
-      const mainRect = main.getBoundingClientRect();
-      const scrollbarWidth = Math.max(0, main.offsetWidth - main.clientWidth);
+      const scrollRootRect = scrollRoot.getBoundingClientRect();
+      const scrollbarWidth = Math.max(0, scrollRoot.offsetWidth - scrollRoot.clientWidth);
       const scrollbarRect = scrollbarWidth > 0 ? {
-        left: mainRect.right - scrollbarWidth,
-        right: mainRect.right,
-        top: mainRect.top,
-        bottom: mainRect.bottom,
+        left: scrollRootRect.right - scrollbarWidth,
+        right: scrollRootRect.right,
+        top: scrollRootRect.top,
+        bottom: scrollRootRect.bottom,
       } : null;
-      main.scrollTop = main.scrollHeight;
-      const bottomReachable = Math.ceil(main.scrollTop + main.clientHeight) >= main.scrollHeight;
-      const overflowY = getComputedStyle(main).overflowY;
-      const verticalOverflowReady = main.scrollHeight <= main.clientHeight || ['auto', 'scroll'].includes(overflowY);
+      scrollRoot.scrollTop = scrollRoot.scrollHeight;
+      const bottomReachable = Math.ceil(scrollRoot.scrollTop + scrollRoot.clientHeight) >= scrollRoot.scrollHeight;
+      const overflowY = getComputedStyle(scrollRoot).overflowY;
+      const verticalOverflowReady = scrollRoot.scrollHeight <= scrollRoot.clientHeight || ['auto', 'scroll'].includes(overflowY);
       const viewportWidth = document.documentElement.clientWidth;
       const overflowOffenders = [...document.querySelectorAll('main *')]
         .map(element => {
@@ -228,7 +229,7 @@ async function verifyGroup(cdp, state, viewport) {
     window.render();
     await document.fonts.ready;
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    document.querySelector('.main').scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    document.querySelector('.app').scrollTo({ top: 0, left: 0, behavior: 'instant' });
     document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return rows;

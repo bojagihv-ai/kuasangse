@@ -68,7 +68,7 @@ async function main() {
       state.step = 'factory';
       window.render();
       await wait(1200);
-      const initialDesc = document.querySelector('.factory-desc');
+      const initialDesc = document.querySelector('#factoryAutomationWizard .factory-section-head p');
       const initialDescStyle = initialDesc ? getComputedStyle(initialDesc) : null;
       const layout = {
         factoryDescPresent: !!initialDesc,

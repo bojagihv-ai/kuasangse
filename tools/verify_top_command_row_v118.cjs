@@ -76,6 +76,7 @@ async function inspect(cdp, label) {
       };
     };
     const main = document.querySelector('main.main');
+    const scrollRoot = document.querySelector('.app');
     const row = document.querySelector('.top-command-row');
     const db = document.querySelector('.db-workfile-strip');
     const dbSync = document.querySelector('.db-workfile-sync');
@@ -121,7 +122,7 @@ async function inspect(cdp, label) {
       topDeltaDbApi: db && api ? Math.abs(Math.round(db.getBoundingClientRect().top) - Math.round(api.getBoundingClientRect().top)) : null,
       topDeltaDbSyncApi: dbSync && apiStrip ? Math.abs(Math.round(dbSync.getBoundingClientRect().top) - Math.round(apiStrip.getBoundingClientRect().top)) : null,
       mainOverflowX: main ? main.scrollWidth - main.clientWidth : 0,
-      mainScrollable: !!main && main.scrollHeight > main.clientHeight,
+      mainScrollable: !!scrollRoot && scrollRoot.scrollHeight > scrollRoot.clientHeight,
       rowPosition: row ? getComputedStyle(row).position : '',
       hasLegacyGlobalWorkfileBar: !!document.querySelector('.global-workfile-bar'),
       bodyHasOldStandaloneTopBeforeRow: (() => {

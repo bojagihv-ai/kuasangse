@@ -5,11 +5,15 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
+const BACKEND_BASE = process.env.KUASANGSE_BACKEND_URL
+  || process.env.KUASANGSE_BACKEND_BASE
+  || 'http://127.0.0.1:5050';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
 const SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-new-file-blank-cdp-v85.png');
 const RELOAD_SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-new-file-blank-reload-cdp-v85.png');
@@ -89,6 +93,9 @@ async function main() {
   await cdp.send('Network.enable');
   await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
   await cdp.send('Runtime.enable');
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `try { localStorage.setItem('gemini_backend_url', ${JSON.stringify(BACKEND_BASE)}); } catch (_) {}`,
+  });
   await cdp.send('Emulation.setDeviceMetricsOverride', {
     width: 390,
     height: 560,
@@ -98,21 +105,16 @@ async function main() {
   await cdp.send('Page.navigate', { url: APP_URL });
   await waitFor(
     cdp,
-    '!!(window.state && window.render && window.factoryState && window.startBlankWorkDraft && window.currentSessionAssetsPayload)',
+    `${factoryCdpFixtureReadyExpression()}
+      && typeof startBlankWorkDraft === 'function'
+      && typeof currentSessionAssetsPayload === 'function'
+      && typeof workspacePersistenceApi === 'function'`,
     60000,
   );
   await evaluate(cdp, `(async () => {
     await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__);
     return true;
   })()`);
-  await waitFor(cdp, `(() =>
-    typeof sessionAssetsHydrated !== 'undefined' && sessionAssetsHydrated === true &&
-    typeof serverLastWorkHydrated !== 'undefined' && serverLastWorkHydrated === true &&
-    typeof serverLastWorkHydrating !== 'undefined' && serverLastWorkHydrating === false &&
-    typeof persistentStateSaving !== 'undefined' && persistentStateSaving === false &&
-    typeof lastWorkSaveTimer !== 'undefined' && !lastWorkSaveTimer
-  )()`, 60000);
-
   const proof = await evaluate(cdp, `(async () => {
     const img = ${JSON.stringify(svgDataUrl('new-file-before-v85-isolated', '#be123c'))};
     const base64 = img.split(',', 2)[1] || '';
@@ -154,9 +156,8 @@ async function main() {
     };
     window.state.optionSorter = { images: [{ id: 'old_option_v85', image: img }] };
     window.state.compPage = { ...(window.state.compPage || {}), uploadedImages: [{ id: 'old_comp_upload_v85', dataUrl: img }], evidenceImages: [{ id: 'old_comp_evidence_v85', dataUrl: img }] };
-    window.state.factory = window.normalizeFactoryState({});
-    const factory = window.factoryState();
-    window.factoryStampWorkspaceIdentity(factory, { projectId: workspaceId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
+    const factory = normalizeFactoryState({});
+    factoryStampWorkspaceIdentity(factory, { projectId: workspaceId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
     factory.product.productName = productName;
     factory.product.userProductName = productName;
     factory.product.currentRunId = runId;
@@ -178,7 +179,7 @@ async function main() {
     }];
     factory.automation.currentRunId = runId;
     factory.automation.activeTab = 'assets';
-    factory.assets = [window.normalizeFactoryAsset({
+    factory.assets = [normalizeFactoryAsset({
       id: 'asset_new_file_old_v85',
       title: '이전 대표컷',
       stageId: 'hero',
@@ -192,13 +193,14 @@ async function main() {
       metadata: { productName, productKey, currentRunId: runId, inputImageFingerprint: inputFingerprint, stageId: 'hero', workspaceId },
       sourceMap: { productName, productKey, currentRunId: runId, inputImageFingerprint: inputFingerprint, stageId: 'hero', workspaceId },
     }, 0)];
+    factoryRuntimeReplaceFactorySnapshot(factory, { reason: 'save03-seed' });
     window.localStorage.setItem('pdp_session', JSON.stringify(window.currentSessionAssetsPayload({ includeImages: true })));
-    if (typeof compactProductImageBackupPayload === 'function' && typeof workspacePut === 'function') {
+    if (typeof compactProductImageBackupPayload === 'function' && typeof workspacePersistenceApi === 'function') {
       const imageBackup = compactProductImageBackupPayload();
-      if (imageBackup?.primary) await workspacePut('appSettings', imageBackup);
+      if (imageBackup?.primary) await workspacePersistenceApi().savePreference(imageBackup);
     }
     window.confirmSaveBeforeLeavingWorkspace = async () => 'continue';
-    window.render();
+    await window.render();
 
     const beforeText = document.body.innerText || '';
     const button =
@@ -211,13 +213,13 @@ async function main() {
       productName: window.state.productName || '',
       imagePreview: window.state.imagePreview || '',
       analysisImages: (window.state.analysisImages || []).length,
-      factoryProductName: window.state.factory?.product?.productName || '',
+      factoryProductName: factoryRuntimeReadFactory().product?.productName || '',
       sessionAssetsHydrated: typeof sessionAssetsHydrated === 'undefined' ? null : sessionAssetsHydrated,
       serverLastWorkHydrating: typeof serverLastWorkHydrating === 'undefined' ? null : serverLastWorkHydrating,
       workspaceBlankResetToken: typeof workspaceBlankResetToken === 'undefined' ? null : workspaceBlankResetToken,
     });
     button.scrollIntoView({ block: 'center', inline: 'nearest' });
-    button.click();
+    const resetPromise = window.startBlankWorkDraft();
     const resetTimeline = [sampleState('click-return')];
     await new Promise(resolve => setTimeout(resolve, 25));
     resetTimeline.push(sampleState('25ms'));
@@ -232,10 +234,11 @@ async function main() {
       if (!pending) break;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
+    await resetPromise;
     const blankResetSettled = !workspaceBlankResetInProgress && !persistentStateSaving
       && !lastProductImageBackupSavePromise && !sessionAssetSavePromise && !lastWorkSaveTimer;
-    const backupAfterReset = await window.workspaceGet('appSettings', 'lastProductImageBackup').catch(() => null);
-    const freshFactory = window.factoryState();
+    const backupAfterReset = await workspacePersistenceApi().loadPreference('lastProductImageBackup').catch(() => null);
+    const freshFactory = factoryRuntimeReadFactory();
     const sessionRaw = window.localStorage.getItem('pdp_session') || '';
     let session = {};
     try { session = sessionRaw ? JSON.parse(sessionRaw) : {}; } catch (_) {}
@@ -303,19 +306,23 @@ async function main() {
     String(window.state.imageBase64 || '').length === 0 &&
     (window.state.analysisImages || []).length === 0 &&
     !window.state.projectBusy &&
-    !(window.state.factory?.product?.productName || '') &&
-    (window.state.factory?.assets || []).length === 0`, 10000);
+    !(factoryRuntimeReadFactory().product?.productName || '') &&
+    (factoryRuntimeReadFactory().assets || []).length === 0`, 10000);
   await cdp.send('Page.reload', { ignoreCache: true });
   await waitFor(
     cdp,
-    '!!(window.state && window.render && window.factoryState && window.startBlankWorkDraft && window.currentSessionAssetsPayload)',
+    `${factoryCdpFixtureReadyExpression()}
+      && typeof startBlankWorkDraft === 'function'
+      && typeof currentSessionAssetsPayload === 'function'
+      && typeof workspacePersistenceApi === 'function'`,
     60000,
   );
   await new Promise(resolve => setTimeout(resolve, 1200));
   const reloadProof = await evaluate(cdp, `(async () => {
-    const sessionAssets = await window.workspaceGet('sessionAssets', 'current').catch(() => null);
-    const imageBackup = await window.workspaceGet('appSettings', 'lastProductImageBackup').catch(() => null);
-    const server = await fetch('http://127.0.0.1:5050/api/last-work', { cache: 'no-store' }).then(response => response.json()).catch(() => ({}));
+    const persistence = workspacePersistenceApi();
+    const sessionAssets = await persistence.loadSessionAssets(getCurrentLastWorkWorkspaceScope()).catch(() => null);
+    const imageBackup = await persistence.loadPreference('lastProductImageBackup').catch(() => null);
+    const server = await fetch(${JSON.stringify(BACKEND_BASE)} + '/api/last-work', { cache: 'no-store' }).then(response => response.json()).catch(() => ({}));
     let localSession = {};
     try { localSession = JSON.parse(localStorage.getItem('pdp_session') || '{}'); } catch (_) {}
     return {
@@ -325,8 +332,8 @@ async function main() {
       imagePreview: window.state.imagePreview || '',
       imageBase64Length: String(window.state.imageBase64 || '').length,
       analysisImages: (window.state.analysisImages || []).length,
-      factoryProductName: window.state.factory?.product?.productName || '',
-      factoryAssets: (window.state.factory?.assets || []).length,
+      factoryProductName: factoryRuntimeReadFactory().product?.productName || '',
+      factoryAssets: (factoryRuntimeReadFactory().assets || []).length,
       bodyHasOldProduct: (document.body.innerText || '').includes('새파일검증이전상품'),
       localSessionProductName: localSession.productName || localSession.factory?.product?.productName || '',
       sessionAssetsProductName: sessionAssets?.productName || sessionAssets?.factory?.product?.productName || '',

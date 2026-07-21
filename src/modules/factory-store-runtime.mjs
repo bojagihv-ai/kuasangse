@@ -1,4 +1,5 @@
 import { createFactoryDraftUpdater } from './factory-store-draft.mjs';
+import { createFactoryOperationLeases } from './factory-store-operation-leases.mjs';
 import {
   cleanText,
   clonePlainData,
@@ -37,7 +38,6 @@ export function createFactoryStore(options = {}) {
   let disposed = false;
   let operationToken = makeOperationToken();
   const listeners = new Set();
-  const activeOperationLeases = new Map();
 
   function makeOperationToken() {
     return Object.freeze({ version: FACTORY_STORE_VERSION, workspaceId, revision, fence });
@@ -47,72 +47,10 @@ export function createFactoryStore(options = {}) {
     if (disposed) throw new Error('factory store is disposed');
   }
 
-  function operationLeaseKey(value) {
-    const key = cleanText(value);
-    if (!key) throw new TypeError('factory operation lease key is required');
-    return key;
-  }
-
-  function staleOperationError(key) {
-    const error = new Error(`STALE_FACTORY_STORE_OPERATION: ${key}`);
-    error.code = 'STALE_FACTORY_STORE_OPERATION';
-    return error;
-  }
-
-  function abortOperationLease(record) {
-    if (!record || record.controller.signal.aborted) return false;
-    record.controller.abort();
-    return true;
-  }
-
-  function cancelAllOperationLeases() {
-    for (const record of activeOperationLeases.values()) abortOperationLease(record);
-    activeOperationLeases.clear();
-  }
-
-  function acquireOperationLease(value, expectedToken = operationToken) {
-    ensureActive();
-    const key = operationLeaseKey(value);
-    if (expectedToken !== operationToken) throw staleOperationError(key);
-    const existing = activeOperationLeases.get(key);
-    if (existing) {
-      return Object.freeze({
-        acquired: false,
-        operationKey: key,
-        operationToken: existing.operationToken,
-        signal: existing.controller.signal,
-        release: () => false,
-      });
-    }
-    const record = { controller: new AbortController(), operationToken: expectedToken };
-    activeOperationLeases.set(key, record);
-    let released = false;
-    const release = () => {
-      if (released) return false;
-      released = true;
-      if (activeOperationLeases.get(key) !== record) return false;
-      activeOperationLeases.delete(key);
-      return true;
-    };
-    return Object.freeze({
-      acquired: true,
-      operationKey: key,
-      operationToken: expectedToken,
-      signal: record.controller.signal,
-      release,
-    });
-  }
-
-  function cancelOperationLease(value, expectedToken = operationToken) {
-    ensureActive();
-    const key = operationLeaseKey(value);
-    if (expectedToken !== operationToken) throw staleOperationError(key);
-    const record = activeOperationLeases.get(key);
-    if (!record) return false;
-    activeOperationLeases.delete(key);
-    abortOperationLease(record);
-    return true;
-  }
+  const operationLeases = createFactoryOperationLeases({
+    ensureActive,
+    readOperationToken: () => operationToken,
+  });
 
   function assertMutable(owner) {
     ensureActive();
@@ -154,14 +92,15 @@ export function createFactoryStore(options = {}) {
     for (const listener of [...listeners]) listener(snapshot, change);
   }
 
-  function commit(nextSnapshot, kind, owner) {
+  function commit(nextSnapshot, kind, owner, commandName = '') {
     const previousRevision = revision;
     snapshot = immutableCopy(nextSnapshot);
     revision = previousRevision + 1;
     fence += 1;
     operationToken = makeOperationToken();
     const change = Object.freeze({
-      kind, owner, workspaceId, previousRevision, revision, operationToken,
+      kind, owner, commandName, workspaceId, previousRevision, revision, operationToken,
+      activeOperationLeaseKeys: Object.freeze(operationLeases.keys()),
     });
     notify(change);
     return snapshot;
@@ -218,7 +157,7 @@ export function createFactoryStore(options = {}) {
     if (!normalized) throw new TypeError('workspaceId is required');
     const nextSnapshot = immutableCopy(value.snapshot ?? snapshot);
     validateSnapshotRoots(nextSnapshot);
-    cancelAllOperationLeases();
+    operationLeases.cancelAll();
     const previousWorkspaceId = workspaceId;
     workspaceId = normalized;
     revision = nonNegativeInteger(value.revision ?? 0, 'revision');
@@ -250,7 +189,7 @@ export function createFactoryStore(options = {}) {
 
   function dispose() {
     if (disposed) return;
-    cancelAllOperationLeases();
+    operationLeases.cancelAll();
     disposed = true;
     listeners.clear();
     operationToken = null;
@@ -265,8 +204,9 @@ export function createFactoryStore(options = {}) {
     assertMutable,
     getOperationToken,
     isOperationCurrent: candidate => !disposed && candidate === operationToken,
-    acquireOperationLease,
-    cancelOperationLease,
+    acquireOperationLease: operationLeases.acquire,
+    cancelOperationLease: operationLeases.cancel,
+    hasActiveOperationLease: operationLeases.has,
     switchWorkspace,
     subscribe,
     reportError,

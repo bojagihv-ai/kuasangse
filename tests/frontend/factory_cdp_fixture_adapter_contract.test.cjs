@@ -109,6 +109,161 @@ test('factory CDP fixture adapter reaches canonical lexical runtime without muta
   }
 });
 
+test('legacy CDP compatibility is diagnostic-gated and commits mutations without window aliases', async () => {
+  const { legacyCdpCompatibilityExpression } = require(UTILS);
+  assert.equal(typeof legacyCdpCompatibilityExpression, 'function');
+  assert.equal(
+    legacyCdpCompatibilityExpression('window.customDiagnosticValue + 1'),
+    'window.customDiagnosticValue + 1',
+    'expressions without retired aliases must stay on the canonical runtime path',
+  );
+
+  const root = {};
+  const document = {};
+  const context = vm.createContext({ structuredClone, window: root, globalThis: root, document });
+  vm.runInContext(`
+    const state = { step: 'upload', factory: { stale: true } };
+    let currentFactory = Object.freeze({ nested: Object.freeze({ count: 1 }) });
+    let factoryReadCount = 0;
+    let replaceCount = 0;
+    let replaceReason = '';
+    const factoryRuntimeReadFactory = () => {
+      factoryReadCount += 1;
+      return currentFactory;
+    };
+    const factoryRuntimeReplaceFactorySnapshot = (value, options = {}) => {
+      replaceCount += 1;
+      replaceReason = options.reason || '';
+      currentFactory = Object.freeze({ nested: Object.freeze({ ...value.nested }) });
+      return currentFactory;
+    };
+    const render = function render() {
+      return state.step + ':' + factoryRuntimeReadFactory().nested.count;
+    };
+    window.canonicalBump = function canonicalBump() {
+      currentFactory = Object.freeze({ nested: Object.freeze({ count: 3 }) });
+      return currentFactory.nested.count;
+    };
+    document.canonicalEvent = function canonicalEvent() {
+      currentFactory = Object.freeze({ nested: Object.freeze({ count: 5 }) });
+    };
+    let classicRuntimeHydrationReady = false;
+    let classicRuntimeInitialRenderComplete = false;
+  `, context);
+
+  const legacyExpression = `async () => {
+    window.state.step = 'factory';
+    window.factoryState.nested.count = 2;
+    window.canonicalBump();
+    window.factoryState.nested.compatible = true;
+    const rendered = window.render();
+    return {
+      rendered,
+      step: window.__kuasangseState.step,
+      count: window.factoryState.nested.count,
+      callableCount: window.factoryState().nested.count,
+    };
+  }`;
+
+  const beforeDiagnostic = await vm.runInContext(
+    legacyCdpCompatibilityExpression(`(${legacyExpression})().then(() => 'unexpected')`),
+    context,
+  ).catch(error => error.name);
+  assert.equal(beforeDiagnostic, 'TypeError', 'compatibility must stay unavailable before diagnostics install');
+
+  Object.defineProperty(root, '__KUASANGSE_DIAGNOSTIC__', {
+    value: Object.freeze({ factory: Object.freeze({ nested: Object.freeze({ count: 1 }) }) }),
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  Object.defineProperty(root, 'nativeLike', {
+    get() {
+      if (this !== root) throw new TypeError('Illegal invocation');
+      return 7;
+    },
+    configurable: true,
+  });
+  assert.equal(
+    vm.runInContext(legacyCdpCompatibilityExpression('!!window.state'), context),
+    false,
+    'legacy aliases must not make readiness probes pass before hydration completes',
+  );
+  vm.runInContext(`
+    classicRuntimeHydrationReady = true;
+    classicRuntimeInitialRenderComplete = true;
+  `, context);
+  const readsBeforeStateOnlyProbe = vm.runInContext('factoryReadCount', context);
+  assert.equal(
+    vm.runInContext(
+      legacyCdpCompatibilityExpression('window.state.step === "upload"'),
+      context,
+    ),
+    true,
+  );
+  assert.equal(
+    vm.runInContext('factoryReadCount', context),
+    readsBeforeStateOnlyProbe,
+    'state-only polling must not clone or serialize the factory snapshot',
+  );
+  const result = await vm.runInContext(
+    legacyCdpCompatibilityExpression(`(${legacyExpression})()`),
+    context,
+  );
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    rendered: 'factory:3',
+    step: 'factory',
+    count: 3,
+    callableCount: 3,
+  });
+  assert.equal(vm.runInContext('replaceCount', context), 2);
+  assert.equal(vm.runInContext('replaceReason', context), 'legacy-cdp-test-compat');
+  assert.equal(vm.runInContext('state.factory.stale', context), true, 'canonical state.factory is not reused');
+  assert.equal(
+    vm.runInContext(
+      legacyCdpCompatibilityExpression('window.state.step === "factory" ? window.nativeLike : 0'),
+      context,
+    ),
+    7,
+    'window accessors must retain their canonical receiver',
+  );
+  const restoredRender = await vm.runInContext(
+    legacyCdpCompatibilityExpression(`(async () => {
+      const savedRender = window.render;
+      window.render = () => 'override:' + savedRender();
+      const overridden = window.render();
+      window.render = savedRender;
+      return { overridden, restored: window.render() };
+    })()`),
+    context,
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(restoredRender)), {
+    overridden: 'override:factory:3',
+    restored: 'factory:3',
+  });
+  const proxyReplacement = await vm.runInContext(
+    legacyCdpCompatibilityExpression(`(async () => {
+      window.state.factory = new Proxy({ nested: { count: 4 } }, {});
+      window.render();
+      return window.factoryState.nested.count;
+    })()`),
+    context,
+  );
+  assert.equal(proxyReplacement, 4, 'Proxy-backed legacy snapshots must remain cloneable');
+  const refreshedAfterDomEvent = vm.runInContext(
+    legacyCdpCompatibilityExpression(`(() => {
+      document.canonicalEvent();
+      return window.factoryState().nested.count;
+    })()`),
+    context,
+  );
+  assert.equal(refreshedAfterDomEvent, 5, 'canonical DOM event mutations must refresh a clean draft');
+  for (const legacyAlias of ['state', '__kuasangseState', 'factoryState', 'render']) {
+    assert.equal(Object.hasOwn(root, legacyAlias), false, `${legacyAlias} must not be installed on window`);
+  }
+});
+
 test('DB-01 fixture invokes canonical candidate scope functions through the adapter', () => {
   const { factoryCdpFixtureExpression, factoryCdpFixtureReadyExpression } = require(UTILS);
   const context = vm.createContext({ structuredClone });
@@ -170,4 +325,36 @@ test('DB-01 fixture invokes canonical candidate scope functions through the adap
   assert.equal(result.staleSelectable, false);
   assert.notEqual(result.beforeScopeKey, result.afterScopeKey);
   assert.equal(result.rotatedScope, 'draft:after-v163');
+});
+
+test('legacy CDP compatibility accepts an empty canonical factory before first hydration', () => {
+  const { legacyCdpCompatibilityExpression } = require(UTILS);
+  const root = {};
+  const context = vm.createContext({ structuredClone, window: root, globalThis: root });
+  vm.runInContext(`
+    const state = { factory: null };
+    let currentFactory = null;
+    const factoryRuntimeReadFactory = () => currentFactory;
+    const factoryRuntimeReplaceFactorySnapshot = value => {
+      currentFactory = structuredClone(value);
+      return currentFactory;
+    };
+    const render = () => currentFactory;
+    let classicRuntimeHydrationReady = true;
+    let classicRuntimeInitialRenderComplete = true;
+  `, context);
+  Object.defineProperty(root, '__KUASANGSE_DIAGNOSTIC__', {
+    value: Object.freeze({}),
+    configurable: false,
+  });
+  const result = vm.runInContext(
+    legacyCdpCompatibilityExpression(`(() => {
+      window.state.factory = { product: { productName: 'first' } };
+      window.render();
+      return window.factoryState.product.productName;
+    })()`),
+    context,
+  );
+  assert.equal(result, 'first');
+  assert.equal(vm.runInContext('currentFactory.product.productName', context), 'first');
 });

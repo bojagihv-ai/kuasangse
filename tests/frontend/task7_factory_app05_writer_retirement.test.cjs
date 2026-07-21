@@ -11,6 +11,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const APP05_PATH = path.join(ROOT, 'src/app-core-05.js');
 const UPLOAD_MENU_PATH = path.join(ROOT, 'src/menus/upload-menu.mjs');
 const ANALYSIS_MENU_PATH = path.join(ROOT, 'src/menus/analysis-menu.mjs');
+const ANALYSIS_CONTROLLER_PATH = path.join(ROOT, 'src/menus/analysis-controller.mjs');
 const AUDIT_PATH = path.join(
   ROOT,
   '.omo/evidence/kuasangse-menu-modularization/task-7/remediation-B2-B3/full-selector-scope-audit-v3.cjs',
@@ -86,6 +87,7 @@ test('classic product and file listeners are retired while upload and analysis E
   const handleFile = sourceSlice(text, 'function handleFile(', 'function handleMultipleFiles(');
   const uploadMenu = fs.readFileSync(UPLOAD_MENU_PATH, 'utf8');
   const analysisMenu = fs.readFileSync(ANALYSIS_MENU_PATH, 'utf8');
+  const analysisController = fs.readFileSync(ANALYSIS_CONTROLLER_PATH, 'utf8');
 
   assert.equal((bindEvents.match(/factorySetCurrentProductIdentity\(/g) || []).length, 0);
   assert.doesNotMatch(bindEvents, /#(?:productNameInput|fileInput|analysisMatchNameInput|analysisHubFileInput)/);
@@ -93,9 +95,10 @@ test('classic product and file listeners are retired while upload and analysis E
   assert.match(uploadMenu, /invokeUploadAction\('updateProductName'/);
   assert.match(uploadMenu, /invokeUploadAction\('saveProductName'/);
   assert.match(uploadMenu, /invokeUploadAction\('uploadFiles'/);
-  assert.match(analysisMenu, /call\('updateProductName'/);
-  assert.match(analysisMenu, /\['#analysisMatchNameInput', 'commitProductName'\]/);
-  assert.match(analysisMenu, /call\('uploadFiles'/);
+  assert.match(analysisMenu, /createAnalysisMenuController\(capabilities\)/);
+  assert.match(analysisController, /call\('updateProductName'/);
+  assert.match(analysisController, /\['#analysisMatchNameInput', 'commitProductName'\]/);
+  assert.match(analysisController, /call\('uploadFiles'/);
 
   assert.match(handleFile, /factory\/runtime:syncProductImageAcrossWorkspaces/);
   assert.match(handleFile, /factoryRuntimeIsOperationCurrent\(operationToken\)/);

@@ -171,13 +171,13 @@ async function main() {
     await evaluate(cdp, `(() => {
       const target = document.querySelector('#factoryAutomationAssetChooser_options [data-factory-asset-id]')
         || document.querySelector('#factoryAutomationAssetChooser_options');
-      const main = target?.closest?.('main.main');
-      if (target && main) {
-        const mainRect = main.getBoundingClientRect();
+      const scrollRoot = document.querySelector('.app');
+      if (target && scrollRoot) {
+        const rootRect = scrollRoot.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
-        const contentTop = targetRect.top - mainRect.top + main.scrollTop;
-        const maxScrollTop = Math.max(0, main.scrollHeight - main.clientHeight);
-        main.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, contentTop - 96)), behavior: 'auto' });
+        const contentTop = targetRect.top - rootRect.top + scrollRoot.scrollTop;
+        const maxScrollTop = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+        scrollRoot.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, contentTop - 96)), behavior: 'auto' });
       } else {
         target?.scrollIntoView({ block: 'center', inline: 'nearest' });
       }

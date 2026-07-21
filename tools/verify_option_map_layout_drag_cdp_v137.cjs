@@ -40,7 +40,7 @@ async function main() {
       os.optionSheetRowPattern = '3,3,3,3';
       window.state.optionSorter = os;
       window.state.step = 'optionsorter';
-      window.render();
+      await window.render();
       const beforeRows = [...document.querySelectorAll('[data-opt-map-row-index]')].map(row => row.children.length);
       const before = [...document.querySelectorAll('[data-opt-map-pair-key]')].map(card => card.querySelector('.name')?.textContent?.trim() || '');
       const firstRow = document.querySelector('[data-opt-map-row-index="0"]');

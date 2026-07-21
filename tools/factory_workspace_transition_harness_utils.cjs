@@ -60,10 +60,25 @@ function backendReadExpression(backendBase, workspaceScope) {
 async function reloadAndRead(cdp, appUrl, backendBase, workspaceScope) {
   const cycle = String(Date.now());
   await cdp.send('Page.navigate', { url: `${appUrl}?candidateWorkspaceTransition=v220&cycle=${cycle}` });
-  await waitFor(cdp, `location.search.includes(${JSON.stringify(`cycle=${cycle}`)}) && ${factoryCdpFixtureReadyExpression()}
+  const readyExpression = `location.search.includes(${JSON.stringify(`cycle=${cycle}`)}) && ${factoryCdpFixtureReadyExpression()}
     && typeof getCurrentLastWorkWorkspaceScope === 'function'
     && typeof workspacePersistenceApi === 'function'
-    && typeof factoryCandidateReviewCanApply === 'function'`, 60000);
+    && typeof factoryCandidateReviewCanApply === 'function'`;
+  try {
+    await waitFor(cdp, readyExpression, 60000);
+  } catch (error) {
+    const readiness = await evaluateFactoryCdpFixture(cdp, `async ({ readAppState, readFactory, readOperationToken }) => ({
+      href: location.href,
+      readyState: document.readyState,
+      hydrationReady: typeof classicRuntimeHydrationReady === 'boolean' ? classicRuntimeHydrationReady : null,
+      initialRenderComplete: typeof classicRuntimeInitialRenderComplete === 'boolean' ? classicRuntimeInitialRenderComplete : null,
+      stateError: readAppState()?.error || '',
+      appWorkspaceId: readAppState()?.currentProjectId || '',
+      factoryWorkspaceId: readFactory()?.workspace?.id || readFactory()?.currentProjectId || '',
+      operationToken: readOperationToken(),
+    })`).catch(diagnosticError => ({ diagnosticError: String(diagnosticError?.message || diagnosticError) }));
+    throw new Error(`${error.message}\nreadiness=${JSON.stringify(readiness)}`);
+  }
   await new Promise(resolve => setTimeout(resolve, 1600));
   return evaluateFactoryCdpFixture(cdp, `async ({ readAppState, readFactory, readOperationToken }) => {
     const appState = readAppState();
@@ -76,7 +91,7 @@ async function reloadAndRead(cdp, appUrl, backendBase, workspaceScope) {
       factoryWorkspaceId: factory.workspace?.id || factory.currentProjectId || '',
       scope: getCurrentLastWorkWorkspaceScope?.() || '',
       operationToken: token,
-      operationTokenScope: workspacePersistenceApi().normalizeProjectScope(token.workspaceId),
+      operationTokenScope: workspacePersistenceApi().normalizeWorkspaceScope(token.workspaceId),
       state: {
         dbKey: factory.product?.selectedDbCandidateKey || '',
         cafeKey: factory.product?.selectedCafe24CandidateKey || '',

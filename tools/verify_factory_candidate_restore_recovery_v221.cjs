@@ -37,7 +37,7 @@ function buildRestoreRecoveryChecks(proof) {
     { ok: proof.db[1]?.scope === proof.expected.foreignScope && proof.cafe24[1]?.scope === proof.expected.foreignScope && proof.db[1]?.identity === proof.expected.foreignIdentity && proof.cafe24[1]?.identity === proof.expected.foreignIdentity, message: `foreign 후보 scope/identity가 변했습니다: ${JSON.stringify({ db: proof.db[1], cafe24: proof.cafe24[1] })}` },
     { ok: proof.db[1]?.canApply === false && proof.cafe24[1]?.canApply === false && proof.buttons.dbForeign?.exists === true && proof.buttons.dbForeign.disabled === true && proof.buttons.cafeForeign?.exists === true && proof.buttons.cafeForeign.disabled === true, message: `foreign 후보가 선택 가능하거나 버튼이 활성입니다: ${JSON.stringify(proof.buttons)}` },
     { ok: proof.before.recovery.rawLength > 0 && proof.before.recovery.revisionsLength > 0 && proof.before.recovery.rawSha256 === proof.sentinel.recoverySha256 && proof.before.recovery.revisionsSha256 === proof.sentinel.revisionsSha256 && exact(proof.before.recovery, proof.after.recovery, ['rawLength', 'rawSha256', 'revisionsLength', 'revisionsSha256']), message: `non-empty sentinel 또는 skipPersistence 복구 namespace 불변성이 깨졌습니다: ${JSON.stringify({ sentinel: proof.sentinel, before: proof.before.recovery, after: proof.after.recovery })}` },
-    { ok: proof.cleanup.recoveryRestored === true && proof.cleanup.revisionsRestored === true, message: `recovery sentinel cleanup이 원래 상태를 복원하지 못했습니다: ${JSON.stringify(proof.cleanup)}` },
+    { ok: proof.cleanup.recoveryRestored === true && proof.cleanup.revisionsRestored === true && proof.cleanup.authorityReleased === true, message: `recovery sentinel/authority cleanup이 원래 상태를 복원하지 못했습니다: ${JSON.stringify(proof.cleanup)}` },
     { ok: exact(proof.before.scopedBackend, proof.after.scopedBackend, backendKeys), message: `project backend last-work가 변했습니다: ${JSON.stringify({ before: proof.before.scopedBackend, after: proof.after.scopedBackend })}` },
     { ok: exact(proof.before.globalBackend, proof.after.globalBackend, backendKeys), message: `global backend last-work가 변했습니다: ${JSON.stringify({ before: proof.before.globalBackend, after: proof.after.globalBackend })}` },
   ];
@@ -59,11 +59,16 @@ async function main() {
     await cdp.send('Runtime.enable');
     await cdp.send('Network.enable');
     await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `try { localStorage.setItem('gemini_backend_url', ${JSON.stringify(BACKEND_BASE)}); } catch (_) {}`,
+    });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: `${APP_URL}?candidateRestoreRecovery=v221` });
     await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
       && typeof normalizeFactoryState === 'function'
       && typeof applyWorkspacePayload === 'function'
+      && typeof ensureWorkspaceEditAuthority === 'function'
+      && typeof workspaceLockApi === 'function'
       && typeof factoryCandidateReviewScopeKey === 'function'
       && typeof factoryCandidateReviewCanApply === 'function'
       && typeof workspacePersistenceApi === 'function'`, 60000);
@@ -99,6 +104,8 @@ async function main() {
         return { status: response.status, hasSnapshot: payload.hasSnapshot === true, workspaceId: payload.workspaceId || '', revision: Number(payload.revision || 0), bodyLength: raw.length, sha256: await digest(raw) };
       };
       const persistence = workspacePersistenceApi();
+      const authority = await ensureWorkspaceEditAuthority('project:' + projectId, { force: true });
+      if (authority?.mode !== 'editing') throw new Error('DB-04 test workspace authority was not acquired');
       const recoveryKey = 'pdp_session';
       const revisionsKey = 'kuasangse_workspace_revisions_v1';
       const originalRecovery = persistence.readRecoveryValue(recoveryKey);
@@ -166,6 +173,12 @@ async function main() {
         recoveryRestored: persistence.readRecoveryValue(recoveryKey) === originalRecovery,
         revisionsRestored: localStorage.getItem(revisionsKey) === originalRevisions,
       };
+      const lock = workspaceLockApi();
+      const currentAuthority = lock?.snapshot?.();
+      if (currentAuthority?.scopeId === 'project:' + projectId && currentAuthority.mode === 'editing') {
+        await lock.release();
+      }
+      scenario.cleanup.authorityReleased = lock?.snapshot?.().mode !== 'editing';
       return scenario;
     }`);
     await evaluate(cdp, `document.querySelector('[data-factory-apply-db-candidate="0"]')?.scrollIntoView({ block: 'center' })`);

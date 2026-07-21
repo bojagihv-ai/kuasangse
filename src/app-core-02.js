@@ -2081,6 +2081,7 @@ function saveJson(key, value) {
 
 function mainScrollElement() {
   const candidates = [
+    document.querySelector('.app'),
     document.querySelector('main.main'),
     document.querySelector('.main'),
     document.scrollingElement,
@@ -2412,6 +2413,7 @@ let persistentStateSaving = false;
 let persistentStateSavePromise = null;
 let persistentStateSaveQueued = false;
 let persistentStateSaveRetryTimer = null;
+let workspaceScopeTransitionInProgress = false;
 let serverLastWorkSaveTimer = null;
 let serverLastWorkSavePromise = null;
 let serverLastWorkSaveRequestedAgain = false;
@@ -2780,7 +2782,7 @@ function applyProductImageBackupPayload(payload, options = {}) {
       }
     } catch(e) {}
     try {
-      if (typeof ensureCompMarketScrapeState === 'function') {
+      if (options.syncMarket !== false && typeof ensureCompMarketScrapeState === 'function') {
         const market = ensureCompMarketScrapeState();
         if (!market.imagePreview || market.imagePreview === IMAGE_STORED_MARKER || market.defaultImageSeeded === true) {
           market.imageMime = imageMime;
@@ -2839,7 +2841,7 @@ function applyProductImageBackupPayload(payload, options = {}) {
     }
   } catch(e) {}
   try {
-    if (typeof ensureCompMarketScrapeState === 'function') {
+    if (options.syncMarket !== false && typeof ensureCompMarketScrapeState === 'function') {
       const market = ensureCompMarketScrapeState();
       if (force || !market.imageBase64 || !market.imagePreview || market.imagePreview === '__stored_in_indexeddb__' || market.defaultImageSeeded === true) {
         market.imageBase64 = item.base64;
@@ -4223,9 +4225,12 @@ function currentSessionAssetsPayload(options = {}) {
   const preserveSelectedFactoryImages = options.preserveSelectedFactoryImages === true;
   const preserveRecentWorkingImages = options.preserveRecentWorkingImages === true;
   const preserveInlineSectionImages = includeImages || options.preserveSectionImages === true || preserveRecentWorkingImages;
+  const canonicalFactory = options.factorySnapshot
+    || (typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : state.factory)
+    || {};
   const factorySnapshot = includeImages
-    ? cloneData(state.factory || {})
-    : stripFactoryImages(state.factory || {}, {
+    ? cloneData(canonicalFactory)
+    : stripFactoryImages(canonicalFactory, {
         preserveReferencedImages: preserveSelectedFactoryImages || preserveRecentWorkingImages,
         preserveRecentImages: preserveRecentWorkingImages,
       });
@@ -4774,6 +4779,7 @@ function workspaceCommitMetadata(scopeId, prefix, revision = currentWorkspaceRev
 }
 
 async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
+  if (workspaceScopeTransitionInProgress) return false;
   if (serverLastWorkSavePromise) {
     serverLastWorkSaveRequestedAgain = true;
     if (options.force === true) serverLastWorkForceSaveRequested = true;
@@ -4820,6 +4826,7 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
 }
 
 function scheduleServerLastWorkSave(reason = 'auto', delay = 3200) {
+  if (workspaceScopeTransitionInProgress) return;
   if (serverLastWorkHydrating) return;
   if (serverLastWorkSaveTimer) clearTimeout(serverLastWorkSaveTimer);
   serverLastWorkSaveTimer = setTimeout(() => {
@@ -5413,6 +5420,38 @@ function scheduleLastWorkSave(delay = 1600, options = {}) {
   }, wait);
 }
 
+async function settleWorkspaceScopeTransitionPersistence() {
+  const cancelDeferredWrites = () => {
+    for (const timer of [
+      lastWorkSaveTimer,
+      sessionAssetSaveTimer,
+      serverLastWorkSaveTimer,
+      lastWorkInputCheckpointTimer,
+      factoryLastSnapshotSaveTimer,
+      persistentStateSaveRetryTimer,
+    ]) if (timer) clearTimeout(timer);
+    lastWorkSaveTimer = null;
+    sessionAssetSaveTimer = null;
+    serverLastWorkSaveTimer = null;
+    lastWorkInputCheckpointTimer = null;
+    factoryLastSnapshotSaveTimer = null;
+    persistentStateSaveRetryTimer = null;
+    factoryLastSnapshotSavePending = false;
+    persistentStateSaveQueued = false;
+    serverLastWorkSaveRequestedAgain = false;
+    serverLastWorkForceSaveRequested = false;
+  };
+  cancelDeferredWrites();
+  const activeWrites = [
+    persistentStateSavePromise,
+    serverLastWorkSavePromise,
+    sessionAssetSavePromise,
+    lastProductImageBackupSavePromise,
+  ].filter(Boolean);
+  if (activeWrites.length) await Promise.allSettled(activeWrites);
+  cancelDeferredWrites();
+}
+
 function markWorkspaceBlankResetBoundary() {
   workspaceBlankResetToken += 1;
   workspaceBlankResetInProgress = true;
@@ -5467,15 +5506,20 @@ function saveLastWorkNow(options = {}) {
     clearTimeout(lastWorkSaveTimer);
     lastWorkSaveTimer = null;
   }
-  if (options.sync !== false && !lastWorkSyncingVisibleInputs) {
+  if (!options.factory && options.sync !== false && !lastWorkSyncingVisibleInputs) {
     syncVisibleLastWorkInputs({ deep: options.deep === true });
   }
   const pending = [];
   let persistenceBoundary = Promise.resolve(true);
   if (options.persistent !== false) {
-    const persistedImmediately = savePersistentState({ skipVisibleSync: options.skipVisibleSync === true || options.sync === false });
+    const persistenceOptions = {
+      skipVisibleSync: options.skipVisibleSync === true || options.sync === false || !!options.factory,
+      deferWarningRender: options.deferWarningRender === true || !!options.factory,
+      factory: options.factory || null,
+    };
+    const persistedImmediately = savePersistentState(persistenceOptions);
     if (persistedImmediately === false) {
-      persistenceBoundary = flushQueuedPersistentState({ skipVisibleSync: options.skipVisibleSync === true || options.sync === false });
+      persistenceBoundary = flushQueuedPersistentState(persistenceOptions);
     } else {
       persistenceBoundary = Promise.resolve(persistedImmediately);
     }
@@ -5527,9 +5571,16 @@ function flushLastWorkBeforeLeave() {
   } catch(e) {}
 }
 
+function hasRestoredImagePayloadValue(value) {
+  if (!value) return false;
+  if (typeof value !== 'string') return true;
+  const normalized = value.trim();
+  return !!normalized && normalized !== IMAGE_STORED_MARKER;
+}
+
 function hasInlineImagePayload(item, keys = ['base64', 'preview', 'dataUrl', 'image', 'result']) {
   if (!item || typeof item !== 'object') return false;
-  return keys.some(key => !!item[key]);
+  return keys.some(key => hasRestoredImagePayloadValue(item[key]));
 }
 
 function snapshotHasInlineImagePayload(value) {
@@ -5541,38 +5592,81 @@ function snapshotHasInlineImagePayload(value) {
 
 function countSessionAssetRestoreRefs() {
   let count = 0;
+  const activeStep = String(state.step || 'upload');
+  const contentStep = ['sections', 'generating', 'preview'].includes(activeStep);
+  const canonicalFactory = typeof factoryRuntimeReadFactory === 'function'
+    ? factoryRuntimeReadFactory()
+    : (state.factory || {});
+  const currentProductImagePayload = [
+    state.imageBase64,
+    state.imagePreview,
+    canonicalFactory.product?.imageBase64,
+    canonicalFactory.product?.imagePreview,
+    canonicalFactory.product?.imageUrl,
+  ]
+    .find(hasRestoredImagePayloadValue) || '';
+  const currentProductImageFingerprint = typeof factoryImagePayloadFingerprint === 'function'
+    ? factoryImagePayloadFingerprint(currentProductImagePayload)
+    : '';
   if (Array.isArray(state.analysisImages)) {
-    count += state.analysisImages.filter(img => img?.hasImageData && !hasInlineImagePayload(img, ['base64', 'preview'])).length;
+    count += state.analysisImages.filter(img => {
+      if (!img?.hasImageData || hasInlineImagePayload(img, ['base64', 'preview'])) return false;
+      const referenceFingerprint = String(img.inputImageFingerprint || '').trim();
+      return !referenceFingerprint || referenceFingerprint !== currentProductImageFingerprint;
+    }).length;
   }
-  if (Array.isArray(state.detailImageBlocks)) {
-    count += state.detailImageBlocks.filter(block => block?.hasDataUrl && !block.dataUrl).length;
+  if (contentStep) {
+    if (Array.isArray(state.detailImageBlocks)) {
+      count += state.detailImageBlocks.filter(block => block?.hasDataUrl && !block.dataUrl).length;
+    }
+    for (const [sectionId, variants] of Object.entries(state.sectionVariants || {})) {
+      if (!Array.isArray(variants) || hasRestoredImagePayloadValue(state.sectionImages?.[sectionId])) continue;
+      const currentId = String(state.currentSectionVariantIds?.[sectionId] || '');
+      const current = currentId
+        ? variants.filter(item => String(item?.id || item?.variantId || '') === currentId)
+        : variants.slice(0, 1);
+      count += current.filter(item => item?.hasImage && !item.image).length;
+    }
   }
-  for (const variants of Object.values(state.sectionVariants || {})) {
-    if (Array.isArray(variants)) count += variants.filter(item => item?.hasImage && !item.image).length;
+  if (activeStep === 'preview') {
+    for (const stack of Object.values(state.aiRepairUndoStack || {})) {
+      if (Array.isArray(stack)) count += stack.filter(item => item?.hasImage && !item.image).length;
+    }
+    if (state.aiRepair?.hasMaskDataUrl && !state.aiRepair.maskDataUrl) count += 1;
   }
-  for (const stack of Object.values(state.aiRepairUndoStack || {})) {
-    if (Array.isArray(stack)) count += stack.filter(item => item?.hasImage && !item.image).length;
+  if (activeStep === 'imagecuts') {
+    if (state.cuts?.hasSourceImage && !hasInlineImagePayload(state.cuts, ['sourceBase64', 'sourcePreview'])) count += 1;
+    if (state.cuts?.hasWorkImage && !hasInlineImagePayload(state.cuts, ['workImageBase64', 'workImagePreview'])) count += 1;
   }
-  if (state.aiRepair?.hasMaskDataUrl && !state.aiRepair.maskDataUrl) count += 1;
-  if (state.cuts?.hasSourceImage && !hasInlineImagePayload(state.cuts, ['sourceBase64', 'sourcePreview'])) count += 1;
-  if (state.cuts?.hasWorkImage && !hasInlineImagePayload(state.cuts, ['workImageBase64', 'workImagePreview'])) count += 1;
-  if (state.compPage?.hasUploadedImages && !(state.compPage.uploadedImages || []).length) count += 1;
-  if (state.compPage?.hasEvidenceImages && !(state.compPage.evidenceImages || []).length) count += 1;
-  const optionSorter = state.optionSorter || {};
-  if (Array.isArray(optionSorter.images)) {
-    count += optionSorter.images.filter(img => img?.hasImageData && !hasInlineImagePayload(img, ['base64', 'preview', 'dataUrl'])).length;
+  if (activeStep === 'competitor') {
+    if (state.compPage?.hasUploadedImages && !(state.compPage.uploadedImages || []).length) count += 1;
+    if (state.compPage?.hasEvidenceImages && !(state.compPage.evidenceImages || []).length) count += 1;
   }
-  if (Array.isArray(optionSorter.optionResults)) {
-    count += optionSorter.optionResults.filter(result => result?.hasImage && !result.image).length;
+  if (activeStep === 'optionsorter') {
+    const optionSorter = state.optionSorter || {};
+    if (Array.isArray(optionSorter.images)) {
+      count += optionSorter.images.filter(img => img?.hasImageData && !hasInlineImagePayload(img, ['base64', 'preview', 'dataUrl'])).length;
+    }
+    if (Array.isArray(optionSorter.optionResults)) {
+      count += optionSorter.optionResults.filter(result => result?.hasImage && !result.image).length;
+    }
+    if (optionSorter.styleSample?.hasImage && !optionSorter.styleSample.image) count += 1;
   }
-  if (optionSorter.styleSample?.hasImage && !optionSorter.styleSample.image) count += 1;
-  const factory = state.factory || {};
-  if (factory.product?.hasImage && !factory.product.imageBase64 && !factory.product.imagePreview) count += 1;
-  if (Array.isArray(factory.product?.inputImages)) {
-    count += factory.product.inputImages.filter(img => img?.hasImage && !hasInlineImagePayload(img, ['base64', 'preview'])).length;
-  }
-  if (Array.isArray(factory.assets)) {
-    count += factory.assets.filter(asset => asset?.hasImage && !asset.image).length;
+  if (activeStep === 'factory') {
+    const factory = canonicalFactory;
+    const hasCurrentProductImage = hasInlineImagePayload(state, ['imageBase64', 'imagePreview'])
+      || hasInlineImagePayload(factory.product, ['imageBase64', 'imagePreview', 'imageUrl']);
+    if (factory.product?.hasImage && !hasCurrentProductImage) count += 1;
+    if (Array.isArray(factory.product?.inputImages)) {
+      count += factory.product.inputImages.filter(img => {
+        if (!img?.hasImage || hasInlineImagePayload(img, ['base64', 'preview', 'image', 'imageUrl', 'dataUrl'])) return false;
+        const referenceFingerprint = String(img.inputImageFingerprint || '').trim();
+        return !referenceFingerprint || referenceFingerprint !== currentProductImageFingerprint;
+      }).length;
+    }
+    if (Array.isArray(factory.assets)) {
+      count += factory.assets.filter(asset => asset?.hasImage && !hasInlineImagePayload(asset, ['image', 'imageUrl', 'preview', 'base64', 'dataUrl', 'result'])).length;
+    }
   }
   return count;
 }
@@ -5592,7 +5686,12 @@ function dismissCurrentStorageWarning() {
 
 function showImageRestoreWarningIfNeeded() {
   const missingCount = countSessionAssetRestoreRefs();
-  if (!missingCount) return false;
+  if (!missingCount) {
+    if (!String(state.storageWarning || '').includes('저장된 이미지 복원')) return false;
+    state.storageWarning = '';
+    state.storageWarningDismissKey = '';
+    return true;
+  }
   const key = `image-restore:${state.currentProjectId || state.analysisTimestamp || 'session'}:${state.step || ''}:${missingCount}`;
   if (wasStorageWarningDismissed(key)) return false;
   state.storageWarning = `저장된 이미지 복원에 실패했습니다. ${missingCount}개 이미지 원본을 현재 브라우저 저장소에서 읽지 못했습니다. 저장된 작업이 있다면 작업공간에서 다시 불러오거나 원본을 다시 업로드해주세요.`;
@@ -5647,11 +5746,15 @@ function applySessionAssetsPayload(assets, options = {}) {
   assets = preserveInlineImages
     ? (options.payloadAlreadyCloned === true ? assets : cloneData(assets))
     : stripRuntimeAssetsForApply(assets);
-  let workingFactory = normalizeFactoryState(cloneData(factoryRuntimeReadFactory()));
+  const currentFactorySnapshot = factoryRuntimeReadFactory();
+  const rawIncomingFactory = assets.factory && typeof assets.factory === 'object'
+    ? assets.factory
+    : null;
   const productScopeTargetName = String(
     options.targetName ||
     (preserveInlineImages ? lastWorkPayloadProductName(assets) : '') ||
-    workingFactory?.product?.productName ||
+    rawIncomingFactory?.product?.productName ||
+    currentFactorySnapshot?.product?.productName ||
     state.productName ||
     lastWorkPayloadProductName(assets) ||
     ''
@@ -5660,15 +5763,18 @@ function applySessionAssetsPayload(assets, options = {}) {
     targetName: productScopeTargetName,
     mutate: true,
   });
+  let workingFactory = preserveInlineImages && assets.factory && typeof assets.factory === 'object'
+    ? normalizeFactoryState(cloneData(assets.factory))
+    : normalizeFactoryState(cloneData(currentFactorySnapshot));
   let changed = !!assets.__productScopeCleaned;
   const incomingFactoryForIdentity = assets.factory && typeof assets.factory === 'object'
     ? assets.factory
     : { product: { productName: assets.productName || '' } };
   const currentFactoryForIdentity = {
-    ...workingFactory,
+    ...currentFactorySnapshot,
     product: {
-      ...(workingFactory.product || {}),
-      productName: (workingFactory.product?.productName || state.productName || ''),
+      ...(currentFactorySnapshot.product || {}),
+      productName: (currentFactorySnapshot.product?.productName || state.productName || ''),
     },
   };
   const incomingKey = typeof factoryIdentityKey === 'function' ? factoryIdentityKey(incomingFactoryForIdentity) : '';
@@ -5764,6 +5870,7 @@ function applySessionAssetsPayload(assets, options = {}) {
       restoreInline: true,
       force: options.forceProductRestore === true,
       factory: workingFactory,
+      syncMarket: false,
     }) || changed;
   }
   if (assets.sectionContents && typeof assets.sectionContents === 'object') {
@@ -5952,9 +6059,9 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (assets.factory && typeof assets.factory === 'object') {
-    workingFactory = preserveInlineImages
-      ? normalizeFactoryState(cloneData(assets.factory))
-      : mergeFactoryStoredImages(workingFactory, assets.factory);
+    if (!preserveInlineImages) {
+      workingFactory = mergeFactoryStoredImages(workingFactory, assets.factory);
+    }
     const restoredCandidateWorkspaceId = factoryWorkspaceIdentityFromSource(workingFactory).id;
     const restoredWorkspaceId = String(state.currentProjectId || restoredCandidateWorkspaceId || '').trim();
     if (restoredWorkspaceId && typeof factoryRecoverRestoredReviewCandidateWorkspaceScope === 'function') {
@@ -5981,6 +6088,7 @@ function applySessionAssetsPayload(assets, options = {}) {
     reason: 'session-assets-payload',
     workspaceId: state.currentProjectId,
     takeoverAuthority: options.takeoverAuthority,
+    normalized: true,
   });
   const acceptedRevision = observeWorkspaceRevisionSnapshot(assets);
   if (acceptedRevision) {
@@ -6078,7 +6186,13 @@ async function hydratePersistentSessionAssets() {
   const hydrateToken = workspaceBlankResetToken;
   let shouldRenderAfterHydrate = false;
   try {
-    const assets = await workspaceGetSessionAssets();
+    let assets;
+    try {
+      assets = await workspaceGetSessionAssets();
+    } catch (_) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      assets = await workspaceGetSessionAssets();
+    }
     if (hydrateToken !== workspaceBlankResetToken) return false;
     if (assets && !lastWorkSnapshotMatchesCurrentWorkspace(assets)) return false;
     const hasProductWork = !assets || !!(
@@ -6133,6 +6247,9 @@ async function hydratePersistentSessionAssets() {
         }
       } catch(e) {
         console.warn('Post-hydrate generation runtime cleanup failed:', e);
+      }
+      if (state.step !== 'upload' && showImageRestoreWarningIfNeeded()) {
+        shouldRenderAfterHydrate = true;
       }
       if (pendingSessionAssetSaveAfterHydrate) {
         pendingSessionAssetSaveAfterHydrate = false;
@@ -6444,11 +6561,11 @@ function applyCompAnalysisSnapshot(saved, targetSubStep = null) {
   return true;
 }
 
-function saveCompAnalysis(analysisResult, sectionPlan, planEdits) {
+function saveCompAnalysis(analysisResult, sectionPlan, planEdits, options = {}) {
   const hasPlanEdits = !!(planEdits && typeof planEdits === 'object' && Object.keys(planEdits).length);
   if (!analysisResult && !sectionPlan && !hasPlanEdits) {
     try {
-      if (typeof savePersistentState === 'function') savePersistentState();
+      if (options.skipPersistentState !== true && typeof savePersistentState === 'function') savePersistentState();
     } catch(_) {}
     return false;
   }
@@ -6469,7 +6586,7 @@ function saveCompAnalysis(analysisResult, sectionPlan, planEdits) {
     } catch(_) {}
   }
   try {
-    if (typeof savePersistentState === 'function') savePersistentState();
+    if (options.skipPersistentState !== true && typeof savePersistentState === 'function') savePersistentState();
   } catch(_) {}
 }
 function loadCompAnalysis() {
@@ -6500,7 +6617,12 @@ function normalizeSectionScopeKeyPart(value = '') {
 
 function sectionWorkScopeMeta(source = null) {
   const live = source || safeSectionLiveState();
-  const factory = live?.factory || {};
+  let factory = live?.factory || {};
+  if (!source && typeof factoryRuntimeReadFactory === 'function') {
+    try {
+      factory = factoryRuntimeReadFactory();
+    } catch(e) {}
+  }
   const product = factory?.product || {};
   let productName = String(
     product.userProductName ||
@@ -7347,6 +7469,10 @@ function clearResolvedSessionPersistenceWarning() {
 }
 
 function savePersistentState(options = {}) {
+  if (workspaceScopeTransitionInProgress) {
+    persistentStateSaveQueued = true;
+    return false;
+  }
   if (persistentStateSaving) {
     persistentStateSaveQueued = true;
     return false;
@@ -7370,10 +7496,10 @@ function savePersistentState(options = {}) {
   };
   let persistenceCompletion = null;
   try {
-    if (options.skipVisibleSync !== true) syncVisibleLastWorkInputsIfStale();
-    let factorySnapshot = factoryRuntimeReadFactory();
+    if (options.skipVisibleSync !== true && !options.factory) syncVisibleLastWorkInputsIfStale();
+    let factorySnapshot = options.factory || factoryRuntimeReadFactory();
     try {
-      if (typeof factoryEnsureCurrentDetailHtmlAsset === 'function') {
+      if (typeof factoryEnsureCurrentDetailHtmlAsset === 'function' && !options.factory) {
         const detailReceipt = factoryRuntimeUpdateOwnedFactory(
           'factory/runtime:preserveDetailHtml',
           'factory-assets',
@@ -7387,16 +7513,18 @@ function savePersistentState(options = {}) {
     if (factorySnapshot && typeof factorySnapshot === 'object') {
       const cafe24FieldView = resolveCafe24FieldViewForLastWork(factorySnapshot);
       persistCafe24FieldViewForLastWork(cafe24FieldView);
-      const metadataReceipt = factoryRuntimeUpdateOwnedFactory(
-        'factory/runtime:saveSnapshotMetadata',
-        'factory',
-        factory => {
-          factory.cafe24FieldView = cloneData(cafe24FieldView);
-          factory.lastSavedAt = Date.now();
-          return { lastSavedAt: factory.lastSavedAt };
-        },
-      );
-      factorySnapshot = metadataReceipt.snapshot.factory;
+      if (!options.factory) {
+        const metadataReceipt = factoryRuntimeUpdateOwnedFactory(
+          'factory/runtime:saveSnapshotMetadata',
+          'factory',
+          factory => {
+            factory.cafe24FieldView = cloneData(cafe24FieldView);
+            factory.lastSavedAt = Date.now();
+            return { lastSavedAt: factory.lastSavedAt };
+          },
+        );
+        factorySnapshot = metadataReceipt.snapshot.factory;
+      }
       scheduleFactoryLastSnapshotSave();
     }
     payload = {

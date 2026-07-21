@@ -56,6 +56,29 @@ test('menu:v1 계약은 필수 필드와 lifecycle disposer를 강제한다', as
   assert.throws(() => contract.invoke('missing'), /undeclared command/);
 });
 
+test('menu:v1 기본 refresh는 재렌더된 DOM에 다시 bind하고 lifecycle disposer가 최신 binding을 정리한다', async () => {
+  const { createMenuContract } = await import(moduleUrl('src/modules/menu-contracts.mjs'));
+  const roots = [];
+  const disposed = [];
+  const contract = createMenuContract(validDefinition({
+    bind(root) {
+      roots.push(root);
+      return () => disposed.push(root);
+    },
+  }));
+
+  const dispose = contract.bind('first-root');
+  contract.refresh('second-root');
+  assert.deepEqual(roots, ['first-root', 'second-root']);
+  assert.deepEqual(disposed, ['first-root']);
+
+  dispose();
+  dispose();
+  contract.refresh('orphan-root');
+  assert.deepEqual(disposed, ['first-root', 'second-root']);
+  assert.deepEqual(roots, ['first-root', 'second-root']);
+});
+
 test('menu:v1 계약은 선언하지 않은 capability와 중복 ID/route를 거부한다', async () => {
   const {
     createMenuContract,

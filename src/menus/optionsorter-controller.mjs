@@ -27,6 +27,24 @@ export function createOptionSorterMenu(capabilities = {}) {
   for (const name of OPTION_SORTER_RENDER_HELPERS) requiredFunction(renderHelpers, name);
 
   const lifecycle = createOptionSorterLifecycleState(getOperationToken);
+  let activeBinding = null;
+
+  function bind(root) {
+    activeBinding?.dispose();
+    const disposeCurrent = bindOptionSorter(root, {
+      getSnapshot, assertMutable, requestRender, reportError, bindHelpers,
+      claimArchiveStatusLoad: lifecycle.claimArchiveStatusLoad,
+    });
+    let live = true;
+    const dispose = () => {
+      if (!live) return;
+      live = false;
+      if (activeBinding?.dispose === dispose) activeBinding = null;
+      disposeCurrent();
+    };
+    activeBinding = { root, dispose };
+    return dispose;
+  }
 
   const commands = createOptionSorterCommands({
     assertMutable, mutateOptions, persistOptions, loadVisionColors, applyVisionColors,
@@ -36,10 +54,11 @@ export function createOptionSorterMenu(capabilities = {}) {
     getSnapshot,
     commands,
     render: view => renderOptionSorterView(view, renderHelpers),
-    bind: root => bindOptionSorter(root, {
-      getSnapshot, assertMutable, requestRender, reportError, bindHelpers,
-      claimArchiveStatusLoad: lifecycle.claimArchiveStatusLoad,
-    }),
+    bind,
+    refresh(root) {
+      if (!activeBinding) return;
+      bind(root || activeBinding.root);
+    },
     onEnter: lifecycle.onEnter,
     onLeave: lifecycle.onLeave,
   });

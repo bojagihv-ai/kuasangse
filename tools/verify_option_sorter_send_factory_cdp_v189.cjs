@@ -32,7 +32,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, '!!(window.state && window.render && window.factoryState)', 60000);
 
-    const prepared = await evaluate(cdp, `(() => {
+    const prepared = await evaluate(cdp, `(async () => {
       window.scheduleLastWorkSave = () => {};
       window.saveLastWorkNow = () => {};
       const state = window.state;
@@ -90,7 +90,7 @@ async function main() {
       factory.previousAssets = [];
       document.activeElement?.blur?.();
       factory.automation.fieldCommitInProgress = false;
-      window.render();
+      await window.render();
       const optionPanel = document.querySelector('.opt-option-gen-panel');
       const resultScopes = state.optionSorter.optionResults.map(result => ({
         id: result.id,
@@ -117,11 +117,11 @@ async function main() {
     fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
     await evaluate(cdp, `(() => {
       const button = document.getElementById('optSendCurrentOptionResultsToFactory');
-      const main = button?.closest?.('main.main');
-      if (button && main) {
-        const mainRect = main.getBoundingClientRect();
+      const scrollRoot = document.querySelector('.app');
+      if (button && scrollRoot) {
+        const rootRect = scrollRoot.getBoundingClientRect();
         const buttonRect = button.getBoundingClientRect();
-        main.scrollTo({ top: Math.max(0, buttonRect.top - mainRect.top + main.scrollTop - 80), behavior: 'auto' });
+        scrollRoot.scrollTo({ top: Math.max(0, buttonRect.top - rootRect.top + scrollRoot.scrollTop - 80), behavior: 'auto' });
       }
       return !!button;
     })()`);
@@ -159,15 +159,15 @@ async function main() {
     });
     const captureTarget = await evaluate(cdp, `(() => {
       const target = document.querySelector('#factoryAutomationAssetChooser_options');
-      const main = target?.closest?.('main.main');
+      const scrollRoot = document.querySelector('.app');
       const candidate = target?.querySelector('[data-factory-asset-id]') || target;
-      if (target && main) {
-        const mainRect = main.getBoundingClientRect();
+      if (target && scrollRoot) {
+        const rootRect = scrollRoot.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
         const stickyHeight = Math.max(84, Math.round(document.querySelector('.top-command-row')?.getBoundingClientRect().height || 0) + 12);
-        const contentTop = targetRect.top - mainRect.top + main.scrollTop;
-        const maxScrollTop = Math.max(0, main.scrollHeight - main.clientHeight);
-        main.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, contentTop - stickyHeight)), behavior: 'auto' });
+        const contentTop = targetRect.top - rootRect.top + scrollRoot.scrollTop;
+        const maxScrollTop = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+        scrollRoot.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, contentTop - stickyHeight)), behavior: 'auto' });
       }
       const candidateRect = candidate?.getBoundingClientRect();
       return {
@@ -182,7 +182,7 @@ async function main() {
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));
 
-    const legacyPrepared = await evaluate(cdp, `(() => {
+    const legacyPrepared = await evaluate(cdp, `(async () => {
       const state = window.state;
       const factory = window.factoryState();
       const scope = window.factoryOptionResultCurrentScope(factory);
@@ -216,7 +216,7 @@ async function main() {
       factory.previousAssets = [];
       document.activeElement?.blur?.();
       factory.automation.fieldCommitInProgress = false;
-      window.render();
+      await window.render();
       const bulkButton = document.getElementById('optSendCurrentOptionResultsToFactory');
       const currentButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_unscoped_v189"]');
       const previousButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_previous_v189"]');

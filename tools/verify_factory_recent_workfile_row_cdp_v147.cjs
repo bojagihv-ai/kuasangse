@@ -67,12 +67,12 @@ async function main() {
       const row = document.querySelector('[data-factory-recent-workfile-row]');
       const select = document.querySelector('#workspaceProjectSelect');
       const loadButtons = [...document.querySelectorAll('[data-factory-recent-load-project]')];
-      const originalLoad = window.loadProjectRecord;
+      const originalLoad = loadProjectRecord;
       let loadedId = '';
-      window.loadProjectRecord = id => { loadedId = String(id || ''); };
+      loadProjectRecord = id => { loadedId = String(id || ''); };
       loadButtons[0]?.click();
       await new Promise(resolve => setTimeout(resolve, 50));
-      window.loadProjectRecord = originalLoad;
+      loadProjectRecord = originalLoad;
       row?.scrollIntoView({ block: 'center', inline: 'nearest' });
       return {
         allFactoryProjects: window.factorySavedProjects?.().length || 0,

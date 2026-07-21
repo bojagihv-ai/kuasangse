@@ -90,7 +90,7 @@ test('protected richer-server no-op stops before IndexedDB and replicas without 
 
   // Then: it is a successful no-op and no local or remote destination advances.
   assert.equal(result.accepted, true);
-  assert.equal(result.clean, true);
+  assert.equal(result.clean, true, JSON.stringify(result));
   assert.equal(result.protectedNoOp, true);
   assert.equal(result.acceptedRevision, 1);
   assert.equal(Object.values(adapters).every(item => item.writes.length === 0), true);
@@ -128,4 +128,35 @@ test('queued mutations from the same live lease receive consecutive revisions', 
   assert.equal(resultB.accepted, true);
   assert.deepEqual(adapters.server.writes.map(item => item.metadata.revision.counter), [1, 2]);
   assert.deepEqual(adapters.server.writes.map(item => item.snapshot.value), ['A', 'B']);
+});
+
+test('server revision observed by heartbeat during commit does not reject remaining replicas', async () => {
+  const { createWorkspacePersistence } = await loadGateway();
+  const adapters = Object.fromEntries(['session', 'indexeddb', 'server', 'workfile', 'archive']
+    .map(name => [name, adapter(name)]));
+  let current = {
+    scopeId: 'project:alpha', leaseId: 'live-lease', fencingToken: 11,
+    revision: 0, mode: 'editing',
+  };
+  const authority = {
+    snapshot: () => current,
+    observeRevision(revision) { current = { ...current, revision }; },
+  };
+  adapters.server.write = async (envelope, context) => {
+    context.assertAuthority();
+    adapters.server.writes.push(structuredClone(envelope));
+    current = { ...current, revision: envelope.metadata.revision.counter };
+    context.assertCompletion();
+    return envelope;
+  };
+  const gateway = createWorkspacePersistence({ adapters, authority });
+
+  const result = await gateway.commit(command(current, 'heartbeat-race', 1));
+
+  assert.equal(result.accepted, true, JSON.stringify(result));
+  assert.equal(result.clean, true, JSON.stringify(result));
+  assert.equal(result.partial, false);
+  for (const target of Object.values(adapters)) {
+    assert.deepEqual(target.writes.map(item => item.snapshot.value), ['heartbeat-race'], target.name);
+  }
 });

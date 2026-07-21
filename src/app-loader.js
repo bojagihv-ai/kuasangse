@@ -91,6 +91,17 @@
     return url.href;
   }
 
+  function workspaceAuthorityServerBases() {
+    let configured = '';
+    try { configured = String(localStorage.getItem('gemini_backend_url') || '').trim(); } catch (_) {}
+    return [...new Set([
+      configured.replace(/\/+$/, ''),
+      String(location.origin || '').replace(/\/+$/, ''),
+      'http://127.0.0.1:5050',
+      'http://localhost:5050',
+    ].filter(Boolean))];
+  }
+
   async function readManifest() {
     const response = await fetch(MANIFEST_URL, { cache: 'no-store' });
     if (!response.ok) throw new Error(`${MANIFEST_URL} HTTP ${response.status}`);
@@ -183,6 +194,7 @@
           }
           authorityNamespace.installWorkspaceLock(window, {
             reloadAccepted: accepted => requestClassicRuntime('workspace-reload', accepted),
+            serverBases: workspaceAuthorityServerBases,
           });
         },
         modules: async () => {

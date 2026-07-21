@@ -10,6 +10,18 @@ import { createWorkspaceLockTransitions } from './workspace-lock-transitions.mjs
 
 export { WorkspaceLockError } from './workspace-lock-protocol.mjs';
 
+const WORKSPACE_LOCK_SESSION_KEY = 'kuasangse.workspace-lock.session-id';
+
+function stableSessionId(root) {
+  try {
+    const existing = String(root.sessionStorage?.getItem(WORKSPACE_LOCK_SESSION_KEY) || '').trim();
+    if (existing) return existing;
+  } catch {}
+  const created = root.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try { root.sessionStorage?.setItem(WORKSPACE_LOCK_SESSION_KEY, created); } catch {}
+  return created;
+}
+
 export function createWorkspaceLockCoordinator({
   root = globalThis,
   heartbeatMs = DEFAULT_HEARTBEAT_MS,
@@ -17,7 +29,7 @@ export function createWorkspaceLockCoordinator({
   serverBases = () => bases(root),
   reloadAccepted = null,
 } = {}) {
-  const sessionId = root.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const sessionId = stableSessionId(root);
   const listeners = new Set();
   let current = frozenSnapshot({ mode: 'idle', sessionId });
   let mutationQueue = Promise.resolve();

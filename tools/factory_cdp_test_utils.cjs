@@ -97,15 +97,26 @@ function connectCdp(wsUrl) {
       }
       return result;
     },
-    close() {
-      ws.close();
+    close(timeoutMs = 2000) {
+      if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+      return new Promise(resolve => {
+        let timer = null;
+        const finish = () => {
+          if (timer) clearTimeout(timer);
+          resolve();
+        };
+        ws.addEventListener('close', finish, { once: true });
+        ws.addEventListener('error', finish, { once: true });
+        timer = setTimeout(finish, Math.max(1, Number(timeoutMs) || 2000));
+        try { ws.close(); } catch (_) { finish(); }
+      });
     },
   };
 }
 
 async function evaluate(cdp, expression, awaitPromise = true) {
   const result = await cdp.send('Runtime.evaluate', {
-    expression,
+    expression: legacyCdpCompatibilityExpression(expression),
     awaitPromise,
     returnByValue: true,
   });
@@ -119,6 +130,183 @@ async function evaluate(cdp, expression, awaitPromise = true) {
     throw new Error(message || 'Runtime.evaluate failed');
   }
   return result.result?.value;
+}
+
+function legacyCdpCompatibilityExpression(expression) {
+  const source = String(expression || '').trim();
+  if (!source) throw new TypeError('CDP expression is required');
+  const needsLegacyAliases = /\bwindow\s*(?:\.\s*(?:state|__kuasangseState|factoryState|render)\b|\[\s*['\"](?:state|__kuasangseState|factoryState|render)['\"]\s*\])/.test(source);
+  if (!needsLegacyAliases) return source;
+  return `(() => {
+    const __classicHydrationComplete = typeof classicRuntimeHydrationReady === 'undefined'
+      || (classicRuntimeHydrationReady === true && classicRuntimeInitialRenderComplete === true);
+    if (typeof window === 'undefined' || !window.__KUASANGSE_DIAGNOSTIC__ || !__classicHydrationComplete) {
+      return (${source});
+    }
+    return ((__lexicalState, __readFactory, __replaceFactory, __lexicalRender, __root) => {
+      const __clone = value => {
+        if (typeof structuredClone === 'function') {
+          try {
+            return structuredClone(value);
+          } catch (_) {
+            // Diagnostic fixtures can pass a Proxy-backed legacy alias here.
+          }
+        }
+        return JSON.parse(JSON.stringify(value));
+      };
+      let __factoryDraft = null;
+      let __factoryBaseline = '';
+      let __factoryProxyCache = new WeakMap();
+      const __ensureFactoryDraft = () => {
+        if (__factoryDraft) return __factoryDraft;
+        __factoryDraft = __clone(__readFactory() || {});
+        __factoryBaseline = JSON.stringify(__factoryDraft);
+        return __factoryDraft;
+      };
+      const __replaceFactoryDraft = value => {
+        const next = __clone(value || {});
+        if (!__factoryDraft) __factoryDraft = {};
+        for (const key of Reflect.ownKeys(__factoryDraft)) Reflect.deleteProperty(__factoryDraft, key);
+        Object.assign(__factoryDraft, next);
+        __factoryProxyCache = new WeakMap();
+        __factoryBaseline = JSON.stringify(__factoryDraft);
+      };
+      const __refreshFactoryDraft = () => {
+        if (!__factoryDraft) return false;
+        if (JSON.stringify(__factoryDraft) !== __factoryBaseline) return false;
+        const latest = __readFactory();
+        if (JSON.stringify(latest) === __factoryBaseline) return false;
+        __replaceFactoryDraft(latest);
+        return true;
+      };
+      const __proxify = value => {
+        if (!value || typeof value !== 'object') return value;
+        if (__factoryProxyCache.has(value)) return __factoryProxyCache.get(value);
+        const proxy = new Proxy(value, {
+          get(target, key, receiver) {
+            return __proxify(Reflect.get(target, key, receiver));
+          },
+        });
+        __factoryProxyCache.set(value, proxy);
+        return proxy;
+      };
+      const __commitFactory = () => {
+        if (!__factoryDraft) return false;
+        if (JSON.stringify(__factoryDraft) === __factoryBaseline) return false;
+        __replaceFactory(__factoryDraft, { reason: 'legacy-cdp-test-compat' });
+        __factoryBaseline = JSON.stringify(__factoryDraft);
+        return true;
+      };
+      const state = new Proxy(__lexicalState, {
+        get(target, key, receiver) {
+          if (key === 'factory') {
+            __ensureFactoryDraft();
+            __refreshFactoryDraft();
+            return __proxify(__factoryDraft);
+          }
+          return Reflect.get(target, key, receiver);
+        },
+        set(target, key, value, receiver) {
+          if (key !== 'factory') return Reflect.set(target, key, value, receiver);
+          __replaceFactoryDraft(value);
+          __factoryBaseline = JSON.stringify({});
+          return true;
+        },
+      });
+      const factoryState = new Proxy(function factoryState() {
+        __ensureFactoryDraft();
+        __refreshFactoryDraft();
+        return __proxify(__factoryDraft);
+      }, {
+        apply() {
+          __ensureFactoryDraft();
+          __refreshFactoryDraft();
+          return __proxify(__factoryDraft);
+        },
+        get(target, key, receiver) {
+          if (Reflect.has(target, key)) return Reflect.get(target, key, receiver);
+          __ensureFactoryDraft();
+          __refreshFactoryDraft();
+          return __proxify(Reflect.get(__factoryDraft, key));
+        },
+        set(target, key, value) {
+          __ensureFactoryDraft();
+          return Reflect.set(__factoryDraft, key, value);
+        },
+        deleteProperty(target, key) {
+          __ensureFactoryDraft();
+          return Reflect.deleteProperty(__factoryDraft, key);
+        },
+        has(target, key) {
+          __ensureFactoryDraft();
+          return Reflect.has(target, key) || Reflect.has(__factoryDraft, key);
+        },
+      });
+      let __renderOverride = null;
+      let __renderOverrideDepth = 0;
+      const render = (...args) => {
+        __commitFactory();
+        let result;
+        if (__renderOverride && __renderOverrideDepth === 0) {
+          __renderOverrideDepth += 1;
+          try {
+            result = __renderOverride(...args);
+          } finally {
+            __renderOverrideDepth -= 1;
+          }
+        } else {
+          result = __lexicalRender(...args);
+        }
+        __refreshFactoryDraft();
+        return result;
+      };
+      const __functionCache = new WeakMap();
+      const window = new Proxy(__root, {
+        get(target, key, receiver) {
+          if (key === 'state' || key === '__kuasangseState') return state;
+          if (key === 'factoryState') return factoryState;
+          if (key === 'render') return render;
+          const value = Reflect.get(target, key, target);
+          if (typeof value !== 'function') return value;
+          if (__functionCache.has(value)) return __functionCache.get(value);
+          const wrapped = new Proxy(value, {
+            apply(fn, thisArg, args) {
+              __commitFactory();
+              const result = Reflect.apply(fn, thisArg === window ? target : thisArg, args);
+              if (result && typeof result.then === 'function') {
+                return Promise.resolve(result).then(value => {
+                  __refreshFactoryDraft();
+                  return value;
+                });
+              }
+              __refreshFactoryDraft();
+              return result;
+            },
+          });
+          __functionCache.set(value, wrapped);
+          return wrapped;
+        },
+        set(target, key, value, receiver) {
+          if (key === 'render') {
+            __renderOverride = typeof value === 'function' && value !== render ? value : null;
+            return true;
+          }
+          if (key === 'state' || key === '__kuasangseState' || key === 'factoryState') return false;
+          return Reflect.set(target, key, value, target);
+        },
+      });
+      const __run = (state, factoryState, render, window) => (${source});
+      const result = __run(state, factoryState, render, window);
+      if (result && typeof result.then === 'function') {
+        return Promise.resolve(result).then(value => {
+          __commitFactory();
+          return value;
+        });
+      }
+      __commitFactory();
+      return result;
+    })(state, factoryRuntimeReadFactory, factoryRuntimeReplaceFactorySnapshot, render, window);
+  })()`;
 }
 
 function factoryCdpFixtureReadyExpression() {
@@ -241,7 +429,7 @@ async function waitForCdpPredicateWithReconnect(cdpUrl, expression, options = {}
       if (!cdp) await connectCurrentTarget();
       const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
       const response = await cdp.send('Runtime.evaluate', {
-        expression,
+        expression: legacyCdpCompatibilityExpression(expression),
         awaitPromise: true,
         returnByValue: true,
       }, Math.min(commandTimeoutMs, remainingMs));
@@ -356,8 +544,23 @@ async function ensureCdp(cdpUrl) {
       stderr: stderr.trim(),
     });
     const cleanup = async () => {
+      const exited = exit.code !== null || exit.signal !== null
+        ? Promise.resolve()
+        : new Promise(resolve => proc.once('exit', resolve));
       try { proc.kill('SIGKILL'); } catch (_) {}
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await Promise.race([
+        exited,
+        new Promise(resolve => setTimeout(resolve, 3000)),
+      ]);
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        try {
+          await fetchJson(`${cdpUrl}/json`);
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (_) {
+          break;
+        }
+      }
       try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (_) {}
     };
     try {
@@ -393,6 +596,7 @@ module.exports = {
   evaluateFactoryCdpFixture,
   factoryCdpFixtureExpression,
   factoryCdpFixtureReadyExpression,
+  legacyCdpCompatibilityExpression,
   fetchJson,
   waitFor,
   waitForCdpPredicateWithReconnect,

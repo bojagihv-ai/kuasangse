@@ -87,7 +87,7 @@ async function main() {
       button?.scrollIntoView({ block: 'center', inline: 'nearest' });
       const rect = button?.getBoundingClientRect();
       const hit = rect ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
-      const main = document.querySelector('main.main');
+      const scrollRoot = document.querySelector('.app');
       const review = factoryAutomationSizeReviewStatus(currentFactory);
       return {
         viewport: { width: innerWidth, height: innerHeight },
@@ -96,7 +96,7 @@ async function main() {
           top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: Math.round(rect.width), height: Math.round(rect.height),
         } : null,
         requiredMissing: review.requiredMissing.map(item => item.fieldId),
-        main: main ? { scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: getComputedStyle(main).overflowY } : null,
+        main: scrollRoot ? { scrollHeight: scrollRoot.scrollHeight, clientHeight: scrollRoot.clientHeight, overflowY: getComputedStyle(scrollRoot).overflowY } : null,
         horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
       };
     }`);
@@ -135,7 +135,7 @@ async function main() {
       const layoutPanels = Array.from(layout?.children || []).filter(node => node.matches?.('.factory-automation-panel'));
       const primaryPanel = layoutPanels[0] || null;
       const candidatePanel = document.querySelector('.factory-candidate-automation-panel');
-      const main = document.querySelector('main.main');
+      const scrollRoot = document.querySelector('.app');
       panel?.scrollIntoView({ block: 'center', inline: 'nearest' });
       const panelRect = panel?.getBoundingClientRect();
       const primaryRect = primaryPanel?.getBoundingClientRect();
@@ -161,7 +161,7 @@ async function main() {
           height: Math.round(candidateRect.height),
         } : null,
         overlapArea: overlapWidth * overlapHeight,
-        main: main ? { scrollHeight: main.scrollHeight, clientHeight: main.clientHeight, overflowY: getComputedStyle(main).overflowY } : null,
+        main: scrollRoot ? { scrollHeight: scrollRoot.scrollHeight, clientHeight: scrollRoot.clientHeight, overflowY: getComputedStyle(scrollRoot).overflowY } : null,
         horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
       };
     }`);

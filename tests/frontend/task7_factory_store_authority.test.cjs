@@ -166,6 +166,11 @@ async function createB2AutomationRuntimeHarness(label) {
     },
     factoryGoalProgressClamp: value => Math.max(0, Math.min(100, Number(value || 0))),
     factoryPatchGoalRunStatusInPlace: () => true,
+    factoryRuntimeRenderWithOwnedDraft: (_factory, renderer) => {
+      if (typeof renderer === 'function') return renderer();
+      sideEffects.render += 1;
+      return undefined;
+    },
     factoryEnsureSizeImageReviewConfirmedForRun: () => ({ ok: true, autoConfirmed: false }),
     factoryScheduleRunStageFeedbackSave: () => { sideEffects.save += 1; },
     factoryYieldToPaint: async () => true,
@@ -207,6 +212,19 @@ test('B2 production source has no factoryState-equivalent live selector or refre
     });
   });
   assert.deepEqual(offenders, []);
+});
+
+test('field commands allow their factory-owned wizard activity timestamp', () => {
+  const core = source('src/app-core-03.js');
+  const createRuntimePolicies = new Function(
+    `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+  const policy = createRuntimePolicies()['factory/fields:commitField'];
+  const factoryPaths = policy.parts
+    .filter(part => part.owner === 'factory')
+    .flatMap(part => part.paths);
+
+  assert.equal(factoryPaths.includes('automation.lastWizardActionAt'), true);
 });
 
 test('B3 production action bridge commits through the owned store draft transaction', async () => {
@@ -637,8 +655,10 @@ test('B3 production action bridge commits through the owned store draft transact
     'async function factoryArchiveSession(',
   );
   assert.match(archiveBootstrapWriter, /const operationToken = options\.operationToken \|\| store\.getOperationToken\(\)/);
-  assert.match(archiveBootstrapWriter, /await ensureWorkspaceEditAuthority[\s\S]*store\.isOperationCurrent\(operationToken\)/);
-  assert.match(archiveBootstrapWriter, /await response\.json[\s\S]*store\.isOperationCurrent\(operationToken\)/);
+  assert.match(factoryCore, /function factoryWorkfileArchiveRequestIsCurrent\(/);
+  assert.match(archiveBootstrapWriter, /await ensureWorkspaceEditAuthority[\s\S]*factoryWorkfileArchiveRequestIsCurrent\(identity, authorityScope, fencingToken\)/);
+  assert.match(archiveBootstrapWriter, /await response\.json[\s\S]*factoryWorkfileArchiveRequestIsCurrent\(identity, authorityScope, fencingToken\)/);
+  assert.doesNotMatch(archiveBootstrapWriter, /await response\.json[\s\S]*store\.isOperationCurrent\(operationToken\)/);
   assert.match(archiveBootstrapWriter, /explicitFactory[\s\S]*factoryAdoptWorkfileArchiveStageRuns\(stageScopes, explicitFactory\)/);
   assert.match(archiveBootstrapWriter, /factory\/archive:completeWorkfileBootstrap/);
   assert.match(archivePreviewWriter, /const operationToken = factoryRuntimeRequireStore\(\)\.getOperationToken\(\)/);
@@ -1240,6 +1260,107 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.strictEqual(logs[0].factory, fileDraft);
 });
 
+test('completed image hydration clears an earlier restore warning once canonical references are resolved', () => {
+  const persistenceCore = source('src/app-core-02.js');
+  const warningSource = sourceSlice(
+    persistenceCore,
+    'function showImageRestoreWarningIfNeeded(',
+    'function mergeOptionSorterStoredImages(',
+  );
+  const state = {
+    currentProjectId: 'project-resolved',
+    step: 'factory',
+    storageWarning: '저장된 이미지 복원에 실패했습니다. 1개 이미지 원본을 읽지 못했습니다.',
+    storageWarningDismissKey: 'image-restore:project-resolved:factory:1',
+  };
+  let missingCount = 0;
+  const reconcile = new Function(
+    'state',
+    'countSessionAssetRestoreRefs',
+    'wasStorageWarningDismissed',
+    `${warningSource}\nreturn showImageRestoreWarningIfNeeded;`,
+  )(state, () => missingCount, () => false);
+
+  assert.equal(reconcile(), true);
+  assert.equal(state.storageWarning, '');
+  assert.equal(state.storageWarningDismissKey, '');
+
+  missingCount = 2;
+  assert.equal(reconcile(), true);
+  assert.match(state.storageWarning, /2개 이미지 원본/);
+  assert.equal(state.storageWarningDismissKey, 'image-restore:project-resolved:factory:2');
+});
+
+test('menu visual QA harness prepares and reads factory state through the canonical store API', () => {
+  const harness = source('tools/verify_menu_navigation_contracts_cdp_v231.cjs');
+  assert.doesNotMatch(harness, /\bfactoryState\s*\(/);
+  assert.match(harness, /factoryRuntimeReplaceFactorySnapshot\(factory/);
+  assert.match(harness, /factoryRuntimeReadFactory\(\)\.automation/);
+});
+
+test('image restore warnings only count the active menu and current visible image references', () => {
+  const persistenceCore = source('src/app-core-02.js');
+  const counterSource = sourceSlice(
+    persistenceCore,
+    'function hasRestoredImagePayloadValue(',
+    'function wasStorageWarningDismissed(',
+  );
+  const count = (state, canonicalFactory = state.factory) => new Function(
+    'state',
+    'factoryRuntimeReadFactory',
+    'IMAGE_STORED_MARKER',
+    `${counterSource}\nreturn countSessionAssetRestoreRefs;`,
+  )(
+    state,
+    () => canonicalFactory,
+    '__stored_in_indexeddb__',
+  )();
+  const marker = { hasImageData: true };
+  const state = {
+    step: 'factory',
+    analysisImages: [],
+    detailImageBlocks: [{ hasDataUrl: true }],
+    sectionVariants: { hero: [{ id: 'old', hasImage: true }] },
+    currentSectionVariantIds: { hero: 'old' },
+    sectionImages: { hero: 'data:image/png;base64,current' },
+    optionSorter: { images: [marker], optionResults: [{ hasImage: true }] },
+    cuts: { hasSourceImage: true },
+    compPage: { hasUploadedImages: true, uploadedImages: [] },
+    imageBase64: 'current-product-payload',
+    factory: { product: { hasImage: true }, assets: [{ hasImage: true, imageUrl: 'data:image/png;base64,asset' }] },
+  };
+  assert.equal(count(state), 0);
+  assert.equal(count({ ...state, step: 'optionsorter' }), 2);
+  assert.equal(count(
+    { ...state, factory: { product: { hasImage: true }, inputImages: [{ hasImage: true }] } },
+    { ...state.factory, assets: [{ hasImage: true }] },
+  ), 1);
+
+  const markerOnlyFactory = {
+    ...state,
+    imageBase64: '',
+    factory: {
+      product: {
+        hasImage: true,
+        imagePreview: '__stored_in_indexeddb__',
+        inputImages: [{ hasImage: true, preview: '__stored_in_indexeddb__' }],
+      },
+      assets: [{ hasImage: true, image: '__stored_in_indexeddb__' }],
+    },
+  };
+  assert.equal(count(markerOnlyFactory, markerOnlyFactory.factory), 3);
+
+  const currentSectionMarker = {
+    ...state,
+    step: 'sections',
+    detailImageBlocks: [],
+    sectionImages: { hero: '__stored_in_indexeddb__' },
+    sectionVariants: { hero: [{ id: 'current', hasImage: true, image: '' }] },
+    currentSectionVariantIds: { hero: 'current' },
+  };
+  assert.equal(count(currentSectionMarker), 1);
+});
+
 test('detail stage completes on its caller-owned draft without invoking image-stage cleanup', async () => {
   const factoryCore = source('src/app-core-06.js');
   const detailStageSource = sourceSlice(
@@ -1509,6 +1630,7 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
       factorySetGoalRunProgress: () => true,
       scheduleLastWorkSave: () => true,
       render: () => true,
+      factoryRuntimeRenderWithOwnedDraft: () => true,
       factoryYieldToPaint: async () => true,
       factoryStartGoalHeartbeat: () => 'vm-heartbeat',
       factoryStopGoalHeartbeat: () => true,
@@ -2888,7 +3010,10 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
     coordinator: 'factory-assets',
     targetPath: 'factory',
     parts: [
-      { owner: 'factory-assets', paths: ['assets', 'archive'] },
+      {
+        owner: 'factory-assets',
+        paths: ['assets', 'archive', 'runtimeAssetPrunedAt', 'runtimeAssetPrunedCount'],
+      },
       {
         owner: 'factory',
         paths: [
@@ -4018,6 +4143,11 @@ async function createB3CutsRuntimeHarness(label) {
     cutsScheduleLightSave: () => { sideEffects.save += 1; },
     cutsScheduleAssetPersistence: () => { sideEffects.save += 1; },
     renderPreservingMainScroll: () => { sideEffects.render += 1; },
+    factoryRuntimeRenderWithOwnedDraft: (_factory, renderer) => {
+      if (typeof renderer === 'function') return renderer();
+      sideEffects.render += 1;
+      return undefined;
+    },
     cutsYieldAfterRender: async () => true,
     factoryStageGoalProgressRange: () => [20, 80],
     factorySetGoalRunProgress: (progress, stage, message, tone, options = {}) => {
@@ -4240,6 +4370,7 @@ async function createB3DetailRuntimeHarness(label) {
       market.lastLog = message;
     },
     render: () => { sideEffects.render += 1; },
+    factoryPatchGoalRunStatusInPlace: () => true,
     factoryYieldToPaint: async () => true,
     compMarketResultId: item => String(item?.id || ''),
     compMarketResolveResultById: (current, id, byId) => byId.get(String(id)) || null,

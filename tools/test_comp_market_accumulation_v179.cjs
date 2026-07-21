@@ -5,8 +5,10 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const core02 = fs.readFileSync(path.join(root, 'src', 'app-core-02.js'), 'utf8');
+const core03 = fs.readFileSync(path.join(root, 'src', 'app-core-03.js'), 'utf8');
 const core05 = fs.readFileSync(path.join(root, 'src', 'app-core-05.js'), 'utf8');
 const core06 = fs.readFileSync(path.join(root, 'src', 'app-core-06.js'), 'utf8');
+const competitorMenu = fs.readFileSync(path.join(root, 'src', 'menus', 'competitor-menu.mjs'), 'utf8');
 
 function extractFunction(source, name, nextName) {
   const plainStart = source.indexOf(`function ${name}(`);
@@ -127,9 +129,14 @@ assert.doesNotMatch(sizeRestoreFunction, /typeof state !== ['"]undefined['"]\s*&
   '영구 세션 초기화 중에는 아직 선언되지 않은 전역 state를 참조하면 안 됩니다.');
 assert.doesNotMatch(candidateCollectionFunction, /market\.scrapedImages\s*=\s*\[\]/, 'VM 후보 재수집 시 기존 상세 이미지 목록을 비우면 안 됩니다.');
 assert.match(
-  core05,
-  /compMarketReloadDetailImages\.onclick\s*=\s*\(\)\s*=>\s*reloadCompMarketDetailImagesFromCurrentJob\(\)/,
-  '상세이미지 다시 표시 버튼은 렌더링할 때마다 직접 실행 핸들러를 다시 연결해야 합니다.',
+  competitorMenu,
+  /compMarketReloadDetailImages:\s*'reloadDetailImages'/,
+  '상세이미지 다시 표시 버튼은 메뉴 소유 이벤트 명령에 연결되어야 합니다.',
+);
+assert.match(
+  core03,
+  /reloadDetailImages\(\)\s*{\s*return reloadCompMarketDetailImagesFromCurrentJob\(\);\s*}/,
+  '메뉴 소유 다시 표시 명령은 기존 누적 병합 구현에 연결되어야 합니다.',
 );
 
 console.log(JSON.stringify({

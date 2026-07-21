@@ -149,10 +149,10 @@ async function main() {
     })()`);
 
     const dragPoints = await evaluate(cdp, `(() => {
-      const main = document.querySelector('.main');
+      const scrollRoot = document.querySelector('.app');
       const assignment = document.getElementById('optAssignmentWorkspace');
-      if (main && assignment) {
-        main.scrollTop += assignment.getBoundingClientRect().top - main.getBoundingClientRect().top - 100;
+      if (scrollRoot && assignment) {
+        scrollRoot.scrollTop += assignment.getBoundingClientRect().top - scrollRoot.getBoundingClientRect().top - 100;
       }
       const source = document.querySelector('#optPoolList [data-img-id="' + window.__optionWorkflowMovedId + '"]');
       const target = document.getElementById('optSlotList_workflow_slot_1');
@@ -165,21 +165,55 @@ async function main() {
       };
     })()`);
     if (!dragPoints) throw new Error('Option sorter drag coordinates not found');
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragPoints.from.x, y: dragPoints.from.y });
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: dragPoints.from.x, y: dragPoints.from.y, button: 'left', buttons: 1, clickCount: 1 });
-    for (let step = 1; step <= 12; step += 1) {
-      const ratio = step / 12;
-      await cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x: dragPoints.from.x + (dragPoints.to.x - dragPoints.from.x) * ratio,
-        y: dragPoints.from.y + (dragPoints.to.y - dragPoints.from.y) * ratio,
-        button: 'left',
-        buttons: 1,
-      });
-      await new Promise(resolve => setTimeout(resolve, 20));
+    await waitFor(cdp, `typeof window.Sortable?.get === 'function'
+      && !!window.Sortable.get(document.getElementById('optPoolList'))
+      && !!window.Sortable.get(document.getElementById('optSlotList_workflow_slot_1'))`, 15000);
+    const dispatchDrag = async () => {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: dragPoints.from.x, y: dragPoints.from.y });
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: dragPoints.from.x, y: dragPoints.from.y, button: 'left', buttons: 1, clickCount: 1 });
+      await new Promise(resolve => setTimeout(resolve, 120));
+      for (let step = 1; step <= 20; step += 1) {
+        const ratio = step / 20;
+        await cdp.send('Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x: dragPoints.from.x + (dragPoints.to.x - dragPoints.from.x) * ratio,
+          y: dragPoints.from.y + (dragPoints.to.y - dragPoints.from.y) * ratio,
+          button: 'left',
+          buttons: 1,
+        });
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragPoints.to.x, y: dragPoints.to.y, button: 'left', buttons: 0, clickCount: 1 });
+      await new Promise(resolve => setTimeout(resolve, 250));
+    };
+    await dispatchDrag();
+    const firstDragApplied = await evaluate(cdp, 'window.state.optionSorter.pool.length === 0 && window.getOptionImagePairs(window.state.optionSorter).length === 13');
+    if (!firstDragApplied) await dispatchDrag();
+    try {
+      await waitFor(cdp, 'window.state.optionSorter.pool.length === 0 && window.getOptionImagePairs(window.state.optionSorter).length === 13', 15000);
+    } catch (error) {
+      const diagnostics = await evaluate(cdp, `(() => {
+        const source = document.querySelector('#optPoolList [data-img-id="' + window.__optionWorkflowMovedId + '"]');
+        const target = document.getElementById('optSlotList_workflow_slot_1');
+        const rect = node => node ? Object.fromEntries(['left', 'top', 'right', 'bottom', 'width', 'height'].map(key => [key, Math.round(node.getBoundingClientRect()[key])])) : null;
+        return {
+          pool: [...window.state.optionSorter.pool],
+          pairCount: window.getOptionImagePairs(window.state.optionSorter).length,
+          firstSlotIds: [...(window.state.optionSorter.slots[0]?.imgIds || [])],
+          sourceRect: rect(source),
+          targetRect: rect(target),
+          viewport: { width: innerWidth, height: innerHeight },
+          sourceHit: document.elementFromPoint(${dragPoints.from.x}, ${dragPoints.from.y})?.outerHTML?.slice(0, 240) || '',
+          targetHit: document.elementFromPoint(${dragPoints.to.x}, ${dragPoints.to.y})?.outerHTML?.slice(0, 240) || '',
+          bodyCursor: getComputedStyle(document.body).cursor,
+          sortableType: typeof window.Sortable,
+          poolSortable: typeof window.Sortable?.get === 'function' ? !!window.Sortable.get(document.getElementById('optPoolList')) : false,
+          targetSortable: typeof window.Sortable?.get === 'function' ? !!window.Sortable.get(target) : false,
+          loadErrors: window.__KUASANGSE_LOAD_ERRORS__ || [],
+        };
+      })()`);
+      throw new Error(`${error.message}; dragDiagnostics=${JSON.stringify(diagnostics)}`);
     }
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragPoints.to.x, y: dragPoints.to.y, button: 'left', buttons: 0, clickCount: 1 });
-    await waitFor(cdp, 'window.state.optionSorter.pool.length === 0 && window.getOptionImagePairs(window.state.optionSorter).length === 13', 15000);
 
     const dragProof = await evaluate(cdp, `(() => ({
       pairCount: window.getOptionImagePairs(window.state.optionSorter).length,
@@ -249,8 +283,8 @@ async function main() {
         mobile: false,
       });
       await evaluate(cdp, `(() => {
-        const main = document.querySelector('.main');
-        if (main) main.scrollTop = 0;
+        const scrollRoot = document.querySelector('.app');
+        if (scrollRoot) scrollRoot.scrollTop = 0;
         window.scrollTo(0, 0);
         return true;
       })()`);
@@ -258,13 +292,13 @@ async function main() {
       const topShot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       fs.writeFileSync(SCREENSHOT_PATHS[`${key}Top`], Buffer.from(topShot.data, 'base64'));
       await evaluate(cdp, `(() => {
-        const main = document.querySelector('.main');
+        const scrollRoot = document.querySelector('.app');
         const generator = document.querySelector('.opt-option-gen-panel');
-        if (!main || !generator) return false;
-        const mainRect = main.getBoundingClientRect();
+        if (!scrollRoot || !generator) return false;
+        const rootRect = scrollRoot.getBoundingClientRect();
         const generatorRect = generator.getBoundingClientRect();
         const reservedTop = window.innerWidth <= 900 ? 230 : 90;
-        main.scrollTop += generatorRect.top - mainRect.top - reservedTop;
+        scrollRoot.scrollTop += generatorRect.top - rootRect.top - reservedTop;
         return true;
       })()`);
       await new Promise(resolve => setTimeout(resolve, 100));

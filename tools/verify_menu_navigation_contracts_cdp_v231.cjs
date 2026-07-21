@@ -190,48 +190,68 @@ const INSTRUMENTATION_SOURCE = `(() => {
 })();`;
 
 async function clickSelector(cdp, selector) {
-  const point = await evaluate(cdp, `(() => {
-    const node = document.querySelector(${JSON.stringify(selector)});
-    if (!node) return null;
-    node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-    const rect = node.getBoundingClientRect();
-    const style = getComputedStyle(node);
-    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-      width: rect.width,
-      height: rect.height,
-      disabled: !!node.disabled,
-      display: style.display,
-      visibility: style.visibility,
-      targetTag: node.tagName,
-      targetText: node.textContent?.trim().slice(0, 80) || '',
-      hitTag: hit?.tagName || '',
-      hitText: hit?.textContent?.trim().slice(0, 80) || '',
-      hitMatches: hit === node || node.contains(hit),
-    };
-  })()`);
-  if (!point || point.disabled || point.width <= 0 || point.height <= 0 || point.display === 'none' || point.visibility === 'hidden') {
-    throw new Error(`click target unavailable: ${selector} ${JSON.stringify(point)}`);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const token = `menu-qa-click-${Date.now()}-${attempt}`;
+    const point = await evaluate(cdp, `(() => {
+      const node = document.querySelector(${JSON.stringify(selector)});
+      if (!node) return null;
+      node.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      node.dataset.menuQaClickToken = ${JSON.stringify(token)};
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        width: rect.width,
+        height: rect.height,
+        disabled: !!node.disabled,
+        display: style.display,
+        visibility: style.visibility,
+        targetTag: node.tagName,
+        targetText: node.textContent?.trim().slice(0, 80) || '',
+        hitTag: hit?.tagName || '',
+        hitText: hit?.textContent?.trim().slice(0, 80) || '',
+        hitMatches: hit === node || node.contains(hit),
+      };
+    })()`);
+    if (!point || point.disabled || point.width <= 0 || point.height <= 0 || point.display === 'none' || point.visibility === 'hidden') {
+      throw new Error(`click target unavailable: ${selector} ${JSON.stringify(point)}`);
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+    const stable = await evaluate(cdp, `(() => {
+      const node = document.querySelector(${JSON.stringify(selector)});
+      if (!node || node.dataset.menuQaClickToken !== ${JSON.stringify(token)}) return false;
+      const rect = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit === node || node.contains(hit);
+    })()`);
+    if (!stable) {
+      await evaluate(cdp, 'new Promise(resolve => requestAnimationFrame(resolve))');
+      continue;
+    }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await evaluate(cdp, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    return { ...point, attempts: attempt };
   }
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-  await evaluate(cdp, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
-  return point;
+  throw new Error(`click target kept rerendering: ${selector}`);
 }
 
 async function inspectLayout(cdp) {
   return evaluate(cdp, `(() => {
+    const scrollRoot = document.querySelector('.app');
     const main = document.querySelector('main.main');
-    if (!main) return { ok: false, reason: 'main missing' };
-    const originalScrollTop = main.scrollTop;
-    const maxScrollTop = Math.max(0, main.scrollHeight - main.clientHeight);
-    main.scrollTop = maxScrollTop;
-    const reachedBottom = maxScrollTop <= 1 || Math.abs(main.scrollTop - maxScrollTop) <= 2;
-    main.scrollTop = originalScrollTop;
-    const style = getComputedStyle(main);
+    const sidebar = document.querySelector('.sidebar');
+    if (!scrollRoot || !main || !sidebar) return { ok: false, reason: 'shell layout missing' };
+    const originalScrollTop = scrollRoot.scrollTop;
+    const maxScrollTop = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+    scrollRoot.scrollTop = maxScrollTop;
+    const reachedBottom = maxScrollTop <= 1 || Math.abs(scrollRoot.scrollTop - maxScrollTop) <= 2;
+    scrollRoot.scrollTop = originalScrollTop;
+    const scrollRootStyle = getComputedStyle(scrollRoot);
+    const mainStyle = getComputedStyle(main);
+    const sidebarStyle = getComputedStyle(sidebar);
     const mainRect = main.getBoundingClientRect();
     const rootOverflow = Math.max(
       0,
@@ -239,11 +259,17 @@ async function inspectLayout(cdp) {
       document.body?.scrollWidth - innerWidth || 0,
       main.scrollWidth - main.clientWidth,
     );
+    const sidebarIndependentScroll = sidebar.scrollHeight > sidebar.clientHeight + 2
+      && /auto|scroll/.test(sidebarStyle.overflowY);
     return {
-      ok: rootOverflow <= 2 && reachedBottom && /auto|scroll/.test(style.overflowY),
+      ok: rootOverflow <= 2
+        && reachedBottom
+        && /auto|scroll/.test(scrollRootStyle.overflowY)
+        && !sidebarIndependentScroll,
       viewport: { width: innerWidth, height: innerHeight },
       rootOverflow,
       reachedBottom,
+      sidebarIndependentScroll,
       overflowCandidates: Array.from(main.querySelectorAll('*'))
         .map(node => {
           const rect = node.getBoundingClientRect();
@@ -264,8 +290,19 @@ async function inspectLayout(cdp) {
         scrollHeight: main.scrollHeight,
         clientWidth: main.clientWidth,
         scrollWidth: main.scrollWidth,
-        overflowY: style.overflowY,
+        overflowY: mainStyle.overflowY,
         right: Math.round(main.getBoundingClientRect().right),
+      },
+      scrollRoot: {
+        clientHeight: scrollRoot.clientHeight,
+        scrollHeight: scrollRoot.scrollHeight,
+        overflowY: scrollRootStyle.overflowY,
+        right: Math.round(scrollRoot.getBoundingClientRect().right),
+      },
+      sidebar: {
+        clientHeight: sidebar.clientHeight,
+        scrollHeight: sidebar.scrollHeight,
+        overflowY: sidebarStyle.overflowY,
       },
     };
   })()`);
@@ -279,7 +316,7 @@ async function setupPage(cdp, appUrl, viewport) {
     mobile: false,
   });
   await cdp.send('Page.navigate', { url: `${appUrl}?menuContract=v231-${viewport.label}-${Date.now()}` });
-  await waitFor(cdp, '!!(window.state && window.render && window.factoryState && document.querySelector(".sidebar"))', 60000);
+  await waitFor(cdp, '!!(window.state && window.render && window.factoryRuntimeReadFactory && document.querySelector(".sidebar"))', 60000);
   await evaluate(cdp, `(() => {
     window.startCafe24OAuthAutoRefresh = () => {};
     window.factoryStartCafe24OAuthAutoRefresh = () => {};
@@ -295,13 +332,13 @@ async function setupPage(cdp, appUrl, viewport) {
     state.currentProjectId = '';
     state.currentProjectName = '메뉴 계약 검증';
     state.productName = '메뉴 계약 검증';
-    state.factory = normalizeFactoryState({});
-    const factory = factoryState();
+    const factory = normalizeFactoryState({});
     factory.currentProjectId = '';
     factory.workspace = { ...(factory.workspace || {}), id: '' };
     factory.product.productName = '메뉴 계약 검증';
     factory.product.userProductName = '메뉴 계약 검증';
     factory.automation.activeTab = 'start';
+    factoryRuntimeReplaceFactorySnapshot(factory, { reason: 'menu-qa-bootstrap' });
     for (const name of Object.keys(window.__MENU_QA__.saveCounts)) {
       const original = window[name];
       window.__MENU_QA__.saveHooks[name] = typeof original === 'function';
@@ -379,7 +416,7 @@ async function clickRoutes(cdp) {
 async function exerciseManualPrimaryAction(cdp, viewport) {
   await clickSelector(cdp, '.sidebar [data-nav="manual"]');
   const before = await evaluate(cdp, `(() => {
-    const button = document.querySelector('.container [data-nav="analyzing"]');
+    const button = document.querySelector('.container [data-manual-nav="analyzing"]');
     const rect = button?.getBoundingClientRect();
     return {
       activeStep: state.step,
@@ -391,7 +428,7 @@ async function exerciseManualPrimaryAction(cdp, viewport) {
   const layout = await inspectLayout(cdp);
   const screenshotPath = path.join(EVIDENCE_DIR, `browser-${viewport.width}x${viewport.height}-manual.png`);
   const png = await capture(cdp, screenshotPath);
-  await clickSelector(cdp, '.container [data-nav="analyzing"]');
+  await clickSelector(cdp, '.container [data-manual-nav="analyzing"]');
   const after = await evaluate(cdp, `({ activeStep: state.step, activeNav: document.querySelector('.sidebar [data-nav].active')?.dataset.nav || '' })`);
   return { before, after, layout, screenshotPath, png };
 }
@@ -456,8 +493,8 @@ async function exerciseAutomationPrimaryAction(cdp, viewport) {
   })()`);
   const layout = await inspectLayout(cdp);
   await evaluate(cdp, `(() => {
-    const main = document.querySelector('.main');
-    if (main) main.scrollTop = 0;
+    const scrollRoot = document.querySelector('.app');
+    if (scrollRoot) scrollRoot.scrollTop = 0;
     window.scrollTo(0, 0);
     return true;
   })()`);
@@ -510,8 +547,8 @@ async function exerciseImageCutsPrimaryAction(cdp, viewport) {
   })`);
   const layout = await inspectLayout(cdp);
   await evaluate(cdp, `(() => {
-    const main = document.querySelector('.main');
-    if (main) main.scrollTop = 0;
+    const scrollRoot = document.querySelector('.app');
+    if (scrollRoot) scrollRoot.scrollTop = 0;
     window.scrollTo(0, 0);
     return true;
   })()`);
@@ -568,8 +605,8 @@ async function exerciseOptionSorterPrimaryAction(cdp, viewport) {
   })()`);
   const layout = await inspectLayout(cdp);
   await evaluate(cdp, `(() => {
-    const main = document.querySelector('.main');
-    if (main) main.scrollTop = 0;
+    const scrollRoot = document.querySelector('.app');
+    if (scrollRoot) scrollRoot.scrollTop = 0;
     window.scrollTo(0, 0);
     return true;
   })()`);
@@ -590,11 +627,11 @@ async function exerciseOptionSorterPrimaryAction(cdp, viewport) {
 }
 
 async function exerciseTaskSixDomainActions(cdp) {
-  const upload = await evaluate(cdp, `(() => {
+  const upload = await evaluate(cdp, `(async () => {
     state.analysisImages = [];
     state.imagePreview = null;
     state.step = 'upload';
-    render();
+    await render();
     const button = document.getElementById('startAnalysis');
     return {
       activeStep: state.step,
@@ -604,7 +641,7 @@ async function exerciseTaskSixDomainActions(cdp) {
     };
   })()`);
 
-  const analyzingPrepared = await evaluate(cdp, `(() => {
+  const analyzingPrepared = await evaluate(cdp, `(async () => {
     const now = Date.now();
     const run = { id: 'menu-qa-analysis', status: 'running', progress: 42, startedAt: now, lastUpdatedAt: now, logs: [] };
     state.analysisRuns = [run];
@@ -612,7 +649,7 @@ async function exerciseTaskSixDomainActions(cdp) {
     state.progress = 42;
     state.progressMsg = '로컬 분석 동작 검증';
     state.step = 'analyzing';
-    render();
+    await render();
     return {
       activeStep: state.step,
       stopPresent: !!document.getElementById('stopAnalysisRunBtn'),
@@ -625,7 +662,7 @@ async function exerciseTaskSixDomainActions(cdp) {
     progress: state.progress,
   }))()`);
 
-  const sections = await evaluate(cdp, `(() => {
+  const sections = await evaluate(cdp, `(async () => {
     state.analysis = { product_name: '메뉴 모듈 검증 상품', category: '수저집' };
     state.sectionContents = {};
     state.sectionGenerating = {};
@@ -633,19 +670,17 @@ async function exerciseTaskSixDomainActions(cdp) {
     state.sectionInstructions = {};
     state.sectionBatchSelection = {};
     state.step = 'sections';
-    render();
+    await render();
     const first = document.getElementById('generateAll');
     const second = document.getElementById('generateAll2');
     return {
       activeStep: state.step,
       firstPresent: !!first,
       secondPresent: !!second,
-      firstHandler: typeof first?.onclick,
-      secondHandler: typeof second?.onclick,
     };
   })()`);
 
-  const generatingPrepared = await evaluate(cdp, `(() => {
+  const generatingPrepared = await evaluate(cdp, `(async () => {
     state.sectionBatchRun = {
       id: 'menu-qa-generation',
       status: 'running',
@@ -656,50 +691,62 @@ async function exerciseTaskSixDomainActions(cdp) {
     state.progress = 38;
     state.progressMsg = '로컬 섹션 생성 동작 검증';
     state.step = 'generating';
-    render();
+    await render();
+    const stopButton = document.getElementById('stopAfterCurrentSection');
     return {
       activeStep: state.step,
-      stopPresent: !!document.getElementById('stopAfterCurrentSection'),
-      handler: typeof document.getElementById('stopAfterCurrentSection')?.onclick,
+      stopPresent: !!stopButton,
+      stopHandler: typeof stopButton?.onclick,
     };
   })()`);
-  if (generatingPrepared.stopPresent) await clickSelector(cdp, '#stopAfterCurrentSection');
-  const generatingStopped = await evaluate(cdp, `(() => ({
-    stopRequested: !!state.sectionBatchRun?.stopRequested,
-    status: state.sectionBatchRun?.status || '',
-  }))()`);
+  let generatingStopClick = null;
+  let generatingStopped = { stopRequested: false, status: '' };
+  if (generatingPrepared.stopPresent) {
+    for (let effectAttempt = 1; effectAttempt <= 3; effectAttempt += 1) {
+      generatingStopClick = {
+        ...await clickSelector(cdp, '#stopAfterCurrentSection'),
+        effectAttempt,
+      };
+      await delay(50);
+      generatingStopped = await evaluate(cdp, `(() => ({
+        stopRequested: !!state.sectionBatchRun?.stopRequested,
+        status: state.sectionBatchRun?.status || '',
+      }))()`);
+      if (generatingStopped.stopRequested) break;
+    }
+  }
 
-  const previewPrepared = await evaluate(cdp, `(() => {
+  const previewPrepared = await evaluate(cdp, `(async () => {
     state.sectionBatchRun = { status: 'done', progress: 100, logs: [] };
     state.previewViewport = 'pc';
     state.step = 'preview';
-    render();
+    await render();
     return {
       activeStep: state.step,
       pcPresent: !!document.getElementById('viewportPc'),
       mobilePresent: !!document.getElementById('viewportMobile'),
-      mobileHandler: typeof document.getElementById('viewportMobile')?.onclick,
     };
   })()`);
-  if (previewPrepared.mobilePresent) await clickSelector(cdp, '#viewportMobile');
+  const previewMobileClick = previewPrepared.mobilePresent
+    ? await clickSelector(cdp, '#viewportMobile')
+    : null;
   const previewChanged = await evaluate(cdp, `(() => ({
     previewViewport: state.previewViewport,
     mobileActive: document.getElementById('viewportMobile')?.classList.contains('active') || false,
   }))()`);
 
-  const competitor = await evaluate(cdp, `(() => {
+  const competitor = await evaluate(cdp, `(async () => {
     state.compPage.mode = 'images';
     state.compPage.subStep = 'input';
     state.compPage.uploadedImages = [];
     state.step = 'competitor';
-    render();
+    await render();
     const button = document.getElementById('compStartAnalyze');
     const main = document.querySelector('.main');
     return {
       activeStep: state.step,
       buttonPresent: !!button,
       disabledWithoutImages: !!button?.disabled,
-      handler: typeof button?.onclick,
       horizontalOverflow: Math.max(0, (main?.scrollWidth || 0) - (main?.clientWidth || 0)),
     };
   })()`);
@@ -725,7 +772,7 @@ async function exerciseTaskSixDomainActions(cdp) {
     };
   })()`);
 
-  await evaluate(cdp, `(() => {
+  await evaluate(cdp, `(async () => {
     state.analysis = null;
     state.analysisRuns = [];
     state.currentAnalysisRunId = '';
@@ -735,7 +782,7 @@ async function exerciseTaskSixDomainActions(cdp) {
     state.progressMsg = '';
     state.error = null;
     state.step = 'upload';
-    render();
+    await render();
     return true;
   })()`);
 
@@ -745,8 +792,10 @@ async function exerciseTaskSixDomainActions(cdp) {
     analyzingStopped,
     sections,
     generatingPrepared,
+    generatingStopClick,
     generatingStopped,
     previewPrepared,
+    previewMobileClick,
     previewChanged,
     competitor,
     cafe24,
@@ -768,7 +817,7 @@ async function clickFactoryTabs(cdp) {
     const click = await clickSelector(cdp, `[data-factory-auto-tab="${id}"]`);
     const outcome = await evaluate(cdp, `(() => ({
       requested: ${JSON.stringify(id)},
-      activeTab: factoryState().automation?.activeTab || '',
+      activeTab: factoryRuntimeReadFactory().automation?.activeTab || '',
       activeButton: document.querySelector('[data-factory-auto-tab].active')?.dataset.factoryAutoTab || '',
       warnings: window.__MENU_QA__.warnings.slice(-5),
     }))()`);
@@ -808,15 +857,10 @@ async function runRepeatCycles(cdp, count = 3) {
 
 async function settleRouteAtTop(cdp) {
   return evaluate(cdp, `(async () => {
-    const main = document.querySelector('main.main');
+    const scrollRoot = document.querySelector('.app');
     const sidebar = document.querySelector('.sidebar');
     const scrollToTop = () => {
-      if (main) main.scrollTop = 0;
-      if (sidebar) {
-        sidebar.scrollTop = 0;
-        sidebar.scrollTo?.({ top: 0, left: 0, behavior: 'instant' });
-        void sidebar.offsetHeight;
-      }
+      if (scrollRoot) scrollRoot.scrollTop = 0;
       window.scrollTo(0, 0);
     };
     scrollToTop();
@@ -826,7 +870,7 @@ async function settleRouteAtTop(cdp) {
     const authority = document.querySelector('.workspace-authority-banner');
     const authorityRect = authority?.getBoundingClientRect?.() || null;
     return {
-      mainScrollTop: main?.scrollTop || 0,
+      mainScrollTop: scrollRoot?.scrollTop || 0,
       sidebarScrollTop: sidebar?.scrollTop || 0,
       sidebarLogoRect: (() => {
         const rect = document.querySelector('.sidebar .logo')?.getBoundingClientRect?.();
@@ -930,7 +974,8 @@ function buildChecks(results) {
         return visit.activeStep === expectedStep
           && visit.activeNav === expectedStep
           && visit.layout.reachedBottom
-          && /auto|scroll/.test(visit.layout.main?.overflowY || '');
+          && /auto|scroll/.test(visit.layout.scrollRoot?.overflowY || '')
+          && visit.layout.sidebarIndependentScroll === false;
       }) && /제품 이미지 분석 후/.test(result.routeVisits.find(visit => visit.requested === 'generating')?.notice || ''),
       detail: result.routeVisits,
     });
@@ -1024,16 +1069,11 @@ function buildChecks(results) {
         && result.taskSixDomainActions.analyzingStopped.status === 'error'
         && result.taskSixDomainActions.sections.firstPresent
         && result.taskSixDomainActions.sections.secondPresent
-        && result.taskSixDomainActions.sections.firstHandler === 'function'
-        && result.taskSixDomainActions.sections.secondHandler === 'function'
         && result.taskSixDomainActions.generatingPrepared.stopPresent
-        && result.taskSixDomainActions.generatingPrepared.handler === 'function'
         && result.taskSixDomainActions.generatingStopped.stopRequested
         && result.taskSixDomainActions.previewPrepared.mobilePresent
-        && result.taskSixDomainActions.previewPrepared.mobileHandler === 'function'
         && result.taskSixDomainActions.previewChanged.previewViewport === 'mobile'
         && result.taskSixDomainActions.competitor.buttonPresent
-        && result.taskSixDomainActions.competitor.handler === 'function'
         && result.taskSixDomainActions.competitor.horizontalOverflow === 0
         && result.taskSixDomainActions.cafe24.mode === 'update'
         && result.taskSixDomainActions.cafe24.productNo === '2534'

@@ -233,7 +233,7 @@ async function main() {
         factory.automation.activeTab = ${JSON.stringify(tab.tabId)};
         window.render();
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          const main = document.querySelector('.main');
+          const main = document.querySelector('.app');
           const tabButton = document.querySelector('[data-factory-auto-tab=${JSON.stringify(tab.tabId)}]');
           const activeButton = document.querySelector('.factory-automation-tab.active');
           const text = document.body?.innerText || '';
@@ -273,7 +273,7 @@ async function main() {
       window.state.step = 'preview';
       window.render();
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        const main = document.querySelector('.main');
+        const main = document.querySelector('.app');
         const text = document.body?.innerText || '';
         resolve({
           key: 'preview',

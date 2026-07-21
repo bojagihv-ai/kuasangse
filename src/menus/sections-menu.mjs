@@ -1,61 +1,7 @@
 import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contracts.mjs';
 import { renderSectionsView } from './sections-menu-view.mjs';
 import { bindSectionsLegacyFallback, bindSectionsSortable, createSectionsA2Handlers } from './sections-menu-a2-events.mjs';
-
-const RENDER_HELPER_NAMES = Object.freeze([
-  "ensureCurrentProductAnalysisForGeneration",
-  "ensureSectionWorkScopeCurrent",
-  "syncFixedSectionPlacementImages",
-  "hasCurrentProductAnalysisForGeneration",
-  "productAnalysisGenerationBlockReason",
-  "orderedSections",
-  "displayableImageSrc",
-  "getSectionBasisModeInfo",
-  "getSectionGenerationModeInfo",
-  "renderBrandStudioPanel",
-  "renderFixedDetailImagePanel",
-  "renderFactoryLightImage",
-  "renderAnalysisLog",
-  "renderImageDirectivesPanel",
-  "renderCompetitorTipBankSummary",
-  "renderSectionAssemblySummaryPanel",
-  "renderSectionBatchRunPanel",
-  "getSectionAssembly",
-  "sectionAssemblyCutUsageInfo",
-  "getSectionInstructionSourceInfo",
-  "getSectionResultSourceInfo",
-  "sectionBasisDisplayInfo",
-  "getSectionBasisDetail",
-  "sectionAssemblySourceSummary",
-  "sectionBasisOptionLabel",
-  "renderSectionCompactPromptPreview",
-  "renderSectionCompetitorPlanNotice",
-  "renderSectionGeneratedImagePreview",
-  "renderSectionImageHelper",
-  "renderSectionBasisChooser",
-  "renderSectionBasisPromptCompare",
-  "renderSectionAssemblyPanel",
-  "renderSectionModeChooser",
-  "disabledAttr",
-  "escAttr",
-  "escapeHtml"
-]);
-
-const ACTION_NAMES = Object.freeze([
-  'generateAll', 'updateBatchBasisMode', 'updateBatchGenerationMode',
-  'selectMissingSections', 'clearMissingSectionSelection', 'generateMissingSections',
-  'updateBatchSelection', 'addCustomSection', 'restoreHiddenSections', 'saveDriveFolder',
-  'connectDrive', 'uploadAllSectionImages', 'toggleSection', 'hideSection',
-  'updateSectionInstruction', 'setSectionGenerationMode', 'setSectionBasisMode',
-  'generateSection', 'toggleSectionLock', 'navigate',
-  'generateCompetitorPlan', 'openCompetitor',
-  'updateSectionAssemblySource', 'updateSectionAssemblyCutUsage', 'updateSectionAssemblyCut',
-  'updateSectionAssemblyNote', 'autoDistributeSectionAssemblyCuts', 'clearSectionAssemblyCutUsage',
-  'applySectionImageHelperTips', 'applyAllSectionImageHelperTips',
-  'beginSectionOrderChange', 'updateSectionOrder',
-  'toggleAnalysisLog', 'toggleRawJson', 'selectBrandPreset', 'selectLayoutTemplate', 'createBrandPreset', 'saveBrandPreset', 'deleteBrandPreset', 'updateBrandPresetDraft',
-]);
-const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['generateAll', 'generateSection', 'navigate']));
+import { REQUIRED_SECTION_ACTIONS, SECTION_ACTIONS, SECTION_RENDER_HELPERS } from './sections-menu-contract.mjs';
 
 function requiredFunction(source, name) {
   if (typeof source?.[name] !== 'function') throw new TypeError(name + ' must be a function');
@@ -68,14 +14,14 @@ export function createSectionsMenu(capabilities = {}) {
   const getOperationToken = requiredFunction(capabilities, 'getOperationToken');
   const reportError = requiredFunction(capabilities, 'reportError');
   const actions = capabilities.actions || {};
-  const menuActions = Object.fromEntries(ACTION_NAMES.map(name => [
+  const menuActions = Object.fromEntries(SECTION_ACTIONS.map(name => [
     name,
-    REQUIRED_ACTION_NAMES.has(name)
+    REQUIRED_SECTION_ACTIONS.has(name)
       ? requiredFunction(actions, name)
       : (typeof actions[name] === 'function' ? actions[name] : () => undefined),
   ]));
   const renderHelpers = capabilities.renderHelpers || {};
-  for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);
+  for (const name of SECTION_RENDER_HELPERS) requiredFunction(renderHelpers, name);
   if (!Array.isArray(renderHelpers.SECTION_BASIS_MODES)) throw new TypeError('SECTION_BASIS_MODES must be an array');
   if (!Array.isArray(renderHelpers.SECTION_GENERATION_MODES)) throw new TypeError('SECTION_GENERATION_MODES must be an array');
   const bindAnalysisPanelEvents = requiredFunction(renderHelpers, 'bindAnalysisPanelEvents'); const normalizeBrandPresetColor = typeof renderHelpers.normalizeBrandPresetColor === 'function' ? renderHelpers.normalizeBrandPresetColor : value => value;
@@ -167,7 +113,7 @@ export function createSectionsMenu(capabilities = {}) {
       return renderSectionsView(view, renderHelpers);
     },
     bind(root) {
-      bindingByRoot.get(root)?.();
+      bindingByRoot.get(root)?.dispose?.();
       const token = getOperationToken();
       const boundGeneration = generation;
       let disposed = false;
@@ -195,7 +141,6 @@ export function createSectionsMenu(capabilities = {}) {
         }
         if (closest(event, '#driveConnectFromSections')) { call('connectDrive'); return; }
         if (closest(event, '#uploadAllSectionImages')) { call('uploadAllSectionImages'); return; }
-        const toggle = closest(event, '[data-section-toggle]'); if (toggle) { call('toggleSection', toggle.dataset.sectionToggle); return; }
         const hide = closest(event, '[data-hide-section]'); if (hide) { event.stopPropagation?.(); call('hideSection', hide.dataset.hideSection); return; }
         const input = closest(event, '[data-section-input]'); if (input) { event.stopPropagation?.(); return; }
         const modeChoice = closest(event, '[data-section-mode-choice]');
@@ -206,7 +151,8 @@ export function createSectionsMenu(capabilities = {}) {
         const basis = closest(event, '[data-section-basis]'); if (basis) { event.stopPropagation?.(); return; }
         const generate = closest(event, '[data-generate-section]');
         if (generate) { event.preventDefault?.(); event.stopPropagation?.(); if (isCurrent()) invoke('generateSection', generate.dataset.generateSection, isCurrent); return; }
-        const lock = closest(event, '[data-lock-section]'); if (lock) { event.stopPropagation?.(); call('toggleSectionLock', lock.dataset.lockSection); }
+        const lock = closest(event, '[data-lock-section]'); if (lock) { event.stopPropagation?.(); call('toggleSectionLock', lock.dataset.lockSection); return; }
+        const toggle = closest(event, '[data-section-toggle]'); if (toggle) call('toggleSection', toggle.dataset.sectionToggle);
       };
       const onInput = event => {
         if (a2Handlers.onInput(event)) return;
@@ -241,11 +187,17 @@ export function createSectionsMenu(capabilities = {}) {
         sortableByRoot.delete(root);
         for (const disposeLegacy of legacyBindings.splice(0).reverse()) disposeLegacy();
         activeDisposers.delete(dispose);
-        if (bindingByRoot.get(root) === dispose) bindingByRoot.delete(root);
+        if (bindingByRoot.get(root)?.dispose === dispose) bindingByRoot.delete(root);
       };
       activeDisposers.add(dispose);
-      bindingByRoot.set(root, dispose);
+      bindingByRoot.set(root, { token, dispose });
       return dispose;
+    },
+    refresh(root) {
+      const binding = bindingByRoot.get(root);
+      if (!active || !binding || isOperationCurrent(binding.token)) return;
+      binding.dispose();
+      contract.bind(root);
     },
     onEnter() {
       active = true;

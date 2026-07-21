@@ -32,7 +32,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryImportOptionSorterResults)', 60000);
 
-    const proof = await evaluate(cdp, `(() => {
+    await evaluate(cdp, `(() => {
       window.scheduleLastWorkSave = () => {};
       window.saveLastWorkNow = () => {};
       const state = window.state;
@@ -95,19 +95,27 @@ async function main() {
       factory.assets = [];
       factory.previousAssets = [];
 
-      window.render();
+      return true;
+    })()`);
+
+    const proof = await evaluate(cdp, `(async () => {
+      const state = window.state;
+      const optionResultId = 'option_result_archive_v187';
+      const imported = await window.factoryImportOptionSorterResults({ silent: true, skipRender: true });
+      await window.render();
       const currentFactory = window.factoryState();
       const asset = (currentFactory.assets || []).find(item => item?.sourceMap?.optionResultId === optionResultId);
       const optionPanel = document.querySelector('#factoryAutomationAssetChooser_options');
       const visible = !!optionPanel && !!optionPanel.querySelector('[data-factory-asset-id]');
       const result = state.optionSorter.optionResults[0] || {};
       return {
+        imported,
         optionUsage: state.optionSorter?.optionColorImageUsage || '',
         optionImagesDisabled: window.optionSorterColorImagesDisabled(state.optionSorter),
         currentFactoryAssetCount: (currentFactory.assets || []).length,
         asset: asset ? {
           stageId: asset.stageId,
-          sourceMap: asset.sourceMap,
+          sourceMap: { optionResultId: asset.sourceMap?.optionResultId || '' },
           currentRunId: asset.currentRunId,
           generationRunId: asset.generationRunId,
           productKey: asset.productKey,

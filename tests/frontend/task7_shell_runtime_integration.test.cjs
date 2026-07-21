@@ -199,6 +199,8 @@ test('Task 7 authority stage explicitly installs workspace lock before its produ
   assert.doesNotMatch(lockSource, /if\s*\(typeof\s+self[\s\S]*?installWorkspaceLock\(self\)/);
   assert.match(loader, /authorityNamespace\.installWorkspaceLock\(window,\s*\{/);
   assert.match(loader, /reloadAccepted\s*:\s*accepted\s*=>\s*requestClassicRuntime\(['"]workspace-reload['"],\s*accepted\)/);
+  assert.match(loader, /serverBases\s*:\s*workspaceAuthorityServerBases/);
+  assert.match(loader, /localStorage\.getItem\(['"]gemini_backend_url['"]\)/);
 
   const cacheBust = `${Date.now()}-${Math.random()}`;
   const [{ createBootstrapCoordinator }, { installWorkspaceLock }] = await Promise.all([
@@ -469,8 +471,9 @@ test('Task 7 classic hydration is coordinator-owned and the initial render is a 
   const hydration = extractFunction(asyncCore, 'runClassicRuntimeHydration');
   assert.match(
     hydration,
-    /hydratePersistentSessionAssets[\s\S]*initialWorkspaceAuthority[\s\S]*ensureWorkspaceEditAuthority[\s\S]*hydrateServerLastWorkSnapshot[\s\S]*factoryRestoreCurrentWorkfileLocalArchive[\s\S]*hydrateLastProductImageBackup/,
+    /initialWorkspaceAuthority[\s\S]*ensureWorkspaceEditAuthority\(initialHydrationIdentity\.scopeId\)[\s\S]*hydratePersistentSessionAssets[\s\S]*initialAuthority[\s\S]*hydrationIdentityIsCurrent[\s\S]*ensureWorkspaceEditAuthority\(activeHydrationIdentity\.scopeId\)[\s\S]*hydrateServerLastWorkSnapshot[\s\S]*factoryRestoreCurrentWorkfileLocalArchive[\s\S]*hydrateLastProductImageBackup/,
   );
+  assert.equal((hydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 2);
   assert.doesNotMatch(hydration, /\brender\s*\(/);
   assert.doesNotMatch(asyncCore, /__KUASANGSE_STARTUP_RESTORE_PROMISE__/);
 

@@ -219,6 +219,7 @@ async function startIntegrationHarness(options = {}) {
     'factoryBojagiSquareSizeOptionSuggestion', 'factoryFieldTransferRows',
     'factoryFieldTransferState', 'factorySinhwaSelectedTransferTarget',
     'factoryCafe24SelectedTransferTarget', 'renderFactoryAutomationStatusCard',
+    'renderFactoryAutomationRunStatus',
     'renderFactoryAutomationAssetChooser',
     'factorySetAutomationWizardFieldDraft', 'factoryCommitAutomationWizardFieldValue',
     'factoryAutomationWizardDrafts', 'factoryPersistAutomationWizardDrafts',
@@ -249,6 +250,7 @@ async function startIntegrationHarness(options = {}) {
     'factoryOpenMarketBuildBaseDraft', 'factoryRenderCacheFinalCafe24Model',
     'factoryFinalRegistrationCafe24Model', 'SECTIONS',
     'renderFactoryFinalRegistrationPanel',
+    'compMarketOpenVisibleVmCapture', 'compMarketResumeDetailJob',
     `"use strict";
       const runtimeMenuModules = new Map();
       let factoryRuntimeStore = null;
@@ -364,6 +366,7 @@ async function startIntegrationHarness(options = {}) {
     () => ({ jcode: 'J1', name: '상품' }),
     () => null,
     (label, value) => `<div data-fields-status>${label}:${value}</div>`,
+    () => '<div data-factory-goal-status="automation"><div data-factory-stage-log-container></div></div>',
     (_factory, stageId) => `<div data-assets-stage="${stageId}"></div>`,
     (input, current = factory) => {
       const fieldId = input.dataset.factoryWizardField;
@@ -392,8 +395,8 @@ async function startIntegrationHarness(options = {}) {
       fieldsCalls.push(`selection:${fieldIds.join(',')}`);
       return [...fieldIds];
     },
-    target => {
-      fieldsCalls.push(`transfer:${target}`);
+    (target, current) => {
+      fieldsCalls.push(`transfer:${target}:${current ? 'owned' : 'missing'}`);
       return options.fieldsDeferred?.promise || Promise.resolve(true);
     },
     () => '#factoryFinalRegistrationPanel',
@@ -500,6 +503,8 @@ async function startIntegrationHarness(options = {}) {
       publishRenderCalls.push('final-panel');
       return '<div id="factoryFinalRegistrationPanel" data-publish-final-panel>최종 등록 설정</div>';
     },
+    () => { competitorCalls.push('open-vm-capture'); return true; },
+    () => { competitorCalls.push('resume-comp-market-detail'); return Promise.resolve(true); },
   );
   let menuLifecycle = null;
   let menuLifecycleRoot = null;
@@ -833,7 +838,7 @@ test('Task 7 fields rejects read-only mutation and stale transfer completion', a
   store.switchWorkspace('project-b', { snapshot: store.getSnapshot(), revision: 0 });
   resolve(true);
   await assert.rejects(pending, /STALE_FACTORY_RUNTIME_ACTION|STALE/);
-  assert.deepEqual(stale.fieldsCalls, ['transfer:sinhwa']);
+  assert.deepEqual(stale.fieldsCalls, ['transfer:sinhwa:owned']);
   assert.equal(store.getOperationToken().workspaceId, 'project-b');
   assert.equal(store.getOperationToken().revision, 0);
 });
@@ -1323,9 +1328,11 @@ test('Task 7 factory composition installs seven canonical tabs and owns the fact
   assert.equal(menu.id, 'factory');
   assert.deepEqual(Object.keys(capabilities).sort(), [
     'actions', 'assertMutable', 'getOperationToken', 'getSnapshot',
-    'isOperationCurrent', 'reportError', 'tabRegistry', 'tabs',
+    'isOperationCurrent', 'renderHelpers', 'reportError', 'tabRegistry', 'tabs',
   ]);
-  assert.deepEqual(Object.keys(capabilities.actions), ['selectFactoryTab']);
+  assert.deepEqual(Object.keys(capabilities.actions), [
+    'selectFactoryTab', 'jumpFactoryStage', 'setFactoryStageLogFilter', 'runFactoryShellGuideAction',
+  ]);
   assert.equal(capabilities.tabs instanceof Map, true);
   assert.equal(capabilities.tabs.size, 7);
   assert.deepEqual([...capabilities.tabs.keys()], ids);
