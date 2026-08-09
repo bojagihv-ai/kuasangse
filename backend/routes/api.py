@@ -17,5 +17,7 @@ from routes import api_archive  # noqa: F401,E402
 from routes import api_marketplus  # noqa: F401,E402
 from routes import api_core  # noqa: F401,E402
 from routes import api_vm  # noqa: F401,E402
+from routes import api_scrapling  # noqa: F401,E402
+from routes import api_workfile_reports  # noqa: F401,E402
 
 __all__ = ["api"]

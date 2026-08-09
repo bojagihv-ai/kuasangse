@@ -80,12 +80,12 @@ function actionFn(actions, names) {
 }
 
 function commandFor(assertMutable, actions, actionName) {
-  return { capability: WRITE, execute(value) {
+  return { capability: WRITE, execute(value, operationContext) {
     assertMutable();
     const direct = actionFn(actions, [ACTION_ALIASES[actionName], actionName].filter(Boolean));
     const generic = actionFn(actions, ['runFactoryGuideAction', 'runGuideAction']);
-    if (direct) return direct(value);
-    if (generic) return generic(actionName, value);
+    if (direct) return direct(value, operationContext);
+    if (generic) return generic(actionName, value, operationContext);
     return value;
   } };
 }
@@ -104,6 +104,7 @@ export function createDbFactoryTab(capabilities = {}) {
     'set-db-search-query': 'setDbSearchQuery', 'commit-db-search-query': 'commitDbSearchQuery',
     'apply-db-candidate': 'applyDbCandidate', 'apply-cafe24-candidate': 'applyCafe24Candidate',
     'confirm-no-db-candidate': 'confirmNoDbCandidate', 'confirm-no-cafe24-candidate': 'confirmNoCafe24Candidate',
+    'clear-db-candidate': 'clearDbCandidateSelection', 'clear-cafe24-candidate': 'clearCafe24CandidateSelection',
     'guide-action': 'runFactoryGuideAction',
   })) commands[name] = commandFor(assertMutable, actions, action);
   const runtimeCapabilities = { getSnapshot, assertMutable, getOperationToken, isOperationCurrent, reportError, actions, renderHelpers };
@@ -129,14 +130,17 @@ export function createDbFactoryTab(capabilities = {}) {
       const readQuery = () => String(root.querySelector?.('[data-factory-db-search-query]')?.value || '').trim();
       const click = event => {
         const target = event?.target;
-        const node = target?.closest?.('[data-factory-guide-action], [data-factory-apply-db-candidate], [data-factory-apply-cafe24-candidate], [data-factory-confirm-no-db-candidate], [data-factory-confirm-no-cafe24-candidate]');
+        const node = target?.closest?.('[data-factory-guide-action], [data-factory-apply-db-candidate], [data-factory-apply-cafe24-candidate], [data-factory-confirm-no-db-candidate], [data-factory-confirm-no-cafe24-candidate], [data-factory-clear-db-candidate], [data-factory-clear-cafe24-candidate]');
         if (!inside(node)) return;
         event.preventDefault?.(); event.stopPropagation?.();
         const guide = node.dataset?.factoryGuideAction;
         if (guide) { const value = ['rerun-db-query', 'rerun-cafe24-query', 'append-cafe24-query'].includes(guide) ? readQuery() : undefined; invoke(Object.prototype.hasOwnProperty.call(commands, guide) ? guide : 'guide-action', value); return; }
         if (node.dataset?.factoryApplyDbCandidate !== undefined) { invoke('apply-db-candidate', { index: Number(node.dataset.factoryApplyDbCandidate) }); return; }
         if (node.dataset?.factoryApplyCafe24Candidate !== undefined) { invoke('apply-cafe24-candidate', { index: Number(node.dataset.factoryApplyCafe24Candidate) }); return; }
-        invoke(node.dataset?.factoryConfirmNoDbCandidate !== undefined ? 'confirm-no-db-candidate' : 'confirm-no-cafe24-candidate');
+        if (node.dataset?.factoryConfirmNoDbCandidate !== undefined) { invoke('confirm-no-db-candidate'); return; }
+        if (node.dataset?.factoryConfirmNoCafe24Candidate !== undefined) { invoke('confirm-no-cafe24-candidate'); return; }
+        if (node.dataset?.factoryClearDbCandidate !== undefined) { invoke('clear-db-candidate'); return; }
+        if (node.dataset?.factoryClearCafe24Candidate !== undefined) invoke('clear-cafe24-candidate');
       };
       const input = event => { const node = event?.target; if (node?.matches?.('[data-factory-db-search-query]')) invoke('set-db-search-query', String(node.value || '')); };
       const focusout = event => { const node = event?.target; if (node?.matches?.('[data-factory-db-search-query]')) invoke('commit-db-search-query', String(node.value || '').trim()); };

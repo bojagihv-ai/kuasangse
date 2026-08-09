@@ -374,6 +374,43 @@ test('FACTORY-TAB-LIFECYCLE: 실제 tab contract를 50회 enter/leave/bind/dispo
   }
 });
 
+test('FACTORY-START-FILE: render가 file input 노드를 교체해도 root 위임 change가 이미지 명령을 실행한다', async t => {
+  if (skipWhenMissing(t)) return;
+  const namespace = await importFresh('src/menus/factory/tabs/start-tab.mjs', 'task7-start-file');
+  const harness = createTabCapabilities(FACTORY_TAB_SPECS[0]);
+  const tab = namespace.createStartFactoryTab(harness.value);
+  const fakeRoot = createFakeRoot(harness.registry);
+  const file = Object.freeze({ name: 'replacement.png', type: 'image/png' });
+  const originalInput = {
+    id: 'factoryGuideProductFile',
+    files: [],
+    value: '',
+  };
+  const replacementInput = {
+    id: 'factoryGuideProductFile',
+    files: [file],
+    value: 'replacement.png',
+  };
+  fakeRoot.addNode('#factoryGuideProductFile', originalInput);
+
+  const dispose = tab.bind(fakeRoot.root);
+  fakeRoot.addNode('#factoryGuideProductFile', replacementInput);
+  const delegatedChange = [...harness.registry.listeners]
+    .find(entry => entry.type === 'change');
+  assert.ok(delegatedChange, 'stable factory root must own the delegated file-input change listener');
+  delegatedChange.listener({ target: replacementInput });
+  await Promise.resolve();
+
+  assert.equal(
+    harness.calls.filter(call => call.kind === 'action' && call.name === 'setProductImage').length,
+    1,
+    'replacement file input must remain live through the stable root listener',
+  );
+  assert.equal(replacementInput.value, '');
+  dispose();
+  assert.equal(harness.registry.listeners.size, 0, 'delegated root listener must be disposed');
+});
+
 test('FACTORY-TAB-AUTHORITY: 읽기 전용 authority는 모든 tab의 첫 mutation command 전에 차단된다', async t => {
   if (skipWhenMissing(t)) return;
   for (const spec of FACTORY_TAB_SPECS) {
@@ -519,6 +556,33 @@ test('FACTORY-MENU-COMPOSITION: registry descriptor로 active tab을 선택하�
     /factory\/publish|tab registry|missing/i,
     'composition must not silently fall back to a wrapper or missing tab',
   );
+});
+
+test('FACTORY-ASSETS: 색상이미지 파일 선택은 options 단계 입력으로 전달된다', async () => {
+  const { bindAssetsTab } = await importFresh('src/menus/factory/tabs/assets-tab-bind.mjs', 'option-upload');
+  const listeners = new Map();
+  const calls = [];
+  const root = {
+    addEventListener(type, listener) { listeners.set(type, listener); },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) listeners.delete(type);
+    },
+  };
+  const file = Object.freeze({ name: '버건디.jpg', type: 'image/jpeg' });
+  const target = {
+    files: [file],
+    value: 'selected',
+    closest(selector) {
+      return selector === '[data-factory-option-color-file]' ? this : null;
+    },
+  };
+  const dispose = bindAssetsTab(root, (...args) => calls.push(args));
+
+  listeners.get('change')?.({ target });
+
+  assert.deepEqual(calls, [['addStageInputFiles', 'options', [file]]]);
+  assert.equal(target.value, '');
+  dispose();
 });
 
 test('FACTORY-LOC: 모든 새 factory production module은 250 pure LOC 이하이다', async t => {

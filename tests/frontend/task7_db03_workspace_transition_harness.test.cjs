@@ -59,6 +59,24 @@ test('DB-03 cleanup accepts only its exact hashed scoped path', () => {
   assert.throws(() => resolveTestScopePaths(scope, path.join(ROOT, 'backend', '.local', 'outside.json'), ROOT), /escaped test scope/);
 });
 
+test('DB-03 cleanup follows the task-owned local state root', () => {
+  const { resolveTestScopePaths } = require(TRANSITION_UTILS);
+  const previous = process.env.KUASANGSE_LOCAL_STATE_FOLDER;
+  const stateRoot = path.join(ROOT, '.omo', 'evidence', 'db03-isolated-state-contract');
+  const scope = 'project:project_db03_isolated_123';
+  try {
+    process.env.KUASANGSE_LOCAL_STATE_FOLDER = stateRoot;
+    const expected = resolveTestScopePaths(scope, '', ROOT);
+    assert.equal(
+      path.dirname(expected.livePath),
+      path.join(stateRoot, 'pdp-last-work-scoped'),
+    );
+  } finally {
+    if (previous === undefined) delete process.env.KUASANGSE_LOCAL_STATE_FOLDER;
+    else process.env.KUASANGSE_LOCAL_STATE_FOLDER = previous;
+  }
+});
+
 test('DB-03 verifier keeps both migrated candidate buttons present and enabled', () => {
   const source = fs.readFileSync(VERIFIER, 'utf8');
   assert.match(source, /button\('\[data-factory-apply-db-candidate="0"\]'\)/);

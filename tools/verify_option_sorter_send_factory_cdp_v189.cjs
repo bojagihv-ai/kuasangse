@@ -5,6 +5,8 @@ const {
   connectCdp,
   ensureCdp,
   evaluate,
+  evaluateFactoryCdpFixture,
+  factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
 
@@ -30,13 +32,20 @@ async function main() {
       mobile: false,
     });
     await cdp.send('Page.navigate', { url: APP_URL });
-    await waitFor(cdp, '!!(window.state && window.render && window.factoryState)', 60000);
+    await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+      && serverLastWorkHydrated === true
+      && classicRuntimeDeferredHydrationPromise === null`, 60000);
 
-    const prepared = await evaluate(cdp, `(async () => {
+    const prepared = await evaluateFactoryCdpFixture(cdp, `(async ({
+      setAppState,
+      readAppState,
+      readOperationToken,
+      cloneFactory,
+      replaceFactory,
+      renderApp,
+    }) => {
       window.scheduleLastWorkSave = () => {};
       window.saveLastWorkNow = () => {};
-      const state = window.state;
-      const factory = window.factoryState();
       const scope = {
         workspaceId: 'option-send-workspace-v189',
         currentRunId: 'option_send_run_v189',
@@ -54,16 +63,19 @@ async function main() {
         prompt: 'verification',
         factoryScope: { ...scope },
       }));
-      state.step = 'optionsorter';
-      state.currentProjectId = scope.workspaceId;
-      state.productName = scope.productKey;
-      state.optionSorter = window.normalizeOptionSorterState({
-        ...window.defaultOptionSorterState(),
-        optionColorImageUsage: 'use',
-        subStep: 'sort',
-        optionResults: results,
-        optionLastGeneratedResultIds: results.map(result => result.id),
+      setAppState({
+        step: 'optionsorter',
+        currentProjectId: scope.workspaceId,
+        productName: scope.productKey,
+        optionSorter: window.normalizeOptionSorterState({
+          ...window.defaultOptionSorterState(),
+          optionColorImageUsage: 'use',
+          subStep: 'sort',
+          optionResults: results,
+          optionLastGeneratedResultIds: results.map(result => result.id),
+        }),
       });
+      const factory = cloneFactory();
       factory.workspace = { ...(factory.workspace || {}), id: scope.workspaceId };
       factory.product = {
         ...(factory.product || {}),
@@ -90,24 +102,32 @@ async function main() {
       factory.previousAssets = [];
       document.activeElement?.blur?.();
       factory.automation.fieldCommitInProgress = false;
-      await window.render();
+      replaceFactory(factory, {
+        mode: 'hydrate',
+        workspaceId: scope.workspaceId,
+        reason: 'option-sorter-send-v189',
+      });
+      await renderApp();
+      const appState = readAppState();
+      const currentFactory = cloneFactory();
       const optionPanel = document.querySelector('.opt-option-gen-panel');
-      const resultScopes = state.optionSorter.optionResults.map(result => ({
+      const resultScopes = appState.optionSorter.optionResults.map(result => ({
         id: result.id,
         factoryScope: result.factoryScope || null,
-        match: window.factoryOptionSorterResultMatchesCurrentJob(result, factory),
+        match: window.factoryOptionSorterResultMatchesCurrentJob(result, currentFactory),
       }));
       return {
-        step: state.step,
+        step: appState.step,
         optionPanelExists: !!optionPanel,
-        optionResultCount: state.optionSorter.optionResults.length,
-        optionLastGeneratedResultIds: state.optionSorter.optionLastGeneratedResultIds,
-        currentScope: window.factoryOptionResultCurrentScope(factory),
+        optionResultCount: appState.optionSorter.optionResults.length,
+        optionLastGeneratedResultIds: appState.optionSorter.optionLastGeneratedResultIds,
+        currentScope: window.factoryOptionResultCurrentScope(currentFactory),
+        operationToken: readOperationToken(),
         resultScopes,
         sendButtonExists: !!document.getElementById('optSendCurrentOptionResultsToFactory'),
         resultSendButtonCount: document.querySelectorAll('[data-opt-send-factory-result]').length,
       };
-    })()`);
+    })`);
 
     assertChecks([
       { ok: prepared.sendButtonExists, message: `현재 생성안 전체 전송 버튼이 없습니다: ${JSON.stringify(prepared)}` },
@@ -129,7 +149,48 @@ async function main() {
     fs.writeFileSync(OPTION_SORTER_SCREENSHOT_PATH, Buffer.from(optionSorterScreenshot.data, 'base64'));
 
     await evaluate(cdp, 'document.getElementById("optSendCurrentOptionResultsToFactory").click()');
-    await waitFor(cdp, 'window.state.step === "factory" && window.factoryUsableAssetsForStage("options", window.factoryState()).length === 3', 30000);
+    try {
+      await waitFor(cdp, 'window.state.step === "factory" && window.factoryUsableAssetsForStage("options", window.factoryState()).length === 3', 30000);
+    } catch (error) {
+      const diagnostics = await evaluate(cdp, `(() => {
+        const factory = window.factoryState();
+        const store = typeof factoryRuntimeRequireStore === 'function'
+          ? factoryRuntimeRequireStore()
+          : null;
+        return {
+          step: window.state.step,
+          stateWorkspaceId: window.state.currentProjectId || '',
+          factoryWorkspaceId: factory.workspace?.id || '',
+          operationToken: store?.getOperationToken?.() || null,
+          activeLease: store?.hasActiveOperationLease?.() === true,
+          deferredPending: typeof factoryRuntimeDeferredOperationsPending === 'function'
+            ? factoryRuntimeDeferredOperationsPending()
+            : null,
+          deferredQueueLength: typeof factoryRuntimeDeferredOperationQueue === 'undefined'
+            ? null
+            : factoryRuntimeDeferredOperationQueue.length,
+          classicRuntimeHydrationReady: typeof classicRuntimeHydrationReady === 'undefined'
+            ? null
+            : classicRuntimeHydrationReady,
+          classicRuntimeInitialRenderComplete: typeof classicRuntimeInitialRenderComplete === 'undefined'
+            ? null
+            : classicRuntimeInitialRenderComplete,
+          deferredHydrationActive: typeof classicRuntimeDeferredHydrationPromise === 'undefined'
+            ? null
+            : classicRuntimeDeferredHydrationPromise !== null,
+          serverLastWorkHydrated: typeof serverLastWorkHydrated === 'undefined'
+            ? null
+            : serverLastWorkHydrated,
+          optionResultIds: (window.state.optionSorter?.optionResults || []).map(result => result.id),
+          optionAssetIds: window.factoryUsableAssetsForStage('options', factory)
+            .map(asset => asset.sourceMap?.optionResultId || asset.id),
+          stageStatus: factory.stages?.options?.status || '',
+          stageMessage: factory.stages?.options?.message || '',
+          stateError: window.state.error || '',
+        };
+      })()`);
+      throw new Error(`${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
+    }
     const proof = await evaluate(cdp, `(() => {
       const factory = window.factoryState();
       const assets = window.factoryUsableAssetsForStage('options', factory);
@@ -157,18 +218,40 @@ async function main() {
       deviceScaleFactor: 1,
       mobile: false,
     });
-    const captureTarget = await evaluate(cdp, `(() => {
+    const scrollAttempt = await evaluate(cdp, `(() => {
       const target = document.querySelector('#factoryAutomationAssetChooser_options');
-      const scrollRoot = document.querySelector('.app');
       const candidate = target?.querySelector('[data-factory-asset-id]') || target;
-      if (target && scrollRoot) {
+      const scrollRoot = document.querySelector('.app');
+      const documentRoot = document.scrollingElement || document.documentElement;
+      const before = scrollRoot ? scrollRoot.scrollTop : 0;
+      if (candidate) {
+        candidate.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+      } else if (target && scrollRoot) {
         const rootRect = scrollRoot.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
         const stickyHeight = Math.max(84, Math.round(document.querySelector('.top-command-row')?.getBoundingClientRect().height || 0) + 12);
         const contentTop = targetRect.top - rootRect.top + scrollRoot.scrollTop;
         const maxScrollTop = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
-        scrollRoot.scrollTo({ top: Math.min(maxScrollTop, Math.max(0, contentTop - stickyHeight)), behavior: 'auto' });
+        scrollRoot.scrollTop = Math.min(maxScrollTop, Math.max(0, contentTop - stickyHeight));
       }
+      return {
+        app: scrollRoot ? {
+          before,
+          after: scrollRoot.scrollTop,
+          scrollHeight: scrollRoot.scrollHeight,
+          clientHeight: scrollRoot.clientHeight,
+        } : null,
+        document: {
+          scrollTop: documentRoot.scrollTop,
+          scrollHeight: documentRoot.scrollHeight,
+          clientHeight: documentRoot.clientHeight,
+        },
+      };
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 140));
+    const captureTarget = await evaluate(cdp, `(() => {
+      const target = document.querySelector('#factoryAutomationAssetChooser_options');
+      const candidate = target?.querySelector('[data-factory-asset-id]') || target;
       const candidateRect = candidate?.getBoundingClientRect();
       return {
         hasTarget: !!target,
@@ -176,15 +259,19 @@ async function main() {
         candidateInViewport: !!candidateRect && candidateRect.top >= 0 && candidateRect.bottom <= window.innerHeight,
         candidateRect: candidateRect ? { top: candidateRect.top, bottom: candidateRect.bottom, height: candidateRect.height } : null,
         viewportHeight: window.innerHeight,
+        scrollAttempt: ${JSON.stringify(scrollAttempt)},
       };
     })()`);
-    await new Promise(resolve => setTimeout(resolve, 140));
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));
 
-    const legacyPrepared = await evaluate(cdp, `(async () => {
-      const state = window.state;
-      const factory = window.factoryState();
+    const legacyPrepared = await evaluateFactoryCdpFixture(cdp, `(async ({
+      setAppState,
+      cloneFactory,
+      replaceFactory,
+      renderApp,
+    }) => {
+      const factory = cloneFactory();
       const scope = window.factoryOptionResultCurrentScope(factory);
       const image = index => 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="360" height="260"><rect width="360" height="260" fill="#ffffff"/><text x="180" y="135" text-anchor="middle">legacy option ' + index + '</text></svg>');
       const currentUnscoped = {
@@ -204,19 +291,22 @@ async function main() {
         prompt: 'previous verification',
         factoryScope: { ...scope, currentRunId: 'other_option_run_v189' },
       };
-      state.step = 'optionsorter';
-      state.optionSorter = window.normalizeOptionSorterState({
-        ...window.defaultOptionSorterState(),
-        optionColorImageUsage: 'use',
-        subStep: 'sort',
-        optionResults: [currentUnscoped, mismatched],
-        optionLastGeneratedResultIds: [currentUnscoped.id],
+      setAppState({
+        step: 'optionsorter',
+        optionSorter: window.normalizeOptionSorterState({
+          ...window.defaultOptionSorterState(),
+          optionColorImageUsage: 'use',
+          subStep: 'sort',
+          optionResults: [currentUnscoped, mismatched],
+          optionLastGeneratedResultIds: [currentUnscoped.id],
+        }),
       });
       factory.assets = [];
       factory.previousAssets = [];
       document.activeElement?.blur?.();
       factory.automation.fieldCommitInProgress = false;
-      await window.render();
+      replaceFactory(factory, { reason: 'option-sorter-send-legacy-v189' });
+      await renderApp();
       const bulkButton = document.getElementById('optSendCurrentOptionResultsToFactory');
       const currentButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_unscoped_v189"]');
       const previousButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_previous_v189"]');
@@ -225,7 +315,7 @@ async function main() {
         previousButtonDisabled: !!previousButton && previousButton.disabled,
         bulkButtonDisabled: !!bulkButton && bulkButton.disabled,
       };
-    })()`);
+    })`);
     assertChecks([
       { ok: legacyPrepared.currentButtonDisabled, message: `범위 미기록 옵션표 전송 버튼이 차단되지 않았습니다: ${JSON.stringify(legacyPrepared)}` },
       { ok: legacyPrepared.previousButtonDisabled, message: `이전 작업 옵션표 전송 버튼이 차단되지 않았습니다: ${JSON.stringify(legacyPrepared)}` },

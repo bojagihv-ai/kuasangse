@@ -18,6 +18,7 @@ const TARGETS = [
   ['factory', 'src/menus/factory/factory-menu.mjs', 'factory', 'menu:v1 + factory composition', 'MENU-FACTORY'],
   ['automation', 'src/menus/automation-menu.mjs', 'automation', 'menu:v1 + automation commands', 'MENU-AUTO'],
   ['modelsettings', 'src/menus/modelsettings-menu.mjs', 'app-preferences', 'menu:v1 + settings commands', 'MENU-SETTINGS'],
+  ['reports', 'src/menus/reports-menu.mjs', 'composition', 'menu:v1 + report commands', 'MENU-REPORTS'],
   ['manual', 'src/menus/manual-menu.mjs', 'manual-ui', 'menu:v1', 'MENU-MANUAL'],
   ['factory/start', 'src/menus/factory/tabs/start-tab.mjs', 'factory', 'factory-tab:v1', 'FACTORY-START'],
   ['factory/db', 'src/menus/factory/tabs/db-tab.mjs', 'product-db', 'factory-tab:v1', 'FACTORY-DB'],
@@ -36,16 +37,16 @@ function source(relativePath) {
   return fs.readFileSync(absolute(relativePath), 'utf8');
 }
 
-test('target matrix는 12 sidebar route와 7 factory tab을 빠짐없이 한 번씩 소유한다', () => {
-  assert.equal(TARGETS.length, 19);
-  assert.equal(new Set(TARGETS.map(item => item.id)).size, 19);
-  assert.equal(new Set(TARGETS.map(item => item.implementation)).size, 19);
-  assert.equal(new Set(TARGETS.map(item => item.gate)).size, 19);
-  assert.deepEqual(TARGETS.slice(0, 12).map(item => item.id), [
+test('target matrix는 13 sidebar route와 7 factory tab을 빠짐없이 한 번씩 소유한다', () => {
+  assert.equal(TARGETS.length, 20);
+  assert.equal(new Set(TARGETS.map(item => item.id)).size, 20);
+  assert.equal(new Set(TARGETS.map(item => item.implementation)).size, 20);
+  assert.equal(new Set(TARGETS.map(item => item.gate)).size, 20);
+  assert.deepEqual(TARGETS.slice(0, 13).map(item => item.id), [
     'upload', 'analyzing', 'competitor', 'sections', 'generating', 'preview',
-    'imagecuts', 'optionsorter', 'factory', 'automation', 'modelsettings', 'manual',
+    'imagecuts', 'optionsorter', 'factory', 'automation', 'modelsettings', 'reports', 'manual',
   ]);
-  assert.deepEqual(TARGETS.slice(12).map(item => item.id), [
+  assert.deepEqual(TARGETS.slice(13).map(item => item.id), [
     'factory/start', 'factory/db', 'factory/fields', 'factory/competitor',
     'factory/assets', 'factory/sections', 'factory/publish',
   ]);
@@ -64,7 +65,7 @@ for (const target of TARGETS) {
   });
 }
 
-test('TARGET-MODULE-REGISTRY: 19개 경계는 구현을 위조하지 않고 owner/API/gate target descriptor를 제공한다', async () => {
+test('TARGET-MODULE-REGISTRY: 20개 경계는 구현을 위조하지 않고 owner/API/gate target descriptor를 제공한다', async () => {
   const registryPath = absolute('src/modules/module-registry.mjs');
   assert.equal(fs.existsSync(registryPath), true, 'missing module registry foundation');
   const registryUrl = `${pathToFileURL(registryPath).href}?target=${Date.now()}`;
@@ -78,7 +79,7 @@ test('TARGET-MODULE-REGISTRY: 19개 경계는 구현을 위조하지 않고 owne
   })), TARGETS);
 });
 
-test('TARGET-MISSING-OWNERSHIP-CONTRACT: immutable store와 exhaustive registry가 19개 owner/API를 선언한다', () => {
+test('TARGET-MISSING-OWNERSHIP-CONTRACT: immutable store와 exhaustive registry가 20개 owner/API를 선언한다', () => {
   const required = [
     'src/modules/menu-contracts.mjs',
     'src/modules/app-store.mjs',

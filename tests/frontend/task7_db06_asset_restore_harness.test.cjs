@@ -21,8 +21,8 @@ function validProof(seed) {
     buttons: {
       dbDraft: { exists: true, disabled: false },
       cafeDraft: { exists: true, disabled: false },
-      dbForeign: { exists: true, disabled: true },
-      cafeForeign: { exists: true, disabled: true },
+      dbForeign: { exists: false, disabled: null },
+      cafeForeign: { exists: false, disabled: null },
     },
     cleanup: { cdpClosed: true, runtimeCleaned: true, errors: [] },
   };

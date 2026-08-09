@@ -122,6 +122,7 @@ test('DB-02 confirmation uses the real factory store token and rejects rotated c
       reviewProductName: state.productName,
     };
     const draft = cloneFactory();
+    const tokenBeforeCommit = readOperationToken();
     const scopeKey = factoryCandidateReviewScopeKey(draft);
     candidate.reviewProductScopeKey = scopeKey;
     const candidateKey = factorySinhwaCandidateKey(candidate);
@@ -132,15 +133,18 @@ test('DB-02 confirmation uses the real factory store token and rejects rotated c
     replaceFactory(draft, { mode: 'candidate-confirmation', workspaceId: currentScope });
     const roundTrip = readFactory();
     const token = readOperationToken();
+    const ordinaryCommitKeepsFence = token.fence === tokenBeforeCommit.fence;
     const currentSelectable = factoryCandidateReviewCanApply(candidate, roundTrip);
     const rendered = renderApp();
 
     setAppState({ currentProjectId: rotatedScope });
+    const tokenBeforeWorkspaceSwitch = readOperationToken();
     const rotated = cloneFactory();
     rotated.workspace = { ...rotated.workspace, id: rotatedScope };
     rotated.currentProjectId = rotatedScope;
     switchWorkspaceSnapshot(rotatedScope, rotated);
     const rotatedToken = readOperationToken();
+    const workspaceSwitchIncrementsFenceOnce = rotatedToken.fence === tokenBeforeWorkspaceSwitch.fence + 1;
     const staleSelectable = factoryCandidateReviewCanApply(candidate, readFactory());
     const rotatedScopeKey = factoryCandidateReviewScopeKey(readFactory());
     return {
@@ -153,6 +157,8 @@ test('DB-02 confirmation uses the real factory store token and rejects rotated c
       selectedDbCandidateKey: roundTrip.product.selectedDbCandidateKey,
       confirmedDbSelected: roundTrip.product.confirmedDb?.selected === true,
       dbResolution: roundTrip.product.dbCandidateResolution,
+      ordinaryCommitKeepsFence,
+      workspaceSwitchIncrementsFenceOnce,
       token,
       rotatedToken,
       appWorkspaceId: readAppState().currentProjectId,
@@ -169,20 +175,24 @@ test('DB-02 confirmation uses the real factory store token and rejects rotated c
     selectedDbCandidateKey: 'DB02-JCODE',
     confirmedDbSelected: true,
     dbResolution: 'selected',
+    ordinaryCommitKeepsFence: true,
+    workspaceSwitchIncrementsFenceOnce: true,
     token: {
       version: 'factory-store:v1',
       workspaceId: 'project:db02-current',
       revision: 1,
-      fence: 2,
+      fence: 1,
     },
     rotatedToken: {
       version: 'factory-store:v1',
       workspaceId: 'project:db02-rotated',
       revision: 0,
-      fence: 3,
+      fence: 2,
     },
     appWorkspaceId: 'project:db02-rotated',
   });
+  assert.equal(result.ordinaryCommitKeepsFence, true, 'ordinary commit must advance revision without rotating the operation fence');
+  assert.equal(result.workspaceSwitchIncrementsFenceOnce, true, 'workspace switch must increment the operation fence exactly once');
   for (const legacyAlias of ['factoryState', 'saveLastWorkNow', 'render']) {
     assert.equal(Object.hasOwn(context, legacyAlias), false, `${legacyAlias} must remain lexical-only`);
   }

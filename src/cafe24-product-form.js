@@ -124,6 +124,14 @@ function factoryUpdateFinalDbFromFields(factory) {
     setting.enabled = true;
   });
   const model = factoryBuildDbReviewModel(factory);
+  const previousFinalDb = factory.product?.finalDb && typeof factory.product.finalDb === 'object'
+    ? factory.product.finalDb
+    : {};
+  Object.entries(previousFinalDb).forEach(([fieldId, value]) => {
+    if (model.finalDb[fieldId] && String(model.finalDb[fieldId]).trim()) return;
+    if (fieldId === 'sale_price' && !factoryCafe24PositiveMoneyText(value)) return;
+    if (String(value ?? '').trim()) model.finalDb[fieldId] = value;
+  });
   const finalRegistration = factory.product?.cafe24FinalRegistration || {};
   const finalRegistrationName = String(finalRegistration.productName || finalRegistration.product_name || '').trim();
   const protectedProductName = [
@@ -140,7 +148,15 @@ function factoryUpdateFinalDbFromFields(factory) {
   const finalRegistrationSalePrice = String(finalRegistration.price || finalRegistration.salePrice || finalRegistration.sale_price || '').trim();
   const finalRegistrationRetailPrice = String(finalRegistration.retailPrice || finalRegistration.consumerPrice || finalRegistration.consumer_price || finalRegistration.retail_price || '').trim();
   const finalRegistrationSupplyPrice = String(finalRegistration.supplyPrice || finalRegistration.purchasePrice || finalRegistration.purchase_price || finalRegistration.supply_price || '').trim();
-  if (finalRegistrationSalePrice) model.finalDb.sale_price = finalRegistrationSalePrice;
+  if (finalRegistrationSalePrice && factoryCafe24PositiveMoneyText(finalRegistrationSalePrice)) {
+    model.finalDb.sale_price = finalRegistrationSalePrice;
+  } else {
+    const preservedSalePrice = factoryCafe24PositiveMoneyText(model.finalDb.sale_price);
+    if (preservedSalePrice) {
+      factory.product.cafe24FinalRegistration.price = preservedSalePrice;
+      factory.product.cafe24FinalRegistration.salePrice = preservedSalePrice;
+    }
+  }
   if (finalRegistrationRetailPrice) model.finalDb.consumer_price = finalRegistrationRetailPrice;
   if (finalRegistrationSupplyPrice) model.finalDb.purchase_price = finalRegistrationSupplyPrice;
   factoryClearDefaultWeightFromFinalDb(factory, model.finalDb);
@@ -673,8 +689,15 @@ function factoryCafe24PointsAmountRows(value) {
       const paymentMethod = String(item.payment_method || item.paymentMethod || item.payment_type || item.paymentType || item.method || '').trim();
       const pointsRate = String(item.points_rate || item.pointsRate || item.rate || item.percent || '').trim();
       const pointsAmount = String(item.points_amount || item.pointsAmount || item.amount || item.point || '').trim();
+      const pointsUnit = String(item.points_unit_by_payment || item.pointsUnitByPayment || item.unit || '').trim().toUpperCase();
       if (!paymentMethod && !pointsRate && !pointsAmount) return null;
-      return { key: `point_${index + 1}`, payment_method: paymentMethod, points_rate: pointsRate, points_amount: pointsAmount };
+      return {
+        key: `point_${index + 1}`,
+        payment_method: paymentMethod,
+        points_rate: pointsRate,
+        points_amount: pointsAmount,
+        points_unit_by_payment: /^[PW]$/.test(pointsUnit) ? pointsUnit : '',
+      };
     }
     const raw = String(item || '').trim();
     if (!raw) return null;
@@ -692,6 +715,7 @@ function factoryCafe24PointsAmountRows(value) {
       payment_method: payment,
       points_rate: rate,
       points_amount: amount.replace(/,/g, ''),
+      points_unit_by_payment: rate ? 'P' : (amount ? 'W' : ''),
     };
   }).filter(Boolean);
   return rows.length ? rows : [{ key: 'point_1', payment_method: '', points_rate: '', points_amount: '' }];
@@ -702,9 +726,14 @@ function factoryCafe24PointsAmountPayload(value) {
   return factoryCafe24PointsAmountRows(value)
     .map(row => {
       const payload = {};
+      const unit = /^[PW]$/.test(String(row.points_unit_by_payment || '').toUpperCase())
+        ? String(row.points_unit_by_payment).toUpperCase()
+        : (row.points_amount ? 'W' : (row.points_rate ? 'P' : ''));
+      const rate = String(unit === 'W' && row.points_amount ? row.points_amount : row.points_rate || '')
+        .replace(/[%원,\s]/g, '');
       if (row.payment_method) payload.payment_method = row.payment_method;
-      if (row.points_rate) payload.points_rate = row.points_rate;
-      if (row.points_amount) payload.points_amount = String(row.points_amount).replace(/,/g, '');
+      if (rate) payload.points_rate = rate;
+      if (unit) payload.points_unit_by_payment = unit;
       return payload;
     })
     .filter(row => Object.keys(row).length);
@@ -2071,7 +2100,13 @@ function factoryCafe24VariantOptionPairs(variant = {}) {
 function factoryCafe24VariantRows(factory = factoryRuntimeReadFactory(), optionValues = []) {
   const target = factoryCafe24TargetCandidate(factory, { allowFallback: !!factory.product.candidateAutoApply });
   const raw = parseCafe24Raw(target) || {};
-  const sourceVariants = Array.isArray(raw.variants) ? raw.variants : (Array.isArray(target?.variants) ? target.variants : []);
+  const targetProductNo = String(target?.product_no || raw.product_no || '').trim();
+  const rawVariants = Array.isArray(raw.variants) ? raw.variants : (Array.isArray(target?.variants) ? target.variants : []);
+  const cachedVariants = String(factory.product?.cafe24VariantCatalogProductNo || '').trim() === targetProductNo
+    && Array.isArray(factory.product?.cafe24VariantCatalog)
+    ? factory.product.cafe24VariantCatalog
+    : [];
+  const sourceVariants = cachedVariants.length > rawVariants.length ? cachedVariants : rawVariants;
   const edits = factoryCafe24DraftMatchesCurrentProduct(factory) ? (factory.product.cafe24VariantEdits || {}) : {};
   const sourceInventoryMap = typeof factoryCafe24SourceVariantInventoryMap === 'function'
     ? factoryCafe24SourceVariantInventoryMap(factory, target?.product_no || raw.product_no || '')
@@ -2190,14 +2225,17 @@ function factoryCafe24OptionEditorModel(factory = factoryRuntimeReadFactory(), m
   const manualNameTouched = !!(optionNameSetting && (optionNameSetting.manualTouched || String(optionNameSetting.manualValue || '').trim()));
   const manualValuesTouched = !!(optionValuesSetting && (optionValuesSetting.manualTouched || String(optionValuesSetting.manualValue || '').trim()));
   const sourceValues = factoryDedupeRealOptionValues(sourceModel.optionValues || firstGroup?.values || [], { allowNumeric: true });
+  const optionSorterDraft = factoryCafe24OptionSorterDraft();
+  const inferredValues = sourceValues.length ? sourceValues : optionSorterDraft.optionValues;
   const optionName = String(
     (manualNameTouched ? optionNameSetting.manualValue : '') ||
     firstGroup?.label ||
-    (manualValuesTouched || sourceValues.length ? '색상' : '')
+    optionSorterDraft.optionName ||
+    (manualValuesTouched || inferredValues.length ? '색상' : '')
   ).trim();
   const optionValues = manualValuesTouched
     ? factoryDedupeRealOptionValues(factorySplitOptionText(optionValuesSetting.manualValue), { allowNumeric: true })
-    : sourceValues;
+    : inferredValues;
   let editGroups = factoryCafe24OptionGroupsForEditor(factory, sourceModel);
   if (!editGroups.length && (optionValues.length || manualNameTouched || manualValuesTouched)) {
     editGroups = [{ key: 'group_1', name: optionName || '색상', values: optionValues, required_option: 'T', option_display_type: 'S' }];
@@ -2568,6 +2606,13 @@ function factoryCafe24GeneratedMainImage(factory = factoryRuntimeReadFactory()) 
   return null;
 }
 
+function factoryCafe24ImageRequestValue(candidate = {}) {
+  const base64 = String(candidate?.base64 || '').trim();
+  if (!base64) return '';
+  if (/^data:image\//i.test(base64)) return base64;
+  return `data:${candidate?.mime || 'image/png'};base64,${base64}`;
+}
+
 function factoryCafe24ImagePayload(factory = factoryRuntimeReadFactory()) {
   const draft = factoryCafe24ImageDraft(factory);
   const image = {
@@ -2577,7 +2622,7 @@ function factoryCafe24ImagePayload(factory = factoryRuntimeReadFactory()) {
   FACTORY_CAFE24_IMAGE_SLOTS.forEach(slot => {
     const item = draft[slot.key];
     if (item?.base64) {
-      image[slot.key] = item.base64;
+      image[slot.key] = factoryCafe24ImageRequestValue(item);
       manualCount += 1;
     }
   });
@@ -2585,7 +2630,7 @@ function factoryCafe24ImagePayload(factory = factoryRuntimeReadFactory()) {
     const fallback = factoryCafe24GeneratedMainImage(factory);
     if (fallback?.base64) {
       FACTORY_CAFE24_IMAGE_SLOTS.forEach(slot => {
-        image[slot.key] = fallback.base64;
+        image[slot.key] = factoryCafe24ImageRequestValue(fallback);
       });
     }
   }
@@ -3560,6 +3605,13 @@ function renderFactoryCafe24OptionEditor(factory, model) {
         : '<span class="factory-source-missing">옵션값이 없습니다. Cafe24 상품을 확정했는데도 비어 있으면 “Cafe24 옵션 새로고침”을 눌러 공식 옵션 API를 다시 읽어주세요.</span>'}
     </div>
     ${renderFactoryCafe24OptionExtrasPanel(factory, raw)}
+    <div class="factory-cafe24-inventory-bulk" style="display:flex;gap:8px;align-items:end;margin:10px 0;flex-wrap:wrap">
+      <label style="min-width:180px">전체 품목 재고
+        <input id="factoryCafe24InventoryAll" type="number" min="0" step="1" value="99" placeholder="예: 99">
+      </label>
+      <button class="btn-sm" id="factoryCafe24ApplyInventoryAll" type="button" ${disabledAttr(!optionModel.variants.length, '품목이 없어 재고를 적용할 수 없습니다.')}><span class="material-icons-outlined" style="font-size:14px">inventory_2</span>전체 품목에 적용</button>
+      <span class="factory-source-sub">각 품목 행의 재고 입력값을 일괄 변경한 뒤 옵션/품목 동기화에서 전송합니다.</span>
+    </div>
     <div class="factory-cafe24-variant-table">
       <div class="factory-cafe24-variant-row header">
         <span>품목</span><span>옵션값</span><span>진열</span><span>판매</span><span>재고관리</span><span>중요재고</span><span>차감기준</span><span>품절표시</span><span>재고</span><span>안전재고</span><span>추가금액</span><span>자체품목코드</span>
@@ -3679,7 +3731,9 @@ function renderFactoryCafe24SavePreview(factory) {
 
 function factoryCafe24CreatePreviewModel(factory = factoryRuntimeReadFactory()) {
   const dbModel = factoryBuildDbReviewModel(factory);
-  const product = factoryBuildCafe24UpdatePayload(dbModel.finalDb, dbModel.fields, factory);
+  const product = factoryBuildCafe24UpdatePayload(dbModel.finalDb, dbModel.fields, factory, {
+    includeCreateReferenceDefaults: true,
+  });
   factoryAttachCafe24OptionsToProductPayload(product, factory, dbModel.finalDb);
   factoryAttachCafe24CategoryToProductPayload(product, factory);
   const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, dbModel.finalDb);
@@ -3699,11 +3753,20 @@ function factoryCafe24CreatePreviewModel(factory = factoryRuntimeReadFactory()) 
     product.option_list_type ? `표시: ${factoryCafe24SelectLabel({ value: product.option_list_type, label: CAFE24_FORM_SELECTS.optionListType.find(item => item.value === product.option_list_type)?.label || product.option_list_type })}` : '',
     product.select_one_by_option ? `1개 선택: ${factoryCafe24SelectLabel({ value: product.select_one_by_option, label: CAFE24_FORM_SELECTS.selectOneByOption.find(item => item.value === product.select_one_by_option)?.label || product.select_one_by_option })}` : '',
   ].filter(Boolean).join(' / ');
+  const originPlaceNo = product.origin_place_no || product.origin_place_code;
+  const originValue = String(product.origin_place_value || '').trim()
+    || factoryCafe24ReferenceOverrideName('originPlaces', originPlaceNo)
+    || [{ F: '국내', T: '국외', E: '기타' }[String(product.origin_classification || '').toUpperCase()], originPlaceNo].filter(Boolean).join(' > ')
+    || factoryCafe24CountryLabel(product.made_in_code);
   const rows = [
     { label: '상품명', value: product.product_name, required: true },
     { label: '판매가', value: product.price, required: true },
     { label: '소비자가', value: product.retail_price },
     { label: '공급가 / 원가', value: product.supply_price },
+    { label: '제조사', value: factoryCafe24ReferenceOverrideName('manufacturers', product.manufacturer_code) || product.manufacturer_code },
+    { label: '공급사', value: factoryCafe24ReferenceOverrideName('suppliers', product.supplier_code) || product.supplier_code },
+    { label: '브랜드', value: factoryCafe24ReferenceOverrideName('brands', product.brand_code) || product.brand_code },
+    { label: '원산지', value: originValue },
     {
       label: '카테고리',
       value: categoryRows.length
@@ -4018,6 +4081,12 @@ function factoryCafe24ReadySyncPlan(factory = factoryRuntimeReadFactory(), optio
   const productPayload = options.productPayload || factoryBuildCafe24UpdatePayload(dbModel.finalDb, dbModel.fields, factory, { onlyChanged: true });
   const optionModel = options.optionModel || factoryCafe24OptionEditorModel(factory);
   const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, dbModel.finalDb, optionModel);
+  const detailScope = typeof factoryCafe24CurrentScopedDetailHtml === 'function'
+    ? factoryCafe24CurrentScopedDetailHtml(factory)
+    : { html: '', blocked: true };
+  const detailImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(detailScope.html || '').length
+    : 0;
   const categoryRows = factorySelectedCafe24CategoryRows(factory, dbModel.finalDb);
   const imagePayload = factoryCafe24ImagePayload(factory);
   const imageSlotCount = FACTORY_CAFE24_IMAGE_SLOTS.filter(slot => imagePayload[slot.key]).length;
@@ -4120,6 +4189,8 @@ function factoryCafe24ReadySyncPlan(factory = factoryRuntimeReadFactory(), optio
     blockers,
     productPayload,
     optionPlan,
+    detailScope,
+    detailImageCount,
     categoryRows,
     imageSlotCount,
     additionalCount,
@@ -4134,11 +4205,17 @@ function factoryCafe24ReadySyncPlan(factory = factoryRuntimeReadFactory(), optio
   };
 }
 
-function factoryCafe24CreatePostSyncPlan(factory = factoryRuntimeReadFactory()) {
+function factoryCafe24CreatePostSyncPlan(factory = factoryRuntimeReadFactory(), syncOptions = {}) {
   const imagePayload = factoryCafe24ImagePayload(factory);
   const imageSlotCount = FACTORY_CAFE24_IMAGE_SLOTS.filter(slot => imagePayload[slot.key]).length;
   const additionalCount = factoryCafe24AdditionalImagesPayload(factory).length;
   const { productNo } = factoryCafe24TargetInfo(factory);
+  const detailScope = typeof factoryCafe24CurrentScopedDetailHtml === 'function'
+    ? factoryCafe24CurrentScopedDetailHtml(factory)
+    : { html: '', blocked: true };
+  const detailImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(detailScope.html || '').length
+    : 0;
   const additionalImagesBlockedReason = factoryCafe24EndpointDisabledReason(factory, 'additionalImages', '추가 이미지 API', productNo);
   const iconPayload = factoryCafe24IconPayload(factory);
   const iconCount = iconPayload.image_list.length;
@@ -4149,7 +4226,7 @@ function factoryCafe24CreatePostSyncPlan(factory = factoryRuntimeReadFactory()) 
   const memoPlan = factoryCafe24MemoPayload(factory);
   const mainDraft = factoryCafe24MainDraft(factory);
   const dbModel = factoryBuildDbReviewModel(factory);
-  const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, dbModel.finalDb);
+  const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, dbModel.finalDb, null, syncOptions);
   const categoryRows = factorySelectedCafe24CategoryRows(factory, dbModel.finalDb);
   const actions = [
     {
@@ -4163,6 +4240,12 @@ function factoryCafe24CreatePostSyncPlan(factory = factoryRuntimeReadFactory()) 
       label: '옵션/품목/재고',
       ready: optionPlan.hasChanges || optionPlan.inventoryUpdates.length > 0,
       summary: `옵션값 ${optionPlan.optionValueTotal || 0}개 · 재고 ${optionPlan.inventoryUpdates.length || 0}건`,
+    },
+    {
+      key: 'detailHtml',
+      label: '상세페이지 HTML',
+      ready: !!productNo && !!String(detailScope.html || '').trim() && !detailScope.blocked && detailImageCount > 0,
+      summary: detailScope.blocked ? '현재 상세 HTML 차단' : `${detailImageCount}개 이미지 · ${detailScope.source || '현재 작업'}`,
     },
     {
       key: 'images',

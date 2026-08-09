@@ -7,6 +7,11 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const MANIFEST = require('../../src/runtime-manifest.json');
 const { buildRegressionSteps } = require('../../tools/regression_manifest.cjs');
 const { verifyRuntimeBundle } = require('../../tools/build_runtime_bundle.cjs');
+const NON_RUNTIME_ESM = Object.freeze([
+  'src/modules/pdp-api-client.mjs',
+  'src/modules/pdp-sync-queue.mjs',
+  'src/modules/persistence/migration-backup.mjs',
+]);
 
 function relative(file) {
   return path.relative(ROOT, file).split(path.sep).join('/');
@@ -35,14 +40,19 @@ function runtimeModules() {
   return [MANIFEST.authorityModule, ...(MANIFEST.modules || [])];
 }
 
-test('ARCH-MANIFEST-01: src의 모든 ESM은 runtime manifest에 정확히 한 번 등록된다', () => {
+test('ARCH-MANIFEST-01: browser ESM은 manifest에, backend·migration 도구는 폐쇄 목록에 정확히 한 번 분류된다', () => {
   const discovered = walk(path.join(ROOT, 'src'))
     .filter(file => file.endsWith('.mjs'))
     .map(relative)
     .sort();
   const registered = runtimeModules().slice().sort();
   assert.equal(new Set(registered).size, registered.length, 'duplicate runtime module registration');
-  assert.deepEqual(registered, discovered);
+  assert.deepEqual(
+    registered.filter(file => NON_RUNTIME_ESM.includes(file)),
+    [],
+    'non-runtime ESM must not enter the browser manifest',
+  );
+  assert.deepEqual([...registered, ...NON_RUNTIME_ESM].sort(), discovered);
 });
 
 test('ARCH-SIZE-01: 모든 runtime ESM은 250 pure LOC 이하이다', () => {

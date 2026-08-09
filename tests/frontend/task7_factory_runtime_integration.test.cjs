@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 
 const ROOT = path.resolve(__dirname, '../..');
 const CORE_03 = path.join(ROOT, 'src', 'app-core-03.js');
+const CORE_06 = path.join(ROOT, 'src', 'app-core-06.js');
 
 function sourceSlice(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
@@ -86,6 +87,9 @@ async function startIntegrationHarness(options = {}) {
     product: {
       productName: 'before', userProductName: 'before', naturalHint: '', inputImages: [],
       dbFieldSettings: {}, dbCustomFields: [],
+      ...(options.initialFinalProductName
+        ? { cafe24FinalRegistration: { productName: options.initialFinalProductName } }
+        : {}),
     },
     automation: { activeTab: 'start', startRunCounts: {} },
     stages: {
@@ -128,7 +132,9 @@ async function startIntegrationHarness(options = {}) {
   let capturedPublishCapabilities = null;
   let capturedFactoryMenuCapabilities = null;
   const dbCalls = [];
+  const runDbCalls = [];
   const fieldsCalls = [];
+  const scheduledSaves = [];
   const competitorCalls = [];
   const assetsCalls = [];
   const sectionsCalls = [];
@@ -136,6 +142,7 @@ async function startIntegrationHarness(options = {}) {
   const domClicks = [];
   const domScrolls = [];
   const document = {
+    addEventListener() {},
     querySelector(selector) {
       if (selector === '[data-factory-option-color-file]') {
         return { click() { domClicks.push('option-color-file'); } };
@@ -201,7 +208,7 @@ async function startIntegrationHarness(options = {}) {
   };
 
   const compile = new Function(
-    'state', 'factoryState', 'currentWorkspaceAuthority', 'workspaceAuthorityIsReadOnly',
+    'cloneData', 'state', 'factoryState', 'currentWorkspaceAuthority', 'workspaceAuthorityIsReadOnly',
     'factorySetCurrentProductIdentity', 'scheduleLastWorkSave', 'saveLastWorkNow',
     'factorySetProductImage', 'factoryPromoteStoredProductCandidateToInput',
     'factoryRunDbCompetitorHeroCutsFlow', 'document', 'render',
@@ -224,7 +231,7 @@ async function startIntegrationHarness(options = {}) {
     'factorySetAutomationWizardFieldDraft', 'factoryCommitAutomationWizardFieldValue',
     'factoryAutomationWizardDrafts', 'factoryPersistAutomationWizardDrafts',
     'factorySetFieldTransferSelection', 'factoryExecuteSelectedFieldTransfer',
-    'factoryMissingFieldSourceSelector', 'factoryRunStage',
+    'factoryMissingFieldSourceSelector', 'factoryRunStage', 'factoryHandleRunStageButton',
     'factorySetOptionColorImageUsage', 'factoryOpenOptionSorterEditor',
     'factoryAddOptionColorImageFiles',
     'renderFactoryAutomationVmSearchInfo', 'renderCompetitorAnalyzeLogItems',
@@ -248,6 +255,7 @@ async function startIntegrationHarness(options = {}) {
     'factoryApplySelectedAssetsToSections',
     'factoryFinalRegistrationSettings', 'factoryRenderCacheBaseDraft',
     'factoryOpenMarketBuildBaseDraft', 'factoryRenderCacheFinalCafe24Model',
+    'factoryRenderCacheFinalDetailModel',
     'factoryFinalRegistrationCafe24Model', 'SECTIONS',
     'renderFactoryFinalRegistrationPanel',
     'compMarketOpenVisibleVmCapture', 'compMarketResumeDetailJob',
@@ -284,6 +292,7 @@ async function startIntegrationHarness(options = {}) {
       };`,
   );
   const compiledRuntime = compile(
+    value => value == null ? value : structuredClone(value),
     state,
     () => factory,
     () => ({ scopeId: 'project:project-a', fencingToken: 7, mode: readOnly ? 'readonly' : 'editing' }),
@@ -293,10 +302,13 @@ async function startIntegrationHarness(options = {}) {
       target.product.productName = String(name || '');
       target.product.userProductName = String(name || '');
     },
-    () => {},
+    (...args) => { scheduledSaves.push(args); },
     () => {},
     () => true,
-    () => Promise.resolve(true),
+    value => {
+      runDbCalls.push(value);
+      return options.runDbDeferred?.promise || Promise.resolve(true);
+    },
     () => Promise.resolve(true),
     document,
     () => { renderCount += 1; },
@@ -408,7 +420,25 @@ async function startIntegrationHarness(options = {}) {
         ? (options.sectionsDeferred?.promise || Promise.resolve(true))
         : (options.assetsDeferred?.promise || Promise.resolve(true));
     },
-    usage => { fieldsCalls.push(`option:${usage}`); return true; },
+    button => {
+      const stage = String(button?.dataset?.factoryRunStage || '');
+      assetsCalls.push(`run-stage:${stage}`);
+      return options.assetsDeferred?.promise || Promise.resolve(true);
+    },
+    (usage, actionOptions = {}) => {
+      const current = actionOptions.factory || factory;
+      current.automation = current.automation || {};
+      current.stages = current.stages || {};
+      current.automation.optionMode = usage === 'none' ? 'none' : 'provided';
+      current.stages.options = {
+        ...(current.stages.options || {}),
+        status: usage === 'none' ? 'done' : (current.stages.options?.status || 'idle'),
+        message: usage === 'none' ? '색상이미지 없이 진행' : (current.stages.options?.message || ''),
+      };
+      fieldsCalls.push(`option:${usage}`);
+      fieldsCalls.push(`option-save:${String(actionOptions.save)}`);
+      return true;
+    },
     () => { fieldsCalls.push('openOptionSorter'); return true; },
     files => { fieldsCalls.push(`upload:${files.length}`); return files.length; },
     () => '<div data-competitor-vm-info></div>',
@@ -433,7 +463,13 @@ async function startIntegrationHarness(options = {}) {
     mode => { competitorCalls.push(`analyze-images:${mode}`); return Promise.resolve(true); },
     () => { competitorCalls.push('reload'); return Promise.resolve(true); },
     (_value, detailOptions = {}) => { competitorCalls.push(`detail:${detailOptions.runtime || 'vm'}`); return Promise.resolve(true); },
-    () => { competitorCalls.push('detail-analyze'); return Promise.resolve(true); },
+    () => {
+      const selectedIds = state.compPage.marketScrape.selectedIds || [];
+      competitorCalls.push(`detail-analyze:${selectedIds.join(',')}`);
+      state.compPage.marketScrape.scrapedImages = [{ id: 'detail-image-1', src: 'memory://detail-image-1' }];
+      state.compPage.analysisResult = { title: '현재 선택 경쟁사 분석' };
+      return Promise.resolve(true);
+    },
     market => market.results || [],
     item => String(item.id || ''),
     market => market.scrapedImages || [],
@@ -497,6 +533,7 @@ async function startIntegrationHarness(options = {}) {
     () => { publishRenderCalls.push('cache-base-draft'); return {}; },
     () => { publishRenderCalls.push('base-draft'); return {}; },
     () => { publishRenderCalls.push('cache-cafe24-model'); return { canRun: true, label: '실행 가능', reason: '준비됨' }; },
+    () => { publishRenderCalls.push('cache-detail-model'); return { canRun: true, label: '실행 가능', reason: '준비됨' }; },
     () => { publishRenderCalls.push('cafe24-model'); return { canRun: true, label: '실행 가능', reason: '준비됨' }; },
     [{ id: 'intro' }, { id: 'detail' }],
     () => {
@@ -558,7 +595,9 @@ async function startIntegrationHarness(options = {}) {
     publishCapabilities: () => capturedPublishCapabilities,
     factoryMenuCapabilities: () => capturedFactoryMenuCapabilities,
     dbCalls,
+    runDbCalls,
     fieldsCalls,
+    scheduledSaves,
     competitorCalls,
     assetsCalls,
     sectionsCalls,
@@ -596,14 +635,33 @@ test('Task 7 START uses the public app-core installer, detached store, and deter
   assert.match(html, /data-factory-tab="start"/);
   assert.match(html, /id="factoryGuideProductName"/);
   assert.match(html, /data-factory-guide-action="run-db"/);
+  assert.match(html, /data-factory-guide-action="run-cafe24-only"/);
   assert.match(html, /DB\/경쟁사 수집 및 대표\/이미지컷 생성/);
+  assert.match(html, /data-factory-local-service-preflight="idle"/);
+  assert.match(html, /data-factory-product-name-status="1"/);
+  assert.match(html, /실행 준비 상태/);
+  assert.match(html, /실행 대기/);
 
   // When: its real bind lifecycle receives a product-name input event.
-  const root = fakeRoot();
+  const productNameInput = { id: 'factoryGuideProductName', tagName: 'INPUT', value: '통합 상품' };
+  const productNameValue = { textContent: '미입력' };
+  const productNameDetail = { textContent: '제품명을 입력해야 수집이 시작됩니다.' };
+  const productNameClasses = new Map([['done', false], ['warn', true]]);
+  const productNameStatus = {
+    querySelector(selector) { return selector === 'strong' ? productNameValue : null; },
+    querySelectorAll(selector) { return selector === 'span' ? [{}, productNameDetail] : []; },
+    classList: { toggle(name, enabled) { productNameClasses.set(name, enabled); } },
+  };
+  const root = fakeRoot({
+    '#factoryGuideProductName': productNameInput,
+    '[data-factory-product-name-status]': productNameStatus,
+  });
   const dispose = tab.bind(root);
-  assert.deepEqual([...root.listeners.keys()].sort(), ['change', 'click', 'dragover', 'drop', 'input']);
+  assert.deepEqual([...root.listeners.keys()].sort(), [
+    'change', 'click', 'compositionend', 'compositionstart', 'dragover', 'drop', 'input',
+  ]);
   root.dispatch('input', {
-    id: 'factoryGuideProductName', tagName: 'INPUT', value: '통합 상품',
+    id: productNameInput.id, tagName: productNameInput.tagName, value: productNameInput.value,
   });
   await Promise.resolve();
   await Promise.resolve();
@@ -613,6 +671,11 @@ test('Task 7 START uses the public app-core installer, detached store, and deter
   assert.equal(store.getSnapshot().factory.product.productName, '통합 상품');
   assert.equal(store.getOperationToken().revision, 1);
   assert.equal(fixture.renderCount(), 0);
+  assert.equal(root.querySelector('#factoryGuideProductName'), productNameInput);
+  assert.equal(productNameValue.textContent, '통합 상품');
+  assert.equal(productNameDetail.textContent, 'DB/Cafe24/VM 검색어로 사용됩니다.');
+  assert.equal(productNameClasses.get('done'), true);
+  assert.equal(productNameClasses.get('warn'), false);
   dispose();
   dispose();
   assert.equal(root.listeners.size, 0);
@@ -621,6 +684,99 @@ test('Task 7 START uses the public app-core installer, detached store, and deter
   capabilities.reportError(new Error('START_RECEIPT_ERROR'));
   assert.equal(fixture.storeReportCount(), 1);
   assert.equal(fixture.state.error, 'START_RECEIPT_ERROR');
+});
+
+test('Task 7 START commits the completed Korean IME product name instead of its first jamo', async () => {
+  const fixture = await startIntegrationHarness({ initialFinalProductName: 'ㅁ' });
+  const store = fixture.runtime.getStore();
+  const tab = fixture.runtime.getStartTab();
+  const productNameInput = {
+    id: 'factoryGuideProductName',
+    tagName: 'INPUT',
+    value: '',
+  };
+  const root = fakeRoot({ '#factoryGuideProductName': productNameInput });
+  const dispose = tab.bind(root);
+
+  root.dispatch('compositionstart', productNameInput);
+  productNameInput.value = 'ㅁ';
+  root.dispatch('input', productNameInput, { isComposing: true });
+
+  assert.equal(
+    store.getSnapshot().factory.product.productName,
+    'before',
+    'IME 조합 중 첫 자모를 canonical 상품명으로 저장하면 안 됩니다.',
+  );
+
+  productNameInput.value = '모시바둑파우치';
+  root.dispatch('compositionend', productNameInput, { data: '모시바둑파우치' });
+  await flushMicrotasks();
+
+  assert.equal(store.getSnapshot().factory.product.productName, '모시바둑파우치');
+  dispose();
+});
+
+test('Task 7 START product image drop does not cancel or recursively re-click the native file input', async () => {
+  const fixture = await startIntegrationHarness();
+  const tab = fixture.runtime.getStartTab();
+  let inputClickCount = 0;
+  let inputClickDefaultPrevented = false;
+  let root;
+  const drop = {
+    id: 'factoryGuideProductDrop',
+    tagName: 'DIV',
+    matches(selector) { return selector === '#factoryGuideProductDrop'; },
+    closest(selector) { return selector === '#factoryGuideProductDrop' ? this : null; },
+  };
+  const input = {
+    id: 'factoryGuideProductFile',
+    tagName: 'INPUT',
+    matches() { return false; },
+    closest(selector) { return selector === '#factoryGuideProductDrop' ? drop : null; },
+    click() {
+      inputClickCount += 1;
+      if (inputClickCount > 1) return;
+      root.dispatch('click', input, {
+        preventDefault() { inputClickDefaultPrevented = true; },
+      });
+    },
+  };
+  root = fakeRoot({ '#factoryGuideProductFile': input });
+  const dispose = tab.bind(root);
+
+  root.dispatch('click', drop);
+
+  assert.equal(inputClickCount, 1, 'drop click must open the native file input exactly once');
+  assert.equal(inputClickDefaultPrevented, false, 'native file input click must keep its browser default action');
+  dispose();
+});
+
+test('Task 7 START and DB rerun share one lease so the long one-click flow cannot overlap', async () => {
+  let releaseRunDb;
+  const deferred = { promise: new Promise(resolve => { releaseRunDb = resolve; }) };
+  const fixture = await startIntegrationHarness({ runDbDeferred: deferred });
+  const start = fixture.runtime.getStartTab();
+  const db = fixture.runtime.getDbTab();
+  let startPending;
+  let dbPending;
+
+  try {
+    startPending = Promise.resolve(start.invoke('runDb', {
+      productName: '동시 실행 방지 상품', naturalHint: '', sourceMode: 'all',
+    }));
+    await flushMicrotasks(10);
+    dbPending = Promise.resolve(db.invoke('run-db'));
+    await flushMicrotasks(10);
+
+    assert.equal(
+      fixture.runDbCalls.length,
+      1,
+      'START 실행 중 DB 탭 재실행은 같은 장시간 작업을 두 번째로 시작하면 안 된다',
+    );
+  } finally {
+    releaseRunDb?.(true);
+    await Promise.allSettled([startPending, dbPending].filter(Boolean));
+  }
 });
 
 test('Task 7 START installer fails closed and blocks read-only DOM mutations', async () => {
@@ -659,7 +815,8 @@ test('Task 7 DB installs its explicit allowlists and drives the real DOM contrac
     'startCafe24ControlAndRerun', 'cafe24OauthStart',
     'cafe24OauthStatusRefreshAndRerun', 'focusSize', 'setDbSearchQuery',
     'commitDbSearchQuery', 'applyDbCandidate', 'applyCafe24Candidate',
-    'confirmNoDbCandidate', 'confirmNoCafe24Candidate', 'runFactoryGuideAction',
+    'confirmNoDbCandidate', 'confirmNoCafe24Candidate',
+    'clearDbCandidateSelection', 'clearCafe24CandidateSelection', 'runFactoryGuideAction',
   ]);
   assert.deepEqual(Object.keys(capabilities.renderHelpers), [
     'escapeHtml', 'escAttr', 'factoryAutomationCounts',
@@ -713,6 +870,25 @@ test('Task 7 DB installs its explicit allowlists and drives the real DOM contrac
   dispose();
   dispose();
   assert.equal(root.listeners.size, 0);
+});
+
+test('Task 7 DB candidate buttons delegate once without an empty outer store transaction', async () => {
+  const fixture = await startIntegrationHarness();
+  const tab = fixture.runtime.getDbTab();
+  const store = fixture.runtime.getStore();
+
+  await tab.invoke('apply-db-candidate', { index: 2 });
+  await tab.invoke('apply-cafe24-candidate', { index: 4 });
+
+  assert.deepEqual(fixture.dbCalls, [
+    'applyDbCandidate:2',
+    'applyCafe24Candidate:4',
+  ]);
+  assert.equal(
+    store.getOperationToken().revision,
+    0,
+    'candidate applier owns its transaction; the modular button adapter must not add a competing empty revision',
+  );
 });
 
 test('Task 7 DB rejects read-only and stale async actions before accepting completion', async () => {
@@ -818,6 +994,26 @@ test('Task 7 fields installs explicit allowlists and owns draft, commit, guide, 
   assert.equal(root.listeners.size, 0);
 });
 
+test('Task 7 fields commits no-options through the owned transaction before persistence', async () => {
+  const fixture = await startIntegrationHarness();
+  const tab = fixture.runtime.getFieldsTab();
+  const store = fixture.runtime.getStore();
+
+  const result = await tab.invoke('runGuideAction', { action: 'mark-no-options' });
+  await flushMicrotasks(10);
+
+  assert.equal(result, true);
+  assert.equal(fixture.factory.automation.optionMode, undefined);
+  assert.equal(store.getSnapshot().factory.automation.optionMode, 'none');
+  assert.equal(store.getSnapshot().factory.stages.options.status, 'done');
+  assert.equal(fixture.fieldsCalls.includes('option:none'), true);
+  assert.equal(fixture.fieldsCalls.includes('option-save:false'), true);
+  assert.deepEqual(fixture.scheduledSaves.at(-1), [1600, { force: true }]);
+  assert.match(tab.render(tab.select()), /현재 선택[\s\S]*옵션 없음/);
+  assert.equal(store.getOperationToken().revision, 1);
+  assert.equal(fixture.renderCount(), 1);
+});
+
 test('Task 7 fields rejects read-only mutation and stale transfer completion', async () => {
   const readOnly = await startIntegrationHarness();
   readOnly.setReadOnly(true);
@@ -915,6 +1111,141 @@ test('Task 7 competitor owns market target, candidate click, guide, and disposer
   assert.equal(root.listeners.size, 0);
 });
 
+test('Task 7 competitor modular tab bypasses the legacy capture click handler', () => {
+  const source = fs.readFileSync(CORE_06, 'utf8');
+  const handlerSource = sourceSlice(
+    source,
+    'function handleCompMarketQuickActionClick(',
+    'function handleFactoryGenerationFallbackClick(',
+  );
+  const legacyMarket = { selectedIds: [] };
+  const handler = new Function(
+    'ensureCompMarketScrapeState',
+    'compMarketMarkDetailSelectionChanged',
+    'saveCompMarketUiState',
+    'render',
+    'compMarketLog',
+    'compMarketSetStatus',
+    `${handlerSource}\nreturn handleCompMarketQuickActionClick;`,
+  )(
+    () => legacyMarket,
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+    () => {},
+  );
+  const calls = [];
+  const target = {
+    dataset: { compMarketToggleResult: 'candidate-long' },
+    disabled: false,
+    onclick: null,
+    getAttribute() { return null; },
+    closest(selector) {
+      if (selector === '[data-factory-competitor-tab]') return { dataset: { factoryCompetitorTab: '' } };
+      if (selector.includes('[data-comp-market-toggle-result]')) return this;
+      return null;
+    },
+  };
+
+  handler({
+    target,
+    preventDefault() { calls.push('preventDefault'); },
+    stopPropagation() { calls.push('stopPropagation'); },
+    stopImmediatePropagation() { calls.push('stopImmediatePropagation'); },
+  });
+
+  assert.deepEqual(calls, []);
+  assert.deepEqual(legacyMarket.selectedIds, []);
+});
+
+test('Task 7 competitor candidate selection patches the canonical modular picker', () => {
+  const source = fs.readFileSync(CORE_03, 'utf8');
+  const actionSource = sourceSlice(
+    source,
+    'function factoryRuntimeCompetitorMarketAction(',
+    'function factoryRuntimeCompetitorHelpers(',
+  );
+
+  assert.match(
+    actionSource,
+    /const competitorSelectionChanged = type === 'toggle-candidate'/,
+    '후보 선택 변경은 canonical competitors snapshot을 읽는 selection patch를 사용해야 합니다.',
+  );
+  assert.match(
+    actionSource,
+    /patchTab: competitorSelectionChanged \? 'competitor-selection' : 'competitor'/,
+    '후보 선택 변경 후 legacy factory snapshot만 렌더링하면 화면 read-back이 0건으로 되돌아갑니다.',
+  );
+});
+
+test('Task 7 competitor selection patch updates the candidate picker even without scraped images', () => {
+  const source = fs.readFileSync(CORE_06, 'utf8');
+  const patchSource = sourceSlice(
+    source,
+    'function factoryPatchAutomationCompetitorSelection(',
+    'function factoryPatchAutomationAssetsTab(',
+  );
+
+  assert.match(
+    patchSource,
+    /const currentPickerPanel = root\?\.querySelector\?\.\('#factoryCompetitorPickerPanel'\)/,
+    '상세 이미지가 0장이어도 후보 선택판을 찾아야 합니다.',
+  );
+  assert.match(
+    patchSource,
+    /morphNode\(currentPickerPanel, nextPickerPanel\)/,
+    'canonical 선택 상태를 후보 카드·요약·상세수집 버튼에 반영해야 합니다.',
+  );
+});
+
+test('Task 7 competitor view snapshot keeps canonical selection over legacy image fallback', () => {
+  const source = fs.readFileSync(CORE_03, 'utf8');
+  const snapshotSource = sourceSlice(
+    source,
+    'function factoryRuntimeReadViewSnapshot(',
+    'function factoryRuntimeNormalizeFactorySnapshot(',
+  );
+
+  assert.match(
+    snapshotSource,
+    /const canonicalCompPage = snapshotCompetitors\.compPage/,
+    '경쟁사 canonical slice를 화면 snapshot의 기준으로 삼아야 합니다.',
+  );
+  assert.match(
+    snapshotSource,
+    /scrapedImages: Array\.isArray\(canonicalMarket\.scrapedImages\)/,
+    '기존 상세 이미지 fallback은 유지하되 canonical 선택 상태가 덮어써지면 안 됩니다.',
+  );
+  assert.match(
+    snapshotSource,
+    /const viewCompPage = factoryRuntimeFreezeDetachedValue\(/,
+    '병합된 화면 snapshot은 factory tab 불변성 계약을 만족해야 합니다.',
+  );
+});
+
+test('Task 7 competitor analyze-vm projects canonical selection to legacy worker and syncs outputs back', async () => {
+  const fixture = await startIntegrationHarness();
+  const tab = fixture.runtime.getCompetitorTab();
+  const store = fixture.runtime.getStore();
+
+  await tab.invoke('marketAction', {
+    type: 'toggle-candidate', candidateId: 'candidate-long',
+  });
+  await tab.invoke('marketAction', {
+    type: 'quick-action', action: 'analyze-vm',
+  });
+
+  assert.deepEqual(fixture.competitorCalls, ['detail-analyze:candidate-long']);
+  assert.deepEqual(fixture.state.compPage.marketScrape.selectedIds, ['candidate-long']);
+  assert.deepEqual(
+    store.getSnapshot().competitors.compPage.marketScrape.scrapedImages.map(image => image.id),
+    ['detail-image-1'],
+  );
+  assert.equal(store.getSnapshot().competitors.compPage.analysisResult.title, '현재 선택 경쟁사 분석');
+  assert.equal(store.getSnapshot().factory.automation.activeTab, 'start');
+});
+
 test('Task 7 competitor rejects read-only mutation and stale async guide completion', async () => {
   const readOnly = await startIntegrationHarness();
   readOnly.setReadOnly(true);
@@ -934,7 +1265,11 @@ test('Task 7 competitor rejects read-only mutation and stale async guide complet
   store.switchWorkspace('project-b', { snapshot: store.getSnapshot(), revision: 0 });
   resolve(true);
   await assert.rejects(pending, /STALE_FACTORY_RUNTIME_ACTION|STALE/);
-  assert.deepEqual(stale.competitorCalls, ['rerun-vm']);
+  assert.deepEqual(
+    stale.competitorCalls,
+    [],
+    'workspace가 바뀐 뒤에는 lease 획득 전에 stale 명령을 폐기해 VM worker를 시작하면 안 됩니다.',
+  );
   assert.equal(store.getOperationToken().workspaceId, 'project-b');
   assert.equal(store.getOperationToken().revision, 0);
 });
@@ -952,10 +1287,13 @@ test('Task 7 assets installs exact allowlists and preserves the four-stage rende
   assert.deepEqual(Object.keys(capabilities.actions), [
     'runFactoryGuideAction', 'setFactoryStageTarget', 'setFactoryStagePrompt',
     'runFactoryStage', 'addFactoryStageInputFiles', 'createFactoryProductInputAsset',
-    'sendFactoryAssetToStage', 'toggleFactoryAssetUse', 'toggleFactoryAssetReject',
+    'sendFactoryAssetToStage', 'toggleFactoryAssetUse', 'selectFactoryACut',
+    'toggleFactoryAssetReject',
     'openFactoryAssetPreview', 'placeFactoryAsset', 'archiveFactoryAsset',
     'confirmFactorySizeImage', 'openFactoryOptionSorter', 'syncFactoryDbOptions',
     'syncFactoryOptionResults', 'setFactoryOptionColorImageUsage',
+    'setFactoryGroupShotImageSelected', 'selectAllFactoryGroupShotImages',
+    'clearFactoryGroupShotImages', 'setFactoryGroupShotPrompt', 'generateFactoryGroupShot',
     'toggleFactoryAssets', 'toggleFactoryPreviousAssets', 'openFactoryStageFile',
     'openFactoryOptionColorFile', 'addFactoryCompletedFiles', 'openFactoryCompletedFile',
   ]);
@@ -1124,7 +1462,7 @@ test('Task 7 sections installs exact allowlists and preserves section policy con
     'isOperationCurrent', 'renderHelpers', 'reportError',
   ]);
   assert.deepEqual(Object.keys(capabilities.actions), [
-    'runFactoryGuideAction', 'runFactoryStage',
+    'runFactoryGuideAction', 'runFactoryStage', 'applySectionVariant',
   ]);
   assert.deepEqual(Object.keys(capabilities.renderHelpers), [
     'factoryAutomationCounts', 'factoryAutomationWizardTasks',
@@ -1191,6 +1529,16 @@ test('Task 7 sections owns apply, focus, detail-run, and disposer click paths', 
   assert.equal(root.listeners.size, 0);
 });
 
+test('Task 7 sections guide commits before persistence metadata is saved', () => {
+  const core = fs.readFileSync(CORE_03, 'utf8');
+  const guide = sourceSlice(
+    core,
+    'function factoryRuntimeSectionsGuideAction(',
+    'function factoryRuntimeSectionsActions()',
+  );
+  assert.doesNotMatch(guide, /saveLastWorkNow\(\)/);
+});
+
 test('Task 7 sections rejects read-only mutation and stale detail completion', async () => {
   const readOnly = await startIntegrationHarness();
   readOnly.setReadOnly(true);
@@ -1231,6 +1579,7 @@ test('Task 7 publish installs only focus routing and renders the final registrat
     'factoryFinalRegistrationSettings', 'renderFactoryAutomationStatusCard',
     'renderFactoryAutomationTaskChecklist', 'factoryRenderCacheBaseDraft',
     'factoryOpenMarketBuildBaseDraft', 'factoryRenderCacheFinalCafe24Model',
+    'factoryRenderCacheFinalDetailModel',
     'factoryFinalRegistrationCafe24Model', 'orderedSections', 'escapeHtml',
     'disabledAttr', 'renderFactoryFinalRegistrationPanel',
   ]);
@@ -1238,7 +1587,7 @@ test('Task 7 publish installs only focus routing and renders the final registrat
   const html = tab.render(tab.select());
   assert.deepEqual(viewport, { width: 535, height: 697 });
   assert.match(html, /<h4>7\. 전송<\/h4>/);
-  assert.match(html, /data-factory-guide-action="focus-final-registration"/);
+  assert.match(html, /data-factory-guide-action="run-final-registration"/);
   assert.match(html, /data-factory-guide-action="focus-stage-log"/);
   assert.match(html, /data-factory-guide-action="focus-materials"/);
   assert.match(html, /id="factoryPublishInlineFinalPanel"/);
@@ -1379,6 +1728,7 @@ test('Task 7 factory menu switches by canonical id and renders exactly once', as
     closest(selector) { return selector === '[data-factory-auto-tab]' ? this : null; },
   };
   root.dispatch('click', dbButton);
+  await new Promise(resolve => setTimeout(resolve, 0));
   await flushMicrotasks(10);
   assert.equal(fixture.factory.automation.activeTab, 'start');
   assert.equal(store.getSnapshot().factory.automation.activeTab, 'db');

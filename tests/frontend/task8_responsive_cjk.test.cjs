@@ -43,6 +43,7 @@ test('TASK8-RESPONSIVE-CJK: 공장 설명 텍스트는 작은 폭에서도 CJK �
     '.factory-section-head p',
     '.factory-automation-panel p',
     '.factory-automation-note',
+    '.factory-automation-status-card span',
     '.factory-small',
   ];
   for (const selector of headingRules) {
@@ -75,6 +76,25 @@ test('TASK8-SCROLL-OWNER: 앱 전체는 오른쪽 단일 스크롤로 사이드�
 
   const mobileSidebarRules = [...css.matchAll(/\.sidebar\{[^}]*\}/g)].map(match => match[0]);
   assert.equal(mobileSidebarRules.some(source => /overflow-y:(?:auto|scroll)/.test(source)), false);
+});
+
+test('TASK8-BOTTOM-SAFE-AREA: 고정 토큰바가 모든 메뉴의 마지막 기능을 가리지 않는다', () => {
+  const containerRules = [...css.matchAll(/\.container\{[^}]*\}/g)].map(match => match[0]);
+  assert.match(css, /--token-bar-height:\d+px/);
+  assert.match(css, /--shell-bottom-safe-space:calc\(var\(--token-bar-height\)[^)]*\)/);
+  assert.equal(
+    containerRules.some(source => /padding-bottom:var\(--shell-bottom-safe-space\)/.test(source)),
+    true,
+    'the shared menu container needs real scroll extent below the fixed token bar',
+  );
+});
+
+test('TASK8-RESPONSIVE-ARCHIVE: 로컬 보관함은 긴 경로가 있어도 본문 폭 안에서 줄어든다', () => {
+  const panelRule = rule('.factory-local-archive-panel');
+  const childRule = rule('.factory-local-archive-panel>*');
+  assert.match(panelRule, /grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(panelRule, /min-width:0/);
+  assert.match(childRule, /min-width:0/);
 });
 
 test('TASK8-RESPONSIVE-CJK: 모바일 현재 화면 배너와 모델 크기 문구는 어절을 보존한다', () => {

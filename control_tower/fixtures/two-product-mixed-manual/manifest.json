@@ -1,0 +1,61 @@
+{
+  "schema": "control-tower-two-product-mixed-manual:v1",
+  "batchId": "task15-two-product-mixed",
+  "externalWrite": false,
+  "evidence": {
+    "workerAuthority": "durable-process-restart",
+    "staleIdentityFields": ["runId", "inputFingerprint", "revision", "eventSequence"],
+    "strictIdentityFields": ["productId", "productKey", "orderId", "revision", "imageIdentity"],
+    "browserControlAudit": "all-rendered-controls-per-viewport"
+  },
+  "products": [
+    {
+      "productId": "task15-product-a",
+      "productKey": "task15-a",
+      "runId": "task15-run-a",
+      "inputFingerprint": "sha256:task15-a",
+      "revision": 7,
+      "checkpointIdentity": {
+        "imageIdentity": {
+          "candidateId": "task15-candidate-a-1",
+          "imageId": "task15-image-a-1",
+          "productId": "task15-product-a",
+          "productKey": "task15-a",
+          "revision": 7,
+          "digest": "sha256:task15-image-a-1"
+        },
+        "selectedImages": ["task15-image-a-1"],
+        "artifacts": ["task15-artifact-a-1"],
+        "digests": {
+          "selectedImages": "sha256:task15-selected-images-a",
+          "artifacts": "sha256:task15-artifacts-a"
+        }
+      },
+      "policy": { "representative": "manual" }
+    },
+    {
+      "productId": "task15-product-b",
+      "productKey": "task15-b",
+      "runId": "task15-run-b",
+      "inputFingerprint": "sha256:task15-b",
+      "revision": 11,
+      "checkpointIdentity": {
+        "imageIdentity": {
+          "candidateId": "task15-candidate-b-1",
+          "imageId": "task15-image-b-1",
+          "productId": "task15-product-b",
+          "productKey": "task15-b",
+          "revision": 11,
+          "digest": "sha256:task15-image-b-1"
+        },
+        "selectedImages": ["task15-image-b-1"],
+        "artifacts": ["task15-artifact-b-1"],
+        "digests": {
+          "selectedImages": "sha256:task15-selected-images-b",
+          "artifacts": "sha256:task15-artifacts-b"
+        }
+      },
+      "policy": { "representative": "auto" }
+    }
+  ]
+}

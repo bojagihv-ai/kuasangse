@@ -157,6 +157,11 @@ test('runtime graph registry는 manifest-known branded contract만 허용한다'
   assert.ok(Object.isFrozen(branded.imports));
   assert.ok(Object.isFrozen(branded.exports));
   assert.doesNotThrow(() => validateModuleImportGraph([branded]));
+
+  const versionedImport = contract(createModuleGraphContract, manifest.modules[1], {
+    imports: [`${manifest.modules[0]}?v=runtime-cache-key`],
+  });
+  assert.deepEqual(versionedImport.imports, [manifest.modules[0]]);
   assert.throws(() => validateModuleImportGraph([{ ...branded }]), /branded module graph contract/);
   assert.throws(() => validateModuleImportGraph([{
     id: manifest.modules[0],

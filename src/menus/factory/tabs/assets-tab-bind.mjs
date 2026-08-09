@@ -32,6 +32,18 @@ export function bindAssetsTab(root, fire) {
     if (syncResults) { stop(event); fire('syncOptionResults'); return; }
     const usage = eventTarget(event, '[data-factory-color-image-usage]');
     if (usage) { stop(event); fire('setColorImageUsage', usage.dataset?.factoryColorImageUsage || ''); return; }
+    const groupShotImage = eventTarget(event, '[data-opt-group-shot-image]');
+    if (groupShotImage) {
+      stop(event);
+      fire('setGroupShotImageSelected', {
+        imageId: groupShotImage.dataset?.optGroupShotImage || '',
+        selected: groupShotImage.dataset?.optGroupShotSelected !== 'true',
+      });
+      return;
+    }
+    if (eventTarget(event, '[data-opt-group-shot-select-all]')) { stop(event); fire('selectAllGroupShotImages'); return; }
+    if (eventTarget(event, '[data-opt-group-shot-clear]')) { stop(event); fire('clearGroupShotImages'); return; }
+    if (eventTarget(event, '#optGenerateGroupShot')) { stop(event); fire('generateGroupShot'); return; }
     if (eventTarget(event, '[data-factory-option-color-upload]')) { stop(event); fire('openOptionColorFile'); return; }
     const previous = eventTarget(event, '[data-factory-toggle-previous-assets]');
     if (previous) { stop(event); fire('togglePreviousAssets', previous.dataset?.factoryTogglePreviousAssets || ''); return; }
@@ -62,10 +74,13 @@ export function bindAssetsTab(root, fire) {
     const stageTarget = eventTarget(event, '[data-factory-stage-target]');
     if (stageTarget) { fire('setStageTarget', stageTarget.dataset?.factoryStageTarget || '', target?.value ?? ''); return; }
     const prompt = eventTarget(event, '[data-factory-stage-prompt]');
-    if (prompt) fire('setStagePrompt', prompt.dataset?.factoryStagePrompt || '', target?.value ?? '');
+    if (prompt) { fire('setStagePrompt', prompt.dataset?.factoryStagePrompt || '', target?.value ?? ''); return; }
+    if (eventTarget(event, '#optGroupShotPrompt')) fire('setGroupShotPrompt', target?.value ?? '');
   };
   const change = event => {
     const target = event?.target;
+    const optionColorFile = eventTarget(event, '[data-factory-option-color-file]');
+    if (optionColorFile) { fire('addStageInputFiles', 'options', optionColorFile.files || []); optionColorFile.value = ''; return; }
     const stageFile = eventTarget(event, '[data-factory-stage-file]');
     if (stageFile) { fire('addStageInputFiles', stageFile.dataset?.factoryStageFile || '', target?.files || []); if (target) target.value = ''; return; }
     if (eventTarget(event, '#factoryCompleteFile')) { fire('addCompletedFiles', target?.files || []); if (target) target.value = ''; return; }

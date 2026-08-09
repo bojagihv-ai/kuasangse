@@ -138,6 +138,7 @@ const bridgeContext = {
   compMarketSave() {},
   compMarketSetStatus() {},
   compMarketSetSiteSearchStatus() {},
+  compMarketRefreshVmCandidateBridgeView() {},
   compMarketNormalizeSite: value => String(value || '').toLowerCase() === 'auction' ? 'auction' : String(value || '').toLowerCase(),
   compMarketSiteLabel: siteId => siteLabels[siteId] || siteId,
   render() {},
@@ -165,7 +166,10 @@ const bridgeContext = {
   },
 };
 vm.createContext(bridgeContext);
-vm.runInContext(extractFunction(core06, 'compMarketTryVmCandidateBridgeSearch'), bridgeContext);
+vm.runInContext([
+  extractFunction(core06, 'factoryVmCandidateTimeoutMs'),
+  extractFunction(core06, 'compMarketTryVmCandidateBridgeSearch'),
+].join('\n'), bridgeContext);
 
 async function main() {
   const bridgeMarket = {

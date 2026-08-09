@@ -183,7 +183,7 @@ export function createFactoryTabContract(definition, runtimeCapabilities) {
     try {
       if (mutationCommand(normalizedName, command.capability)) runtime.assertMutable(owner);
       token = runtime.getOperationToken();
-      result = command.execute(...args);
+      result = command.execute(...args, Object.freeze({ operationToken: token }));
       if (!result || typeof result.then !== 'function') {
         const receipt = runtimeCommandReceipt(result);
         if (!runtime.isOperationCurrent(receipt?.operationToken || token)) throw staleOperationError(id);

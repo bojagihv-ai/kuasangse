@@ -30,7 +30,7 @@ function closest(target, selector) {
   return target?.matches?.(selector) ? target : null;
 }
 
-function fieldPayload(input) {
+function fieldPayload(input, eventType = 'input') {
   if (!input) return null;
   const fieldId = String(input.dataset?.factoryWizardField || '').trim();
   if (!fieldId) return null;
@@ -39,6 +39,8 @@ function fieldPayload(input) {
     id: fieldId,
     label: String(input.dataset?.factoryWizardLabel || fieldId),
     value: String(input.value || ''),
+    previousValue: String(input.dataset?.factoryWizardPreviousValue || ''),
+    eventType,
   });
 }
 
@@ -125,19 +127,19 @@ export function createFieldsFactoryTab(capabilities = {}) {
     if (!root || typeof root.addEventListener !== 'function') return () => {};
     const onInput = event => {
       const input = closest(event?.target, '[data-factory-wizard-field]');
-      const payload = fieldPayload(input);
+      const payload = fieldPayload(input, 'input');
       if (payload) invokeFromEvent('setFieldDraft', payload);
     };
     const onBlur = event => {
       const input = closest(event?.target, '[data-factory-wizard-field]');
-      const payload = fieldPayload(input);
+      const payload = fieldPayload(input, 'blur');
       if (payload) invokeFromEvent('setFieldDraft', payload);
     };
     const onChange = event => {
       const input = closest(event?.target, '[data-factory-wizard-field]');
       const transferId = closest(event?.target, '[data-factory-field-transfer-id]');
       if (input && !transferId) {
-        const payload = fieldPayload(input);
+        const payload = fieldPayload(input, 'change');
         if (payload) invokeFromEvent('setFieldDraft', payload);
         return;
       }

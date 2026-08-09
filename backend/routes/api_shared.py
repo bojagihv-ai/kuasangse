@@ -39,7 +39,16 @@ _JEPUM_PYTHON_CANDIDATES = (
     Path(r"C:\Users\kua\AppData\Local\Python\pythoncore-3.14-64\python.exe"),
     Path(sys.executable),
 )
-_IMAGE_PROXY_ALLOWED_HOSTS = {"03030.co.kr", "www.03030.co.kr"}
+_IMAGE_PROXY_ALLOWED_HOSTS = {
+    "03030.co.kr",
+    "www.03030.co.kr",
+    "thumbnail.coupangcdn.com",
+    "gdimg.gmarket.co.kr",
+    "sinbad-img.gmarket.com",
+    "image.auction.co.kr",
+    "cdn.011st.com",
+    "shopping-phinf.pstatic.net",
+}
 _SINHWA_DB_ROOT = Path(r"C:\Users\kua\sinhwa-db-hub")
 _SINHWA_DB_SCRIPT = _SINHWA_DB_ROOT / "manage_sinhwa_servers.ps1"
 _SINHWA_DB_PORT = 8200
@@ -70,8 +79,8 @@ def _local_action_request_allowed():
 # ── Vertex Config (공용 중앙 설정) ─────────────────────────────────
 _VERTEX_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'vertex-config.json')
 _SACHYOSANGSE_VERTEX_CONFIG_PATH = r'C:\Users\kua\Documents\Playground\sachyosangse\apps\api\.local\vertex-config.json'
-_LAST_WORK_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'pdp-last-work.json')
-_LAST_WORK_BACKUP_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'pdp-last-work.bak.json')
+_LAST_WORK_PATH = os.path.join(Config.LOCAL_STATE_FOLDER, 'pdp-last-work.json')
+_LAST_WORK_BACKUP_PATH = os.path.join(Config.LOCAL_STATE_FOLDER, 'pdp-last-work.bak.json')
 _MARKETPLUS_RECIPE_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'marketplus-internal-recipes.json')
 _LOCAL_ARCHIVE_INDEX_PATH = os.path.join(Config.LOCAL_ARCHIVE_FOLDER, "index.json")
 _LOCAL_ARCHIVE_LOCK = threading.Lock()
@@ -225,10 +234,12 @@ def _sinhwa_db_status_payload():
             except requests.RequestException as exc:
                 health_detail = f"{path} {exc.__class__.__name__}"
     running = port_open and health_ok
+    port_conflict = port_open and not health_ok
     return {
         "ok": True,
         "running": running,
         "portOpen": port_open,
+        "portConflict": port_conflict,
         "healthOk": health_ok,
         "healthDetail": health_detail,
         "port": _SINHWA_DB_PORT,
@@ -262,10 +273,12 @@ def _cafe24_control_status_payload():
         except requests.RequestException as exc:
             health_detail = exc.__class__.__name__
     running = port_open and health_ok
+    port_conflict = port_open and not health_ok
     return {
         "ok": True,
         "running": running,
         "portOpen": port_open,
+        "portConflict": port_conflict,
         "healthOk": health_ok,
         "healthDetail": health_detail,
         "port": _CAFE24_CONTROL_PORT,
@@ -319,11 +332,13 @@ def _jepum_scraper_status_payload():
         except (requests.RequestException, ValueError) as exc:
             health_detail = f"{_JEPUM_HEALTH_PATH} {exc.__class__.__name__}"
     running = port_open and health_ok
+    port_conflict = port_open and not health_ok
     python_path = _jepum_scraper_python_executable()
     return {
         "ok": True,
         "running": running,
         "portOpen": port_open,
+        "portConflict": port_conflict,
         "healthOk": health_ok,
         "healthDetail": health_detail,
         "port": _JEPUM_PORT,

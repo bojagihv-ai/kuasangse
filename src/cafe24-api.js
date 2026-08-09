@@ -184,6 +184,52 @@ async function fetchSinhwaDirect(path, query = {}) {
   return fetchJsonWithTimeout(url.toString(), { headers: { 'Accept': 'application/json' } });
 }
 
+async function fetchSinhwaPdpBackend(path, query = {}, options = {}) {
+  const url = new URL(`${kuasangseBackendBaseUrl()}/api/sinhwa-pdp/${String(path || '').replace(/^\/+/, '')}`);
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+  });
+  return fetchJsonWithTimeout(url.toString(), {
+    method: options.method || 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(options.headers || {}),
+    },
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+  }, options.timeoutMs || 15000);
+}
+
+async function uploadSinhwaPdpWorkBundleAsset({
+  bundleId,
+  assetId,
+  blob,
+  mimeType,
+  filename,
+  idempotencyKey,
+  version,
+}) {
+  const root = kuasangseBackendBaseUrl();
+  const url = new URL(
+    `${root}/api/sinhwa-pdp/work-bundles/${encodeURIComponent(bundleId)}`
+    + `/assets/${encodeURIComponent(assetId)}/content`,
+  );
+  const asciiFilename = encodeURIComponent(
+    String(filename || 'asset.png').trim() || 'asset.png',
+  ).slice(0, 240);
+  return fetchJsonWithTimeout(url.toString(), {
+    method: 'PUT',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': String(mimeType || blob?.type || 'image/png'),
+      'X-Asset-Filename': asciiFilename,
+      'Idempotency-Key': String(idempotencyKey || ''),
+      'If-Match': String(version || 1),
+    },
+    body: blob,
+  }, 120000);
+}
+
 async function putSinhwaDirect(path, body = {}) {
   const url = new URL(`${SINHWA_DB_API.directBase}${path}`);
   return fetchJsonWithTimeout(url.toString(), {
@@ -1265,10 +1311,14 @@ function cafe24ConsoleSanitizeProductDetailPayload(method, path, payloadBody) {
   const preflight = cafe24ConsolePayloadGuard.preflightProduct(product);
   if (preflight.ok) return payloadBody;
   const sanitized = cafe24ConsolePayloadGuard.sanitizeProduct(product);
+  if ((preflight.unsafeFields || []).length && !Object.keys(sanitized || {}).length) {
+    const issues = Array.isArray(preflight.issues) ? preflight.issues.filter(Boolean).join(' ') : '';
+    throw new Error(`Cafe24 전송 직전 상세설명 안전검사 실패: ${issues || '상세설명 필드가 모두 제외되었습니다.'}`);
+  }
   Object.keys(product).forEach(key => { delete product[key]; });
   Object.assign(product, sanitized);
   if (typeof factoryLog === 'function') {
-    factoryLog(`Cafe24 전송 직전 상세설명 base64 차단: ${preflight.unsafeFields.join(', ')}`, 'ok');
+    factoryLog(`Cafe24 전송 직전 안전하지 않은 상세설명 제외: ${preflight.unsafeFields.join(', ')}`, 'ok');
   }
   return payloadBody;
 }
@@ -1807,12 +1857,16 @@ async function findCafe24CandidateMatches(termInfo) {
     24,
     Math.min(termInfo?.imageOnlyMode ? 120 : 64, requestedLimit * 2)
   );
-  for (const query of queries) {
-    try {
-      const products = await fetchCafe24ProductsByQuery(query, queryFetchLimit);
-      products.forEach((product, index) => addCandidate(product, index, 'query', query));
-    } catch(e) {
-      failures.push(`${query}: ${e?.message || e}`);
+  const queryResults = await Promise.allSettled(queries.map(query =>
+    fetchCafe24ProductsByQuery(query, queryFetchLimit)
+  ));
+  for (let queryIndex = 0; queryIndex < queryResults.length; queryIndex += 1) {
+    const query = queries[queryIndex];
+    const result = queryResults[queryIndex];
+    if (result.status === 'fulfilled') {
+      result.value.forEach((product, index) => addCandidate(product, index, 'query', query));
+    } else {
+      failures.push(`${query}: ${result.reason?.message || result.reason}`);
     }
   }
   let snapshotCount = 0;

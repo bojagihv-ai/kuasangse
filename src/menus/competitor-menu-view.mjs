@@ -25,7 +25,10 @@ export function renderCompetitorStepView(view, helpers) {
     loadCompAnalysis,
     ensureCompMarketScrapeState,
     compMarketSavedAnalysisMatchesSelectedImages,
+    sectionWorkScopeMeta,
+    sectionWorkScopeMatches,
     renderCompMarketScrapePanel,
+    renderCompetitorAnalysisModelOptions,
     renderFactoryLightImage,
     disabledAttr,
     escAttr,
@@ -34,6 +37,7 @@ export function renderCompetitorStepView(view, helpers) {
     SECTION_GENERATION_MODES,
   } = helpers;
   const cp = view.compPage;
+  const analysisMatchSettings = view.analysisMatchSettings || {};
   const backendBase = (cp.scraperBase || 'http://127.0.0.1:5001').replace(/\/+$/, '');
   const hasBackend = cp.backendOk === true;
 
@@ -93,7 +97,16 @@ export function renderCompetitorStepView(view, helpers) {
   const hasSaved = !!(savedComp?.analysisResult);
   const marketForSavedComp = ensureCompMarketScrapeState();
   const savedMatchesSelectedImages = hasSaved ? compMarketSavedAnalysisMatchesSelectedImages(savedComp, marketForSavedComp) : true;
-  const savedIsStaleForSelection = hasSaved && !savedMatchesSelectedImages;
+  const savedMatchesCurrentScope = hasSaved ? sectionWorkScopeMatches(savedComp.sectionWorkScope, sectionWorkScopeMeta()) : true;
+  const savedAnalysisProductScope = savedComp?.analysisResult?.analysisProductScope || null;
+  const savedMatchesAnalysisProduct = hasSaved
+    ? !!savedAnalysisProductScope && sectionWorkScopeMatches(savedAnalysisProductScope, sectionWorkScopeMeta())
+    : true;
+  const savedIsStaleForSelection = hasSaved && (
+    !savedMatchesSelectedImages ||
+    !savedMatchesCurrentScope ||
+    !savedMatchesAnalysisProduct
+  );
   const savedAt = hasSaved ? new Date(savedComp.savedAt).toLocaleString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
   const savedTitle = hasSaved ? (savedComp.analysisResult.page_title || '경쟁사 페이지') : '';
   const hasSavedPlan = !!(savedComp?.sectionPlan);
@@ -105,6 +118,20 @@ export function renderCompetitorStepView(view, helpers) {
   return `<div class="fade-in">
     <h1 class="page-title">🔍 경쟁사 상세페이지 분석</h1>
     <p class="page-desc">경쟁사 페이지를 분석해 맞춤 섹션 플랜을 제안합니다.</p>
+    <div class="comp-card" data-comp-analysis-model style="margin:0 0 18px;padding:14px 16px;border-color:rgba(99,102,241,.42);background:rgba(99,102,241,.06)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+        <div style="min-width:220px;flex:1">
+          <div style="font-weight:800;font-size:14px">경쟁사 분석 LLM</div>
+          <div style="font-size:11px;color:var(--text-m);line-height:1.5;margin-top:4px">이번 경쟁사 분석에 사용할 ChatGPT OAuth 모델입니다. 모델 설정의 기본 LLM과 별도로 저장됩니다.</div>
+        </div>
+        <label style="display:block;min-width:0;max-width:100%;flex:1 1 300px">
+          <span style="display:block;font-size:11px;color:var(--text-m);margin-bottom:5px">분석 모델</span>
+          <select id="compAnalysisGptOAuthModelSelect" data-comp-analysis-model class="input" style="width:100%;height:36px;font-size:12px;padding:0 9px">
+            ${renderCompetitorAnalysisModelOptions(analysisMatchSettings.gptOAuthModel)}
+          </select>
+        </label>
+      </div>
+    </div>
     ${renderCompetitorFlowNav('input')}
     ${renderCompMarketScrapePanel()}
 
@@ -113,7 +140,7 @@ export function renderCompetitorStepView(view, helpers) {
         <span style="font-size:18px">🕐</span>
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;font-size:13px">${savedIsStaleForSelection ? '이전 저장 결과: ' : '마지막 저장: '}${escapeHtml(savedTitle)}${savedScoreHtml}</div>
-          <div style="font-size:11px;color:${savedIsStaleForSelection ? 'var(--warn)' : 'var(--text-m)'};margin-top:2px">${savedIsStaleForSelection ? '현재 선택 이미지와 맞지 않아 기본 생성 기준에서는 제외합니다. 그래도 이전 결과로 열어볼 수 있습니다.' : `${savedAt} 저장 · 섹션 ${(savedComp.analysisResult.sections_found||[]).length}개 발견${hasSavedPlan?' · 15개 플랜 있음':''}`}</div>
+          <div style="font-size:11px;color:${savedIsStaleForSelection ? 'var(--warn)' : 'var(--text-m)'};margin-top:2px">${savedIsStaleForSelection ? '현재 제품/선택 이미지 기준과 달라 기본 생성 기준에서는 제외합니다. 이전 결과는 보기 전용으로 열 수 있습니다.' : `${savedAt} 저장 · 섹션 ${(savedComp.analysisResult.sections_found||[]).length}개 발견${hasSavedPlan?' · 15개 플랜 있음':''}`}</div>
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0">
           <button class="btn-sm" id="compLoadReport">${savedIsStaleForSelection ? '이전 결과 보기' : '분석 결과 보기'}</button>

@@ -33,6 +33,24 @@ function authorityHarnessSource() {
   `;
 }
 
+function workspaceTransitionStateSource() {
+  const core02 = read('src/app-core-02.js');
+  return sourceBetween(
+    core02,
+    ['const workspaceScopeTransitionState ='],
+    'const SERVER_LAST_WORK_RETRY_BASE_MS',
+  );
+}
+
+function requiredFieldRestoreSource() {
+  const core02 = read('src/app-core-02.js');
+  return sourceBetween(
+    core02,
+    ['const LAST_WORK_REQUIRED_FIELD_ALIASES = Object.freeze'],
+    'function lastWorkSnapshotScore',
+  );
+}
+
 test('classic runtime keeps takeover authority lexical and rejects forged, proxied, stale, or closed tokens', () => {
   const accepted = {
     mode: 'editing', scopeId: 'project:alpha', sessionId: 'session-local', leaseId: 'lease-b',
@@ -102,6 +120,8 @@ test('failed takeover apply restores the prior app and factory snapshots before 
     let serverLastWorkHydrating = false;
     let sessionAssetsHydrated = false;
     let pendingSessionAssetSaveAfterHydrate = false;
+    const getCurrentLastWorkWorkspaceScope = () => 'project:alpha';
+    const workspaceHydrationScopeIsCurrent = () => true;
     let deferRestore = false;
     let resolveRestore = null;
     const cloneData = value => JSON.parse(JSON.stringify(value));
@@ -122,6 +142,7 @@ test('failed takeover apply restores the prior app and factory snapshots before 
       },
     });
     const lastWorkSnapshotMatchesCurrentWorkspace = () => true;
+    const lastWorkSnapshotMatchesWorkspaceScope = () => true;
     const workspaceSnapshotRevision = snapshot => snapshot.workspaceRevision;
     const lastWorkSnapshotScore = () => 10;
     const getCurrentLastWorkScore = () => 0;
@@ -130,7 +151,9 @@ test('failed takeover apply restores the prior app and factory snapshots before 
     const getCurrentCompAnalysisTime = () => 0;
     const snapshotSectionImagesQualityScore = () => 0;
     const sectionImagesQualityScore = () => 0;
+    const persistedCutResultCount = () => 0;
     const hasInlineImagePayload = () => false;
+    const lastWorkFactoryHasSelfConsistentCurrentAssets = () => false;
     const observeWorkspaceRevisionSnapshot = () => null;
     const applyServerLastWorkSnapshot = (_snapshot, options) => {
       authorityApi.assert(options.takeoverAuthority);
@@ -145,6 +168,8 @@ test('failed takeover apply restores the prior app and factory snapshots before 
     const render = () => {};
     const saveCompAnalysis = () => {};
     const saveServerLastWorkSnapshot = async () => {};
+    ${requiredFieldRestoreSource()}
+    ${workspaceTransitionStateSource()}
     ${hydrateSource}
     const authority = authorityApi.create(accepted);
     globalThis.runHydrate = () => hydrateServerLastWorkSnapshot({

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 const API_BASE = process.env.REACT_APP_API_URL || '/api';
+const PDP_SYNC_QUEUE_KEY = 'kuasangse_pdp_sync_queue_v1';
 
 // ─── Section Icons ─────────────────────────────────────────────
 const SECTION_ICONS = {
@@ -29,11 +30,90 @@ async function apiUpload(path, formData) {
   return res.json();
 }
 
+function normalizeSinhwaJcode(value) {
+  const text = String(value || '').trim();
+  return /^\d+$/.test(text) && Number(text) > 0 ? text : '';
+}
+
+function buildPdpSyncPayload(projectId, projectData) {
+  const entries = Object.entries(projectData?.sections || {});
+  return {
+    idempotencyKey: `automation:${projectId}:output`,
+    sections: entries.map(([sectionKey, section], sortOrder) => ({
+      idempotencyKey: `automation:${projectId}:section:${sectionKey}`,
+      payload: {
+        sectionKey,
+        sectionType: sectionKey,
+        title: section?.content?.headline || sectionKey,
+        copyText: section?.content?.body_text || null,
+        structuredData: section?.content || {},
+        sortOrder,
+      },
+    })),
+    composition: {
+      payload: {
+        name: `자동화 결과 ${projectId}`,
+        sectionOrder: entries.map(([sectionKey]) => sectionKey),
+        stitchedDetailAssetId: null,
+      },
+    },
+  };
+}
+
+function readPdpSyncQueue() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PDP_SYNC_QUEUE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePdpSyncQueue(entries) {
+  localStorage.setItem(PDP_SYNC_QUEUE_KEY, JSON.stringify(entries));
+}
+
+function enqueuePdpSync(jcode, payload, projectId) {
+  const entries = readPdpSyncQueue();
+  const next = entries.filter(entry => entry.idempotencyKey !== payload.idempotencyKey);
+  next.push({
+    jcode,
+    projectId,
+    idempotencyKey: payload.idempotencyKey,
+    payload,
+    queuedAt: new Date().toISOString(),
+  });
+  writePdpSyncQueue(next);
+  return next.length;
+}
+
+async function replayPdpSyncQueue() {
+  const entries = readPdpSyncQueue();
+  if (!entries.length) return { attempted: false, remaining: 0 };
+  const remaining = [];
+  let attempted = false;
+  for (const entry of entries) {
+    attempted = true;
+    try {
+      await api(`/sinhwa-pdp/products/${entry.jcode}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry.payload),
+      });
+    } catch {
+      remaining.push(entry);
+    }
+  }
+  writePdpSyncQueue(remaining);
+  return { attempted, remaining: remaining.length };
+}
+
 // ─── Main App ───────────────────────────────────────────────────
 export default function App() {
   const [step, setStep] = useState('upload'); // upload | analyzing | sections | generating | preview
   const [projectId, setProjectId] = useState(null);
   const [productName, setProductName] = useState('');
+  const [sinhwaJcode, setSinhwaJcode] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [imageFile, setImageFile] = useState(null);
   const [analysis, setAnalysis] = useState(null);
@@ -44,6 +124,7 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
   const [error, setError] = useState('');
+  const [pdpSaveState, setPdpSaveState] = useState('not-configured');
   const [activeSectionEdit, setActiveSectionEdit] = useState(null);
   const fileInputRef = useRef(null);
   const pollRef = useRef(null);
@@ -51,6 +132,7 @@ export default function App() {
   // Load section definitions
   useEffect(() => {
     api('/sections').then(setSections).catch(() => {});
+    replayPdpSyncQueue().catch(() => {});
   }, []);
 
   // Handle file selection
@@ -77,7 +159,7 @@ export default function App() {
   };
 
   // Poll project status
-  const startPolling = useCallback((pid) => {
+  const startPolling = useCallback((pid, jcode) => {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
       try {
@@ -88,6 +170,21 @@ export default function App() {
           clearInterval(pollRef.current);
           if (data.status === 'completed') {
             const full = await api(`/projects/${pid}/full`);
+            if (jcode) {
+              try {
+                setPdpSaveState('saving');
+                const syncPayload = buildPdpSyncPayload(pid, full);
+                await api(`/sinhwa-pdp/products/${jcode}/sync`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(syncPayload),
+                });
+                setPdpSaveState('authoritative');
+              } catch {
+                try { enqueuePdpSync(jcode, buildPdpSyncPayload(pid, full), pid); } catch { }
+                setPdpSaveState('local-fallback');
+              }
+            }
             setProjectData(full);
             setStep('preview');
           }
@@ -114,11 +211,25 @@ export default function App() {
       const proj = await apiUpload('/projects', formData);
       setProjectId(proj.project_id);
 
+      const normalizedJcode = normalizeSinhwaJcode(sinhwaJcode);
+      if (normalizedJcode) {
+        setPdpSaveState('loading');
+        try {
+          const context = await api(`/sinhwa-pdp/products/${normalizedJcode}/context`);
+          setAnalysis(current => ({ ...(current || {}), sinhwa_pdp: context }));
+          setPdpSaveState('local-only');
+        } catch {
+          setPdpSaveState('local-fallback');
+        }
+      } else {
+        setPdpSaveState('not-configured');
+      }
+
       // 2. Analyze
       setProgressMsg('제품 이미지 AI 분석 중...');
       setProgress(10);
       const analysisRes = await api(`/projects/${proj.project_id}/analyze`, { method: 'POST' });
-      setAnalysis(analysisRes.analysis);
+      setAnalysis(current => ({ ...(current || {}), ...analysisRes.analysis }));
       setProgress(25);
 
       // 3. Competitor search
@@ -147,7 +258,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ section_instructions: sectionInstructions }),
       });
-      startPolling(projectId);
+      startPolling(projectId, normalizeSinhwaJcode(sinhwaJcode));
     } catch (e) {
       setError(e.message);
     }
@@ -210,6 +321,8 @@ export default function App() {
         {step === 'upload' && (
           <UploadStep
             imagePreview={imagePreview}
+            sinhwaJcode={sinhwaJcode}
+            onSinhwaJcodeChange={setSinhwaJcode}
             productName={productName}
             onProductNameChange={setProductName}
             onFileSelect={handleFileSelect}
@@ -250,6 +363,7 @@ export default function App() {
             onRegenerateSection={handleGenerateSection}
             onExportHTML={handleExportHTML}
             onInstructionChange={(id, val) => setSectionInstructions(prev => ({...prev, [id]: val}))}
+            pdpSaveState={pdpSaveState}
           />
         )}
       </main>
@@ -258,7 +372,7 @@ export default function App() {
 }
 
 // ─── Upload Step ────────────────────────────────────────────────
-function UploadStep({ imagePreview, productName, onProductNameChange, onFileSelect, onDrop, onStart, fileInputRef }) {
+function UploadStep({ imagePreview, productName, onProductNameChange, sinhwaJcode, onSinhwaJcodeChange, onFileSelect, onDrop, onStart, fileInputRef }) {
   return (
     <div style={styles.stepContainer} className="fade-in">
       <h1 style={styles.pageTitle}>상세페이지 자동 생성</h1>
@@ -287,6 +401,18 @@ function UploadStep({ imagePreview, productName, onProductNameChange, onFileSele
           value={productName}
           onChange={e => onProductNameChange(e.target.value)}
           placeholder="AI가 자동 감지하지만, 직접 입력하면 더 정확합니다"
+          style={styles.input}
+        />
+      </div>
+
+      <div style={styles.inputGroup}>
+        <label style={styles.label}>신화사 제품코드 (선택사항)</label>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={sinhwaJcode}
+          onChange={e => onSinhwaJcodeChange(e.target.value.replace(/[^0-9]/g, ''))}
+          placeholder="예: 920001, 입력하면 기존 자산과 결과를 연결합니다"
           style={styles.input}
         />
       </div>
@@ -447,7 +573,7 @@ function GeneratingStep({ progress, message }) {
 }
 
 // ─── Preview Step ───────────────────────────────────────────────
-function PreviewStep({ projectData, projectId, sections, sectionInstructions, onRegenerateSection, onExportHTML, onInstructionChange }) {
+function PreviewStep({ projectData, projectId, sections, sectionInstructions, onRegenerateSection, onExportHTML, onInstructionChange, pdpSaveState }) {
   const [editingSection, setEditingSection] = useState(null);
   const [regeneratingSection, setRegeneratingSection] = useState(null);
 
@@ -465,6 +591,9 @@ function PreviewStep({ projectData, projectId, sections, sectionInstructions, on
         <div>
           <h1 style={styles.pageTitle}>상세페이지 미리보기</h1>
           <p style={styles.pageDesc}>생성된 상세페이지를 확인하고 개별 섹션을 수정할 수 있습니다.</p>
+        </div>
+        <div style={{fontSize:12,color:pdpSaveState === 'authoritative' ? 'var(--ok)' : 'var(--text-dim)'}}>
+          신화사 DB 저장 상태: {pdpSaveState === 'authoritative' ? '기준 저장 완료' : pdpSaveState === 'local-fallback' ? '로컬 안전망 보관' : pdpSaveState === 'saving' ? '저장 중' : '제품코드 연결 전'}
         </div>
         <div style={{display:'flex',gap:8}}>
           <button onClick={onExportHTML} style={styles.primaryBtn}>

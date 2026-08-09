@@ -106,19 +106,11 @@ async function main() {
     factory.product.inputImageFingerprint = inputImageFingerprint;
     factory.product.lockedInputImageFingerprint = inputImageFingerprint;
     factory.automation.currentRunId = runId;
-    const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
-    let authority = await lock.acquire({
-      scopeId: 'project:' + projectId,
-      ownerId: 'scoped reload regression',
-    });
-    if (authority.mode !== 'editing') {
-      authority = await lock.takeover({
-        confirmed: true,
-        scopeId: 'project:' + projectId,
-        ownerId: 'scoped reload regression',
-      });
+    const branchScope = window.getCurrentLastWorkWorkspaceScope();
+    const authority = await window.ensureWorkspaceEditAuthority(branchScope, { force: true });
+    if (!['editing', 'offline-edit'].includes(authority?.mode) || authority?.scopeId !== branchScope) {
+      throw new Error('scoped reload branch authority acquisition failed: ' + JSON.stringify(authority));
     }
-    if (authority.mode !== 'editing') throw new Error('scoped reload authority acquisition failed');
     window.render();
     await new Promise(resolve => setTimeout(resolve, 300));
     await window.saveLastWorkNow({ force: true, deep: true });
@@ -132,6 +124,7 @@ async function main() {
       projectId: state.currentProjectId,
       projectName: state.currentProjectName,
       scope: window.getCurrentLastWorkWorkspaceScope(),
+      branchScope,
       imageCount: state.optionSorter.images.length,
       slotNames: state.optionSorter.slots.slice(0, 4).map(slot => slot.name),
       serverScope: server.workspaceId || '',
@@ -143,6 +136,12 @@ async function main() {
         base64Length: String(image.base64 || '').length,
         dataUrlLength: String(image.dataUrl || '').length,
       })),
+      storedSessionAuthority: storedSession?.persistenceAuthority || null,
+      currentAuthority: window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null,
+      serverRevision: Number(server.snapshot?.metadata?.revision?.counter)
+        || Number(server.snapshot?.persistenceAuthority?.revision)
+        || Number(server.snapshot?.workspaceRevision?.counter)
+        || 0,
       storageWarning: state.storageWarning || '',
       localScope: localSession.workspaceScope?.id || localSession.workspaceScope || '',
       localProjectId: localSession.currentProjectId || '',
@@ -185,6 +184,8 @@ async function main() {
     const mappedSlots = state.optionSorter.slots.slice(0, 4);
     const server = await fetch('http://127.0.0.1:5050/api/last-work?workspaceId=' + encodeURIComponent('project:' + expectedProjectId), { cache: 'no-store' }).then(response => response.json());
     const serverImages = server.snapshot?.assets?.optionSorter?.images || [];
+    const sessionAssets = await window.workspaceGetSessionAssets?.().catch(() => null);
+    const sessionAssetImages = sessionAssets?.optionSorter?.images || [];
     return {
       buildId: window.__KUASANGSE_APP_BUILD_ID__ || '',
       projectId: state.currentProjectId,
@@ -206,6 +207,15 @@ async function main() {
         base64Length: String(image.base64 || '').length,
         dataUrlLength: String(image.dataUrl || '').length,
       })),
+      sessionAssetImagePayloads: sessionAssetImages.map(image => ({
+        id: image.id || '',
+        previewLength: String(image.preview || '').length,
+        base64Length: String(image.base64 || '').length,
+        dataUrlLength: String(image.dataUrl || '').length,
+      })),
+      sessionAssetAuthority: sessionAssets?.persistenceAuthority || null,
+      currentAuthority: window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null,
+      storageWarning: state.storageWarning || '',
       snapshotMatches: window.lastWorkSnapshotMatchesCurrentWorkspace(server.snapshot),
       assetsMatch: window.lastWorkSnapshotMatchesCurrentWorkspace(server.snapshot?.assets || {}),
       serverAssetScope: server.snapshot?.assets?.workspaceScope?.id || server.snapshot?.assets?.workspaceScope || '',
@@ -231,10 +241,10 @@ async function main() {
   const result = { url: APP_URL, saved, restored, screenshot };
   fs.writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf8');
   assertChecks([
-    { ok: saved.scope === `project:${projectId}`, message: `저장 scope 불일치: ${saved.scope}` },
-    { ok: saved.serverScope === `project:${projectId}`, message: `서버 저장 scope 불일치: ${saved.serverScope}` },
-    { ok: saved.bootstrapScope === `project:${projectId}`, message: `즉시 복원 포인터 scope 불일치: ${saved.bootstrapScope}` },
-    { ok: saved.serverImages === 4, message: `서버 옵션 이미지 수 불일치: ${saved.serverImages}` },
+    { ok: /^draft:/.test(saved.scope) && saved.scope === saved.branchScope, message: `현재 탭 브랜치 저장 scope 불일치: ${saved.scope}` },
+    { ok: saved.bootstrapScope === saved.branchScope, message: `즉시 복원 포인터 branch 불일치: ${saved.bootstrapScope}` },
+    { ok: saved.localScope === saved.branchScope && saved.localProjectId === projectId, message: `로컬 branch/document 식별자 불일치: ${JSON.stringify({ scope: saved.localScope, projectId: saved.localProjectId })}` },
+    { ok: saved.storedSessionImages.length === 4 && saved.storedSessionImages.every(image => image.previewLength > 0 || image.base64Length > 0 || image.dataUrlLength > 0), message: `브랜치 옵션 이미지 저장 불일치: ${JSON.stringify(saved.storedSessionImages)}` },
     { ok: !!EXPECTED_BUILD_ID && restored.buildId === EXPECTED_BUILD_ID, message: `최신 빌드가 아닙니다: ${restored.buildId} (예상: ${EXPECTED_BUILD_ID || '빌드 ID 없음'})` },
     { ok: restored.projectId === projectId && restored.projectName === projectName, message: `새로고침 후 작업파일 식별자 불일치: ${JSON.stringify(restored)}` },
     { ok: restored.imageCount === 4 && restored.usableImages === 4, message: `새로고침 후 옵션 이미지 복원 실패: ${JSON.stringify(restored)}` },

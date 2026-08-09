@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
+  assertCdpRuntimeIsolation,
   connectCdp,
   ensureCdp,
   evaluate,
@@ -8,6 +9,7 @@ const {
 } = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
+const API_ROOT = process.env.KUASANGSE_BACKEND_BASE || process.env.KUASANGSE_BACKEND_URL || '';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9447';
 const productName = process.env.KUASANGSE_PROOF_PRODUCT || '버튼실제사이즈검증띠수네모동전지갑';
 const evidenceDir = path.resolve(__dirname, '..', 'output', 'debug-evidence');
@@ -45,14 +47,15 @@ function compactArchiveRow(row = {}) {
   };
 }
 
-function setupExpression({ inputFingerprint, ids, productName, runId }) {
+function setupExpression({ backendBase, inputFingerprint, ids, productName, runId }) {
   return `(async () => {
+    const backendBase = ${JSON.stringify(backendBase)};
     const inputFingerprint = ${JSON.stringify(inputFingerprint)};
     const ids = ${JSON.stringify(ids)};
     const productName = ${JSON.stringify(productName)};
     const runId = ${JSON.stringify(runId)};
     state.step = 'imagecuts';
-    state.backendBaseUrl = 'http://127.0.0.1:5050';
+    state.backendBaseUrl = backendBase;
     state.productName = productName;
     state.imageBase64 = '';
     state.imageMime = 'image/png';
@@ -165,9 +168,10 @@ const summaryBootstrap = `(() => {
 })()`;
 
 (async () => {
+  assertCdpRuntimeIsolation();
   fs.mkdirSync(evidenceDir, { recursive: true });
   console.error('[size-restore-proof] archive query');
-  const list = await fetchJson(`http://127.0.0.1:5050/api/local-archive/assets?limit=6&stageId=size&productKey=${encodeURIComponent(productName)}`);
+  const list = await fetchJson(`${API_ROOT}/api/local-archive/assets?limit=6&stageId=size&productKey=${encodeURIComponent(productName)}`);
   const archiveRows = (list.items || list.assets || []).filter(row => row.archiveId).slice(0, 3);
   if (archiveRows.length < 3) throw new Error(`사이즈 보관 원본 부족: ${archiveRows.length}`);
   const runId = archiveRows[0].currentRunId;
@@ -191,7 +195,13 @@ const summaryBootstrap = `(() => {
     console.error('[size-restore-proof] app ready');
     await evaluate(cdp, summaryBootstrap);
     console.error('[size-restore-proof] setup restore before reload');
-    const beforeReload = await evaluate(cdp, setupExpression({ inputFingerprint, ids: archiveIds, productName, runId }));
+    const beforeReload = await evaluate(cdp, setupExpression({
+      backendBase: new URL(API_ROOT).origin,
+      inputFingerprint,
+      ids: archiveIds,
+      productName,
+      runId,
+    }));
     console.error(`[size-restore-proof] before usable=${beforeReload.usable} prompts=${beforeReload.promptResults}`);
     await timedSend(cdp, 'Page.reload', { ignoreCache: true });
     await waitFor(cdp, `typeof render === 'function' && typeof factoryRestoreCutPromptResultsFromAssets === 'function'`, 30000);

@@ -8,9 +8,13 @@ const { pathToFileURL } = require('node:url');
 const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const appCore03Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
+const appCore05Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-05.js'), 'utf8');
+const appCore06Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-06.js'), 'utf8');
 const appCore04Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-04.js'), 'utf8');
 const payloadSource = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-payloads.js'), 'utf8');
 const productFormSource = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-product-form.js'), 'utf8');
+const cafe24ApiSource = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-api.js'), 'utf8');
 const syncSource = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-sync.js'), 'utf8');
 
 function sourceFunction(source, name) {
@@ -131,6 +135,127 @@ function compileDbReviewModel(globals = {}) {
     ...globals,
   }).factoryBuildDbReviewModel;
 }
+
+test('Cafe24 상세페이지 내보내기 이미지는 브라우저 이벤트 핸들러를 포함하지 않는다', () => {
+  const section = compileFunction(appCore05Source, 'renderSectionTemplate', {
+    state: {
+      previewLayerMode: false,
+      layoutTemplate: 'classic',
+      activePreviewLayer: null,
+      previewLayerEdits: {},
+      currentSectionVariantIds: {},
+      sectionVariants: {},
+      sectionGenerationMeta: {},
+    },
+    applyBrandPresetToContent: value => value,
+    displayableImageSrc: value => value,
+    cssFontFamily: () => 'sans-serif',
+    publicSectionText: value => String(value || ''),
+    escapeHtml: value => String(value || ''),
+    nl2br: value => String(value || ''),
+    escAttr: value => String(value || ''),
+    renderPreviewLayer: (_sectionId, _layerId, html) => html,
+    renderExtraElements: () => '',
+    resolveSectionRenderGenerationMode: () => 'full_image',
+    renderFactoryLightImage: (src, alt) => `<img src="${src}" alt="${alt}" onerror="window.recover(this)">`,
+  });
+  const sectionHtml = section({ id: 'header', name: '헤더', n: 1 }, {}, 'https://example.com/header.jpg', 'export');
+  assert.match(sectionHtml, /<img\b/);
+  assert.doesNotMatch(sectionHtml, /\bonerror\s*=|\bwindow\./i);
+
+  const inserted = compileFunction(appCore05Source, 'renderInsertedDetailImageBlock', {
+    escAttr: value => String(value),
+    escapeHtml: value => String(value),
+    displayableImageSrc: value => value,
+    renderFactoryLightImage: (src, alt) => `<img src="${src}" alt="${alt}" onerror="window.recover(this)">`,
+  });
+  const insertedHtml = inserted({ id: 'detail-1', dataUrl: 'https://example.com/detail.jpg', label: '상세 이미지' }, 'export');
+  assert.match(insertedHtml, /<img\b/);
+  assert.doesNotMatch(insertedHtml, /\bonerror\s*=|\bwindow\./i);
+
+  const fixed = compileFunction(appCore05Source, 'renderFixedDetailImageForExport', {
+    state: { fixedDetailImages: { brand: { dataUrl: 'https://example.com/brand.jpg' } } },
+    loadFixedDetailImages: () => ({}),
+    normalizeFixedDetailImages: value => value,
+    displayableImageSrc: value => value,
+    getFixedDetailImageSlot: () => ({ label: '브랜드 이미지' }),
+    escAttr: value => String(value),
+    renderFactoryLightImage: (src, alt) => `<img src="${src}" alt="${alt}" onerror="window.recover(this)">`,
+  });
+  const fixedHtml = fixed('brand');
+  assert.match(fixedHtml, /<img\b/);
+  assert.doesNotMatch(fixedHtml, /\bonerror\s*=|\bwindow\./i);
+});
+
+test('Cafe24 상세 payload guard는 설명 필드를 전부 지우고 빈 요청을 보내지 않는다', () => {
+  const functions = compileFunctions(cafe24ApiSource, [
+    'cafe24ConsoleIsRootProductWrite',
+    'cafe24ConsoleProductObjectFromPayloadBody',
+    'cafe24ConsoleRemoveUnsupportedProductFields',
+    'cafe24ConsoleSanitizeProductDetailPayload',
+  ], {
+    CAFE24_CONSOLE_UNSUPPORTED_PRODUCT_FIELD_LABELS: {},
+    cafe24ConsolePayloadGuard: {
+      preflightProduct: () => ({
+        ok: false,
+        unsafeFields: ['description', 'mobile_description'],
+        issues: ['상세설명 HTML에 이벤트 핸들러 속성이 포함되어 있습니다.'],
+      }),
+      sanitizeProduct: () => ({}),
+    },
+    factoryLog: () => {},
+  });
+
+  assert.throws(
+    () => functions.cafe24ConsoleSanitizeProductDetailPayload('PUT', '/api/v2/admin/products/2994', {
+      product: { description: '<img onerror="alert(1)">', mobile_description: '<img onerror="alert(1)">' },
+    }),
+    /상세설명 안전검사 실패.*이벤트 핸들러/,
+  );
+});
+
+test('Cafe24 point payload always sends an explicit API unit for product creation', () => {
+  const combinedSource = [
+    sourceFunction(productFormSource, 'factoryCafe24PointsAmountRows'),
+    sourceFunction(productFormSource, 'factoryCafe24PointsAmountPayload'),
+  ].join('\n');
+  const { factoryCafe24PointsAmountPayload } = compileFunctions(combinedSource, [
+    'factoryCafe24PointsAmountRows',
+    'factoryCafe24PointsAmountPayload',
+  ], { factoryCafe24JsonPayload: value => value });
+  const plain = value => JSON.parse(JSON.stringify(value));
+
+  assert.deepEqual(
+    plain(factoryCafe24PointsAmountPayload([{ points_rate: '0.00%' }])),
+    [{ points_rate: '0.00', points_unit_by_payment: 'P' }],
+  );
+  assert.deepEqual(
+    plain(factoryCafe24PointsAmountPayload([{ points_amount: '500' }])),
+    [{ points_rate: '500', points_unit_by_payment: 'W' }],
+  );
+  assert.deepEqual(
+    plain(factoryCafe24PointsAmountPayload([{ points_rate: '2', points_unit_by_payment: 'P' }])),
+    [{ points_rate: '2', points_unit_by_payment: 'P' }],
+  );
+});
+
+test('Cafe24 update payload includes required mileage parent settings with point rows', () => {
+  const normalize = compileFunction(syncSource, 'factoryNormalizeCafe24ProductPayloadForSave', {
+    factoryRemoveCafe24UnsupportedProductPayloadFields() {},
+    factoryRemoveCafe24InvalidReferenceCodePayloadFields() {},
+    factoryCafe24FieldLabelByApiField: value => value,
+  });
+  const notes = [];
+  const normalized = normalize({
+    points_amount: [{ points_rate: '0.00', points_unit_by_payment: 'P' }],
+  }, notes);
+  assert.equal(normalized.points_by_product, 'T');
+  assert.equal(normalized.points_setting_by_payment, 'B');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(normalized.points_amount)),
+    [{ points_rate: '0.00', points_unit_by_payment: 'P' }],
+  );
+});
 
 test('Cafe24 payload core writers require an explicit transaction draft', () => {
   const reset = compileFunction(payloadSource, 'factoryResetCafe24DraftsForProduct');
@@ -567,6 +692,40 @@ test('Cafe24 image draft stale operation and delayed FileReader callbacks fail c
   }
 });
 
+test('Cafe24 product image payload uses official data URLs and request envelope', async () => {
+  const slots = [
+    { key: 'detail_image', label: '상세 이미지' },
+    { key: 'list_image', label: '목록 이미지' },
+  ];
+  const draft = {
+    product: {
+      cafe24ImageDraft: {
+        image_upload_type: 'B',
+        detail_image: { mime: 'image/jpeg', base64: 'jpeg-payload' },
+        list_image: { mime: 'image/png', base64: 'data:image/png;base64,png-payload' },
+      },
+    },
+  };
+  const imageFunctions = compileFunctions(productFormSource, [
+    'factoryCafe24ImageRequestValue',
+    'factoryCafe24ImagePayload',
+  ], {
+    FACTORY_CAFE24_IMAGE_SLOTS: slots,
+    factoryCafe24ImageDraft: factory => factory.product.cafe24ImageDraft,
+    factoryCafe24GeneratedMainImage: () => null,
+  });
+  const imagePayload = imageFunctions.factoryCafe24ImagePayload(draft);
+  assert.deepEqual(JSON.parse(JSON.stringify(imagePayload)), {
+    image_upload_type: 'B',
+    detail_image: 'data:image/jpeg;base64,jpeg-payload',
+    list_image: 'data:image/png;base64,png-payload',
+  });
+
+  const syncImagesSource = sourceFunction(syncSource, 'factorySyncCafe24ProductImages');
+  assert.match(syncImagesSource, /body:\s*\{\s*shop_no:\s*1,\s*request:\s*payload,\s*\}/s);
+  assert.match(syncImagesSource, /executeDirect:\s*true/);
+});
+
 test('Cafe24 DOM/form drafts share one explicit draft and preserve post-commit save mode', () => {
   const events = [];
   const draft = {
@@ -886,6 +1045,94 @@ test('analysis-hub sync command commits before save/render and candidate helpers
   assert.match(sourceFunction(syncSource, 'factoryApplyLatestToAnalysisHub'), /factory:\s*draft/);
 });
 
+test('analysis-hub factory import preserves explicit size units and ignores Cafe24 category assignment objects', () => {
+  const functions = compileFunctions(syncSource, [
+    'factoryAnalysisImportText',
+    'factoryAnalysisImportFirst',
+    'factoryAnalysisImportCategoryText',
+    'factoryAnalysisImportCategoryFirst',
+    'factoryAnalysisImportDimensionText',
+    'factoryAnalysisImportDimensionHasUnit',
+    'factoryAnalysisImportDimensionNumber',
+    'factoryAnalysisImportDimensions',
+  ], {
+    factorySourceRowsValueByAliases: () => '',
+    hasProductValue: value => value !== null && value !== undefined && value !== '',
+  });
+
+  const dims = functions.factoryAnalysisImportDimensions(
+    { size: '가로 4.8cm x 세로 23cm' },
+    { spec: { width_mm: 4.8, depth_mm: 23 } },
+    [],
+  );
+  assert.equal(dims.width, '4.8cm');
+  assert.equal(dims.depth, '23cm');
+  assert.equal(dims.summary, '가로 4.8cm x 세로 23cm');
+
+  const assignments = [
+    { category_no: 71, recommend: 'F', new: 'F' },
+    { category_no: 88, recommend: 'F', new: 'F' },
+  ];
+  assert.equal(functions.factoryAnalysisImportCategoryText(assignments), '');
+  assert.equal(functions.factoryAnalysisImportCategoryFirst('', assignments, '패션잡화 > 전통 소품 주머니'), '패션잡화 > 전통 소품 주머니');
+  assert.equal(functions.factoryAnalysisImportCategoryText([{ category_name: '패션잡화 > 파우치' }]), '패션잡화 > 파우치');
+});
+
+test('successful Cafe24 create immediately becomes the update target to prevent duplicate registration', () => {
+  const factory = {
+    product: {
+      selectedCafe24CandidateKey: '',
+      confirmedCafe24ProductKey: '',
+      cafe24DraftProductKey: '',
+    },
+    openMarketSync: {
+      cafe24RegistrationMode: 'create',
+      cafe24RegistrationModeUserTouched: false,
+    },
+  };
+  const promote = compileFunction(syncSource, 'factoryPromoteCreatedCafe24ProductToUpdateTarget', {
+    factoryAttachCafe24ProductAsCurrentTarget(product, source, draft) {
+      assert.equal(product.product_no, 2994);
+      assert.match(source, /created/);
+      assert.equal(draft, factory);
+      draft.product.selectedCafe24CandidateKey = '2994';
+      draft.product.confirmedCafe24ProductKey = '2994';
+      draft.product.cafe24DraftProductKey = '2994';
+      return { productNo: 2994, key: '2994' };
+    },
+    factoryEnsureOpenMarketSync: draft => draft.openMarketSync,
+  });
+
+  const attached = promote(
+    { product_no: 2994, product_name: '방울수저집', display: 'F', selling: 'F' },
+    'created:2994',
+    factory,
+  );
+
+  assert.equal(attached.productNo, 2994);
+  assert.equal(factory.product.selectedCafe24CandidateKey, '2994');
+  assert.equal(factory.product.confirmedCafe24ProductKey, '2994');
+  assert.equal(factory.product.cafe24DraftProductKey, '2994');
+  assert.equal(factory.openMarketSync.cafe24RegistrationMode, 'update');
+  assert.equal(factory.openMarketSync.cafe24RegistrationModeUserTouched, true);
+});
+
+test('a new workflow run resets the registration target to create until the user chooses update', () => {
+  const startRun = compileFunction(appCore03Source, 'factoryStartNewWorkflowRun', {
+    uid: () => 'factory_work_run:new',
+  });
+  const factory = {
+    openMarketSync: {
+      cafe24RegistrationMode: 'update',
+      cafe24RegistrationModeUserTouched: true,
+    },
+  };
+
+  assert.equal(startRun(factory), 'factory_work_run:new');
+  assert.equal(factory.openMarketSync.cafe24RegistrationMode, 'create');
+  assert.equal(factory.openMarketSync.cafe24RegistrationModeUserTouched, false);
+});
+
 test('candidate DB cleanup helpers require and preserve the caller-owned draft', () => {
   const names = [
     'factoryResetDbContextForNewCollection',
@@ -943,6 +1190,174 @@ test('candidate DB cleanup helpers require and preserve the caller-owned draft',
   assert.equal(draft.automation.fieldReview.custom_note !== undefined, true);
   assert.equal(draft.automation.optionMode, 'pending');
   assert.equal(state.productInfoManualValues.sale_price, undefined);
+});
+
+test('Cafe24 candidate-only search holds an operation lease across its async owned transaction', () => {
+  const source = sourceFunction(syncSource, 'factoryRunCafe24CandidateSearchOnly');
+  assert.match(source, /operationLeaseHeld\s*!==\s*true/);
+  assert.match(source, /factoryRuntimeWithOperationLease\(\s*'factory\/cafe24:run-candidate-search-only'/);
+  assert.match(source, /operationLeaseHeld:\s*true/);
+});
+
+test('candidate collection captures the existing Cafe24 receipt before clearing search results', () => {
+  const collectAll = sourceFunction(syncSource, 'factoryCollectProductCandidatesForReview');
+  const collectCafe24 = sourceFunction(syncSource, 'factoryCollectCafe24CandidatesForReviewOnly');
+  const runCafe24 = sourceFunction(syncSource, 'factoryRunCafe24CandidateSearchOnly');
+  const runDbStage = sourceFunction(appCore06Source, 'factoryRunDbStage');
+
+  for (const collector of [collectAll, collectCafe24]) {
+    assert.match(
+      collector,
+      /const previousSelection = factoryCaptureCandidateReviewSelection\(factory\);[\s\S]*factoryResetDbContextForNewCollection\(factory,/,
+      'the owned collector must snapshot #2995 before clearing candidates',
+    );
+    assert.match(
+      collector,
+      /const retainedCafe24Selection = restoredSelection && !!previousSelection\.selectedCafe24CandidateKey;/,
+      'a restored Cafe24 receipt must outrank candidate auto-apply',
+    );
+    assert.match(
+      collector,
+      /if \([^)]*!retainedCafe24Selection\)/,
+      'candidate auto-apply must not replace the restored Cafe24 product',
+    );
+  }
+  assert.doesNotMatch(runCafe24, /factoryResetDbContextForNewCollection\(/);
+  assert.doesNotMatch(runDbStage, /factoryResetDbContextForNewCollection\(/);
+});
+
+test('Cafe24 candidate searches await persistence before reporting completion', () => {
+  for (const functionName of [
+    'factoryRunCafe24CandidateSearchOnly',
+    'factoryRunCafe24CandidateAdditionalSearch',
+  ]) {
+    const source = sourceFunction(syncSource, functionName);
+    assert.match(
+      source,
+      /await\s+saveLastWorkNow\(\{\s*sync:\s*false,\s*factory:\s*receipt\.snapshot\.factory\s*\}\)/,
+      functionName,
+    );
+  }
+});
+
+test('final registration owns field review changes and holds one operation lease', () => {
+  const runSource = sourceFunction(appCore05Source, 'factoryRunFinalRegistration');
+  assert.match(runSource, /operationLeaseHeld\s*!==\s*true/);
+  assert.match(runSource, /factoryRuntimeWithOperationLease\(\s*'factory\/final-registration:run'/);
+  assert.match(runSource, /operationLeaseHeld:\s*true/);
+  assert.match(
+    runSource,
+    /await\s+saveLastWorkNow\(\{\s*sync:\s*false,\s*factory:\s*receipt\.snapshot\.factory\s*\}\)/,
+    'successful Cafe24 registration must persist the committed receipt before returning',
+  );
+
+  const createPolicies = new Function(
+    `${sourceFunction(appCore03Source, 'factoryRuntimeCreateCommandPolicies')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+  for (const command of [
+    'factory/final-registration:apply-basic-info',
+    'factory/final-registration:run',
+  ]) {
+    const fieldReviewPart = createPolicies()[command].parts.find(part => part.owner === 'product-db'
+      && part.paths.includes('automation.fieldReview'));
+    assert.ok(fieldReviewPart, `${command} must own automation.fieldReview`);
+  }
+});
+
+test('final registration confirmation is an automation-friendly in-page dialog', () => {
+  const runSource = sourceFunction(appCore05Source, 'factoryRunFinalRegistration');
+  const promptSource = sourceFunction(appCore05Source, 'factoryPromptFinalRegistrationConfirmation');
+  const renderSource = sourceFunction(appCore05Source, 'renderFactoryFinalRegistrationPanel');
+  assert.match(runSource, /await\s+factoryPromptFinalRegistrationConfirmation\(confirmLines/);
+  assert.doesNotMatch(runSource, /window\.confirm/);
+  assert.match(renderSource, /data-factory-guide-action="run-final-registration"/);
+  assert.match(renderSource, /onclick="return window\.factoryRunFinalRegistrationButtonInline\(this,event\)"/);
+  assert.match(promptSource, /role=["']dialog["']/);
+  assert.match(promptSource, /aria-modal=["']true["']/);
+  assert.match(promptSource, /data-factory-final-registration-confirm=["']confirm["']/);
+  assert.match(promptSource, /확인하고 등록 실행/);
+});
+
+test('final registration status shell exists before the first progress update', () => {
+  const renderSource = sourceFunction(appCore05Source, 'renderFactoryFinalRegistrationPanel');
+  const patchSource = sourceFunction(appCore05Source, 'factoryPatchFinalRegistrationStatusInPlace');
+  assert.match(renderSource, /data-final-registration-status-box/);
+  assert.doesNotMatch(renderSource, /shownStatus\s*\?\s*`<div data-final-registration-status-box/);
+  assert.match(patchSource, /statusBox\.style\.display\s*=\s*'block'/);
+});
+
+test('detail HTML images use the Cafe24 description-image upload resource', () => {
+  const uploadSource = sourceFunction(syncSource, 'factoryUploadCafe24DetailInlineImages');
+  assert.match(uploadSource, /['"]\/api\/v2\/admin\/products\/images['"]/);
+  assert.match(uploadSource, /body:\s*\{\s*request:\s*null,/);
+  assert.match(uploadSource, /requests:\s*payloadImages\.map\(image\s*=>\s*\(\{\s*image\s*\}\)\)/);
+  assert.doesNotMatch(uploadSource, /body:\s*\{\s*image:/);
+  assert.doesNotMatch(uploadSource, /\/additionalimages/);
+});
+
+test('final registration update mode finishes detail HTML and product image synchronization', () => {
+  const runSource = sourceFunction(appCore05Source, 'factoryRunFinalRegistration');
+  assert.match(runSource, /factoryPublishCafe24ScopedDetailHtml\s*\(/);
+  assert.match(runSource, /factoryRunCafe24PostCreateSync\s*\(/);
+  assert.match(runSource, /Cafe24 기존 상품 후속 등록 검증 완료/);
+});
+
+test('final registration can recover the latest exact-name Cafe24 product through a visible control', () => {
+  const renderSource = sourceFunction(appCore05Source, 'renderFactoryFinalRegistrationPanel');
+  const bindSource = sourceFunction(appCore05Source, 'bindFactoryOpenMarketEvents');
+  const recoverSource = sourceFunction(appCore05Source, 'factoryResumeLatestExactCafe24Product');
+  const guideSource = sourceFunction(appCore03Source, 'factoryRuntimePublishGuideAction');
+  assert.match(renderSource, /data-factory-resume-exact-cafe24-product/);
+  assert.match(renderSource, /data-factory-guide-action="resume-exact-cafe24-product"/);
+  assert.match(renderSource, /동일명 최신 Cafe24 상품 이어서 수정/);
+  assert.match(bindSource, /resumeButton\.dataset\.factoryGuideAction/);
+  assert.match(recoverSource, /factoryFindLiveCafe24ProductByExactName\s*\(/);
+  assert.match(recoverSource, /factoryAttachCafe24ProductAsCurrentTarget\s*\(/);
+  assert.match(recoverSource, /cafe24RegistrationMode\s*=\s*'update'/);
+  assert.match(
+    recoverSource,
+    /await\s+saveLastWorkNow\(\{\s*sync:\s*false,\s*factory:\s*receipt\.snapshot\.factory\s*\}\)/,
+    'exact-name recovery must persist its committed Cafe24 target before returning',
+  );
+  assert.match(guideSource, /action === 'resume-exact-cafe24-product'/);
+  assert.match(guideSource, /factoryResumeLatestExactCafe24Product\s*\(/);
+  assert.match(guideSource, /action === 'run-final-registration'/);
+  assert.match(guideSource, /factoryRunFinalRegistration\s*\(/);
+});
+
+test('dynamic final registration actions have a persistent document-level click fallback', () => {
+  const handlerSource = sourceFunction(appCore06Source, 'handleFactoryFinalRegistrationDelegatedClick');
+  const resumeInlineSource = sourceFunction(appCore06Source, 'factoryResumeExactCafe24ButtonInline');
+  const runInlineSource = sourceFunction(appCore06Source, 'factoryRunFinalRegistrationButtonInline');
+  const bindSource = sourceFunction(appCore06Source, 'bindClassicRuntimeDocumentEvents');
+  assert.match(handlerSource, /data-factory-resume-exact-cafe24-product/);
+  assert.match(handlerSource, /factoryResumeLatestExactCafe24Product\s*\(/);
+  assert.match(handlerSource, /#factoryRunFinalRegistration/);
+  assert.match(handlerSource, /factoryRunFinalRegistration\s*\(/);
+  assert.match(resumeInlineSource, /factoryResumeLatestExactCafe24Product\s*\(/);
+  assert.match(runInlineSource, /factoryRunFinalRegistration\s*\(/);
+  assert.match(appCore06Source, /window\.factoryResumeExactCafe24ButtonInline\s*=\s*factoryResumeExactCafe24ButtonInline/);
+  assert.match(appCore06Source, /window\.factoryRunFinalRegistrationButtonInline\s*=\s*factoryRunFinalRegistrationButtonInline/);
+  assert.match(bindSource, /addEventListener\('click', handleFactoryFinalRegistrationDelegatedClick, true\)/);
+  assert.match(bindSource, /removeEventListener\('click', handleFactoryFinalRegistrationDelegatedClick, true\)/);
+});
+
+test('startup detail pruning never reads app state before state initialization', () => {
+  let completenessReads = 0;
+  const prune = compileFunction(appCore03Source, 'factoryRuntimePruneAsset', {
+    factoryAppStateReady: false,
+    factoryRuntimeArchiveImageUrl: () => '',
+    factoryInlineImageLooksHeavy: () => false,
+    factorySanitizeHeavyInlineHolder: value => value,
+    factoryCurrentDetailSectionsComplete: () => {
+      completenessReads += 1;
+      throw new ReferenceError("Cannot access 'state' before initialization");
+    },
+  });
+  const html = '<section>복구 대상</section>'.repeat(1200);
+  const pruned = prune({ stageId: 'detail', html }, true);
+  assert.equal(completenessReads, 0);
+  assert.equal(pruned.html, html);
 });
 
 test('background Cafe24 save verification keeps one operation token and commits before save/render', async () => {
@@ -1114,6 +1529,8 @@ test('Cafe24 candidate rerank mutates only the delayed owned draft', async () =>
   assert.equal(outerDraft.product.cafe24RerankRunning, true);
   assert.equal(typeof scheduled, 'function');
   scheduled();
+  for (let index = 0; index < 20 && !transactionPromise; index += 1) await Promise.resolve();
+  assert.ok(transactionPromise, 'owned rerank transaction starts after external image/LLM work resolves');
   await transactionPromise;
   await Promise.resolve();
 
@@ -1144,6 +1561,31 @@ test('size review and no-candidate actions use exact owners and save only after 
       automation: {},
       stages: {},
     },
+    'factory/db:clearDbCandidateSelection': {
+      product: {
+        productName: '슬라브나비수저집',
+        confirmedDb: { id: 1 },
+        selectedDbCandidateKey: 'db-1',
+        dbCandidateResolution: 'selected',
+        dbCandidates: [{ id: 'db-1' }],
+        pendingDbCandidates: [{ id: 'db-1' }],
+      },
+      automation: {},
+      stages: {},
+    },
+    'factory/db:clearCafe24CandidateSelection': {
+      product: {
+        productName: '슬라브나비수저집',
+        selectedCafe24CandidateKey: '2534',
+        confirmedCafe24ProductKey: '2534',
+        cafe24DraftProductKey: '2534',
+        cafe24CandidateResolution: 'selected',
+        cafe24Candidates: [{ product_no: '2534' }],
+        pendingCafe24Candidates: [{ product_no: '2534' }],
+      },
+      automation: {},
+      stages: {},
+    },
   };
   let activeCommand = '';
   const functions = compileFunctions(syncSource, [
@@ -1151,6 +1593,8 @@ test('size review and no-candidate actions use exact owners and save only after 
     'factoryScheduleSizeCutAfterCandidateConfirm',
     'factoryConfirmNoDbCandidate',
     'factoryConfirmNoCafe24Candidate',
+    'factoryClearDbCandidateSelection',
+    'factoryClearCafe24CandidateSelection',
   ], {
     state: { productName: '슬라브나비수저집' },
     factoryRuntimeUpdateOwnedFactory(command, owner, mutate) {
@@ -1200,13 +1644,21 @@ test('size review and no-candidate actions use exact owners and save only after 
   assert.equal(functions.factoryScheduleSizeCutAfterCandidateConfirm(), false);
   assert.equal(functions.factoryConfirmNoDbCandidate(), true);
   assert.equal(functions.factoryConfirmNoCafe24Candidate(), true);
+  assert.equal(functions.factoryClearDbCandidateSelection(), true);
+  assert.equal(functions.factoryClearCafe24CandidateSelection(), true);
 
   assert.equal(drafts['factory/db:schedule-size-cut-review'].automation.lastAutoSizeRunKey, '');
   assert.equal(drafts['factory/db:confirmNoDbCandidate'].product.dbCandidateResolution, 'none');
   assert.equal(drafts['factory/db:confirmNoCafe24Candidate'].product.cafe24CandidateResolution, 'none');
   assert.equal(drafts['factory/db:confirmNoCafe24Candidate'].product.cafe24DraftReset, true);
-  assert.equal(events.filter(event => event === 'save').length, 3);
-  assert.equal(events.filter(event => event === 'render').length, 3);
+  assert.equal(drafts['factory/db:clearDbCandidateSelection'].product.selectedDbCandidateKey, '');
+  assert.equal(drafts['factory/db:clearDbCandidateSelection'].product.dbCandidateResolution, '');
+  assert.equal(drafts['factory/db:clearDbCandidateSelection'].product.pendingDbCandidates.length, 1);
+  assert.equal(drafts['factory/db:clearCafe24CandidateSelection'].product.selectedCafe24CandidateKey, '');
+  assert.equal(drafts['factory/db:clearCafe24CandidateSelection'].product.cafe24CandidateResolution, '');
+  assert.equal(drafts['factory/db:clearCafe24CandidateSelection'].product.pendingCafe24Candidates.length, 1);
+  assert.equal(events.filter(event => event === 'save').length, 5);
+  assert.equal(events.filter(event => event === 'render').length, 5);
   for (const command of Object.keys(drafts)) {
     const commitIndex = events.indexOf(`commit:${command}`);
     const nextSaveIndex = events.indexOf('save', commitIndex);
@@ -1217,6 +1669,8 @@ test('size review and no-candidate actions use exact owners and save only after 
     'factoryScheduleSizeCutAfterCandidateConfirm',
     'factoryConfirmNoDbCandidate',
     'factoryConfirmNoCafe24Candidate',
+    'factoryClearDbCandidateSelection',
+    'factoryClearCafe24CandidateSelection',
   ]) {
     assert.doesNotMatch(sourceFunction(syncSource, name), /factoryRuntimeReadFactory\s*\(/, name);
   }

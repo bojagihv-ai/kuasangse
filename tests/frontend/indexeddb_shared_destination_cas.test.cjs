@@ -60,7 +60,9 @@ function createDriver(assertReplicaCanPublish, pausedMarkers = []) {
         throw error;
       }
       guard.assertAuthority?.();
-      assertReplicaCanPublish(current, guard.envelope || guard);
+      assertReplicaCanPublish(current, guard.envelope || guard, {
+        allowSameRevisionMutation: guard.allowSameRevisionMutation === true,
+      });
       records.set(key, structuredClone(value));
     },
     async compareAndDelete(store, id, guard) {
@@ -106,6 +108,38 @@ test('Given a global preference changes scopes sequentially Then each accepted w
   // Then: the sequential cross-scope update is allowed and its destination version advances.
   assert.equal((await adapter.get('appSettings', 'global-pref')).marker, 'B');
   assert.equal(physical.raw('appSettings', 'global-pref').persistenceDestination.version, 2);
+});
+
+test('Given an occupied legacy global revision Then destination CAS allows the preference repair', async () => {
+  // Given: a prior runtime stamped a global preference with an operation at revision zero.
+  const { adapter, physical } = await fixture();
+  await physical.driver.put('appSettings', {
+    id: 'lastProductImageBackup:draft:restore',
+    marker: 'legacy',
+    persistenceAuthority: {
+      scopeId: 'app-global', leaseId: '', fencingToken: 0, revision: 0, operationId: 'legacy-save',
+    },
+    persistenceDestination: { version: 8, deleted: false },
+  });
+  const appGlobalAuthority = {
+    persistenceAuthority: { scopeId: 'app-global', leaseId: '', fencingToken: 0, revision: 0 },
+    assertAuthority() {},
+    assertCompletion() {},
+  };
+
+  // When: the current runtime repairs that same global key.
+  await adapter.put(
+    'appSettings',
+    { id: 'lastProductImageBackup:draft:restore', marker: 'repaired' },
+    appGlobalAuthority,
+  );
+
+  // Then: the per-key destination CAS advances and preserves the new preference value.
+  assert.equal((await adapter.get('appSettings', 'lastProductImageBackup:draft:restore')).marker, 'repaired');
+  assert.equal(
+    physical.raw('appSettings', 'lastProductImageBackup:draft:restore').persistenceDestination.version,
+    9,
+  );
 });
 
 test('Given stale A spans delete and recreate Then the tombstone version prevents ABA overwrite', async () => {

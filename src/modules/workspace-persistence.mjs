@@ -10,9 +10,14 @@ import { createWorkfileAdapter } from './persistence/workfile-adapter.mjs';
 import {
   WORKSPACE_PERSISTENCE_SCHEMA,
   WORKSPACE_PERSISTENCE_VERSION,
+  createWorkspaceWorkBranch,
+  createWorkspaceWorkIdentity,
   createPersistenceMetadata,
   normalizeProjectScope,
   normalizeWorkspaceScope,
+  validateWorkspaceSnapshotIdentity,
+  workspaceWorkBranchesMatch,
+  workspaceWorkIdentitiesMatch,
 } from './persistence/contracts.mjs';
 import { WorkspaceAuthorityError } from './persistence/fencing.mjs';
 import { migrateWorkfilePayload } from './persistence/migrations.mjs';
@@ -33,7 +38,11 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
 export function createBrowserWorkspacePersistence(root) {
   const authority = root.__KUASANGSE_WORKSPACE_LOCK__ || null;
   const adapters = Object.freeze({
-    session: createSessionStorageAdapter({ storage: root.localStorage, authority }),
+    session: createSessionStorageAdapter({
+      storage: root.localStorage,
+      draftStorage: root.sessionStorage,
+      authority,
+    }),
     indexeddb: createIndexedDbPersistenceAdapter(),
     server: createServerLastWorkAdapter({ root }),
     workfile: createWorkfileAdapter({ root }),
@@ -53,6 +62,11 @@ export function createBrowserWorkspacePersistence(root) {
   const capability = {
     ...orchestrator,
     createMetadata: createPersistenceMetadata,
+    createWorkBranch: createWorkspaceWorkBranch,
+    createWorkIdentity: createWorkspaceWorkIdentity,
+    validateSnapshotIdentity: validateWorkspaceSnapshotIdentity,
+    workBranchesMatch: workspaceWorkBranchesMatch,
+    workIdentitiesMatch: workspaceWorkIdentitiesMatch,
     migrateWorkfilePayload: value => {
       const record = migrateWorkfilePayload(value);
       return Object.freeze({
@@ -84,6 +98,10 @@ export function createBrowserWorkspacePersistence(root) {
       }
       const current = authority?.snapshot?.();
       return sessionAssetRecordMatchesAuthority(record, current, scopeId) ? record : null;
+    },
+    loadDocumentSessionAssetsForBranchMigration(scopeId) {
+      const documentScopeId = normalizeProjectScope(scopeId);
+      return adapters.indexeddb.getDocumentSessionAssetsForBranchMigration(documentScopeId);
     },
   };
   Object.defineProperty(capability, PERSISTENCE_CAPABILITY_MARKER, {

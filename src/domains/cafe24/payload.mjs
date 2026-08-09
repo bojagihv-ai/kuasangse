@@ -12,7 +12,8 @@ const ADMIN_LABEL_PATTERN = /(?:DB\s*확인|작업용\s*섹션|관리자\s*메�
 const LIGHT_PLACEHOLDER_PATTERN = /(?:__stored_in_indexeddb__|data-factory-light|factory-light-image)/i;
 const INLINE_IMAGE_PATTERN = /<img\b[^>]*\bsrc\s*=\s*["']data:image\//i;
 const LONG_BASE64_PATTERN = /(?:base64,|[A-Za-z0-9+/]{1200,}={0,2})/i;
-const ACTIVE_TAG_PATTERN = /<\s*\/?\s*(?:script|iframe|object|embed|svg|math|style|link|meta|base|form|input|button)\b/i;
+const ACTIVE_TAG_PATTERN = /<\s*\/?\s*(?:script|iframe|object|embed|svg|math|base|form|input|button)\b/i;
+const META_REFRESH_PATTERN = /<\s*meta\b[^>]*\bhttp-equiv\s*=\s*(?:["']\s*)?refresh\b/i;
 const EVENT_ATTRIBUTE_PATTERN = /\bon[a-z][\w:-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i;
 const UNSAFE_URL_PATTERN = /(?:\b(?:javascript|vbscript|file|about)\s*:|\b(?:href|src|action|formaction|poster)\s*=\s*["']?\s*data\s*:\s*(?!image\/(?:png|jpe?g|gif|webp|avif);base64,)|\burl\s*\(\s*["']?\s*(?:javascript|vbscript|data)\s*:)/i;
 
@@ -23,11 +24,12 @@ function cloneRecord(value) {
 export function preflightCafe24DetailHtml(html = '') {
   const text = String(html || '');
   const issues = [];
+  const hasActiveTags = ACTIVE_TAG_PATTERN.test(text) || META_REFRESH_PATTERN.test(text);
   if (INLINE_IMAGE_PATTERN.test(text)) issues.push('상세설명 HTML에 base64 인라인 이미지가 포함되어 있습니다.');
   if (LONG_BASE64_PATTERN.test(text)) issues.push('상세설명 HTML에 긴 base64 데이터가 포함되어 있습니다.');
   if (LIGHT_PLACEHOLDER_PATTERN.test(text)) issues.push('상세설명 HTML에 브라우저 전용 이미지 플레이스홀더가 포함되어 있습니다.');
   if (ADMIN_LABEL_PATTERN.test(text)) issues.push('상세설명 HTML에 작업용 관리자 문구가 포함되어 있습니다.');
-  if (ACTIVE_TAG_PATTERN.test(text)) issues.push('상세설명 HTML에 실행 가능한 태그가 포함되어 있습니다.');
+  if (hasActiveTags) issues.push('상세설명 HTML에 실행 가능한 태그가 포함되어 있습니다.');
   if (EVENT_ATTRIBUTE_PATTERN.test(text)) issues.push('상세설명 HTML에 이벤트 핸들러 속성이 포함되어 있습니다.');
   if (UNSAFE_URL_PATTERN.test(text)) issues.push('상세설명 HTML에 안전하지 않은 URL이 포함되어 있습니다.');
   return Object.freeze({
@@ -37,7 +39,7 @@ export function preflightCafe24DetailHtml(html = '') {
     hasLongBase64: LONG_BASE64_PATTERN.test(text),
     hasLightPlaceholder: LIGHT_PLACEHOLDER_PATTERN.test(text),
     hasAdminLabels: ADMIN_LABEL_PATTERN.test(text),
-    hasActiveTags: ACTIVE_TAG_PATTERN.test(text),
+    hasActiveTags,
     hasEventAttributes: EVENT_ATTRIBUTE_PATTERN.test(text),
     hasUnsafeUrls: UNSAFE_URL_PATTERN.test(text),
   });

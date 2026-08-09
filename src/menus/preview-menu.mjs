@@ -2,47 +2,12 @@ import { MENU_CONTRACT_VERSION, createMenuContract } from '../modules/menu-contr
 import { renderPreviewView } from './preview-menu-view.mjs';
 import { createPreviewImageInsertBridge } from './preview-image-insert-events.mjs';
 import { createPreviewAiRepairEvents } from './preview-ai-repair-events.mjs';
-import { createPreviewLayerBridge, PREVIEW_LAYER_ACTION_NAMES } from './preview-layer-events.mjs';
-
-const RENDER_HELPER_NAMES = Object.freeze([
-  "syncFixedSectionPlacementImages",
-  "orderedSections",
-  "factoryRecoveredDetailPreviewHtml",
-  "renderBrandStudioPanel",
-  "renderToneQuickPanel",
-  "renderQaPanel",
-  "renderFixedDetailImagePanel",
-  "renderRecoveredDetailPreviewNotice",
-  "renderRecoveredDetailPreviewAside",
-  "renderPreviewOutline",
-  "renderFixedDetailImageForExport",
-  "cssFontFamily",
-  "displayableImageSrc",
-  "canUndoAiRepair",
-  "getSectionGenerationModeInfo",
-  "resolveSectionRenderGenerationMode",
-  "renderSectionVariantQuickBar",
-  "renderSectionVariantEvaluationPanel",
-  "renderPreviewEditPanel",
-  "renderSectionTemplate",
-  "renderDetailImageBlocksAfter",
-  "renderFactoryLightImage",
-  "publicSectionText",
-  "nl2br",
-  "escAttr",
-  "escapeHtml"
-]);
-
-const ACTION_NAMES = Object.freeze([
-  // Navigation, editing, and AI repair actions.
-  'setViewport', 'navigate', 'startGenerating', 'togglePreviewEdit', 'openAiRepair', 'closeAiRepair', 'updateAiRepairField', 'persistAiRepairMask', 'runAiRepair', 'undoAiRepair', 'regenerateSection', 'applyPreviewEdit', 'updatePreviewInstruction',
-  // Section content, evaluation, and layer toolbar actions.
-  'setSectionLock', 'saveManualSection', 'applySectionVariant', 'applySectionVariantImage', 'evaluateSectionVariants', 'applyBestEvaluatedVariant', 'setRecoveredDetailMode', 'runQaCheck', 'runAiQaCheck', 'toggleLayerMode', 'resetAllLayers', 'exportLayeredSVG', 'exportPhotoshopPackage', 'exportJpgAll', 'exportJpgSections', 'exportHTML',
-  // Image insertion and remaining-section actions.
-  'openRemainingSectionsAfterStop', 'deleteDetailImage', 'moveDetailImage', 'focusSectionImage', 'deleteSectionImage', 'openImageInsert', 'closeImageInsert', 'applyImageInsert', 'updateImageInsertFolder', 'loadDetailDriveImages', 'connectImageInsertDrive', 'useDriveDetailImage', 'useCutDetailImage', 'setImageInsertError', 'requestRender',
-  ...PREVIEW_LAYER_ACTION_NAMES,
-]);
-const REQUIRED_ACTION_NAMES = Object.freeze(new Set(['setViewport', 'navigate', 'startGenerating']));
+import { createPreviewLayerBridge } from './preview-layer-events.mjs';
+import {
+  PREVIEW_ACTION_NAMES,
+  PREVIEW_RENDER_HELPER_NAMES,
+  PREVIEW_REQUIRED_ACTION_NAMES,
+} from './preview-menu-contract.mjs';
 
 function requiredFunction(source, name) {
   if (typeof source?.[name] !== 'function') throw new TypeError(name + ' must be a function');
@@ -55,15 +20,15 @@ export function createPreviewMenu(capabilities = {}) {
   const getOperationToken = requiredFunction(capabilities, 'getOperationToken');
   const reportError = requiredFunction(capabilities, 'reportError');
   const actions = capabilities.actions || {};
-  const menuActions = Object.fromEntries(ACTION_NAMES.map(name => [
+  const menuActions = Object.fromEntries(PREVIEW_ACTION_NAMES.map(name => [
     name,
-    REQUIRED_ACTION_NAMES.has(name)
+    PREVIEW_REQUIRED_ACTION_NAMES.has(name)
       ? requiredFunction(actions, name)
       : (typeof actions[name] === 'function' ? actions[name] : () => undefined),
   ]));
   const reportMenuError = error => { if (error?.message !== 'STALE_MENU_OPERATION') reportError(error); };
   const renderHelpers = capabilities.renderHelpers || {};
-  for (const name of RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);
+  for (const name of PREVIEW_RENDER_HELPER_NAMES) requiredFunction(renderHelpers, name);
 
 
   let active = false;
@@ -83,6 +48,15 @@ export function createPreviewMenu(capabilities = {}) {
     return Promise.resolve(result).then(output => {
       if (!context.isCurrent()) throw new Error('STALE_MENU_OPERATION');
       return output;
+    });
+  }
+
+  function snapshotNeedsArchiveImageRecovery(snapshot = getSnapshot() || {}) {
+    const sections = renderHelpers.orderedSections();
+    if (!Array.isArray(sections)) return false;
+    return sections.some(section => {
+      const storedImage = snapshot.sectionImages?.[section.id];
+      return !!storedImage && !renderHelpers.displayableImageSrc(storedImage);
     });
   }
 
@@ -155,10 +129,9 @@ export function createPreviewMenu(capabilities = {}) {
     refresh(root) { return activeRefresh?.(root); },
     bind(root) {
       bindingByRoot.get(root)?.();
-      const token = getOperationToken();
       const boundGeneration = generation;
       let disposed = false;
-      const isCurrent = () => !disposed && active && generation === boundGeneration && getOperationToken() === token;
+      const isCurrent = () => !disposed && active && generation === boundGeneration;
       const closest = (event, selector) => {
         const node = event?.target?.closest?.(selector);
         return node && root?.contains?.(node) !== false ? node : null;
@@ -171,6 +144,7 @@ export function createPreviewMenu(capabilities = {}) {
         if (route) { event.preventDefault?.(); if (isCurrent()) invoke('navigate', route.dataset.routeTarget, isCurrent); return; }
         if (closest(event, '[data-start-generating]')) { event.preventDefault?.(); if (isCurrent()) invoke('startGenerating', undefined, isCurrent); return; }
         if (closest(event, '#openRemainingSectionsAfterStop')) { event.preventDefault?.(); call('openRemainingSectionsAfterStop'); return; }
+        if (closest(event, '#recoverPreviewArchiveSections')) { event.preventDefault?.(); call('recoverPreviewArchiveSections'); return; }
         const viewport = closest(event, '[data-preview-viewport]');
         if (viewport) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', viewport.dataset.previewViewport, isCurrent); return; }
         if (closest(event, '#viewportPc')) { event.preventDefault?.(); if (isCurrent()) invoke('setViewport', 'pc', isCurrent); return; }
@@ -199,6 +173,7 @@ export function createPreviewMenu(capabilities = {}) {
           } }); }
           return; }
         const deleteDetailImage = closest(event, '[data-delete-detail-image]'); if (deleteDetailImage) { const blockId = String(deleteDetailImage.dataset.deleteDetailImage || '').trim(); if (blockId) call('deleteDetailImage', { blockId }); return; } const moveDetailImage = closest(event, '[data-move-detail-image]'); if (moveDetailImage) { const [blockId, direction] = String(moveDetailImage.dataset.moveDetailImage || '').split(':'); if (blockId && (direction === 'up' || direction === 'down')) call('moveDetailImage', { blockId, direction }); return; } const focusSectionImage = closest(event, '[data-focus-section-image]'); if (focusSectionImage) { const sectionId = String(focusSectionImage.dataset.focusSectionImage || '').trim(); if (sectionId) call('focusSectionImage', { sectionId }); return; } const deleteSectionImage = closest(event, '[data-delete-section-image]'); if (deleteSectionImage) { const sectionId = String(deleteSectionImage.dataset.deleteSectionImage || '').trim(); if (sectionId) call('deleteSectionImage', { sectionId }); return; } const openImageInsert = closest(event, '[data-open-image-insert]'); if (openImageInsert) { const [sectionId, mode] = String(openImageInsert.dataset.openImageInsert || '').split(':'); if (sectionId) call('openImageInsert', { sectionId, mode }); return; }
+        const chooseSectionPlacement = closest(event, '[data-choose-section-placement-value]'); if (chooseSectionPlacement) { const sectionId = String(chooseSectionPlacement.dataset.chooseSectionPlacementSection || '').trim(); const placementValue = String(chooseSectionPlacement.dataset.chooseSectionPlacementValue || '').trim(); if (sectionId && placementValue) call('chooseSectionPlacement', { sectionId, placementValue }); return; }
         const b1Specs = [['[data-apply-variant]', 'applyVariant', 'applySectionVariant'], ['[data-apply-variant-image]', 'applyVariantImage', 'applySectionVariantImage'], ['[data-eval-section-variants]', 'evalSectionVariants', 'evaluateSectionVariants'], ['[data-apply-eval-best]', 'applyEvalBest', 'applyBestEvaluatedVariant'], ['[data-preview-recovered-detail-mode]', 'previewRecoveredDetailMode', 'setRecoveredDetailMode']];
         for (const [selector, key, name] of b1Specs) {
           const node = closest(event, selector); if (!node) continue;
@@ -258,7 +233,20 @@ export function createPreviewMenu(capabilities = {}) {
       bindingByRoot.set(root, dispose);
       return dispose;
     },
-    onEnter() { active = true; generation += 1; void active; void generation; void getOperationToken(); },
+    onEnter() {
+      active = true;
+      generation += 1;
+      if (!snapshotNeedsArchiveImageRecovery()) return;
+      try {
+        assertMutable();
+      } catch (_) {
+        return;
+      }
+      const enteredGeneration = generation;
+      const isCurrent = () => active && generation === enteredGeneration;
+      const result = runCommand(menuActions.recoverPreviewArchiveSections, undefined, isCurrent);
+      if (result && typeof result.catch === 'function') result.catch(reportMenuError);
+    },
     onLeave() { for (const dispose of [...activeDisposers].reverse()) dispose(); active = false; generation += 1; },
   });
 

@@ -166,3 +166,48 @@ test('acquiring authority renders every transition action disabled with a waitin
     /data-workspace-authority-action="readonly"[^>]*title="편집권 확인이 끝날 때까지 기다려 주세요\."[^>]*disabled aria-disabled="true"/,
   );
 });
+
+test('available authority acquires directly while an active foreign lease requires confirmed takeover', () => {
+  const core06 = read('src/app-core-06.js');
+  const classificationSource = sourceBetween(
+    core06,
+    ['function workspaceAuthorityNeedsConfirmedTakeover'],
+    'function handleWorkspaceAuthorityAction',
+  );
+  const handlerSource = sourceBetween(
+    core06,
+    ['function handleWorkspaceAuthorityAction'],
+    'function bindWorkspaceAuthorityUi',
+  );
+  const context = vm.createContext({});
+  vm.runInContext(`
+    ${classificationSource}
+    globalThis.needsTakeover = workspaceAuthorityNeedsConfirmedTakeover;
+  `, context);
+
+  assert.equal(context.needsTakeover({
+    mode: 'available',
+    scopeId: 'project:alpha',
+    reasonCode: 'AVAILABLE',
+  }), false);
+  assert.equal(context.needsTakeover({
+    mode: 'readonly',
+    scopeId: 'project:alpha',
+    reasonCode: 'AUTHORITY_UNAVAILABLE',
+  }), false);
+  assert.equal(context.needsTakeover({
+    mode: 'readonly',
+    scopeId: 'project:alpha',
+    reasonCode: 'LEASE_HELD',
+  }), true);
+  assert.match(handlerSource, /authority\s*=\s*await lock\.refresh\(\)\s*\|\|\s*lock\.snapshot\(\)/);
+  assert.match(handlerSource, /if\s*\(!workspaceAuthorityNeedsConfirmedTakeover\(authority\)\)\s*\{[\s\S]*?await lock\.acquire\(/);
+  assert.ok(
+    handlerSource.indexOf('await lock.refresh()') < handlerSource.indexOf('await lock.acquire('),
+    'the server status must be refreshed before deciding whether direct acquire is safe',
+  );
+  assert.ok(
+    handlerSource.indexOf('await lock.acquire(') < handlerSource.indexOf('window.confirm('),
+    'direct acquire must happen before the native takeover confirmation branch',
+  );
+});

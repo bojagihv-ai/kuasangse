@@ -64,6 +64,13 @@ export function renderSectionsView(view, helpers) {
     : 'keep';
   const batchBasisLabel = batchBasisMode === 'keep' ? '섹션별 기존 기준 유지' : getSectionBasisModeInfo(batchBasisMode).label;
   const batchGenerationLabel = batchGenerationMode === 'keep' ? '섹션별 기존 방식 유지' : getSectionGenerationModeInfo(batchGenerationMode).label;
+  const sectionBatchPreview = {
+    basisMode: batchBasisMode,
+    basisLabel: batchBasisLabel,
+    generationMode: batchGenerationMode,
+    generationLabel: batchGenerationLabel,
+  };
+  const batchOverridesIndividualSettings = batchBasisMode !== 'keep' || batchGenerationMode !== 'keep';
   const sectionBatchRunning = view.sectionBatchRun?.status === 'running';
   return `<div class="fade-in">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
@@ -71,10 +78,16 @@ export function renderSectionsView(view, helpers) {
         <h1 class="page-title">섹션별 설정</h1>
         <p class="page-desc">각 섹션에 원하는 지시사항을 입력하세요. 비워두면 AI가 자동으로 최적의 콘텐츠를 생성합니다.</p>
       </div>
-      <button class="btn-primary" id="generateAll" ${disabledAttr(!canGenerateSections, generateBlockReason)}>
-        <span class="material-icons-outlined" style="font-size:20px">rocket_launch</span>
-        전체 생성 시작
-      </button>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn-sm" type="button" data-factory-open-local-archive-folder="section_header" data-factory-local-archive-scope="category">
+          <span class="material-icons-outlined" style="font-size:16px">folder_open</span>섹션 이미지 폴더
+        </button>
+        <span class="factory-small" data-factory-local-archive-folder-status="section_header" aria-live="polite"></span>
+        <button class="btn-primary" id="generateAll" ${disabledAttr(!canGenerateSections, generateBlockReason)}>
+          <span class="material-icons-outlined" style="font-size:20px">rocket_launch</span>
+          전체 생성 시작
+        </button>
+      </div>
     </div>
 
     ${renderBrandStudioPanel()}
@@ -158,7 +171,7 @@ export function renderSectionsView(view, helpers) {
           미생성 ${missingBatchSections.length}개 · 선택 ${selectedBatchSections.length}개
         </div>
         <div style="font-size:11px;color:var(--text-d);line-height:1.5;margin-top:2px">
-          생성 기준: <b style="color:var(--text)">${escapeHtml(batchBasisLabel)}</b> · 생성 방식: <b style="color:var(--text)">${escapeHtml(batchGenerationLabel)}</b>
+          생성 기준: <b style="color:var(--text)">${escapeHtml(batchBasisLabel)}</b> · 생성 방식: <b style="color:var(--text)">${escapeHtml(batchGenerationLabel)}</b> · <b style="color:var(--cyan)">동시 생성 최대 2장</b>
         </div>
       </div>
         <div style="display:flex;align-items:flex-end;justify-content:flex-end;gap:8px;flex-wrap:wrap;flex:2 1 560px">
@@ -179,15 +192,28 @@ export function renderSectionsView(view, helpers) {
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
           <button class="btn-sm" id="selectMissingSectionsForBatch" ${disabledAttr(!missingBatchSections.length, '생성할 미생성 섹션이 없습니다.')}>미생성 전체 선택</button>
           <button class="btn-sm" id="clearMissingSectionBatchSelection" ${disabledAttr(!selectedBatchSections.length, '선택된 섹션이 없습니다.')}>선택 해제</button>
-          <button class="btn-sm" id="generateAllMissingSections" ${disabledAttr(sectionBatchRunning || !missingBatchSections.length || !canGenerateSections, sectionBatchRunning ? '섹션 일괄 생성이 이미 진행 중입니다.' : (!canGenerateSections ? generateBlockReason : '생성할 미생성 섹션이 없습니다.'))} style="background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.45);color:var(--ok);font-weight:900">남은 섹션 전체 생성</button>
+          <button class="btn-sm" id="generateAllMissingSections" aria-label="남은 ${missingBatchSections.length}개 · ${escAttr(batchBasisLabel)} · ${escAttr(batchGenerationLabel)}" ${disabledAttr(sectionBatchRunning || !missingBatchSections.length || !canGenerateSections, sectionBatchRunning ? '섹션 일괄 생성이 이미 진행 중입니다.' : (!canGenerateSections ? generateBlockReason : '생성할 미생성 섹션이 없습니다.'))} style="background:rgba(34,197,94,.16);border-color:rgba(34,197,94,.45);color:var(--ok);font-weight:900">남은 ${missingBatchSections.length}개 전체 생성</button>
           <button class="btn-sm" id="generateSelectedMissingSections" ${disabledAttr(sectionBatchRunning || !selectedBatchSections.length || !canGenerateSections, sectionBatchRunning ? '섹션 일괄 생성이 이미 진행 중입니다.' : (!canGenerateSections ? generateBlockReason : '체크한 미생성 섹션이 없습니다.'))} style="background:var(--primary);border-color:var(--primary);color:#fff;font-weight:900">선택한 섹션 생성</button>
         </div>
       </div>
       </div>
+      <div class="section-batch-plan"
+        data-section-batch-plan
+        data-batch-basis="${escAttr(batchBasisMode)}"
+        data-batch-generation="${escAttr(batchGenerationMode)}">
+        <span class="material-icons-outlined">playlist_play</span>
+        <div>
+          <span>실행 예정 · 남은 ${missingBatchSections.length}개</span>
+          <strong>${escapeHtml(batchBasisLabel)} · ${escapeHtml(batchGenerationLabel)} · 동시 생성 최대 2장</strong>
+          <small>${batchOverridesIndividualSettings
+            ? '위 버튼을 누르면 각 대상 카드의 개별 설정보다 이 일괄 설정을 우선 적용합니다.'
+            : '각 대상 카드에 표시된 개별 설정을 그대로 사용합니다.'}</small>
+        </div>
+      </div>
       ${renderSectionBatchRunPanel()}
     </div>
 
-    ${renderSectionCards(view, helpers)}
+    ${renderSectionCards({ ...view, sectionBatchPreview }, helpers)}
 
     <div style="text-align:center;margin-top:32px">
       <button class="btn-primary" id="generateAll2" style="padding:16px 48px;font-size:16px" ${disabledAttr(!canGenerateSections, generateBlockReason)}>

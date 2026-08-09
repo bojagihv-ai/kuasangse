@@ -6,13 +6,20 @@ export function renderCompetitorReportView(view, helpers) {
     renderCompetitorLlmPill,
     renderCompetitorStylePresetCard,
     renderCompetitorEvidenceCard,
+    sectionWorkScopeMeta,
+    sectionWorkScopeMatches,
     disabledAttr,
     escapeHtml,
   } = helpers;
   const cp = view.compPage;
     const r = cp.analysisResult || {};
+    const analysisProductScope = r.analysisProductScope || null;
     const previousViewOnly = !!cp.previousAnalysisViewOnly
-      || (!!cp.analysisResult && !compMarketAnalysisMatchesSelectedImages(ensureCompMarketScrapeState(), cp.analysisResult));
+      || (!!cp.analysisResult && !compMarketAnalysisMatchesSelectedImages(ensureCompMarketScrapeState(), cp.analysisResult))
+      || (!!cp.analysisResult && (
+        !analysisProductScope ||
+        !sectionWorkScopeMatches(analysisProductScope, sectionWorkScopeMeta())
+      ));
     const sections = r.sections_found || [];
     const typeLabel = {header:'헤더',hook:'훅',features:'핵심특징',specs:'스펙',scenarios:'사용시나리오',comparison:'비교우위',material:'소재/기술',certification:'인증',review:'리뷰',size_color:'사이즈/컬러',promotion:'프로모션',shipping:'배송',faq:'FAQ',brand_story:'브랜드스토리',cta:'CTA',other:'기타'};
 
@@ -157,14 +164,14 @@ export function renderCompetitorReportView(view, helpers) {
 
       ${cp.sectionPlan
         ? `<div style="display:flex;gap:10px">
-            <button class="btn" id="compViewPlan" style="flex:1;justify-content:center;font-size:15px;padding:13px">
+            <button class="btn" id="compViewPlan" ${previousViewOnly ? disabledAttr(true, '이전 결과 보기용 리포트입니다. 현재 기준으로 다시 분석해야 섹션 플랜을 열 수 있습니다.') : ''} style="flex:1;justify-content:center;font-size:15px;padding:13px">
               <span class="material-icons-outlined">dashboard_customize</span> 섹션 플랜 보기 →
             </button>
-            <button class="btn-secondary" id="compGenPlan" style="padding:13px 16px" title="플랜 다시 생성">
+            <button class="btn-secondary" id="compGenPlan" ${previousViewOnly ? disabledAttr(true, '이전 결과 보기용 리포트입니다. 현재 기준으로 다시 분석해야 플랜을 다시 만들 수 있습니다.') : ''} style="padding:13px 16px" title="플랜 다시 생성">
               <span class="material-icons-outlined">refresh</span>
             </button>
           </div>`
-        : `<button class="btn" id="compGenPlan" style="width:100%;justify-content:center;font-size:16px;padding:14px">
+        : `<button class="btn" id="compGenPlan" ${previousViewOnly ? disabledAttr(true, '이전 결과 보기용 리포트입니다. 현재 기준으로 다시 분석해야 섹션 플랜을 만들 수 있습니다.') : ''} style="width:100%;justify-content:center;font-size:16px;padding:14px">
             <span class="material-icons-outlined">auto_fix_high</span> 이 분석으로 15개 섹션 플랜 생성 →
           </button>`}
     </div>`;

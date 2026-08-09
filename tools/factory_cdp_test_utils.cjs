@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { terminateOwnedProcessTree } = require('./owned_process_cleanup.cjs');
 
 const DEFAULT_CDP_COMMAND_TIMEOUT_MS = Math.max(
   1000,
@@ -114,12 +115,12 @@ function connectCdp(wsUrl) {
   };
 }
 
-async function evaluate(cdp, expression, awaitPromise = true) {
+async function evaluate(cdp, expression, awaitPromise = true, timeoutMs = DEFAULT_CDP_COMMAND_TIMEOUT_MS) {
   const result = await cdp.send('Runtime.evaluate', {
     expression: legacyCdpCompatibilityExpression(expression),
     awaitPromise,
     returnByValue: true,
-  });
+  }, timeoutMs);
   if (result.exceptionDetails) {
     const details = result.exceptionDetails;
     const message = [
@@ -505,10 +506,37 @@ async function waitForCdpJson(cdpUrl, timeoutMs = 12000) {
   throw lastError || new Error(`CDP not available: ${cdpUrl}`);
 }
 
+function assertCdpRuntimeIsolation(env = process.env) {
+  if (env.KUASANGSE_ALLOW_UNISOLATED_CDP === '1') return true;
+  const backendBase = String(env.KUASANGSE_BACKEND_BASE || env.KUASANGSE_BACKEND_URL || '').trim();
+  const stateFolder = String(env.KUASANGSE_LOCAL_STATE_FOLDER || '').trim();
+  const archiveFolder = String(env.KUASANGSE_LOCAL_ARCHIVE_FOLDER || '').trim();
+  const backendUrl = backendBase ? new URL(backendBase) : null;
+  if (!backendUrl || backendUrl.port === '5050' || !stateFolder || !archiveFolder) {
+    throw new Error(
+      '회귀 Chrome은 격리 state와 archive 및 전용 backend가 필요합니다. ' +
+      '사용자 backend(127.0.0.1:5050)에서는 실행하지 않습니다.',
+    );
+  }
+  return true;
+}
+
 async function ensureCdp(cdpUrl) {
+  let existingTargets = null;
   try {
-    return { targets: await fetchJson(`${cdpUrl}/json`), cleanup: async () => {}, launched: false };
-  } catch (_) {
+    existingTargets = await fetchJson(`${cdpUrl}/json`);
+  } catch (_) {}
+  if (existingTargets) {
+    if (process.env.KUASANGSE_ALLOW_EXISTING_CDP === '1') {
+      return { targets: existingTargets, cleanup: async () => {}, launched: false };
+    }
+    throw new Error(
+      `기존 CDP를 사용자 브라우저로 간주하여 연결을 거부했습니다: ${cdpUrl}. ` +
+      '회귀 검증은 비어 있는 전용 CDP port를 사용하세요.',
+    );
+  }
+  {
+    assertCdpRuntimeIsolation();
     const chrome = findChromeExecutable();
     const port = new URL(cdpUrl).port || '9333';
     const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kuasangse-cdp-'));
@@ -544,14 +572,7 @@ async function ensureCdp(cdpUrl) {
       stderr: stderr.trim(),
     });
     const cleanup = async () => {
-      const exited = exit.code !== null || exit.signal !== null
-        ? Promise.resolve()
-        : new Promise(resolve => proc.once('exit', resolve));
-      try { proc.kill('SIGKILL'); } catch (_) {}
-      await Promise.race([
-        exited,
-        new Promise(resolve => setTimeout(resolve, 3000)),
-      ]);
+      await terminateOwnedProcessTree(proc);
       const deadline = Date.now() + 3000;
       while (Date.now() < deadline) {
         try {
@@ -589,6 +610,7 @@ function currentSourceBuildId(rootDir = process.cwd()) {
 
 module.exports = {
   assertChecks,
+  assertCdpRuntimeIsolation,
   connectCdp,
   currentSourceBuildId,
   ensureCdp,

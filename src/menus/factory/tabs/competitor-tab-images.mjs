@@ -26,11 +26,11 @@ function renderPreviewModal(image, market, helpers) {
 }
 
 function renderImageCard(image, index, context) {
-  const { detailImages, selected, helpers } = context;
+  const { selectable, selected, helpers } = context;
   const { escapeHtml, escAttr, renderFactoryLightImage } = helpers;
   const id = scrapedImageId(image, index);
   const selectedImage = selected.has(id);
-  const currentImage = String(image?.detailOperationId || '') === String(detailImages.operation?.id || '');
+  const selectableImage = selectable.has(id);
   const title = image.title || image.name || `상세 이미지 ${index + 1}`;
   const site = image.platform || image.site || '';
   const originalUrl = image.productUrl || image.product_url || image.detailUrl || image.detail_url || image.pageUrl || image.page_url || '';
@@ -41,10 +41,10 @@ function renderImageCard(image, index, context) {
     <div style="font-size:11px;font-weight:900;color:var(--text);overflow:hidden;overflow-wrap:anywhere;word-break:break-word">${escapeHtml(title)}</div>
     <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px;min-width:0">
       ${site ? `<span class="comp-tag" style="font-size:10px">${escapeHtml(marketSiteLabel(site))}</span>` : ''}
-      <span class="comp-tag" style="font-size:10px;color:${currentImage ? (selectedImage ? 'var(--ok)' : 'var(--text-m)') : 'var(--warn)'}">${currentImage ? (selectedImage ? '분석 선택' : '이번 선택') : '이전 수집'}</span>
+      <span class="comp-tag" style="font-size:10px;color:${selectableImage ? (selectedImage ? 'var(--ok)' : 'var(--text-m)') : 'var(--warn)'}">${selectableImage ? (selectedImage ? '분석 선택' : '선택 가능') : '이전 수집'}</span>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;min-width:0">
-      ${currentImage ? `<button class="btn-sm" type="button" data-comp-market-toggle-image="${escAttr(id)}" style="font-size:11px;padding:6px 8px;background:${selectedImage ? 'rgba(16,185,129,.18)' : 'rgba(99,102,241,.18)'};border-color:${selectedImage ? 'rgba(16,185,129,.55)' : 'rgba(99,102,241,.45)'};color:${selectedImage ? 'var(--ok)' : 'var(--primary-h)'}">${selectedImage ? '분석 선택 해제' : '분석 선택'}</button>` : ''}
+      ${selectableImage ? `<button class="btn-sm" type="button" data-comp-market-toggle-image="${escAttr(id)}" style="font-size:11px;padding:6px 8px;background:${selectedImage ? 'rgba(16,185,129,.18)' : 'rgba(99,102,241,.18)'};border-color:${selectedImage ? 'rgba(16,185,129,.55)' : 'rgba(99,102,241,.45)'};color:${selectedImage ? 'var(--ok)' : 'var(--primary-h)'}">${selectedImage ? '분석 선택 해제' : '분석 선택'}</button>` : ''}
       ${originalUrl ? `<a class="btn-sm" href="${escAttr(originalUrl)}" target="_blank" rel="noopener" style="font-size:11px;padding:6px 8px;text-decoration:none;overflow-wrap:anywhere">원본 링크</a>` : '<span class="comp-tag" style="font-size:10px;color:var(--warn);margin-top:2px">원본 링크 없음</span>'}
     </div>
   </div>`;
@@ -56,10 +56,15 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
   if (!images.length) return '';
   const currentImages = detailImages.currentImages;
   const previousImages = detailImages.previousImages;
-  const displayedImages = market.showPreviousDetailImages ? [...currentImages, ...previousImages] : currentImages;
+  const selectableImages = currentImages.length ? currentImages : previousImages;
+  const historicalImages = currentImages.length ? previousImages : [];
+  const displayedImages = market.showPreviousDetailImages
+    ? [...selectableImages, ...historicalImages]
+    : selectableImages;
   const previewRows = displayedImages.slice(0, 6);
   const selected = new Set(Array.isArray(market.selectedImageIds) ? market.selectedImageIds.map(String) : []);
-  const selectedCount = currentImages.filter((image, index) => selected.has(scrapedImageId(image, index))).length;
+  const selectable = new Set(selectableImages.map((image, index) => scrapedImageId(image, index)));
+  const selectedCount = selectableImages.filter((image, index) => selected.has(scrapedImageId(image, index))).length;
   const previewId = String(market.previewImageId || '');
   const previewImage = includePreviewModal
     ? images.find((image, index) => scrapedImageId(image, index) === previewId) || null
@@ -79,7 +84,9 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
   const buttonLabel = analyzing ? '분석 진행 중...' : market.loading ? '분석 준비 중...' : analysisResult ? '선택 이미지 다시 분석' : stale ? '현재 선택 이미지 다시 분석' : '선택 이미지 분석';
   const { disabledAttr, escapeHtml, renderCompetitorAnalyzeLogItems } = helpers;
   const currentSummary = detailImages.operation ? `현재 선택 ${detailImages.operation.selectedIds?.length || 0}건 · 이번 수집 ${currentImages.length}장` : '현재 선택 수집 결과 없음';
-  const previousSummary = previousImages.length ? ` · 이전 수집 ${previousImages.length}장` : '';
+  const previousSummary = currentImages.length
+    ? (previousImages.length ? ` · 이전 수집 ${previousImages.length}장` : '')
+    : ` · 복구 이미지 ${previousImages.length}장`;
   return `<div id="factoryCompetitorImagePicker" class="factory-automation-panel" style="margin-top:12px;border-color:rgba(34,197,94,.36);background:rgba(16,185,129,.045);min-width:0;max-width:100%;overflow-wrap:anywhere">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;min-width:0">
       <div style="min-width:0"><h4 style="margin:0">상세페이지 이미지 분석 선택</h4><p style="margin:5px 0 0;overflow-wrap:anywhere">수집 이미지 ${images.length}장 중 분석할 이미지를 고르세요. 후보 목록이 비어 있어도 이 이미지는 바로 선택할 수 있습니다.</p></div>
@@ -88,7 +95,7 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
         <button class="btn-sm" type="button" data-comp-market-quick-action="clear-images" ${disabledAttr(!selectedCount, '선택된 이미지가 없습니다.')}>선택 해제</button>
         <button class="btn-sm" type="button" id="compMarketAnalyzeSelectedImages" ${disabledAttr(Boolean(market.loading || analyzing || !selectedCount), market.loading || analyzing ? '현재 선택 이미지 분석이 진행 중입니다.' : '분석할 이미지를 먼저 선택하세요.')} style="background:var(--primary);border-color:var(--primary);color:#fff">${buttonLabel}</button>
         <button class="btn-sm" type="button" id="compMarketAnalyzeAllImages">전체 분석</button>
-        ${previousImages.length ? `<button class="btn-sm" type="button" data-comp-market-quick-action="toggle-history-images">${market.showPreviousDetailImages ? '이전 수집 결과 닫기' : `이전 수집 결과 보기 (${previousImages.length})`}</button>` : ''}
+        ${historicalImages.length ? `<button class="btn-sm" type="button" data-comp-market-quick-action="toggle-history-images">${market.showPreviousDetailImages ? '이전 수집 결과 닫기' : `이전 수집 결과 보기 (${historicalImages.length})`}</button>` : ''}
       </div>
     </div>
     <div class="factory-small" style="margin-bottom:8px;overflow-wrap:anywhere">${escapeHtml(currentSummary)}${escapeHtml(previousSummary)} · 분석 선택 ${selectedCount}장${displayedImages.length > previewRows.length ? ` · 아래에는 ${previewRows.length}장만 표시, 전체는 수집판 펼치기에서 확인` : ''}</div>
@@ -98,7 +105,7 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
     </div>
     ${analyzing ? `<div style="border:1px solid rgba(99,102,241,.30);background:rgba(0,0,0,.16);border-radius:10px;padding:9px 10px;margin:-2px 0 10px"><div data-comp-market-analysis-logs style="display:flex;flex-direction:column;gap:6px;max-height:156px;overflow:auto">${renderCompetitorAnalyzeLogItems(Array.isArray(compPage.analyzeLogs) ? compPage.analyzeLogs : [])}</div></div>` : ''}
     ${renderPreviewModal(previewImage, market, helpers)}
-    ${!displayedImages.length ? '<div class="factory-guide-note warn" style="margin-bottom:10px;overflow-wrap:anywhere">현재 선택 후보의 상세이미지가 아직 없습니다. 이전 수집 결과는 위의 별도 보기에서만 확인할 수 있습니다.</div>' : ''}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(132px,100%),1fr));gap:8px;min-width:0;max-width:100%">${previewRows.map((image, index) => renderImageCard(image, index, { detailImages, selected, helpers })).join('')}</div>
+    ${!displayedImages.length ? '<div class="factory-guide-note warn" style="margin-bottom:10px;overflow-wrap:anywhere">현재 선택 후보의 상세이미지가 아직 없습니다. 최근 VM 상세이미지 불러오기를 실행해주세요.</div>' : ''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(132px,100%),1fr));gap:8px;min-width:0;max-width:100%">${previewRows.map((image, index) => renderImageCard(image, index, { selectable, selected, helpers })).join('')}</div>
   </div>`;
 }

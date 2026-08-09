@@ -142,16 +142,31 @@ async function main() {
       const payload = await response.json();
       return { status: response.status, ok: payload.ok === true, hasSnapshot: payload.hasSnapshot === true, workspaceId: payload.workspaceId || '', revision: Number(payload.revision || 0) };
     };
+    const readPersistenceRuntime = () => ({
+      serverLastWorkHydrated,
+      serverLastWorkHydrating,
+      hasServerHydrationPromise: !!serverLastWorkHydrationPromise,
+      workspaceScopeTransition: { ...workspaceScopeTransitionState },
+      persistentStateSaving,
+      hasPersistentStateSavePromise: !!persistentStateSavePromise,
+      hasPersistentStateRetryTimer: !!persistentStateSaveRetryTimer,
+      contentVersion: Number(state.contentVersion || 0),
+    });
     const backendBefore = await readBackendLastWork();
+    const persistenceBeforeSave = readPersistenceRuntime();
     const savePromise = saveLastWorkNow({ force: true, deep: true, server: false });
-    if (savePromise && typeof savePromise.then === 'function') await savePromise;
+    const saveResult = savePromise && typeof savePromise.then === 'function'
+      ? await savePromise
+      : savePromise;
     const afterSavePersisted = await ${readPersistedExpression()};
     const backendAfterSave = await readBackendLastWork();
     const operationTokenAfterSave = readOperationToken();
+    const persistenceAfterSave = readPersistenceRuntime();
     await new Promise(resolve => setTimeout(resolve, 2500));
     const settledPersisted = await ${readPersistedExpression()};
     const backendSettled = await readBackendLastWork();
     const operationTokenSettled = readOperationToken();
+    const persistenceSettled = readPersistenceRuntime();
     const currentFactory = readFactory();
     const currentState = readAppState();
     return {
@@ -166,6 +181,10 @@ async function main() {
       backendBefore,
       backendAfterSave,
       backendSettled,
+      saveResult,
+      persistenceBeforeSave,
+      persistenceAfterSave,
+      persistenceSettled,
       operationTokenScope: workspacePersistenceApi().normalizeProjectScope(operationTokenAfterSave.workspaceId),
       appWorkspaceId: currentState.currentProjectId || '',
       appWorkspaceScope: getCurrentLastWorkWorkspaceScope(),
@@ -193,34 +212,43 @@ async function main() {
   const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));
 
+  const expectedBranchScope = saved.scope;
   const savedRevision = Number(saved.afterSavePersisted.session?.workspaceRevision?.counter || 0);
-  const savedRevisionEntry = saved.afterSavePersisted.revisionRegistry?.[expectedWorkspaceScope] || {};
+  const savedRevisionEntry = saved.afterSavePersisted.revisionRegistry?.[expectedBranchScope] || {};
   const backendReads = [saved.backendBefore, saved.backendAfterSave, saved.backendSettled];
   const backendSaveFlowValid = saved.backendBefore?.status === 200 && saved.backendBefore.ok === true
     && saved.backendBefore.hasSnapshot === false && saved.backendBefore.workspaceId === expectedWorkspaceScope
     && saved.backendAfterSave?.status === 200 && saved.backendAfterSave.ok === true
-    && saved.backendAfterSave.hasSnapshot === true && saved.backendAfterSave.workspaceId === expectedWorkspaceScope
+    && saved.backendAfterSave.hasSnapshot === false && saved.backendAfterSave.workspaceId === expectedWorkspaceScope
     && saved.backendSettled?.status === 200 && saved.backendSettled.ok === true
-    && saved.backendSettled.hasSnapshot === true && saved.backendSettled.workspaceId === expectedWorkspaceScope
-    && Number(saved.backendSettled.revision) >= Number(saved.backendAfterSave.revision);
+    && saved.backendSettled.hasSnapshot === false && saved.backendSettled.workspaceId === expectedWorkspaceScope;
+  if (!backendSaveFlowValid) {
+    console.log(`[v185-persistence-boundary] ${JSON.stringify({
+      backendReads,
+      saveResult: saved.saveResult,
+      before: saved.persistenceBeforeSave,
+      after: saved.persistenceAfterSave,
+      settled: saved.persistenceSettled,
+    })}`);
+  }
   const checks = [
-    { ok: saved.expectedWorkspaceScope === expectedWorkspaceScope && saved.scope === expectedWorkspaceScope && saved.appWorkspaceScope === expectedWorkspaceScope && saved.appWorkspaceId === projectId, message: `저장 시 app/workspace scope 불일치: ${JSON.stringify({ expectedWorkspaceScope, saved })}` },
+    { ok: saved.expectedWorkspaceScope === expectedWorkspaceScope && /^draft:/.test(expectedBranchScope) && saved.appWorkspaceScope === expectedBranchScope && saved.appWorkspaceId === projectId, message: `저장 시 document/branch scope 불일치: ${JSON.stringify({ expectedWorkspaceScope, expectedBranchScope, saved })}` },
     { ok: saved.runId === runId && saved.productKey === productKey && saved.inputImageFingerprint === inputImageFingerprint, message: `저장 시 작업 identity 불일치: ${JSON.stringify(saved)}` },
     { ok: Boolean(saved.state.dbKey && saved.state.cafeKey && saved.state.dbResolution === 'selected' && saved.state.cafeResolution === 'selected' && saved.state.hasConfirmedDb && saved.state.reviewScopeKey && saved.state.reviewIdentityKey.includes(runId) && saved.state.reviewIdentityKey.includes(inputImageFingerprint)), message: `저장 전 확정 상태가 불완전합니다: ${JSON.stringify(saved.state)}` },
-    { ok: backendSaveFlowValid, message: `saveLastWorkNow backend last-work 저장 경계 불일치: ${JSON.stringify(backendReads)}` },
+    { ok: backendSaveFlowValid, message: `server:false 저장이 project last-work를 변경했습니다: ${JSON.stringify({ backendReads, saveResult: saved.saveResult, before: saved.persistenceBeforeSave, after: saved.persistenceAfterSave, settled: saved.persistenceSettled })}` },
     { ok: saved.operationTokenBeforeSave?.workspaceId === projectId && Number(saved.operationTokenBeforeSave?.revision) === 0, message: `seed operation token 불일치: ${JSON.stringify(saved.operationTokenBeforeSave)}` },
     { ok: saved.operationTokenAfterSave?.workspaceId === projectId && saved.operationTokenScope === expectedWorkspaceScope && Number(saved.operationTokenAfterSave?.revision) >= Number(saved.operationTokenBeforeSave?.revision), message: `저장 후 operation token scope/revision 불일치: ${JSON.stringify(saved.operationTokenAfterSave)}` },
     { ok: saved.operationTokenSettled?.workspaceId === projectId && Number(saved.operationTokenSettled?.revision) >= Number(saved.operationTokenAfterSave?.revision), message: `저장 안정화 후 operation token revision 불일치: ${JSON.stringify(saved.operationTokenSettled)}` },
     { ok: saved.afterSavePersisted.session.dbKey === saved.state.dbKey && saved.afterSavePersisted.session.cafeKey === saved.state.cafeKey && saved.afterSavePersisted.session.dbResolution === 'selected' && saved.afterSavePersisted.session.cafeResolution === 'selected' && saved.afterSavePersisted.session.confirmedCafeKey === saved.state.cafeKey, message: `saveLastWorkNow 완료 후 pdp_session 확정 메타데이터 불일치: ${JSON.stringify(saved.afterSavePersisted.session)}` },
-    { ok: saved.afterSavePersisted.session.projectId === projectId && saved.afterSavePersisted.session.workspaceScope?.id === expectedWorkspaceScope && saved.afterSavePersisted.session.workspaceRevision?.scopeId === expectedWorkspaceScope && savedRevision > 0 && savedRevisionEntry.scopeId === expectedWorkspaceScope && Number(savedRevisionEntry.counter) === savedRevision, message: `saveLastWorkNow 완료 후 작업파일 scope/revision 불일치: ${JSON.stringify(saved.afterSavePersisted)}` },
-    { ok: saved.persisted.session.projectId === projectId && saved.persisted.session.workspaceScope?.id === expectedWorkspaceScope && saved.persisted.session.workspaceRevision?.scopeId === expectedWorkspaceScope && saved.persisted.session.dbKey === saved.state.dbKey && saved.persisted.session.cafeKey === saved.state.cafeKey && Number(saved.persisted.session.workspaceRevision?.counter) >= savedRevision && saved.persisted.revisionRegistry?.[expectedWorkspaceScope]?.scopeId === expectedWorkspaceScope && Number(saved.persisted.revisionRegistry?.[expectedWorkspaceScope]?.counter) >= savedRevision, message: `settled persisted envelope 불일치: ${JSON.stringify(saved.persisted)}` },
+    { ok: saved.afterSavePersisted.session.projectId === projectId && saved.afterSavePersisted.session.workspaceScope?.id === expectedBranchScope && saved.afterSavePersisted.session.workspaceRevision?.scopeId === expectedBranchScope && savedRevision > 0 && savedRevisionEntry.scopeId === expectedBranchScope && Number(savedRevisionEntry.counter) === savedRevision, message: `saveLastWorkNow 완료 후 branch/document scope/revision 불일치: ${JSON.stringify(saved.afterSavePersisted)}` },
+    { ok: saved.persisted.session.projectId === projectId && saved.persisted.session.workspaceScope?.id === expectedBranchScope && saved.persisted.session.workspaceRevision?.scopeId === expectedBranchScope && saved.persisted.session.dbKey === saved.state.dbKey && saved.persisted.session.cafeKey === saved.state.cafeKey && Number(saved.persisted.session.workspaceRevision?.counter) >= savedRevision && saved.persisted.revisionRegistry?.[expectedBranchScope]?.scopeId === expectedBranchScope && Number(saved.persisted.revisionRegistry?.[expectedBranchScope]?.counter) >= savedRevision, message: `settled branch envelope 불일치: ${JSON.stringify(saved.persisted)}` },
     { ok: saved.afterSavePersisted.namespace.session.length > 0 && saved.persisted.namespace.session.length > 0, message: `pdp_session recovery namespace가 비어 있습니다: ${JSON.stringify({ afterSave: saved.afterSavePersisted.namespace, settled: saved.persisted.namespace })}` },
-    { ok: firstReload.projectId === projectId && firstReload.productName === productName && firstReload.scope === expectedWorkspaceScope && firstReload.factoryWorkspaceId === projectId && firstReload.factoryWorkspaceScope === expectedWorkspaceScope && firstReload.operationToken?.workspaceId === projectId && firstReload.operationTokenScope === expectedWorkspaceScope && Number(firstReload.operationToken?.revision) > 0, message: `첫 Ctrl+F5 후 app/factory/store identity 불일치: ${JSON.stringify(firstReload)}` },
+    { ok: firstReload.projectId === projectId && firstReload.productName === productName && firstReload.scope === expectedBranchScope && firstReload.factoryWorkspaceId === projectId && firstReload.factoryWorkspaceScope === expectedWorkspaceScope && firstReload.operationToken?.workspaceId === projectId && firstReload.operationTokenScope === expectedWorkspaceScope && Number(firstReload.operationToken?.revision) > 0, message: `첫 Ctrl+F5 후 branch/document/factory identity 불일치: ${JSON.stringify(firstReload)}` },
     { ok: firstReload.state.dbKey === saved.state.dbKey && firstReload.state.cafeKey === saved.state.cafeKey && firstReload.state.dbResolution === 'selected' && firstReload.state.cafeResolution === 'selected' && firstReload.state.hasConfirmedDb === true && firstReload.state.confirmedCafeKey === saved.state.cafeKey && firstReload.domConfirmedCount === 2, message: `첫 Ctrl+F5 후 확정 메타데이터/DOM 소실: ${JSON.stringify(firstReload)}` },
-    { ok: firstReload.persisted.session?.projectId === projectId && firstReload.persisted.session?.workspaceScope?.id === expectedWorkspaceScope && firstReload.persisted.session?.workspaceRevision?.scopeId === expectedWorkspaceScope && Number(firstReload.persisted.session?.workspaceRevision?.counter) > 0 && firstReload.persisted.revisionRegistry?.[expectedWorkspaceScope]?.scopeId === expectedWorkspaceScope, message: `첫 Ctrl+F5 후 작업파일 scope/revision 변경: ${JSON.stringify(firstReload.persisted)}` },
-    { ok: secondReload.projectId === projectId && secondReload.productName === productName && secondReload.scope === expectedWorkspaceScope && secondReload.factoryWorkspaceId === projectId && secondReload.factoryWorkspaceScope === expectedWorkspaceScope && secondReload.operationToken?.workspaceId === projectId && secondReload.operationTokenScope === expectedWorkspaceScope && Number(secondReload.operationToken?.revision) > 0, message: `두 번째 Ctrl+F5 후 app/factory/store identity 불일치: ${JSON.stringify(secondReload)}` },
+    { ok: firstReload.persisted.session?.projectId === projectId && firstReload.persisted.session?.workspaceScope?.id === expectedBranchScope && firstReload.persisted.session?.workspaceRevision?.scopeId === expectedBranchScope && Number(firstReload.persisted.session?.workspaceRevision?.counter) > 0 && firstReload.persisted.revisionRegistry?.[expectedBranchScope]?.scopeId === expectedBranchScope, message: `첫 Ctrl+F5 후 branch scope/revision 변경: ${JSON.stringify(firstReload.persisted)}` },
+    { ok: secondReload.projectId === projectId && secondReload.productName === productName && secondReload.scope === expectedBranchScope && secondReload.factoryWorkspaceId === projectId && secondReload.factoryWorkspaceScope === expectedWorkspaceScope && secondReload.operationToken?.workspaceId === projectId && secondReload.operationTokenScope === expectedWorkspaceScope && Number(secondReload.operationToken?.revision) > 0, message: `두 번째 Ctrl+F5 후 branch/document/factory identity 불일치: ${JSON.stringify(secondReload)}` },
     { ok: secondReload.state.dbKey === saved.state.dbKey && secondReload.state.cafeKey === saved.state.cafeKey && secondReload.state.dbResolution === 'selected' && secondReload.state.cafeResolution === 'selected' && secondReload.state.hasConfirmedDb === true && secondReload.state.confirmedCafeKey === saved.state.cafeKey && secondReload.domConfirmedCount === 2, message: `두 번째 Ctrl+F5 후 확정 메타데이터/DOM 소실: ${JSON.stringify(secondReload)}` },
-    { ok: secondReload.persisted.session?.projectId === projectId && secondReload.persisted.session?.workspaceScope?.id === expectedWorkspaceScope && secondReload.persisted.session?.workspaceRevision?.scopeId === expectedWorkspaceScope && Number(secondReload.persisted.session?.workspaceRevision?.counter) > 0 && secondReload.persisted.revisionRegistry?.[expectedWorkspaceScope]?.scopeId === expectedWorkspaceScope, message: `두 번째 Ctrl+F5 후 작업파일 scope/revision 변경: ${JSON.stringify(secondReload.persisted)}` },
+    { ok: secondReload.persisted.session?.projectId === projectId && secondReload.persisted.session?.workspaceScope?.id === expectedBranchScope && secondReload.persisted.session?.workspaceRevision?.scopeId === expectedBranchScope && Number(secondReload.persisted.session?.workspaceRevision?.counter) > 0 && secondReload.persisted.revisionRegistry?.[expectedBranchScope]?.scopeId === expectedBranchScope, message: `두 번째 Ctrl+F5 후 branch scope/revision 변경: ${JSON.stringify(secondReload.persisted)}` },
     { ok: candidateProof.currentScopeKey === saved.state.reviewScopeKey && candidateProof.currentSelectable === true && candidateProof.staleSelectable === false && candidateProof.foreignSelectable === false, message: `현재/stale/foreign 후보 판정 오류: ${JSON.stringify(candidateProof)}` },
     { ok: [candidateProof.staleDbAttempt, candidateProof.foreignDbAttempt, candidateProof.staleCafe24Attempt, candidateProof.foreignCafe24Attempt].every(attempt => attempt?.outcome?.status === 'resolved' && attempt.outcome.value === false && attempt.selectionUnchanged === true && attempt.confirmedDbUnchanged === true), message: `실제 후보 적용 명령이 stale/foreign 후보를 거부하지 않았거나 선택/확정 상태를 바꿨습니다: ${JSON.stringify(candidateProof)}` },
     { ok: candidateProof.sameSession === true && candidateProof.sameNamespace === true && candidateProof.sameSelection === true && candidateProof.sameBackendLastWork === true && candidateProof.beforeNamespace.session.length > 0 && candidateProof.afterNamespace.session.length > 0 && JSON.stringify(candidateProof.backendBefore) === JSON.stringify(candidateProof.backendAfter), message: `stale/foreign 후보 시도 후 last-work namespace/SHA 또는 확정 상태 변경: ${JSON.stringify(candidateProof)}` },

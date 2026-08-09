@@ -35,4 +35,14 @@ function compareRuntimeSourceSnapshots(before, after) {
   return { stable: changed.length === 0, changed };
 }
 
-module.exports = { captureRuntimeSourceSnapshot, compareRuntimeSourceSnapshots };
+function runtimeSourceDigest(snapshot) {
+  const files = snapshot?.files || {};
+  const canonical = Object.keys(files).sort().map(file => [file, files[file]]);
+  return crypto.createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+module.exports = {
+  captureRuntimeSourceSnapshot,
+  compareRuntimeSourceSnapshots,
+  runtimeSourceDigest,
+};

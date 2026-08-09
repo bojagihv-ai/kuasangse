@@ -64,6 +64,10 @@ const context = {
     return a === b || a.includes(b) || b.includes(a);
   },
   compMarketFilterCandidatesForCurrentWork: rows => Array.isArray(rows) ? rows : [],
+  compMarketTrimImageRowsForState: rows => Array.isArray(rows) ? rows : [],
+  compMarketDedupeScrapedImages: rows => Array.isArray(rows) ? rows : [],
+  compMarketFilterScrapedImagesForCurrentWork: rows => Array.isArray(rows) ? rows : [],
+  compMarketScrapedImageId: (row, index) => String(row?.id || `image-${index}`),
   compMarketNormalizeSite: value => String(value || ''),
   compMarketResultId: row => String(row?.id || ''),
 };

@@ -73,6 +73,8 @@ export function sourceCandidates(market, source) {
   const data = record(market);
   const selectedSource = candidateSource(source);
   const storedRows = data[`${selectedSource}Results`];
+  if (Array.isArray(storedRows) && storedRows.length) return storedRows;
+  if (data.collectMode === selectedSource && Array.isArray(data.results)) return data.results;
   if (Array.isArray(storedRows)) return storedRows;
   return data.collectMode === selectedSource ? rows(data.results) : [];
 }
@@ -81,7 +83,10 @@ function activeCandidateRows(market) {
   const data = record(market);
   const active = candidateSource(data.candidateView || data.collectMode);
   const direct = sourceCandidates(data, active);
-  const grouped = record(data[`${active}GroupedResults`] || data.groupedResults);
+  const storedGrouped = record(data[`${active}GroupedResults`]);
+  const grouped = Object.keys(storedGrouped).length || data.collectMode !== active
+    ? storedGrouped
+    : record(data.groupedResults);
   const output = [];
   const seen = new Set();
   const append = (item, siteId, index) => {
@@ -146,7 +151,7 @@ export function createCompetitorTabView(snapshot) {
     competitors: Number(suppliedCounts.competitors ?? candidates.length),
     selectedCompetitors: Number(suppliedCounts.selectedCompetitors ?? selectedIds.length),
     scrapedImages: Number(suppliedCounts.scrapedImages ?? rows(market.scrapedImages).length),
-    selectedAnalysisImages: Number(suppliedCounts.selectedAnalysisImages ?? selectedImageIds.length),
+    selectedAnalysisImages: selectedImageIds.length,
     competitorAnalysisReady: Boolean(suppliedCounts.competitorAnalysisReady ?? Object.keys(analysisResult).length),
   });
   const tasks = rows(factory.automation?.tasks || factory.tasks || competitors.tasks);

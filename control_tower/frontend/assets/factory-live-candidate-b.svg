@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480" role="img" aria-labelledby="title description">
+  <title id="title">Factory live candidate B</title>
+  <desc id="description">Teal product candidate used by the isolated runtime verification workspace.</desc>
+  <rect width="640" height="480" fill="#ecfeff"/>
+  <rect x="112" y="72" width="416" height="336" rx="48" fill="#0f766e"/>
+  <path d="M224 240h192M320 144v192" stroke="#99f6e4" stroke-width="28" stroke-linecap="round"/>
+</svg>

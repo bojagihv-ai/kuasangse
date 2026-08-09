@@ -116,7 +116,17 @@ class WorkspaceLockService(WorkspaceLockStore):
         with self._locked():
             state = self._read()
             record = self._record(state, scope)
-            self._require(scope, record, lease_id, fencing_token, now)
+            current = self._snapshot(scope, record, now)
+            if current.granted:
+                self._require(scope, record, lease_id, fencing_token, now)
+            else:
+                recorded_lease = record.get("lease") or {}
+                if (
+                    str(recorded_lease.get("leaseId") or "") != str(lease_id or "")
+                    or int(recorded_lease.get("fencingToken") or 0)
+                    != int(fencing_token or 0)
+                ):
+                    raise WorkspaceConflict("LEASE_EXPIRED", current)
             record["lease"]["expiresAt"] = now + self._ttl(ttl_ms)
             self._write(state)
             return self._snapshot(scope, record, now, code="HEARTBEAT_OK")

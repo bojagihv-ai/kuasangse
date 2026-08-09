@@ -90,7 +90,10 @@ export function createModuleRegistry(descriptors = TARGET_MODULE_DESCRIPTORS) {
 
 function cleanGraphList(values, field, id) {
   if (!Array.isArray(values)) throw new TypeError(`invalid ${field} for module graph contract: ${id}`);
-  const normalized = values.map(cleanText);
+  const normalized = values.map(value => {
+    const item = cleanText(value);
+    return field === 'imports' ? item.replace(/[?#].*$/u, '') : item;
+  });
   if (normalized.some(value => !value)) throw new TypeError(`empty ${field} in module graph contract: ${id}`);
   if (new Set(normalized).size !== normalized.length) throw new Error(`duplicate ${field} in module graph contract: ${id}`);
   return Object.freeze(normalized);

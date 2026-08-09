@@ -24,7 +24,7 @@ export function persistenceFence(value) {
   const envelope = envelopeOf(value);
   const authority = value?.persistenceAuthority || envelope?.persistenceAuthority || {};
   const metadata = envelope?.metadata || {};
-  const revision = metadata.revision || envelope.workspaceRevision || authority.revision || {};
+  const revision = metadata.revision || authority.revision || envelope.workspaceRevision || {};
   return Object.freeze({
     scopeId: String(envelope.scopeId || value?.scopeId || authority.scopeId || revision.scopeId || ''),
     leaseId: String(metadata.leaseId || authority.leaseId || ''),
@@ -51,7 +51,7 @@ export function assertDestinationVersion(existing, expectedVersion) {
   return currentVersion;
 }
 
-export function assertReplicaCanPublish(existing, candidate) {
+export function assertReplicaCanPublish(existing, candidate, options = {}) {
   if (!existing) return 'publish';
   const current = persistenceFence(existing);
   const next = persistenceFence(candidate);
@@ -67,6 +67,7 @@ export function assertReplicaCanPublish(existing, candidate) {
     throw new PersistenceReplicaError('STALE_REVISION', 'replica already contains a newer revision', current);
   }
   if (current.fencingToken === next.fencingToken && current.revision === next.revision) {
+    if (options.allowSameRevisionMutation === true) return 'publish';
     const sameOperation = current.operationId && current.operationId === next.operationId;
     const sameDigest = current.digest && current.digest === next.digest;
     if (sameOperation || sameDigest) return 'idempotent';

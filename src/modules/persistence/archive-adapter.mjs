@@ -17,6 +17,33 @@ export async function fetchArchiveWithAuthority({
     } catch (error) {
       throw createAuthorityError('INVALID_ARCHIVE_BODY', 'archive mutation body must be JSON', error);
     }
+    const current = authority?.snapshot?.() || null;
+    const currentScope = String(current?.scopeId || '').trim();
+    const currentOfflineBranch = current?.mode === 'offline-edit'
+      && currentScope.startsWith('draft:');
+    if (currentOfflineBranch) {
+      const guardedPayload = {
+        ...payload,
+        authorityWorkspaceId: currentScope,
+        leaseId: current.leaseId || '',
+        fencingToken: Number(current.fencingToken) || 0,
+        expectedRevision: Number(current.revision) || 0,
+        revision: Number(current.revision) || 0,
+      };
+      const response = await adapter.fetchResponse(url, {
+        ...options,
+        body: JSON.stringify(guardedPayload),
+      });
+      const latest = authority?.snapshot?.() || null;
+      if (!latest || latest.mode !== 'offline-edit' || latest.scopeId !== currentScope) {
+        throw createAuthorityError(
+          'STALE_FENCE',
+          'archive mutation completed after authority changed',
+          latest,
+        );
+      }
+      return response;
+    }
     const pathScope = decodeURIComponent(String(url).match(/\/workfiles\/([^/?]+)/)?.[1] || '');
     const rawScope = String(
       payload.authorityWorkspaceId
@@ -28,7 +55,6 @@ export async function fetchArchiveWithAuthority({
     ).trim();
     if (!rawScope || rawScope.startsWith('draft:')) return adapter.fetchResponse(url, options);
     const scopeId = normalizeProjectScope(rawScope);
-    const current = authority?.snapshot?.() || null;
     if (!current || current.scopeId !== scopeId || current.mode !== 'editing') {
       throw createAuthorityError('READ_ONLY', 'archive mutation requires the current edit authority', current);
     }

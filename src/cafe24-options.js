@@ -71,6 +71,65 @@ function factoryDedupeRealOptionValues(values, options = {}) {
   return factoryDedupeOptionValues(values.map(value => factoryCleanRealOptionValue(value, options)).filter(Boolean));
 }
 
+function factoryOptionNamesFromArchivedPrompt(prompt) {
+  const raw = String(prompt ?? '');
+  if (!raw) return [];
+  const names = [...raw.matchAll(/(?:uploaded image|source image\s+No\.?)\s+"[^"]+"\s*->\s*(?:exact label|option name)\s+"([^"]+)"/gi)]
+    .map(match => match[1]);
+  return factoryDedupeRealOptionValues(names, { allowNumeric: true });
+}
+
+function factoryCafe24ArchivedOptionValues(optionSorter = state.optionSorter || {}) {
+  const factory = typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null;
+  const assets = Array.isArray(factory?.archive?.localAssets) ? factory.archive.localAssets : [];
+  const ordered = assets
+    .filter(asset => String(asset?.stageId || '') === 'options')
+    .sort((a, b) => String(b?.savedAt || b?.createdAt || '').localeCompare(String(a?.savedAt || a?.createdAt || '')));
+  for (const asset of ordered) {
+    const names = factoryOptionNamesFromArchivedPrompt(
+      asset?.prompt || asset?.metadata?.prompt || asset?.sourceMap?.prompt || '',
+    );
+    if (names.length) return names;
+  }
+  return [];
+}
+
+function factoryCafe24OptionSorterDraft(optionSorter = state.optionSorter || {}) {
+  const slots = Array.isArray(optionSorter?.slots) ? optionSorter.slots : [];
+  const images = Array.isArray(optionSorter?.images) ? optionSorter.images : [];
+  const imageIds = new Set(images.map(image => image?.id).filter(Boolean));
+  const namedSlots = slots.filter(slot => {
+    const name = factoryCleanOptionLabel(slot?.name);
+    return name && !/^\d+\s*번$/i.test(name);
+  });
+  const hasAssignedImages = namedSlots.some(slot => (
+    Array.isArray(slot?.imgIds) && slot.imgIds.some(imageId => imageIds.has(imageId))
+  ));
+  const generatedResults = (Array.isArray(optionSorter?.optionResults) ? optionSorter.optionResults : [])
+    .filter(result => result?.image || result?.preview || result?.archiveUrl || result?.localArchiveUrl || result?.hasImage);
+  const hasGeneratedResult = generatedResults.length > 0;
+  const generatedOptionValues = factoryDedupeRealOptionValues(generatedResults.flatMap(result => [
+    ...(Array.isArray(result?.optionNames) ? result.optionNames : []),
+    ...(Array.isArray(result?.splitImages) ? result.splitImages.map(item => item?.optionName) : []),
+  ]), { allowNumeric: true });
+  const dbValues = factoryDedupeRealOptionValues(
+    Array.isArray(optionSorter?.dbOptionSource?.values) ? optionSorter.dbOptionSource.values : [],
+    { allowNumeric: true },
+  );
+  const archivedOptionValues = factoryCafe24ArchivedOptionValues(optionSorter);
+  const hasConfirmedSource = optionSorter?.optionSlotSource === 'db' && dbValues.length > 0;
+  if (!hasAssignedImages && !hasGeneratedResult && !hasConfirmedSource && !archivedOptionValues.length) {
+    return { optionName: '', optionValues: [] };
+  }
+  const slotOptionValues = factoryDedupeRealOptionValues(namedSlots.map(slot => slot.name), { allowNumeric: true });
+  return {
+    optionName: factoryCleanOptionLabel(optionSorter?.dbOptionSource?.optionName) || '색상',
+    optionValues: slotOptionValues.length
+      ? slotOptionValues
+      : (dbValues.length ? dbValues : (generatedOptionValues.length ? generatedOptionValues : archivedOptionValues)),
+  };
+}
+
 function factoryCafe24NormalizeVariantOptions(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean);

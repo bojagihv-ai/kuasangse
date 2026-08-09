@@ -120,6 +120,7 @@ export function createSectionsFactoryTab(capabilities = {}) {
   const actionMap = Object.freeze({
     guideAction: pickAction(actions, 'guideAction', ['runFactoryGuideAction', 'runGuideAction', 'guideAction']),
     runStage: pickAction(actions, 'runStage', ['runFactoryStage', 'runStage']),
+    applySectionVariant: pickAction(actions, 'applySectionVariant', ['applySectionVariant']),
   });
   const helpers = Object.freeze({
     factoryAutomationCounts: providedFunction(renderHelpers, 'factoryAutomationCounts'),
@@ -132,6 +133,7 @@ export function createSectionsFactoryTab(capabilities = {}) {
   const commands = {
     guideAction: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.guideAction(value) },
     runStage: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.runStage(value) },
+    applySectionVariant: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.applySectionVariant(value) },
   };
   let contract;
   const fire = (name, ...args) => {

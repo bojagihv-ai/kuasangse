@@ -22,6 +22,7 @@ export function renderPreviewView(view, helpers) {
     renderSectionTemplate,
     renderDetailImageBlocksAfter,
     renderFactoryLightImage,
+    sectionPlacementChoicesFromOptions,
     publicSectionText,
     nl2br,
     escAttr,
@@ -30,10 +31,17 @@ export function renderPreviewView(view, helpers) {
   const safeColor = (value, fallback) => /^#[0-9a-f]{3,8}$/i.test(String(value || '').trim()) ? String(value).trim() : fallback;
   const safeLength = (value, fallback) => /^(?:\d+(?:\.\d+)?)(?:px|rem|em|%)$/.test(String(value || '').trim()) ? String(value).trim() : fallback;
   const safeWeight = value => /^(?:normal|bold|[1-9]00)$/.test(String(value || '').trim()) ? String(value).trim() : '700';
+  const renderMissingPreviewSection = section => {
+    const choices = section.id === 'size_color' ? sectionPlacementChoicesFromOptions() : [];
+    const picker = section.id === 'size_color' ? `<div style="display:flex;flex-direction:column;gap:8px;min-width:240px;max-width:100%"><div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap"><span style="font-size:10px;color:var(--text-d)">로컬 이미지 또는 옵션 분류기 결과 선택</span><button class="btn-sm" type="button" data-open-image-insert="${escAttr(section.id)}:replace"><span class="material-icons-outlined" style="font-size:15px">upload</span> 로컬 이미지 추가</button></div>${choices.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">${choices.map(choice => `<button class="btn-sm" type="button" data-choose-section-placement-section="${escAttr(section.id)}" data-choose-section-placement-value="${escAttr(choice.key)}" title="${escAttr(choice.source + ' · ' + choice.label)}" style="display:flex;align-items:center;gap:7px;max-width:240px;text-align:left"><span style="width:34px;height:34px;flex:none;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--bg-input);display:inline-flex;align-items:center;justify-content:center"><img src="${escAttr(choice.image)}" alt="${escAttr(choice.label)}" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover"></span><span style="min-width:0;display:flex;flex-direction:column;line-height:1.25"><strong style="font-size:11px;color:var(--text)">${escapeHtml(choice.label || '옵션 분류기 결과')}</strong><span style="font-size:10px;color:var(--text-d)">이 이미지 선택</span></span></button>`).join('')}</div>` : '<span style="font-size:10px;color:var(--text-d);text-align:right">옵션 분류기 생성 결과가 아직 없습니다.</span>'}</div>` : '';
+    return `<div class="preview-missing-section" data-jpg-ignore="true" data-preview-section="${escAttr(section.id)}" style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:rgba(255,255,255,.01);border-bottom:1px solid var(--border)"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:16px">${escapeHtml(section.icon || '')}</span><span style="font-size:13px;font-weight:600;color:var(--text-m)">${section.n}. ${escapeHtml(section.name || '')}</span></div><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto"><span style="font-size:10px;font-weight:700;padding:2px 8px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:6px;color:var(--text-m);letter-spacing:0.5px">미생성</span>${picker}</div></div>`;
+  };
   const jpgBusy = view.jpgExportBusy;
   const previewSections = orderedSections();
   const previewContentCount = previewSections.filter(s => !!view.sectionContents?.[s.id]).length;
   const generatedSectionCount = previewSections.filter(s => !!(view.sectionContents?.[s.id] || view.sectionImages?.[s.id])).length;
+  const missingSectionCount = Math.max(0, previewSections.length - generatedSectionCount);
+  const archiveRecovery = view.previewArchiveRecovery || null;
   const stoppedSectionRun = view.sectionBatchRun?.status === 'stopped' ? view.sectionBatchRun : null;
   const recoveredDetailPreview = factoryRecoveredDetailPreviewHtml();
   const showRecoveredDetailPreview = !!(recoveredDetailPreview && (view.previewRecoveredDetailMode || !previewContentCount));
@@ -80,6 +88,10 @@ export function renderPreviewView(view, helpers) {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
           <span style="font-size:11px;font-weight:700;color:var(--text-d);text-transform:uppercase;letter-spacing:0.5px">내보내기</span>
           <div style="width:1px;height:12px;background:var(--border);margin:0 4px"></div>
+          <button class="btn-sm" type="button" data-factory-open-local-archive-folder="section_header" data-factory-local-archive-scope="category" title="생성된 섹션 이미지를 보관한 로컬 폴더 열기">
+            <span class="material-icons-outlined" style="font-size:15px">folder_open</span>섹션 이미지 폴더
+          </button>
+          <span class="factory-small" data-factory-local-archive-folder-status="section_header" aria-live="polite"></span>
           <button class="btn-sm" id="exportLayeredSVG" title="레이어드 SVG 내보내기">
             <span class="material-icons-outlined" style="font-size:15px">layers</span>SVG
           </button>
@@ -115,6 +127,14 @@ export function renderPreviewView(view, helpers) {
       </div>
       <button class="btn-sm" id="openRemainingSectionsAfterStop" type="button">남은 섹션 확인</button>
     </div>` : ''}
+    ${missingSectionCount ? `<div class="app-notice ${archiveRecovery?.tone === 'ok' ? 'ok' : 'warn'}" style="margin-bottom:16px">
+      <span class="material-icons-outlined">inventory_2</span>
+      <div style="flex:1;min-width:220px">
+        <strong>${escapeHtml(archiveRecovery?.message || `현재 미리보기에 없는 섹션 ${missingSectionCount}개가 있습니다.`)}</strong>
+        <div style="font-size:12px;color:var(--text-m);margin-top:4px;line-height:1.55">생성 이미지와 섹션 내용은 로컬 보관함에 즉시 저장됩니다. 같은 제품·원본 기준의 보관본만 버튼을 눌렀을 때 현재 작업으로 복원합니다.</div>
+      </div>
+      <button class="btn-sm" id="recoverPreviewArchiveSections" type="button">로컬 보관본 복구</button>
+    </div>` : (archiveRecovery?.message ? `<div class="app-notice ok" style="margin-bottom:16px"><span class="material-icons-outlined">inventory_2</span><div style="flex:1"><strong>${escapeHtml(archiveRecovery.message)}</strong></div></div>` : '')}
     ${generatedSectionCount || showRecoveredDetailPreview ? '' : `<div class="app-notice warn" style="margin-bottom:16px">
       <span class="material-icons-outlined">visibility</span>
       <div style="flex:1">
@@ -139,13 +159,7 @@ export function renderPreviewView(view, helpers) {
       ${showRecoveredDetailPreview ? recoveredDetailPreview.html : `${renderFixedDetailImageForExport('brand')}
       ${previewSections.map(s => {
         const content = view.sectionContents[s.id];
-        if (!content) return `<div class="preview-missing-section" data-jpg-ignore="true" style="padding:14px 20px;display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.01);border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:16px">${escapeHtml(s.icon || '')}</span>
-            <span style="font-size:13px;font-weight:600;color:var(--text-m)">${s.n}. ${escapeHtml(s.name || '')}</span>
-          </div>
-          <span style="font-size:10px;font-weight:700;padding:2px 8px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:6px;color:var(--text-m);letter-spacing:0.5px">미생성</span>
-        </div>`;
+        if (!content) return renderMissingPreviewSection(s);
 
         const c = content.color_scheme || {};
         const f = content.font_suggestion || {};

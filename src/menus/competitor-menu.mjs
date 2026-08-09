@@ -18,13 +18,14 @@ const RENDER_HELPER_NAMES = Object.freeze([
   "getSectionBasisModeInfo",
   "getSectionBasisDetail",
   "sectionBasisOptionLabel",
-  "renderPlanInstructionReadable",
-  "renderPlanImprovementBridge",
+  "renderPlanInstructionReadable", "renderPlanImprovementBridge", "getSectionPromptResolutionInfo",
   "productAnalysisGenerationBlockReason",
   "loadCompAnalysis",
   "ensureCompMarketScrapeState",
   "compMarketSavedAnalysisMatchesSelectedImages",
-  "renderCompMarketScrapePanel",
+  "sectionWorkScopeMeta",
+  "sectionWorkScopeMatches",
+  "renderCompMarketScrapePanel", "renderCompetitorAnalysisModelOptions",
   "renderFactoryLightImage",
   "disabledAttr",
   "escAttr",
@@ -43,7 +44,8 @@ const ACTION_NAMES = Object.freeze([
   'previewUploadedImage', 'closeUploadedImagePreview', 'openEvidencePreview', 'closeEvidencePreview',
   'removeUploadedImage', 'importHtmlFile', 'updateHtmlText', 'updateUrl', 'updateScraperBase',
   'pingBackend', 'startAnalysis', 'loadSavedReport', 'loadSavedPlan', 'updatePlanEnabled',
-  'updatePlanInstructions', 'generateSection', 'applyPlan', 'maybeRecoverDetailImages',
+  'updatePlanInstructions', 'setSectionBasisMode', 'setSectionGenerationMode', 'generateSection',
+  'applyPlan', 'maybeRecoverDetailImages', 'setGptOAuthModel',
 ]);
 
 function requiredFunction(source, name) {
@@ -56,6 +58,7 @@ export function createCompetitorMenu(capabilities = {}) {
   const assertMutable = requiredFunction(capabilities, 'assertMutable');
   const getOperationToken = requiredFunction(capabilities, 'getOperationToken');
   const reportError = requiredFunction(capabilities, 'reportError');
+  const isOperationCurrent = typeof capabilities.isOperationCurrent === 'function' ? capabilities.isOperationCurrent : candidate => getOperationToken() === candidate;
   const actions = capabilities.actions || {};
   const menuActions = Object.fromEntries(ACTION_NAMES.map(name => [
     name, name === 'startAnalysis' ? requiredFunction(actions, name)
@@ -66,9 +69,7 @@ export function createCompetitorMenu(capabilities = {}) {
   if (!Array.isArray(renderHelpers.SECTION_BASIS_MODES)) throw new TypeError('SECTION_BASIS_MODES must be an array');
   if (!Array.isArray(renderHelpers.SECTION_GENERATION_MODES)) throw new TypeError('SECTION_GENERATION_MODES must be an array');
 
-  let active = false;
-  let generation = 0;
-  let contract;
+  let active = false, generation = 0, contract;
   const activeDisposers = new Set();
   const bindingByRoot = new WeakMap();
 
@@ -76,7 +77,7 @@ export function createCompetitorMenu(capabilities = {}) {
     const operationToken = getOperationToken();
     const context = Object.freeze({
       operationToken,
-      isCurrent: () => getOperationToken() === operationToken,
+      isCurrent: () => isOperationCurrent(operationToken),
     });
     const result = action(value, context);
     if (!result || typeof result.then !== 'function') return result;
@@ -156,7 +157,8 @@ export function createCompetitorMenu(capabilities = {}) {
         compMarketClearCandidateSelection: 'clearCandidateSelection', compMarketClear: 'clearMarket',
         compMarketCloseImagePreview: 'closeMarketImagePreview', compMarketCloseImagePreviewFixed: 'closeMarketImagePreview',
         compMarketOpenVisibleVm: 'openVisibleVm', compMarketManualOpenVm: 'openVisibleVm',
-        compMarketManualResume: 'resumeDetailJob', compMarketOpenVmLoginSession: 'openVmLogin',
+        compMarketManualOpenVmCompact: 'openVisibleVm', compMarketManualResume: 'resumeDetailJob',
+        compMarketManualResumeCompact: 'resumeDetailJob', compMarketOpenVmLoginSession: 'openVmLogin',
         compMarketSelectAllImages: 'selectAllMarketImages', compMarketClearImageSelection: 'clearMarketImageSelection',
         closeCompImagePreview: 'closeUploadedImagePreview', compImagePreviewOverlay: 'closeUploadedImagePreview',
         closeCompEvidencePreview: 'closeEvidencePreview', compEvidencePreviewOverlay: 'closeEvidencePreview',
@@ -214,7 +216,9 @@ export function createCompetitorMenu(capabilities = {}) {
         if (closest(event, '#compMarketAutoDetail')) { call('setMarketAutoCapture', !!node.checked); return; }
         const site = closest(event, '[data-comp-market-site]'); if (site) { call('setMarketSite', { siteId: site.dataset.compMarketSite, enabled: !!site.checked }); return; }
         if (closest(event, '#compMarketTotalTarget') || closest(event, '[data-factory-comp-market-total-target]')) { call('updateMarketTarget', { siteId: '', value: node.value, commit: true }); return; }
-        if (closest(event, '[data-comp-market-target]') || closest(event, '[data-factory-comp-market-target]')) { call('updateMarketTarget', { siteId: node.dataset.compMarketTarget || node.dataset.factoryCompMarketTarget || '', value: node.value, commit: true }); return; }
+        if (closest(event, '[data-comp-market-target]') || closest(event, '[data-factory-comp-market-target]')) { call('updateMarketTarget', { siteId: node.dataset.compMarketTarget || node.dataset.factoryCompMarketTarget || '', value: node.value, commit: true }); return; } if (closest(event, '#compAnalysisGptOAuthModelSelect')) { call('setGptOAuthModel', node.value); return; }
+        const basis = closest(event, '.section-basis-select'); if (basis) { call('setSectionBasisMode', { sectionId: basis.dataset.sectionBasis, basisId: basis.value }); return; }
+        const mode = closest(event, '.section-mode-select'); if (mode) { call('setSectionGenerationMode', { sectionId: mode.dataset.sectionMode, modeId: mode.value }); return; }
         const plan = closest(event, '.comp-plan-toggle'); if (plan) call('updatePlanEnabled', { sectionId: plan.dataset.sid, enabled: !!plan.checked });
       };
       const onDragOver = event => { if (closest(event, '#compDropZone') || closest(event, '#compMarketDrop')) event.preventDefault?.(); };
@@ -244,9 +248,7 @@ export function createCompetitorMenu(capabilities = {}) {
     onEnter() {
       active = true;
       generation += 1;
-      void active;
-      void generation;
-      void getOperationToken();
+      void active; void generation; void getOperationToken();
     },
     onLeave() {
       for (const dispose of [...activeDisposers].reverse()) dispose();

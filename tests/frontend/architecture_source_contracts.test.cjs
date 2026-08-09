@@ -196,12 +196,17 @@ test('메뉴 비동기 작업 identity는 저장 revision이 아니라 작업 �
   const initial = resolveToken();
   state.workspaceRevision.revision = 2;
   const afterSave = resolveToken();
+  state.currentProjectId = 'project-created-during-operation';
+  const afterDraftPromotion = resolveToken();
   authority = { ...authority, fencingToken: 8 };
   const afterTakeover = resolveToken();
 
-  // Then: 정상 저장은 진행 중 작업을 무효화하지 않고 편집권 교체는 반드시 무효화한다.
+  // Then: 정상 저장과 같은 초안의 프로젝트 ID 발급은 진행 중 작업을 무효화하지 않고
+  // 편집권 교체는 반드시 무효화한다.
   assert.equal(afterSave, initial);
+  assert.equal(afterDraftPromotion, initial);
   assert.notEqual(afterTakeover, initial);
+  assert.match(functionSource, /authorityScope\s*\|\|\s*fallbackScope/);
   assert.match(functionSource, /authority\?\.fencingToken/);
   assert.doesNotMatch(functionSource, /workspaceRevision|authority\?\.fence(?:\W|$)/);
   assert.doesNotMatch(uiSource, /authority\?\.fence(?:\W|$)/);
@@ -211,13 +216,13 @@ test('메뉴 비동기 작업 identity는 저장 revision이 아니라 작업 �
     'currentRuntimeMenuOperationToken',
     'factoryRuntimeRequireStore',
     `${currentCheckSource}; return factoryRuntimeIsOperationCurrent;`,
-  )(() => 'project-a:project:project-a:7', () => ({ isOperationCurrent: token => token?.revision === 3 }));
-  assert.equal(isCurrent('project-a:project:project-a:7'), true);
-  assert.equal(isCurrent('project-a:project:project-a:8'), false);
+  )(() => 'project:project-a:7', () => ({ isOperationCurrent: token => token?.revision === 3 }));
+  assert.equal(isCurrent('project:project-a:7'), true);
+  assert.equal(isCurrent('project:project-a:8'), false);
   assert.equal(isCurrent({ revision: 3 }), true);
 });
 
-test('작업파일 복원은 시각 검증과 server IndexedDB session commit을 각각 한 번만 끝낸다', () => {
+test('작업파일 복원은 문서를 덮어쓰지 않고 시각 검증 뒤 이 탭 브랜치만 한 번 커밋한다', () => {
   // Given: 이미지 변경 뒤 지연 렌더를 예약하는 경계를 읽는다.
   const uiSource = source(path.join(ROOT, 'src', 'app-core-03.js'));
   const scheduleVisualRender = extractFunction(uiSource, 'factoryScheduleVisualValidationRender');
@@ -235,15 +240,15 @@ test('작업파일 복원은 시각 검증과 server IndexedDB session commit을
 
   const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
   assert.match(persistence, /options\.skipSessionAssetSave\s*!==\s*true[\s\S]*scheduleSessionAssetSaveIfChanged/);
-  const persistImport = extractFunction(uiSource, 'persistFactoryProjectBundleLocally');
   const importStart = uiSource.indexOf('async function importFactoryProjectFileBundle(');
   const importEnd = uiSource.indexOf('async function importFactoryProjectFileFromText(', importStart);
   const importBundle = uiSource.slice(importStart, importEnd);
-  assert.match(persistImport, /replicas:\s*\[\s*['"]session['"]\s*\]/);
-  assert.match(persistImport, /selectLocalSessionPayload\(prepared\.snapshot\)/);
-  assert.match(persistImport, /indexeddb:\s*\{\s*records:\s*prepared\.records,\s*sessionAssets:\s*prepared\.sessionAssets\s*\}/);
-  assert.match(persistImport, /session:\s*\{\s*writeBootstrap:\s*true,\s*recoverySnapshot:\s*sessionRecovery\.payload\s*\}/);
-  assert.match(importBundle, /await persistFactoryProjectBundleLocally\([\s\S]*commitCurrentWorkspaceRevision\([\s\S]*commitResult\.envelope\.metadata\.revision/);
+  assert.match(importBundle, /restore\(\{[\s\S]*explicitWorkfile:\s*bundle/);
+  assert.match(importBundle, /ensureExplicitProjectLoadAuthority\(\)/);
+  assert.match(importBundle, /await flushQueuedPersistentState\(\{/);
+  assert.equal((importBundle.match(/flushQueuedPersistentState\(/g) || []).length, 1);
+  assert.doesNotMatch(importBundle, /persistFactoryProjectBundleLocally/);
+  assert.doesNotMatch(importBundle, /commitCurrentWorkspaceRevision/);
   assert.doesNotMatch(importBundle, /savePersistentState\s*\(/);
 });
 
@@ -260,13 +265,13 @@ test('OAuth 백그라운드 상태 완료는 작업파일 복원 렌더를 끼�
   assert.doesNotMatch(autoRefresh, /\n\s+render\(\);/);
 });
 
-test('Cafe24 참조목록 자동 로딩은 경쟁사·생성·섹션 탭의 작업 토큰에 끼어들지 않는다', () => {
+test('Cafe24 참조목록 자동 로딩은 DB 후보 수집과 경쟁사·생성·섹션 탭의 작업 토큰에 끼어들지 않는다', () => {
   // Given: 조립공장 이벤트 바인더는 모든 탭 렌더 뒤 실행된다.
   const uiSource = source(path.join(ROOT, 'src', 'app-core-06.js'));
   const bindFactoryEvents = extractFunction(uiSource, 'bindFactoryEvents');
 
   // When/Then: Cafe24 목록이 필요한 탭에서만 네트워크 갱신을 시작해야 한다.
-  assert.match(bindFactoryEvents, /new Set\(\['db', 'fields', 'publish'\]\)/);
+  assert.match(bindFactoryEvents, /new Set\(\['fields', 'publish'\]\)/);
   assert.match(bindFactoryEvents, /cafe24ReferenceTabs\.has\(String\(factory\.automation\?\.activeTab \|\| ''\)\)[\s\S]*factoryEnsureCafe24ReferenceLists\(\)/);
   assert.doesNotMatch(bindFactoryEvents, /bindFactoryCriticalActions\(\);\s*try\s*\{\s*factoryEnsureCafe24ReferenceLists\(\)/);
 });
@@ -301,10 +306,17 @@ test('장시간 생성 렌더는 현재 명령 draft를 읽고 렌더 동기화�
   const runStage = factoryUi.slice(runStageStart, runStageEnd);
 
   // When/Then: 렌더 호출 중에는 동일 draft를 읽고 렌더 전용 세 명령만 그 draft에 합쳐야 한다.
-  assert.match(renderScope, /factoryRuntimeOwnedRenderDraft\s*=\s*factory/);
-  assert.match(renderScope, /finally[\s\S]*factoryRuntimeOwnedRenderDraft\s*=\s*previous/);
+  assert.match(runtime, /var factoryRuntimeOwnedRenderLeases\s*=\s*\[\]/);
+  assert.match(renderScope, /factoryRuntimeOwnedRenderLeases\.push\(lease\)/);
+  assert.match(renderScope, /factoryRuntimeOwnedRenderLeases\.splice\(leaseIndex, 1\)/);
+  assert.match(renderScope, /factoryRuntimeOwnedRenderLeases\[0\]\?\.factory \|\| null/);
   assert.match(readFactory, /if \(factoryRuntimeOwnedRenderDraft\) return factoryRuntimeOwnedRenderDraft/);
   assert.match(updateFactory, /FACTORY_RUNTIME_OWNED_RENDER_COMMANDS\.has\(commandName\)[\s\S]*mutator\(factoryRuntimeOwnedRenderDraft\)/);
+  assert.ok(
+    updateFactory.indexOf('FACTORY_RUNTIME_DEFER_DURING_OPERATION_COMMANDS.has(commandName)')
+      < updateFactory.indexOf('FACTORY_RUNTIME_OWNED_RENDER_COMMANDS.has(commandName)'),
+    'active operations must defer persistence-only mutations before they can touch the owned command draft',
+  );
   for (const command of [
     'factory/runtime:updateFromInputs',
     'factory/runtime:preserveDetailHtml',
@@ -313,9 +325,66 @@ test('장시간 생성 렌더는 현재 명령 draft를 읽고 렌더 동기화�
     assert.match(runtime, new RegExp(command.replace('/', '\\/')));
   }
 
+  const deferredCommands = runtime.slice(
+    runtime.indexOf('const FACTORY_RUNTIME_DEFER_DURING_OPERATION_COMMANDS'),
+    runtime.indexOf('function factoryRuntimeRenderWithOwnedDraft'),
+  );
+  assert.match(deferredCommands, /factory\/runtime:log/);
+
   // And: 생성 진행 및 최종 성공 렌더가 모두 명령 소유 범위 안에서 실행되어야 한다.
   assert.match(runImageStage, /factoryRuntimeRenderWithOwnedDraft\(factory\)/);
   assert.match(runStage, /factoryRuntimeRenderWithOwnedDraft\(done\)/);
+});
+
+test('저장 경계는 장시간 렌더 draft가 아니라 커밋된 Store 스냅샷을 사용한다', () => {
+  const runtime = source(path.join(ROOT, 'src', 'app-core-03.js'));
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const functionBlock = (text, name) => {
+    const start = text.indexOf(`function ${name}(`);
+    assert.notEqual(start, -1, `${name} 정의를 찾지 못했습니다.`);
+    const next = text.indexOf('\nfunction ', start + `function ${name}(`.length);
+    return text.slice(start, next < 0 ? text.length : next);
+  };
+  const committedRead = extractFunction(runtime, 'factoryRuntimeReadCommittedFactory');
+
+  assert.match(committedRead, /factoryRuntimeStore\.getSnapshot\(\)\?\.factory/);
+  assert.doesNotMatch(committedRead, /factoryRuntimeOwnedRenderDraft/);
+  for (const functionName of ['buildWorkspacePayload', 'saveCurrentProject']) {
+    assert.match(functionBlock(runtime, functionName), /factoryRuntimeReadCommittedFactory/, functionName);
+  }
+  const projectFileBundle = functionBlock(runtime, 'buildFactoryProjectFileBundle');
+  assert.match(projectFileBundle, /factoryRuntimeReadCommittedFactory/);
+  assert.doesNotMatch(projectFileBundle, /factoryRuntimeReadFactory\(\)/);
+  const projectFileExport = functionBlock(runtime, 'exportCurrentProjectFile');
+  assert.match(projectFileExport, /factoryRuntimeReadCommittedFactory/);
+  assert.doesNotMatch(projectFileExport, /factoryRuntimeReadFactory\(\)/);
+  assert.match(
+    projectFileExport,
+    /indexeddb:\s*\{\s*records:\s*prepared\.records,\s*sessionAssets:\s*prepared\.sessionAssets\s*\}/,
+  );
+  for (const functionName of [
+    'currentSessionAssetsPayload',
+    'buildServerLastWorkSnapshot',
+    'savePersistentState',
+    'flushFactoryLastSnapshotSave',
+  ]) {
+    assert.match(functionBlock(persistence, functionName), /factoryRuntimeReadCommittedFactory/, functionName);
+  }
+});
+
+test('현재 상태 저장은 최신 서버 revision에 재베이스하고 보호 no-op을 성공으로 표시하지 않는다', () => {
+  const runtime = source(path.join(ROOT, 'src', 'app-core-03.js'));
+  const start = runtime.indexOf('async function saveCurrentProject(');
+  const end = runtime.indexOf('\nasync function saveCurrentSnapshot(', start);
+  assert.ok(start >= 0 && end > start);
+  const saveCurrentProject = runtime.slice(start, end);
+
+  assert.match(saveCurrentProject, /rebaseRevision:\s*true/);
+  assert.match(saveCurrentProject, /if \(commitResult\.protectedNoOp\) throw new Error\(/);
+  assert.ok(
+    saveCurrentProject.indexOf('if (commitResult.protectedNoOp)')
+      < saveCurrentProject.indexOf('markWorkspaceDocumentClean()'),
+  );
 });
 
 test('섹션 작업 범위는 퇴역한 state.factory 대신 canonical runtime snapshot을 읽는다', () => {
@@ -353,6 +422,14 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
   assert.match(serverSnapshot, /currentProjectId:\s*state\.currentProjectId/);
   assert.match(serverSnapshot, /workspaceScope:\s*\{\s*id:\s*workspaceScope\s*\}/);
   assert.match(serverSnapshot, /workspaceRevision:\s*currentWorkspaceRevision\(workspaceScope\)/);
+  assert.match(
+    serverSnapshot,
+    /const canonicalFactory = options\.factorySnapshot[\s\S]*factoryRuntimeReadCommittedFactory\(\)/,
+    '서버 저장본은 퇴역한 state.factory가 아니라 commit된 canonical factory를 읽어야 합니다.',
+  );
+  assert.match(serverSnapshot, /currentSessionAssetsPayload\(\{[\s\S]*factorySnapshot:\s*canonicalFactory/);
+  assert.match(serverSnapshot, /factory:\s*canonicalFactory/);
+  assert.doesNotMatch(serverSnapshot, /factory:\s*state\.factory/);
   assert.match(persistence, /workspaceRevision:\s*payload\.workspaceRevision\s*\|\|\s*null/);
 
   // And: payload 저장 성공 뒤에만 revision/부트스트랩을 확정해야 한다.
@@ -368,7 +445,7 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
   );
   const protectedReturnIndex = savePersistentState.indexOf('return true;', protectedNoOpIndex);
   const commitIndex = savePersistentState.indexOf('commitCurrentWorkspaceRevision(commitResult.envelope.metadata.revision)');
-  const bootstrapIndex = savePersistentState.indexOf('saveLastWorkBootstrap()', commitIndex);
+  const bootstrapIndex = savePersistentState.indexOf('saveLastWorkBootstrap(', commitIndex);
   const completionReturnIndex = savePersistentState.lastIndexOf('return persistenceCompletion;');
   assert.ok(
     protectedNoOpIndex > acceptedIndex
@@ -380,7 +457,17 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
   assert.ok(acceptedIndex >= 0 && commitIndex > acceptedIndex && bootstrapIndex > commitIndex);
   assert.ok(completionReturnIndex > bootstrapIndex, 'savePersistentState must return durable completion');
   assert.match(sessionAssetsCommit, /currentFingerprint\s*===\s*lastSessionAssetFingerprint[\s\S]*return existing/);
+  assert.match(
+    savePersistentState,
+    /await saveLastProductImageBackupToDbIfChanged\(\)[\s\S]{0,240}await sessionAssetsForAuthoritativeCommit\(\)/,
+    '탭 브랜치 저장 완료 전에 별도 기본 이미지 백업이 먼저 영속화되어야 합니다.',
+  );
   assert.match(savePersistentState, /await sessionAssetsForAuthoritativeCommit\(\)[\s\S]*indexeddb:\s*\{\s*sessionAssets\s*\}/);
+  assert.match(
+    savePersistentState,
+    /buildServerLastWorkSnapshot\(\s*['"]session-save['"],\s*\{\s*factorySnapshot\s*\}\s*\)/,
+    '동일 commit의 로컬/서버 저장본은 같은 factory snapshot을 사용해야 합니다.',
+  );
   assert.match(savePersistentState, /commitCurrentWorkspaceRevision[\s\S]*markSessionAssetFingerprintSaved\(\)[\s\S]*scheduleSessionAssetSaveIfChanged/);
 
   // And: 아직 commit되지 않은 revision이나 identity-only bootstrap을 live restore fence로 공개하지 않는다.
@@ -393,6 +480,357 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
 
   // And: 과거에 범위 필드만 빠진 저장본은 revision scope로 안전 복구한다.
   assert.match(loadSession, /workspaceSnapshotRevision\(s\)\?\.scopeId/);
+});
+
+test('수동 저장은 비동기 저장 경합으로 false가 반환되면 최신 상태를 다시 저장한다', async () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const saveLastWorkNowStart = persistence.indexOf('function saveLastWorkNow(');
+  const saveLastWorkNowEnd = persistence.indexOf('function flushLastWorkBeforeLeave(', saveLastWorkNowStart);
+  assert.ok(saveLastWorkNowStart >= 0 && saveLastWorkNowEnd > saveLastWorkNowStart);
+  const saveLastWorkNowSource = persistence.slice(saveLastWorkNowStart, saveLastWorkNowEnd);
+  let flushCount = 0;
+  const environment = {
+    lastWorkSaveTimer: null,
+    captureWorkspaceDocumentFence() { return { scopeId: 'draft:test', resetToken: 0, allowBlankResetCheckpoint: false }; },
+    workspaceDocumentFenceIsCurrent() { return true; },
+    lastWorkSyncingVisibleInputs: false,
+    syncVisibleLastWorkInputs() {},
+    savePersistentState() { return Promise.resolve(false); },
+    flushQueuedPersistentState() {
+      flushCount += 1;
+      return Promise.resolve(true);
+    },
+    saveLastWorkBootstrap() {},
+    state: { factory: null },
+    saveFactoryLastSnapshot() {},
+    flushFactoryLastSnapshotSave() {},
+    saveLastProductImageBackupToDbIfChanged() { return Promise.resolve(true); },
+    sessionAssetsHydrated: true,
+    saveSessionAssetsToDbIfChanged() { return Promise.resolve(true); },
+    markPendingSessionAssetSaveIfChanged() {},
+    saveServerLastWorkSnapshot() { return Promise.resolve(true); },
+  };
+  const saveLastWorkNow = new Function(
+    ...Object.keys(environment),
+    `${saveLastWorkNowSource}\nreturn saveLastWorkNow;`,
+  )(...Object.values(environment));
+
+  const results = await saveLastWorkNow({ server: false });
+
+  assert.equal(flushCount, 1, '비동기 false도 flushQueuedPersistentState로 재시도해야 합니다.');
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[0].value, true);
+});
+
+test('페이지 이탈 저장은 한 번만 실행하고 대용량 비동기 저장을 시작하지 않는다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const factoryUi = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const flushSource = extractFunction(persistence, 'flushLastWorkBeforeLeave');
+  const visibilitySource = extractFunction(factoryUi, 'handleClassicRuntimeVisibilityChange');
+
+  assert.match(
+    flushSource,
+    /if\s*\(lastWorkPageLeaveFlushInProgress\)\s*return;[\s\S]*lastWorkPageLeaveFlushInProgress\s*=\s*true;/,
+    'visibilitychange, beforeunload, pagehide가 이어져도 이탈 저장은 한 번만 실행되어야 합니다.',
+  );
+  assert.match(flushSource, /syncVisibleLastWorkInputs\(\{\s*deep:\s*false\s*\}\)/);
+  assert.match(flushSource, /saveLastWorkInputCheckpoint\(['"]page-leave-input['"]\)/);
+  assert.doesNotMatch(flushSource, /saveFactoryLastSnapshot|flushFactoryLastSnapshotSave/);
+  assert.doesNotMatch(flushSource, /saveLastProductImageBackupToDbIfChanged|saveSessionAssetsToDbIfChanged/);
+  assert.doesNotMatch(flushSource, /savePersistentState|saveServerLastWorkSnapshot/);
+  assert.doesNotMatch(visibilitySource, /flushLastWorkBeforeLeave/);
+  assert.match(
+    visibilitySource,
+    /document\.visibilityState\s*===\s*['"]hidden['"][\s\S]*saveLastWorkInputCheckpoint\(['"]visibility-hidden['"]\)[\s\S]*resetLastWorkBeforeLeaveFlush\(\)/,
+    '탭 전환은 작은 입력 체크포인트만 남기고, 다시 보이면 다음 실제 이탈을 위해 1회 가드를 해제해야 합니다.',
+  );
+});
+
+test('서버 저장 재시도는 실패 횟수에 따라 15초부터 최대 60초까지 늦춘다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const retryDelaySource = extractFunction(persistence, 'serverLastWorkFailureDelayMs');
+  const serverLastWorkFailureDelayMs = new Function(
+    'SERVER_LAST_WORK_RETRY_BASE_MS',
+    'SERVER_LAST_WORK_RETRY_MAX_MS',
+    `${retryDelaySource}\nreturn serverLastWorkFailureDelayMs;`,
+  )(15_000, 60_000);
+
+  assert.equal(serverLastWorkFailureDelayMs(1), 15_000);
+  assert.equal(serverLastWorkFailureDelayMs(2), 30_000);
+  assert.equal(serverLastWorkFailureDelayMs(3), 60_000);
+  assert.equal(serverLastWorkFailureDelayMs(9), 60_000);
+});
+
+test('서버 저장 예약은 실패 쿨다운보다 앞당겨지지 않는다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const scheduleSource = extractFunction(persistence, 'scheduleServerLastWorkSave');
+  let scheduledDelay = -1;
+  const environment = {
+    workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: false },
+    serverLastWorkHydrated: true,
+    serverLastWorkHydrating: false,
+    serverLastWorkSaveTimer: null,
+    serverLastWorkRetryAfter: 25_000,
+    Date: { now: () => 10_000 },
+    clearTimeout() {},
+    setTimeout(_callback, delay) { scheduledDelay = delay; return 1; },
+    saveServerLastWorkSnapshot() { return Promise.resolve(true); },
+  };
+  const scheduleServerLastWorkSave = new Function(
+    ...Object.keys(environment),
+    `${scheduleSource}\nreturn scheduleServerLastWorkSave;`,
+  )(...Object.values(environment));
+
+  scheduleServerLastWorkSave('persistent-state', 3200);
+
+  assert.equal(scheduledDelay, 15_000);
+});
+
+test('서버 권위 복원이 끝나기 전에는 오래된 브라우저 상태를 서버 저장으로 예약하지 않는다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const scheduleSource = extractFunction(persistence, 'scheduleServerLastWorkSave');
+  let scheduledDelay = -1;
+  const environment = {
+    workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: false },
+    serverLastWorkHydrated: false,
+    serverLastWorkHydrating: false,
+    serverLastWorkSaveTimer: null,
+    serverLastWorkRetryAfter: 0,
+    Date: { now: () => 10_000 },
+    clearTimeout() {},
+    setTimeout(_callback, delay) { scheduledDelay = delay; return 1; },
+    saveServerLastWorkSnapshot() { return Promise.resolve(true); },
+  };
+  const scheduleServerLastWorkSave = new Function(
+    ...Object.keys(environment),
+    `${scheduleSource}\nreturn scheduleServerLastWorkSave;`,
+  )(...Object.values(environment));
+
+  scheduleServerLastWorkSave('persistent-state', 0);
+
+  assert.equal(scheduledDelay, -1);
+});
+
+test('서버 권위 복원 전 일반 자동저장은 큐에만 넣고 복원된 최신 상태로 배출한다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const startup = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const saveStart = persistence.indexOf('function savePersistentState(');
+  const saveEnd = persistence.indexOf('async function flushQueuedPersistentState(', saveStart);
+  const savePersistent = persistence.slice(saveStart, saveEnd);
+  const applyStart = persistence.indexOf('function applyServerLastWorkSnapshot(');
+  const applyEnd = persistence.indexOf('async function hydrateServerLastWorkSnapshot(', applyStart);
+  const applyServer = persistence.slice(applyStart, applyEnd);
+  const hydrateStart = persistence.indexOf('async function hydrateServerLastWorkSnapshot(');
+  const hydrateEnd = persistence.indexOf('async function refreshCompetitorAnalysisFromServer(', hydrateStart);
+  const hydrateServer = persistence.slice(hydrateStart, hydrateEnd);
+  const startupHydration = startup;
+
+  assert.match(
+    savePersistent,
+    /!serverLastWorkHydrated \|\| serverLastWorkHydrating[\s\S]*workspaceScopeTransitionState\.persistentSaveQueued = true;[\s\S]*return false;/,
+    'session-save can still overwrite the server before its authoritative snapshot is restored',
+  );
+  assert.match(
+    hydrateServer,
+    /shouldFlushPersistentStateAfterHydrate[\s\S]*serverLastWorkHydrated = true;[\s\S]*serverLastWorkHydrating = false;[\s\S]*setTimeout\(\(\) => savePersistentState\(\), 0\)/,
+    'queued startup persistence is not replayed from the restored server state',
+  );
+  assert.match(
+    applyServer,
+    /options\.forceRevisionRestore\s*!==\s*true\s*&&\s*!workspaceRevisionAllowsSnapshot\(snapshot/,
+    'trusted server restore can still be rejected by a poisoned local replica revision',
+  );
+  assert.match(
+    hydrateServer,
+    /forceRevisionRestore:\s*options\.forceRevisionRestore\s*===\s*true/,
+    'server hydration does not carry its trusted revision capability into snapshot application',
+  );
+  assert.match(
+    startupHydration,
+    /hydrateServerLastWorkSnapshot\(\{\s*isCurrent:\s*intentIsCurrent,\s*\}\)/,
+    'F5 startup does not run the ordinary quality-gated server hydration after local session assets restore',
+  );
+  assert.doesNotMatch(
+    startupHydration,
+    /hydrateServerLastWorkSnapshot\(\{\s*force:\s*true,\s*forceRevisionRestore:\s*true,\s*isCurrent:\s*intentIsCurrent,\s*\}\)/,
+    'F5 startup must not force an older server receipt over current tab-local work',
+  );
+});
+
+test('서버 저장 후보에는 빈 상대 URL이나 같은 로컬 백엔드 별칭을 넣지 않는다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const basesSource = extractFunction(persistence, 'getServerLastWorkBases');
+  const getServerLastWorkBases = new Function(
+    'state',
+    'loadBackendUrl',
+    `${basesSource}\nreturn getServerLastWorkBases;`,
+  )({ backendBaseUrl: 'http://127.0.0.1:5050/' }, () => 'http://127.0.0.1:5050');
+
+  assert.deepEqual(getServerLastWorkBases(), ['http://127.0.0.1:5050']);
+});
+
+test('서버 권위 lease가 없는 로컬 초안은 서버 복제본 쓰기를 시도하지 않는다', () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const saveStart = persistence.indexOf('async function saveServerLastWorkSnapshot(');
+  const saveEnd = persistence.indexOf('function scheduleServerLastWorkSave(', saveStart);
+  const saveServer = persistence.slice(saveStart, saveEnd);
+
+  assert.match(saveServer, /scopeId\.startsWith\('project:'\)[\s\S]*return false/);
+  assert.match(
+    saveServer,
+    /!serverLastWorkHydrated && !forceRequested[\s\S]*return false/,
+    'startup can still push an IndexedDB replica before the authoritative server snapshot is read',
+  );
+});
+
+test('Cafe24 OAuth 백그라운드 로그는 진행 중 공정 상태를 다시 계산하지 않는다', () => {
+  const factoryCore = source(path.join(ROOT, 'src', 'app-core-05.js'));
+  const factoryUi = source(path.join(ROOT, 'src', 'app-core-06.js'));
+  const factoryLogStart = factoryCore.indexOf('function factoryLog(');
+  const factoryLogEnd = factoryCore.indexOf('function factorySetStageStatus(', factoryLogStart);
+  const factoryLog = factoryCore.slice(factoryLogStart, factoryLogEnd);
+  const autoRefresh = extractFunction(factoryUi, 'factoryStartCafe24OAuthAutoRefresh');
+
+  assert.match(factoryLog, /options\.patchGoalRun\s*!==\s*false/);
+  assert.match(autoRefresh, /factoryLog\(log\.message,\s*log\.type,\s*draft,\s*\{\s*patchGoalRun:\s*false\s*\}\)/);
+});
+
+test('수동 저장은 장시간 명령 draft를 비동기 저장 경계 전에 분리한다', async () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const saveStart = persistence.indexOf('function saveLastWorkNow(');
+  const saveEnd = persistence.indexOf('function flushLastWorkBeforeLeave(', saveStart);
+  const saveSource = persistence.slice(saveStart, saveEnd);
+  let capturedFactory = null;
+  const environment = {
+    lastWorkSaveTimer: null,
+    captureWorkspaceDocumentFence() { return { scopeId: 'draft:test', resetToken: 0, allowBlankResetCheckpoint: false }; },
+    workspaceDocumentFenceIsCurrent() { return true; },
+    lastWorkSyncingVisibleInputs: false,
+    syncVisibleLastWorkInputs() {},
+    factoryRuntimeDetachedValue(value) { return JSON.parse(JSON.stringify(value)); },
+    savePersistentState(options) { capturedFactory = options.factory; return Promise.resolve(true); },
+    flushQueuedPersistentState() { return Promise.resolve(true); },
+    saveLastWorkBootstrap() {},
+    state: { factory: null },
+    saveFactoryLastSnapshot() {},
+    flushFactoryLastSnapshotSave() {},
+    saveLastProductImageBackupToDbIfChanged() { return Promise.resolve(true); },
+    sessionAssetsHydrated: false,
+    saveSessionAssetsToDbIfChanged() { return Promise.resolve(true); },
+    markPendingSessionAssetSaveIfChanged() {},
+    saveServerLastWorkSnapshot() { return Promise.resolve(true); },
+  };
+  const saveLastWorkNow = new Function(
+    ...Object.keys(environment),
+    `${saveSource}\nreturn saveLastWorkNow;`,
+  )(...Object.values(environment));
+  const revocable = Proxy.revocable({ product: { productName: '현재 제품' } }, {});
+
+  const pending = saveLastWorkNow({ factory: revocable.proxy, server: false });
+  revocable.revoke();
+  await pending;
+
+  assert.deepEqual(capturedFactory, { product: { productName: '현재 제품' } });
+});
+
+test('저장 flush는 비동기 경합이 한 번 더 발생해도 최신 상태를 다시 시도한다', async () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const flushStart = persistence.indexOf('async function flushQueuedPersistentState(');
+  const flushEnd = persistence.indexOf('function loadPersistentSession(', flushStart);
+  assert.ok(flushStart >= 0 && flushEnd > flushStart);
+  const flushSource = persistence.slice(flushStart, flushEnd);
+  let saveCount = 0;
+  const environment = {
+    persistentStateSavePromise: null,
+    serverLastWorkHydrationPromise: null,
+    persistentStateSaveRetryTimer: null,
+    workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: false },
+    savePersistentState() {
+      saveCount += 1;
+      return Promise.resolve(saveCount >= 2);
+    },
+  };
+  const flushQueuedPersistentState = new Function(
+    ...Object.keys(environment),
+    `${flushSource}\nreturn flushQueuedPersistentState;`,
+  )(...Object.values(environment));
+
+  const saved = await flushQueuedPersistentState({ skipVisibleSync: true });
+
+  assert.equal(saved, true);
+  assert.equal(saveCount, 2);
+});
+
+test('저장 flush는 서버 last-work 복원이 끝난 뒤에 최신 상태를 저장한다', async () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const flushStart = persistence.indexOf('async function flushQueuedPersistentState(');
+  const flushEnd = persistence.indexOf('function loadPersistentSession(', flushStart);
+  assert.ok(flushStart >= 0 && flushEnd > flushStart);
+  const flushSource = persistence.slice(flushStart, flushEnd);
+  let releaseHydration;
+  const hydration = new Promise(resolve => {
+    releaseHydration = resolve;
+  });
+  let saveCount = 0;
+  const environment = {
+    persistentStateSavePromise: null,
+    serverLastWorkHydrationPromise: hydration,
+    persistentStateSaveRetryTimer: null,
+    workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: true },
+    savePersistentState() {
+      saveCount += 1;
+      return Promise.resolve(true);
+    },
+  };
+  const flushQueuedPersistentState = new Function(
+    ...Object.keys(environment),
+    `${flushSource}\nreturn flushQueuedPersistentState;`,
+  )(...Object.values(environment));
+
+  const pending = flushQueuedPersistentState({ skipVisibleSync: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(saveCount, 0, 'server hydration 중에는 저장을 시작하면 안 됩니다.');
+  releaseHydration();
+
+  assert.equal(await pending, true);
+  assert.equal(saveCount, 1);
+});
+
+test('저장 flush는 지연된 서버 복원이 시작되기 전 공백에서도 복원 완료를 기다린다', async () => {
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const flushStart = persistence.indexOf('async function flushQueuedPersistentState(');
+  const flushEnd = persistence.indexOf('function loadPersistentSession(', flushStart);
+  assert.ok(flushStart >= 0 && flushEnd > flushStart);
+  const flushSource = persistence.slice(flushStart, flushEnd);
+  let releaseDeferredHydration;
+  const deferredHydration = new Promise(resolve => {
+    releaseDeferredHydration = resolve;
+  });
+  let saveCount = 0;
+  const environment = {
+    persistentStateSavePromise: null,
+    serverLastWorkHydrationPromise: null,
+    serverLastWorkHydrated: false,
+    classicRuntimeDeferredHydrationPromise: deferredHydration,
+    persistentStateSaveRetryTimer: null,
+    workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: true },
+    savePersistentState() {
+      saveCount += 1;
+      return Promise.resolve(true);
+    },
+  };
+  const flushQueuedPersistentState = new Function(
+    ...Object.keys(environment),
+    `${flushSource}\nreturn flushQueuedPersistentState;`,
+  )(...Object.values(environment));
+
+  const pending = flushQueuedPersistentState({ skipVisibleSync: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(saveCount, 0, 'deferred server hydration 시작 전 공백에는 저장하면 안 됩니다.');
+  releaseDeferredHydration();
+
+  assert.equal(await pending, true);
+  assert.equal(saveCount, 1);
 });
 
 test('초기 세션 정규화는 state 선언 전에도 백엔드 URL을 안전하게 계산한다', () => {
@@ -417,4 +855,22 @@ test('초기 세션 정규화는 state 선언 전에도 백엔드 URL을 안전�
     resolveBeforeState({}, () => 'http://127.0.0.1:15061/'),
     'http://127.0.0.1:15061',
   );
+});
+
+test('초기 저장 세션 경고는 state 생성 전에도 저장 작업 복원을 중단시키지 않는다', () => {
+  // Given: 저장 세션은 state 객체보다 먼저 읽히며, 이때 identity 경고가 발생할 수 있다.
+  const persistence = source(path.join(ROOT, 'src', 'app-core-02.js'));
+  const runtime = source(path.join(ROOT, 'src', 'app-core-03.js'));
+  const warningSource = extractFunction(persistence, 'setStorageWarningOnce');
+  const setWarningBeforeState = new Function(
+    'factoryAppStateReady',
+    `let pendingStartupStorageWarning = null;\n${warningSource}\nreturn setStorageWarningOnce;`,
+  )(false);
+
+  // When: state 선언 전의 저장 세션 검증이 경고를 남긴다.
+  // Then: TDZ 예외 대신 경고를 보류하고, state 생성 뒤에 적용할 수 있어야 한다.
+  assert.doesNotThrow(() => setWarningBeforeState('서로 다른 작업파일 복원본을 차단했습니다.', 'identity-conflict'));
+  assert.match(runtime, /const _savedStartupStorageWarning = consumeStartupStorageWarning\(\);/);
+  assert.match(runtime, /storageWarning:\s*_savedStartupStorageWarning\?\.message\s*\|\|\s*''/);
+  assert.match(runtime, /storageWarningDismissKey:\s*_savedStartupStorageWarning\?\.dismissKey\s*\|\|\s*''/);
 });

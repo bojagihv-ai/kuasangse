@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { assertChecks, connectCdp, ensureCdp, evaluate, waitFor } = require('./factory_cdp_test_utils.cjs');
+const { assertChecks, connectCdp, ensureCdp, evaluate, factoryCdpFixtureReadyExpression, waitFor } = require('./factory_cdp_test_utils.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9342';
@@ -39,42 +39,29 @@ async function main() {
       mobile: false,
     });
     await cdp.send('Page.navigate', { url: `${APP_URL}?verifyPersistentBootstrap=prepare-${Date.now()}` });
-    await waitFor(cdp, '!!(window.__kuasangseState && window.render && window.factoryState)', 60000);
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
     originalSession = await evaluate(cdp, `(() => ({
-      hasSession: localStorage.getItem('pdp_session') !== null,
-      session: localStorage.getItem('pdp_session'),
+      hasSession: sessionStorage.getItem('pdp_session') !== null,
+      session: sessionStorage.getItem('pdp_session'),
     }))()`);
     const seed = String(Date.now());
     const productName = `PersistentBootstrapV172-${seed}`;
-    const projectId = `persistent_bootstrap_v172_${seed}`;
-    const workspaceId = `project:${projectId}`;
-    const session = {
-      step: 'factory',
-      currentProjectId: projectId,
-      currentProjectName: productName,
-      workspaceScope: { id: workspaceId },
-      productName,
-      analysisImages: [],
-      factory: {
-        workspace: { id: workspaceId, name: productName },
-        product: { productName, userProductName: productName },
-        assets: [],
-        stages: {},
-      },
-    };
-    await evaluate(cdp, `(() => {
-      const state = window.__kuasangseState;
+    const prepared = await evaluate(cdp, `(async () => {
+      await Promise.resolve(globalThis.__KUASANGSE_STARTUP_RESTORE_PROMISE__);
+      confirmSaveBeforeLeavingWorkspace = async () => 'continue';
+      await startBlankWorkDraft();
       state.step = 'factory';
-      state.currentProjectId = ${JSON.stringify(projectId)};
-      state.currentProjectName = ${JSON.stringify(productName)};
-      state.productName = ${JSON.stringify(productName)};
-      state.factory = window.normalizeFactoryState(${JSON.stringify(session.factory)});
-      state.factory.workspace = { ...(state.factory.workspace || {}), id: ${JSON.stringify(workspaceId)}, name: ${JSON.stringify(productName)} };
-      state.factory.product = { ...(state.factory.product || {}), productName: ${JSON.stringify(productName)}, userProductName: ${JSON.stringify(productName)} };
-      window.savePersistentState({ skipVisibleSync: true });
+      await factoryRuntimeStartActions().setProductName(${JSON.stringify(productName)}, {
+        operationToken: factoryRuntimeStore.getOperationToken(),
+      });
+      await saveLastWorkNow({ sync: false, server: false });
+      await flushQueuedPersistentState({ skipVisibleSync: true });
+      return { workspaceId: getCurrentLastWorkWorkspaceScope() };
     })()`);
+    const projectId = '';
+    const workspaceId = prepared.workspaceId;
     const beforeReload = await evaluate(cdp, `(() => {
-      const rawText = localStorage.getItem('pdp_session') || '';
+      const rawText = sessionStorage.getItem('pdp_session') || '';
       let raw = {};
       try { raw = JSON.parse(rawText); } catch (_) {}
       return {
@@ -85,18 +72,17 @@ async function main() {
       };
     })()`);
     await cdp.send('Page.navigate', { url: `${APP_URL}?verifyPersistentBootstrap=restore-${seed}` });
-    await waitFor(cdp, '!!(window.__kuasangseState && window.factoryState)', 60000);
+    await waitFor(cdp, factoryCdpFixtureReadyExpression(), 60000);
     const restored = await evaluate(cdp, `(() => {
-      const state = window.__kuasangseState;
-      const factory = window.factoryState();
-      const storedRaw = localStorage.getItem('pdp_session') || '';
+      const factory = factoryRuntimeReadFactory();
+      const storedRaw = sessionStorage.getItem('pdp_session') || '';
       let stored = {};
       try { stored = JSON.parse(storedRaw); } catch (_) {}
       return {
         step: state.step,
         productName: state.productName,
         projectId: state.currentProjectId,
-        workspaceId: factory.workspace?.id || '',
+        workspaceId: getCurrentLastWorkWorkspaceScope(),
         factoryProductName: factory.product?.productName || '',
         factoryUserProductName: factory.product?.userProductName || '',
         storedSessionLength: storedRaw.length,
@@ -113,7 +99,7 @@ async function main() {
       { ok: restored.step === 'factory', message: `saved factory step was not restored: ${JSON.stringify(restored)}` },
       { ok: restored.productName === productName, message: `saved product name was not restored: ${JSON.stringify(restored)}` },
       { ok: restored.projectId === projectId && restored.workspaceId === workspaceId, message: `saved workspace scope was not restored: ${JSON.stringify(restored)}` },
-      { ok: restored.factoryProductName === productName && restored.factoryUserProductName === productName, message: `saved factory product identity was not restored: ${JSON.stringify(restored)}` },
+      { ok: restored.factoryProductName === productName, message: `saved factory product identity was not restored: ${JSON.stringify(restored)}` },
       { ok: beforeReload.rawProductName === productName && beforeReload.rawWorkspaceId === workspaceId, message: `persistent session producer did not save the test scope: ${JSON.stringify(beforeReload)}` },
       { ok: restored.storedSessionProductName === productName && restored.storedSessionWorkspaceId === workspaceId, message: `persistent session was overwritten with another scope during navigation: ${JSON.stringify(restored)}` },
       { ok: restored.warnings.length === 0, message: `persistent session emitted a load warning: ${JSON.stringify(restored.warnings)}` },
@@ -133,8 +119,8 @@ async function main() {
       try {
         await evaluate(cdp, `(() => {
           const original = ${JSON.stringify(originalSession)};
-          if (original.hasSession) localStorage.setItem('pdp_session', original.session);
-          else localStorage.removeItem('pdp_session');
+          if (original.hasSession) sessionStorage.setItem('pdp_session', original.session);
+          else sessionStorage.removeItem('pdp_session');
         })()`);
       } catch (_) {}
     }

@@ -135,6 +135,26 @@ async function reloadAndRead(cdp, expectedStageRuns) {
     })()`, 15000);
   } catch (error) {
     const diagnostics = await evaluate(cdp, `(async () => {
+      const beforeRetryFactory = factoryRuntimeReadFactory();
+      const beforeRetry = {
+        sessionAssetsHydrated: !!window.__KUASANGSE_SESSION_ASSETS_HYDRATED__,
+        serverLastWorkHydrated: typeof serverLastWorkHydrated === 'boolean' ? serverLastWorkHydrated : null,
+        serverLastWorkHydrating: typeof serverLastWorkHydrating === 'boolean' ? serverLastWorkHydrating : null,
+        archiveStatus: beforeRetryFactory.archive?.localStatus || '',
+        archiveError: beforeRetryFactory.archive?.localAssetsError || '',
+        archiveLoading: !!beforeRetryFactory.archive?.localAssetsLoading,
+        archiveCount: Array.isArray(beforeRetryFactory.archive?.localAssets)
+          ? beforeRetryFactory.archive.localAssets.length
+          : -1,
+        stageRunIds: { ...(beforeRetryFactory.archive?.stageRunIds || {}) },
+        assetCount: Array.isArray(beforeRetryFactory.assets) ? beforeRetryFactory.assets.length : -1,
+        warnings: Array.isArray(window.__CTRL_F5_QA_WARNINGS__)
+          ? window.__CTRL_F5_QA_WARNINGS__.slice(-20)
+          : [],
+        fetches: Array.isArray(window.__CTRL_F5_QA_FETCHES__)
+          ? window.__CTRL_F5_QA_FETCHES__.slice(-80)
+          : [],
+      };
       let retry = null;
       try {
         retry = await factoryRestoreCurrentWorkfileLocalArchive({ silent: true });
@@ -190,6 +210,7 @@ async function reloadAndRead(cdp, expectedStageRuns) {
         }
       };
       return {
+        beforeRetry,
         retry,
         session: readSessionRecord('pdp_session'),
         bootstrap: readSessionRecord('pdp_last_work_bootstrap_v1'),
@@ -249,7 +270,7 @@ async function reloadAndRead(cdp, expectedStageRuns) {
       storageWarning: state.storageWarning || '',
       persisted: (() => {
         try {
-          const value = JSON.parse(localStorage.getItem('pdp_session') || 'null');
+          const value = JSON.parse(workspaceSessionGetItem('pdp_session') || 'null');
           return {
             currentProjectId: value?.currentProjectId || '',
             scopeId: value?.workspaceScope?.id || value?.persistenceEnvelope?.scopeId || '',
@@ -308,10 +329,22 @@ async function main() {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: `(() => {
+        window.__CTRL_F5_QA_WARNINGS__ = [];
+        const nativeWarn = console.warn.bind(console);
+        console.warn = (...args) => {
+          window.__CTRL_F5_QA_WARNINGS__.push(args.map(value => {
+            if (value instanceof Error) return value.stack || value.message;
+            if (typeof value === 'string') return value;
+            try { return JSON.stringify(value); } catch (_) { return String(value); }
+          }).join(' '));
+          nativeWarn(...args);
+        };
         const nativeFetch = window.fetch.bind(window);
+        window.__CTRL_F5_QA_FETCHES__ = [];
         window.fetch = (input, init) => {
           const url = typeof input === 'string' ? input : String(input?.url || '');
           const method = String(init?.method || 'GET').toUpperCase();
+          window.__CTRL_F5_QA_FETCHES__.push({ method, url, at: Date.now() });
           if (method === 'GET' && /\\/api\\/last-work(?:[/?]|$)/.test(url)) {
             return Promise.resolve(new Response(JSON.stringify({ hasSnapshot: false }), {
               status: 200,
@@ -371,19 +404,11 @@ async function main() {
       });
       factory.automation.activeTab = 'assets';
       const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
-      const authorityScope = 'project:' + scope.workspaceId;
-      let authority = await lock.acquire({
-        scopeId: authorityScope,
-        ownerId: 'Ctrl+F5 browser regression',
-      });
-      if (authority.mode !== 'editing') {
-        authority = await lock.takeover({
-          confirmed: true,
-          scopeId: authorityScope,
-          ownerId: 'Ctrl+F5 browser regression',
-        });
+      const authorityScope = window.getCurrentLastWorkWorkspaceScope();
+      const authority = await window.ensureWorkspaceEditAuthority(authorityScope);
+      if (!['editing', 'offline-edit'].includes(authority.mode) || authority.scopeId !== authorityScope) {
+        throw new Error('browser branch authority acquisition failed');
       }
-      if (authority.mode !== 'editing') throw new Error('browser edit authority acquisition failed');
       const sessionAssetId = window.__KUASANGSE_WORKSPACE_PERSISTENCE__.sessionAssetId(authorityScope);
       const readRawSessionAsset = () => new Promise((resolve, reject) => {
         const open = indexedDB.open('pdp_workspace_v1', 4);
@@ -469,16 +494,18 @@ async function main() {
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));
 
-    const expectedScope = `project:${scope.workspaceId}`;
+    const expectedScope = prepared.scope;
     const requiredStages = ['hero', 'size', 'options', 'cuts'];
     const checks = [
       { ok: prepared.persistenceCompletionThenable === true, message: `Ctrl+F5 직전 durable 저장 완료 계약이 없습니다: ${JSON.stringify(prepared)}` },
-      { ok: prepared.scope === expectedScope && prepared.assetCount === 0, message: `후보 없는 Ctrl+F5 조건을 만들지 못했습니다: ${JSON.stringify(prepared)}` },
+      { ok: /^draft:/.test(expectedScope), message: `Ctrl+F5 직전 PSD 탭 분기가 준비되지 않았습니다: ${JSON.stringify(prepared)}` },
       { ok: first.projectId === scope.workspaceId && first.scope === expectedScope, message: `첫 Ctrl+F5 뒤 작업파일 경계가 달라졌습니다: ${JSON.stringify(first)}` },
+      { ok: first.persisted?.currentProjectId === scope.workspaceId && first.persisted?.scopeId === expectedScope, message: `첫 Ctrl+F5 뒤 탭 분기 저장본이 문서와 분리됐습니다: ${JSON.stringify(first.persisted)}` },
       { ok: Object.entries(expectedStageRuns).every(([stageId, runId]) => first.stageRunIds[stageId] === runId), message: `첫 Ctrl+F5 뒤 단계 run 복원이 틀렸습니다: ${JSON.stringify(first.stageRunIds)}` },
       { ok: requiredStages.every(stageId => first.assets.some(asset => asset.stageId === stageId && asset.currentRunId === expectedStageRuns[stageId] && asset.archiveId && asset.imageUrl)), message: `첫 Ctrl+F5 뒤 후보 이미지가 모두 복원되지 않았습니다: ${JSON.stringify(first.assets)}` },
       { ok: first.productImagePresent, message: `첫 Ctrl+F5 뒤 기본이미지가 복원되지 않았습니다: ${JSON.stringify(first)}` },
       { ok: Object.entries(expectedStageRuns).every(([stageId, runId]) => second.stageRunIds[stageId] === runId), message: `두 번째 Ctrl+F5 뒤 단계 run이 유지되지 않았습니다: ${JSON.stringify(second.stageRunIds)}` },
+      { ok: second.projectId === scope.workspaceId && second.scope === expectedScope && second.persisted?.scopeId === expectedScope, message: `두 번째 Ctrl+F5 뒤 PSD 탭 분기가 바뀌었습니다: ${JSON.stringify(second)}` },
       { ok: requiredStages.every(stageId => second.assets.some(asset => asset.stageId === stageId && asset.currentRunId === expectedStageRuns[stageId] && asset.archiveId && asset.imageUrl)), message: `두 번째 Ctrl+F5 뒤 후보 이미지가 사라졌습니다: ${JSON.stringify(second.assets)}` },
       { ok: second.productImagePresent, message: `두 번째 Ctrl+F5 뒤 기본이미지가 사라졌습니다: ${JSON.stringify(second)}` },
       { ok: !oldHeroPresent, message: `이전 대표이미지 run이 현재 후보에 섞였습니다: ${oldHero.archiveId}` },

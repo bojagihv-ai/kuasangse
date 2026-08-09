@@ -1,10 +1,13 @@
 const fs = require('fs');
+const http = require('http');
+const net = require('net');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { MANUAL_EXTERNAL_GATES, RUNTIME_SOURCES, buildRegressionSteps } = require('./regression_manifest.cjs');
 const {
   captureRuntimeSourceSnapshot,
   compareRuntimeSourceSnapshots,
+  runtimeSourceDigest,
 } = require('./runtime_source_guard.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -15,12 +18,42 @@ function argumentValue(name, fallback = '') {
   return index >= 0 ? String(process.argv[index + 1] || fallback) : fallback;
 }
 
-function cdpBasePort() {
-  const port = Number.parseInt(process.env.KUASANGSE_CDP_BASE_PORT || '9460', 10);
+function cdpBasePort(env = process.env) {
+  const port = Number.parseInt(env.KUASANGSE_CDP_BASE_PORT || '9460', 10);
   if (!Number.isInteger(port) || port < 1024 || port > 64000) {
-    throw new Error(`invalid KUASANGSE_CDP_BASE_PORT: ${process.env.KUASANGSE_CDP_BASE_PORT}`);
+    throw new Error(`invalid KUASANGSE_CDP_BASE_PORT: ${env.KUASANGSE_CDP_BASE_PORT}`);
   }
   return port;
+}
+
+function canBindTcpPort(port) {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function findAvailableCdpBasePort(stepCount, requestedPort = cdpBasePort()) {
+  const browserPortSpan = Math.max(16, Number(stepCount) || 0);
+  const offsets = [
+    ...Array.from({ length: browserPortSpan }, (_, index) => index),
+    ...Array.from({ length: browserPortSpan }, (_, index) => 1000 + index),
+    2001,
+  ];
+  for (let basePort = requestedPort; basePort + 2001 <= 64000; basePort += browserPortSpan) {
+    let available = true;
+    for (const offset of offsets) {
+      if (!await canBindTcpPort(basePort + offset)) {
+        available = false;
+        break;
+      }
+    }
+    if (available) return basePort;
+  }
+  throw new Error(`no free daily CDP port range starting at ${requestedPort}`);
 }
 
 function servicePort(name, fallback) {
@@ -94,41 +127,157 @@ function startService(label, command, args, options, runDir) {
   return { label, child, stdout, stderr };
 }
 
-async function ensureServices(pythonExe, runDir) {
-  const started = [];
-  const env = { ...process.env };
-  delete env.SSL_CERT_FILE;
-  const appUrl = frontendUrl();
-  const apiBase = backendBase();
-  const frontendPort = new URL(appUrl).port;
-  const backendPort = new URL(apiBase).port;
-  if (!await urlIsReady(appUrl)) {
-    started.push(startService(`frontend-${frontendPort}`, pythonExe, [
-      '-m', 'http.server', frontendPort, '--bind', '127.0.0.1',
-    ], { env }, runDir));
-    if (!await waitForUrl(appUrl)) {
-      throw new Error(`frontend ${appUrl} startup failed`);
+const STATIC_CONTENT_TYPES = Object.freeze({
+  '.css': 'text/css; charset=utf-8',
+  '.gif': 'image/gif',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+});
+
+function staticFileForRequest(requestUrl) {
+  const pathname = decodeURIComponent(new URL(requestUrl || '/', 'http://127.0.0.1').pathname)
+    .replace(/\\/g, '/');
+  const relativePath = pathname.replace(/^\/+/, '') || 'app.html';
+  const filePath = path.resolve(ROOT, relativePath);
+  if (filePath !== ROOT && !filePath.startsWith(`${ROOT}${path.sep}`)) return null;
+  return filePath;
+}
+
+async function startTaskOwnedStaticServer(runDir, requestedPort = 0) {
+  const stdout = fs.createWriteStream(path.join(runDir, 'task-owned-daily-frontend.out.log'));
+  const stderr = fs.createWriteStream(path.join(runDir, 'task-owned-daily-frontend.err.log'));
+  const server = http.createServer((request, response) => {
+    const filePath = staticFileForRequest(request.url);
+    if (!filePath) {
+      response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Forbidden');
+      return;
     }
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (_) {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+    if (!stat.isFile()) {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+    response.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Length': stat.size,
+      'Content-Type': STATIC_CONTENT_TYPES[path.extname(filePath).toLowerCase()]
+        || 'application/octet-stream',
+      'X-Kuasangse-Test-Server': 'task-owned-daily-frontend',
+    });
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', error => {
+      stderr.write(`${error.stack || error}\n`);
+      response.destroy(error);
+    });
+    stream.pipe(response);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen({
+        host: '127.0.0.1',
+        port: requestedPort,
+        exclusive: true,
+      }, resolve);
+    });
+  } catch (error) {
+    stdout.end();
+    stderr.end();
+    throw error;
   }
-  if (!await urlIsReady(`${apiBase}/api/sections`)) {
-    started.push(startService(`backend-${backendPort}`, pythonExe, ['backend/app.py'], {
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  stdout.write(`listening=http://127.0.0.1:${port}/app.html\n`);
+  return {
+    label: 'task-owned-daily-frontend',
+    server,
+    stdout,
+    stderr,
+    port,
+  };
+}
+
+async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePort = cdpBasePort()) {
+  const backendPort = servicePort('KUASANGSE_DAILY_BACKEND_PORT', selectedCdpBasePort + 2001);
+  const apiBase = `http://127.0.0.1:${backendPort}`;
+  if (await urlIsReady(`${apiBase}/api/sections`)) {
+    throw new Error(`daily task-owned backend port is already occupied: ${backendPort}`);
+  }
+  const runtimeRoot = path.join(runDir, 'task-owned-runtime');
+  const archiveRoot = path.join(runtimeRoot, 'archive');
+  const stateRoot = path.join(runtimeRoot, 'state');
+  fs.mkdirSync(archiveRoot, { recursive: true });
+  fs.mkdirSync(stateRoot, { recursive: true });
+  const requestedFrontendPort = process.env.KUASANGSE_DAILY_FRONTEND_PORT
+    ? servicePort('KUASANGSE_DAILY_FRONTEND_PORT', 0)
+    : 0;
+  const services = [];
+  try {
+    const frontend = await startTaskOwnedStaticServer(runDir, requestedFrontendPort);
+    services.push(frontend);
+    const frontendPort = frontend.port;
+    const appUrl = `http://127.0.0.1:${frontendPort}/app.html`;
+  const env = {
+    ...process.env,
+    KUASANGSE_URL: appUrl,
+    KUASANGSE_FRONTEND_PORT: String(frontendPort),
+    KUASANGSE_BACKEND_BASE: apiBase,
+    KUASANGSE_BACKEND_URL: apiBase,
+    KUASANGSE_BACKEND_PORT: String(backendPort),
+    KUASANGSE_CDP_BASE_PORT: String(selectedCdpBasePort),
+    KUASANGSE_LOCAL_ARCHIVE_FOLDER: archiveRoot,
+    KUASANGSE_LOCAL_STATE_FOLDER: stateRoot,
+  };
+  delete env.SSL_CERT_FILE;
+    services.push(startService('task-owned-daily-backend', pythonExe, ['backend/app.py'], {
       env: {
         ...env,
-        PORT: backendPort,
+        PORT: String(backendPort),
         KUASANGSE_MAINTENANCE: '0',
         KUASANGSE_CORS_ORIGINS: new URL(appUrl).origin,
       },
     }, runDir));
-    if (!await waitForUrl(`${apiBase}/api/sections`)) {
-      throw new Error(`backend ${apiBase} startup failed`);
+    if (!await waitForUrl(appUrl) || !await waitForUrl(`${apiBase}/api/sections`)) {
+      throw new Error('daily task-owned services failed readiness');
     }
+    process.stdout.write(
+      `[daily-runtime] frontend=${appUrl} backend=${apiBase} archive=${archiveRoot} state=${stateRoot}\n`,
+    );
+    return { services, env };
+  } catch (error) {
+    await stopServices(services);
+    throw error;
   }
-  return started;
 }
 
-function stopServices(services) {
+async function stopServices(services) {
   for (const service of services) {
-    try { service.child.kill('SIGKILL'); } catch (_) {}
+    if (service.server) {
+      await new Promise(resolve => service.server.close(resolve));
+    } else {
+      terminateProcessTree(service.child);
+    }
     service.stdout.end();
     service.stderr.end();
   }
@@ -150,7 +299,7 @@ function isRetryableInfrastructureFailure(step, result) {
   const output = String(result.tail || '');
   if (/Factory browser verification failed/i.test(output)) return false;
   if (result.timedOut === true) return true;
-  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET|SocketError: other side closed|waitFor timeout: !!\(window\./i.test(output);
+  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET|SocketError: other side closed|waitFor timeout:[\s\S]{0,800}(?:classicRuntimeHydrationReady|typeof state === ['"]object['"]|window\.(?:state|__kuasangseState))/i.test(output);
 }
 
 function terminateProcessTree(child) {
@@ -182,7 +331,7 @@ function sourceMutationFailure(comparison) {
   };
 }
 
-async function runStepAttempt(step, index, runDir, attempt = 1) {
+async function runStepAttempt(step, index, runDir, attempt = 1, runtimeEnv = {}) {
   const startedAt = Date.now();
   const retrySuffix = attempt > 1 ? `-retry-${attempt}` : '';
   const logPath = path.join(runDir, `${String(index + 1).padStart(2, '0')}-${step.id}${retrySuffix}.log`);
@@ -192,8 +341,9 @@ async function runStepAttempt(step, index, runDir, attempt = 1) {
     KUASANGSE_URL: frontendUrl(),
     KUASANGSE_BACKEND_BASE: backendBase(),
     KUASANGSE_BACKEND_URL: backendBase(),
-    KUASANGSE_CDP_URL: `http://127.0.0.1:${cdpBasePort() + index + ((attempt - 1) * 1000)}`,
-    KUASANGSE_CDP_COMMAND_TIMEOUT_MS: '45000',
+    KUASANGSE_CDP_URL: `http://127.0.0.1:${cdpBasePort(runtimeEnv) + index + ((attempt - 1) * 1000)}`,
+    KUASANGSE_CDP_COMMAND_TIMEOUT_MS: process.env.KUASANGSE_DAILY_CDP_COMMAND_TIMEOUT_MS || '45000',
+    ...runtimeEnv,
   };
   for (const name of step.clearEnv || []) delete env[name];
   process.stdout.write(`\n[${step.id}] ${step.area} · ${step.title}${attempt > 1 ? ` · 재시도 ${attempt}` : ''}\n`);
@@ -243,15 +393,16 @@ async function runStepAttempt(step, index, runDir, attempt = 1) {
   };
 }
 
-async function runStep(step, index, runDir) {
+async function runStep(step, index, runDir, runtimeEnv) {
   const startedAt = Date.now();
-  const firstAttempt = await runStepAttempt(step, index, runDir, 1);
-  const attempts = [firstAttempt];
+  const attempts = [];
+  const firstAttempt = await runStepAttempt(step, index, runDir, 1, runtimeEnv);
+  attempts.push(firstAttempt);
   if (!retriesDisabled() && isRetryableInfrastructureFailure(step, firstAttempt)) {
     process.stdout.write(`[재시도] ${step.id} · 브라우저/CDP 시작 실패로 1회만 다시 실행합니다. 첫 로그는 보존됩니다.\n`);
-    await waitForUrl(frontendUrl(), 15000);
+    await waitForUrl(runtimeEnv.KUASANGSE_URL || frontendUrl(), 15000);
     await new Promise(resolve => setTimeout(resolve, 1000));
-    attempts.push(await runStepAttempt(step, index, runDir, 2));
+    attempts.push(await runStepAttempt(step, index, runDir, 2, runtimeEnv));
   }
   const finalAttempt = attempts.at(-1);
   return {
@@ -300,19 +451,30 @@ function markdownReport(report) {
 
 async function main() {
   if (process.argv.includes('--help')) {
-    console.log('사용법: node tools/run_daily_regression.cjs --profile fast|daily|full [--no-retry]');
+    console.log('사용법: node tools/run_daily_regression.cjs --profile fast|daily|full [--ids DB-04,FIELD-03] [--no-retry]');
     return;
   }
   const profile = argumentValue('--profile', 'daily');
   if (!(profile in PROFILE_RANK)) throw new Error(`unknown profile: ${profile}`);
+  const selectedIds = new Set(
+    argumentValue('--ids', '').split(',').map(value => value.trim()).filter(Boolean),
+  );
   const startedAt = new Date();
   const reportRoot = path.join(ROOT, 'test-results', 'daily-regression');
   const runDir = path.join(reportRoot, safeTimestamp(startedAt));
   fs.mkdirSync(runDir, { recursive: true });
   const pythonExe = findPython();
-  const steps = buildRegressionSteps(pythonExe).filter(step => PROFILE_RANK[step.tier] <= PROFILE_RANK[profile]);
+  const steps = buildRegressionSteps(pythonExe)
+    .filter(step => PROFILE_RANK[step.tier] <= PROFILE_RANK[profile])
+    .filter(step => !selectedIds.size || selectedIds.has(step.id));
+  if (selectedIds.size && steps.length !== selectedIds.size) {
+    const found = new Set(steps.map(step => step.id));
+    const missing = [...selectedIds].filter(id => !found.has(id));
+    throw new Error(`unknown or unavailable regression ids: ${missing.join(', ')}`);
+  }
   const sourceBaseline = captureRuntimeSourceSnapshot(ROOT, RUNTIME_SOURCES);
-  const services = await ensureServices(pythonExe, runDir);
+  const selectedCdpBasePort = await findAvailableCdpBasePort(steps.length);
+  const runtime = await startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePort);
   const results = [];
   try {
     for (let index = 0; index < steps.length; index += 1) {
@@ -324,7 +486,11 @@ async function main() {
         results.push(sourceMutationFailure(beforeStep));
         break;
       }
-      results.push(await runStep(steps[index], index, runDir));
+      results.push(await runStep(steps[index], index, runDir, runtime.env));
+      const browserSettleMs = Math.max(0, Number(process.env.KUASANGSE_DAILY_BROWSER_SETTLE_MS || 0) || 0);
+      if (browserSettleMs > 0 && isBrowserStep(steps[index])) {
+        await new Promise(resolve => setTimeout(resolve, browserSettleMs));
+      }
       const afterStep = compareRuntimeSourceSnapshots(
         sourceBaseline,
         captureRuntimeSourceSnapshot(ROOT, RUNTIME_SOURCES),
@@ -335,7 +501,7 @@ async function main() {
       }
     }
   } finally {
-    stopServices(services);
+    await stopServices(runtime.services);
   }
   const finishedAt = new Date();
   const passed = results.filter(result => result.passed).length;
@@ -344,6 +510,8 @@ async function main() {
     profile,
     startedAt: startedAt.toISOString(),
     finishedAt: finishedAt.toISOString(),
+    runtimeSourceSnapshot: sourceBaseline,
+    runtimeSourceDigest: runtimeSourceDigest(sourceBaseline),
     summary: {
       total: results.length,
       passed,
@@ -373,6 +541,8 @@ if (require.main === module) {
 module.exports = {
   captureRuntimeSourceSnapshot,
   compareRuntimeSourceSnapshots,
+  findAvailableCdpBasePort,
   isBrowserStep,
   isRetryableInfrastructureFailure,
+  startTaskOwnedStaticServer,
 };

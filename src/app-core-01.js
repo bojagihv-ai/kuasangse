@@ -84,6 +84,14 @@ const GPT_OAUTH_EXECUTION_PRESETS = [
   { id: 'deep-review', label: '깊은 추론', description: '복잡한 설계·실패 원인 분석', model: 'gpt-5.6-sol', reasoningEffort: 'high', serviceTier: 'standard', timeoutMs: 180000 },
 ];
 
+function includeCurrentGptOAuthModelOption(modelOptions = [], currentModelId = '') {
+  const options = Array.isArray(modelOptions) ? modelOptions.filter(item => item?.id) : [];
+  const modelId = String(currentModelId || '').trim();
+  if (!modelId || options.some(item => item.id === modelId)) return options;
+  const known = (LLM_PROVIDERS.gpt_oauth?.models || []).find(item => item.id === modelId);
+  return [known || { id: modelId, label: modelId }, ...options];
+}
+
 function normalizeGptOAuthOptions(raw = {}) {
   const modelOptions = Array.isArray(raw.modelOptions) && raw.modelOptions.length
     ? raw.modelOptions.filter(item => item?.id).map(item => ({ ...item, label: item.label || item.id }))
@@ -376,6 +384,77 @@ function normalizeImagePayloadForApi(base64 = '', mime = 'image/png') {
   };
 }
 
+function gptOAuthVisionImageScale(width, height, options = {}) {
+  const sourceWidth = Math.max(1, Math.round(Number(width) || 0));
+  const sourceHeight = Math.max(1, Math.round(Number(height) || 0));
+  const maxDimension = Math.max(1024, Number(options.maxDimension) || 16000);
+  const maxPixels = Math.max(1_000_000, Number(options.maxPixels) || 18_000_000);
+  const dimensionScale = maxDimension / Math.max(sourceWidth, sourceHeight);
+  const pixelScale = Math.sqrt(maxPixels / (sourceWidth * sourceHeight));
+  const scale = Math.min(1, dimensionScale, pixelScale);
+  const widthResult = Math.max(1, Math.round(sourceWidth * scale));
+  const heightResult = Math.max(1, Math.round(sourceHeight * scale));
+  return {
+    width: widthResult,
+    height: heightResult,
+    changed: widthResult !== sourceWidth || heightResult !== sourceHeight,
+  };
+}
+
+async function compactGptOAuthVisionImage(img, index = 0, options = {}) {
+  if (!img?.base64 || typeof Image !== 'function' || typeof document === 'undefined') return img;
+  const normalized = normalizeImagePayloadForApi(img.base64, img.mime || img.mimeType || 'image/png');
+  if (!normalized.base64) return img;
+  const dataUrl = `data:${normalized.mime};base64,${normalized.base64}`;
+  const dimensions = await new Promise(resolve => {
+    const image = new Image();
+    const timeoutId = setTimeout(() => resolve(null), 10000);
+    image.onload = () => {
+      clearTimeout(timeoutId);
+      resolve({
+        width: image.naturalWidth || image.width || 0,
+        height: image.naturalHeight || image.height || 0,
+      });
+    };
+    image.onerror = () => {
+      clearTimeout(timeoutId);
+      resolve(null);
+    };
+    image.src = dataUrl;
+  });
+  if (!dimensions?.width || !dimensions.height) return img;
+  const target = gptOAuthVisionImageScale(dimensions.width, dimensions.height, options);
+  if (!target.changed) return img;
+  try {
+    const resizedDataUrl = await resizeImageDataUrl(dataUrl, target.width, target.height);
+    const resized = normalizeImagePayloadForApi(resizedDataUrl, 'image/png');
+    if (!resized.base64) return img;
+    return {
+      ...img,
+      base64: resized.base64,
+      mime: resized.mime,
+      analysisResize: {
+        sourceWidth: dimensions.width,
+        sourceHeight: dimensions.height,
+        width: target.width,
+        height: target.height,
+        index,
+      },
+    };
+  } catch(_) {
+    return img;
+  }
+}
+
+async function prepareGptOAuthVisionImages(imagesArray, options = {}) {
+  const items = Array.isArray(imagesArray) ? imagesArray.slice(0, 8) : [];
+  const prepared = [];
+  for (let i = 0; i < items.length; i++) {
+    prepared.push(await compactGptOAuthVisionImage(items[i], i, options));
+  }
+  return prepared;
+}
+
 function imageSourceToPngDataUrl(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -448,6 +527,7 @@ const tokenTracker = {
   sessionStart: Date.now(),
   activeTab: 'stats',
   showDetail: false,
+  bottomSafeAreaObserver: null,
 
   record(modelId, inputTokens, outputTokens, isImage = false, op = '', meta = null) {
     if (!this.sessions[modelId]) {
@@ -586,8 +666,15 @@ const tokenTracker = {
       <button class="tb-reset" id="tbResetBtn">초기화</button>
     `;
 
-    const main = document.querySelector('.main');
-    if (main) main.style.paddingBottom = '52px';
+    const syncBottomSafeArea = () => {
+      const height = Math.ceil(bar.getBoundingClientRect().height || bar.offsetHeight || 31);
+      document.documentElement.style.setProperty('--token-bar-height', `${height}px`);
+    };
+    syncBottomSafeArea();
+    if (!this.bottomSafeAreaObserver && typeof ResizeObserver === 'function') {
+      this.bottomSafeAreaObserver = new ResizeObserver(syncBottomSafeArea);
+      this.bottomSafeAreaObserver.observe(bar);
+    }
 
     // 신규 호출 시 flash
     const el = document.getElementById('tbCostSession');
@@ -720,6 +807,79 @@ tokenTracker.load();
 // ════════════════════════════════════════════════════════════════
 // GEMINI API SERVICE
 // ════════════════════════════════════════════════════════════════
+const SECTION_CONTENT_PROVIDER_PROMPT_VERSION = 'section-content-provider-v1';
+
+function buildSectionContentProviderPrompt(sectionDef, productAnalysis, customInstructions, competitorRef, options = {}) {
+  const variant = options.variant === 'gpt_oauth' ? 'gpt_oauth' : 'standard';
+  const activeDirectives = getEffectiveImageDirectives();
+  const directiveHeading = variant === 'gpt_oauth'
+    ? 'STRICT USER CONSTRAINTS:'
+    : 'STRICT USER CONSTRAINTS (must be followed — override defaults):';
+  const directiveBlock = activeDirectives.length > 0
+    ? `\n${directiveHeading}\n${activeDirectives.map((directive, index) => `${index + 1}. ${directive}`).join('\n')}\n`
+    : '';
+  const brandBlock = buildBrandPromptBlock();
+  const layoutBlock = buildLayoutPromptBlock();
+  const responseSchema = variant === 'gpt_oauth'
+    ? `  {
+    "headline": "Main headline text in Korean",
+    "subheadline": "Sub headline in Korean",
+    "body_text": "Body copy in Korean (2-3 sentences)",
+    "cta_text": "CTA text or empty string",
+    "layout_suggestion": "Layout recommendation",
+    "color_scheme": {"background":"#hex","text_primary":"#hex","text_secondary":"#hex","accent":"#hex"},
+    "font_suggestion": {"headline_font":"Noto Sans KR","headline_size":"42px","headline_weight":"800","body_font":"Noto Sans KR","body_size":"16px"},
+    "image_description": "Detailed section image direction",
+    "product_placement": "How product image should be placed",
+    "design_notes": "Design notes",
+    "extra_elements": ["bullet or feature"]
+  }`
+    : `  {
+    "headline": "Main headline text in Korean (impactful, short)",
+    "subheadline": "Sub headline in Korean",
+    "body_text": "Body copy in Korean (2-3 sentences)",
+    "cta_text": "Call to action text if applicable, or empty string",
+    "layout_suggestion": "Layout recommendation",
+    "color_scheme": {
+      "background": "#hex",
+      "text_primary": "#hex",
+      "text_secondary": "#hex",
+      "accent": "#hex"
+    },
+    "font_suggestion": {
+      "headline_font": "Noto Sans KR",
+      "headline_size": "px value like 42px",
+      "headline_weight": "700 or 900",
+      "body_font": "Noto Sans KR",
+      "body_size": "px value like 16px"
+    },
+    "image_description": "Detailed description of what the section image should look like",
+    "product_placement": "Description of how the product image should be placed",
+    "design_notes": "Additional design recommendations",
+    "extra_elements": ["list of bullet points or features if applicable"]
+  }`;
+  const responseLead = variant === 'gpt_oauth' ? 'Return ONLY JSON:' : 'Return a JSON object:';
+  const responseTail = variant === 'gpt_oauth' ? '' : '\nRespond ONLY with the JSON object.';
+
+  return `You are a Korean e-commerce detail page content creator.
+
+Section-scoped product facts:
+${JSON.stringify(productAnalysis, null, 2)}
+Only use the facts included above for this section. Do not pull omitted DB/Cafe24 values into the copy.
+
+${competitorRef ? `Competitor Reference: ${competitorRef}` : ''}
+
+Section to create: ${sectionDef.name}
+Section number: ${sectionDef.n}
+Section purpose: ${sectionDef.purpose}
+User custom instructions: ${customInstructions || 'None'}
+${directiveBlock}
+${brandBlock}
+${layoutBlock}
+${variant === 'gpt_oauth' ? '' : 'Based on the product analysis, generate content for this section.\n'}${responseLead}
+${responseSchema}${responseTail}`;
+}
+
 class GeminiAPI {
   constructor(apiKeyOrOptions, model) {
     const isObject = apiKeyOrOptions && typeof apiKeyOrOptions === 'object';
@@ -794,54 +954,13 @@ class GeminiAPI {
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
-    const activeDirectives = getEffectiveImageDirectives();
-    const directiveBlock = activeDirectives.length > 0
-      ? `\nSTRICT USER CONSTRAINTS (must be followed — override defaults):\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n`
-      : '';
-    const brandBlock = buildBrandPromptBlock();
-    const layoutBlock = buildLayoutPromptBlock();
-    const prompt = `You are a Korean e-commerce detail page content creator.
-
-Section-scoped product facts:
-${JSON.stringify(productAnalysis, null, 2)}
-Only use the facts included above for this section. Do not pull omitted DB/Cafe24 values into the copy.
-
-${competitorRef ? 'Competitor Reference: ' + competitorRef : ''}
-
-Section to create: ${sectionDef.name}
-Section number: ${sectionDef.n}
-Section purpose: ${sectionDef.purpose}
-User custom instructions: ${customInstructions || 'None'}
-${directiveBlock}
-${brandBlock}
-${layoutBlock}
-Based on the product analysis, generate content for this section.
-Return a JSON object:
-{
-    "headline": "Main headline text in Korean (impactful, short)",
-    "subheadline": "Sub headline in Korean",
-    "body_text": "Body copy in Korean (2-3 sentences)",
-    "cta_text": "Call to action text if applicable, or empty string",
-    "layout_suggestion": "Layout recommendation",
-    "color_scheme": {
-        "background": "#hex",
-        "text_primary": "#hex",
-        "text_secondary": "#hex",
-        "accent": "#hex"
-    },
-    "font_suggestion": {
-        "headline_font": "Noto Sans KR",
-        "headline_size": "px value like 42px",
-        "headline_weight": "700 or 900",
-        "body_font": "Noto Sans KR",
-        "body_size": "px value like 16px"
-    },
-    "image_description": "Detailed description of what the section image should look like",
-    "product_placement": "Description of how the product image should be placed",
-    "design_notes": "Additional design recommendations",
-    "extra_elements": ["list of bullet points or features if applicable"]
-}
-Respond ONLY with the JSON object.`;
+    const prompt = buildSectionContentProviderPrompt(
+      sectionDef,
+      productAnalysis,
+      customInstructions,
+      competitorRef,
+      { variant: 'standard' },
+    );
 
     const body = {
       contents: [{ parts: [{ text: prompt }] }],
@@ -1469,54 +1588,13 @@ Respond ONLY with the JSON object, no other text.`;
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
-    const activeDirectives = getEffectiveImageDirectives();
-    const directiveBlock = activeDirectives.length > 0
-      ? `\nSTRICT USER CONSTRAINTS (must be followed — override defaults):\n${activeDirectives.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n`
-      : '';
-    const brandBlock = buildBrandPromptBlock();
-    const layoutBlock = buildLayoutPromptBlock();
-    const prompt = `You are a Korean e-commerce detail page content creator.
-
-Section-scoped product facts:
-${JSON.stringify(productAnalysis, null, 2)}
-Only use the facts included above for this section. Do not pull omitted DB/Cafe24 values into the copy.
-
-${competitorRef ? 'Competitor Reference: ' + competitorRef : ''}
-
-Section to create: ${sectionDef.name}
-Section number: ${sectionDef.n}
-Section purpose: ${sectionDef.purpose}
-User custom instructions: ${customInstructions || 'None'}
-${directiveBlock}
-${brandBlock}
-${layoutBlock}
-Based on the product analysis, generate content for this section.
-Return a JSON object:
-{
-    "headline": "Main headline text in Korean (impactful, short)",
-    "subheadline": "Sub headline in Korean",
-    "body_text": "Body copy in Korean (2-3 sentences)",
-    "cta_text": "Call to action text if applicable, or empty string",
-    "layout_suggestion": "Layout recommendation",
-    "color_scheme": {
-        "background": "#hex",
-        "text_primary": "#hex",
-        "text_secondary": "#hex",
-        "accent": "#hex"
-    },
-    "font_suggestion": {
-        "headline_font": "Noto Sans KR",
-        "headline_size": "px value like 42px",
-        "headline_weight": "700 or 900",
-        "body_font": "Noto Sans KR",
-        "body_size": "px value like 16px"
-    },
-    "image_description": "Detailed description of what the section image should look like",
-    "product_placement": "Description of how the product image should be placed",
-    "design_notes": "Additional design recommendations",
-    "extra_elements": ["list of bullet points or features if applicable"]
-}
-Respond ONLY with the JSON object.`;
+    const prompt = buildSectionContentProviderPrompt(
+      sectionDef,
+      productAnalysis,
+      customInstructions,
+      competitorRef,
+      { variant: 'standard' },
+    );
 
     const body = {
       model: this.model,
@@ -2390,36 +2468,13 @@ class GptOAuthAPI {
   }
 
   async generateSectionContent(sectionDef, productAnalysis, customInstructions, competitorRef) {
-    const prompt = `You are a Korean e-commerce detail page content creator.
-
-Section-scoped product facts:
-${JSON.stringify(productAnalysis, null, 2)}
-Only use the facts included above for this section. Do not pull omitted DB/Cafe24 values into the copy.
-
-${competitorRef ? 'Competitor Reference: ' + competitorRef : ''}
-
-Section to create: ${sectionDef.name}
-Section number: ${sectionDef.n}
-Section purpose: ${sectionDef.purpose}
-User custom instructions: ${customInstructions || 'None'}
-${getEffectiveImageDirectives().length ? `\nSTRICT USER CONSTRAINTS:\n${getEffectiveImageDirectives().map((d,i)=>`${i+1}. ${d}`).join('\n')}` : ''}
-${buildBrandPromptBlock()}
-${buildLayoutPromptBlock()}
-
-Return ONLY JSON:
-{
-  "headline": "Main headline text in Korean",
-  "subheadline": "Sub headline in Korean",
-  "body_text": "Body copy in Korean (2-3 sentences)",
-  "cta_text": "CTA text or empty string",
-  "layout_suggestion": "Layout recommendation",
-  "color_scheme": {"background":"#hex","text_primary":"#hex","text_secondary":"#hex","accent":"#hex"},
-  "font_suggestion": {"headline_font":"Noto Sans KR","headline_size":"42px","headline_weight":"800","body_font":"Noto Sans KR","body_size":"16px"},
-  "image_description": "Detailed section image direction",
-  "product_placement": "How product image should be placed",
-  "design_notes": "Design notes",
-  "extra_elements": ["bullet or feature"]
-}`;
+    const prompt = buildSectionContentProviderPrompt(
+      sectionDef,
+      productAnalysis,
+      customInstructions,
+      competitorRef,
+      { variant: 'gpt_oauth' },
+    );
     return this._execJson(prompt, { purpose: '섹션생성' });
   }
 
@@ -2549,7 +2604,8 @@ ${currentTargetText || JSON.stringify(currentTargetValue, null, 2)}
   }
 
   async analyzeCompetitorImages(imagesArray) {
-    const images = buildGptOAuthImagePayloads(null, null, imagesArray, {
+    const preparedImages = await prepareGptOAuthVisionImages(imagesArray);
+    const images = buildGptOAuthImagePayloads(null, null, preparedImages, {
       label: '경쟁사 상세페이지 이미지',
       limit: 8,
     });

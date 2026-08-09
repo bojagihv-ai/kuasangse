@@ -1,15 +1,69 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$BridgeRoot = '\\VBOXSVR\KuasangseVmBridge',
     [string]$WorkerBase = 'http://127.0.0.1:5002',
     [int]$PollMilliseconds = 1500,
-    [int]$JobTimeoutSeconds = 420
+    [int]$JobTimeoutSeconds = 420,
+    [string]$StateRoot = 'C:\ProgramData\JepumVMWorker',
+    [string]$WorkerEnvPath = 'C:\JepumScraper\.env',
+    [string]$HeartbeatPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
-$StateRoot = 'C:\ProgramData\JepumVMWorker'
+$HeartbeatPath = if ($HeartbeatPath) { $HeartbeatPath } else { Join-Path $BridgeRoot '.host-watcher.heartbeat' }
 $LogPath = Join-Path $StateRoot 'candidate-bridge.log'
 $ApiKeyPath = Join-Path $StateRoot 'jepumscraper_worker_api_key.txt'
+
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Threading;
+
+public sealed class VmCandidateBridgeHeartbeat : IDisposable
+{
+    private readonly string path;
+    private readonly Timer timer;
+    private int disposed;
+    private int writing;
+
+    public VmCandidateBridgeHeartbeat(string path, int intervalMilliseconds)
+    {
+        this.path = path;
+        Touch(null);
+        timer = new Timer(Touch, null, intervalMilliseconds, intervalMilliseconds);
+    }
+
+    private void Touch(object state)
+    {
+        if (Volatile.Read(ref disposed) != 0 || Interlocked.Exchange(ref writing, 1) != 0) return;
+        try
+        {
+            string directory = Path.GetDirectoryName(path);
+            if (!String.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            byte[] payload = Encoding.UTF8.GetBytes(DateTime.UtcNow.Ticks.ToString());
+            using (FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.Write(payload, 0, payload.Length);
+                stream.Flush(true);
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        finally { Volatile.Write(ref writing, 0); }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 0) timer.Dispose();
+    }
+
+    public void Pulse()
+    {
+        Touch(null);
+    }
+}
+'@
 
 function Write-BridgeLog {
     param([string]$Message)
@@ -18,22 +72,73 @@ function Write-BridgeLog {
     } catch {}
 }
 
+function Ensure-BridgeDirectory {
+    param([string]$Path)
+    if ($Path -and -not (Test-Path -LiteralPath $Path -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    }
+}
+
+function Test-RequestAlreadyTerminal {
+    param([Parameter(Mandatory)][string]$RequestPath)
+
+    $jobId = [IO.Path]::GetFileNameWithoutExtension($RequestPath)
+    $statusPath = Join-Path (Join-Path (Join-Path $BridgeRoot 'results') $jobId) 'status.json'
+    if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+        return $false
+    }
+    try {
+        $existingStatus = Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        return @('completed', 'error', 'failed', 'cancelled', 'cancelled_partial', 'manual_required') -contains ([string]$existingStatus.status).ToLowerInvariant()
+    } catch {
+        return $false
+    }
+}
+
 function Write-JsonAtomic {
     param([string]$Path, [object]$Value)
     $directory = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    Ensure-BridgeDirectory -Path $directory
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    $Value | ConvertTo-Json -Depth 80 | Set-Content -LiteralPath $temp -Encoding UTF8
+    ConvertTo-Json -InputObject $Value -Depth 80 | Set-Content -LiteralPath $temp -Encoding UTF8
     Move-Item -LiteralPath $temp -Destination $Path -Force
 }
 
 function Get-WorkerHeaders {
     $headers = @{ Accept = 'application/json' }
-    if (Test-Path -LiteralPath $ApiKeyPath -PathType Leaf) {
-        $key = (Get-Content -LiteralPath $ApiKeyPath -TotalCount 1 -Encoding UTF8).Trim()
-        if ($key) { $headers['X-API-Key'] = $key }
+    $key = ''
+    if (Test-Path -LiteralPath $WorkerEnvPath -PathType Leaf) {
+        foreach ($line in [IO.File]::ReadLines($WorkerEnvPath)) {
+            if ($line -notmatch '^\s*(?:export\s+)?JEPUM_API_KEY\s*=\s*(?<value>.*)\s*$') { continue }
+            $key = ([string]$matches.value).Trim()
+            if ($key.Length -ge 2) {
+                $first = $key.Substring(0, 1)
+                $last = $key.Substring($key.Length - 1, 1)
+                if (($first -eq "'" -and $last -eq "'") -or ($first -eq '"' -and $last -eq '"')) {
+                    $key = $key.Substring(1, $key.Length - 2)
+                }
+            }
+            break
+        }
     }
+    if (-not $key -and (Test-Path -LiteralPath $ApiKeyPath -PathType Leaf)) {
+        $key = (Get-Content -LiteralPath $ApiKeyPath -TotalCount 1 -Encoding UTF8).Trim()
+    }
+    if ($key) { $headers['X-API-Key'] = $key }
     return $headers
+}
+
+function Update-BridgeHeartbeat {
+    if (-not $HeartbeatPath) { return }
+    if ($null -ne $script:heartbeatTimer) {
+        $script:heartbeatTimer.Pulse()
+        return
+    }
+$heartbeatDirectory = Split-Path -Parent $HeartbeatPath
+Ensure-BridgeDirectory -Path $heartbeatDirectory
+    try {
+        [IO.File]::WriteAllText($HeartbeatPath, [datetime]::UtcNow.Ticks.ToString())
+    } catch {}
 }
 
 function Invoke-WorkerJson {
@@ -55,9 +160,13 @@ function Invoke-WorkerJson {
         $params['ContentType'] = 'application/json; charset=utf-8'
         $params['Body'] = $Body | ConvertTo-Json -Depth 80 -Compress
     }
+    Update-BridgeHeartbeat
     try {
-        return Invoke-RestMethod @params
+        $response = Invoke-RestMethod @params
+        Update-BridgeHeartbeat
+        return $response
     } catch {
+        Update-BridgeHeartbeat
         $worker_response = ''
         try {
             $response = $_.Exception.Response
@@ -116,6 +225,7 @@ function Write-JobStatus {
     param([string]$ResultDir, [hashtable]$Status)
     $Status.updated_at = (Get-Date).ToString('o')
     Write-JsonAtomic -Path (Join-Path $ResultDir 'status.json') -Value $Status
+    Update-BridgeHeartbeat
 }
 
 function Resolve-WorkerPath {
@@ -129,20 +239,34 @@ function Resolve-WorkerPath {
     return $text
 }
 
+function Test-NaverDetailPayload {
+    param([object]$Payload)
+    foreach ($product in @($Payload.products)) {
+        $platform = ([string]$product.platform).Trim().ToLowerInvariant()
+        $url = ([string]$product.product_url).Trim().ToLowerInvariant()
+        if ($platform -match 'naver|smartstore|네이버|스마트' -or $url -match 'naver\.com') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Process-DetailCaptureRequest {
     param([object]$Request, [string]$JobId, [string]$ResultDir)
     $payload = $Request.worker_payload
     if (-not $payload -or -not ($payload -is [psobject])) { throw 'VM 상세수집 worker_payload가 없습니다.' }
     $payload | Add-Member -NotePropertyName capture_runtime -NotePropertyValue 'local' -Force
     $payload | Add-Member -NotePropertyName runtime -NotePropertyValue 'local' -Force
+    $payload | Add-Member -NotePropertyName execution_profile -NotePropertyValue 'local' -Force
     $optionsProperty = $payload.PSObject.Properties['options']
     $options = if ($optionsProperty) { $optionsProperty.Value } else { $null }
     if ($options -is [psobject]) {
         $options | Add-Member -NotePropertyName capture_runtime -NotePropertyValue 'local' -Force
         $options | Add-Member -NotePropertyName runtime -NotePropertyValue 'local' -Force
+        $options | Add-Member -NotePropertyName execution_profile -NotePropertyValue 'local' -Force
         $options | Add-Member -NotePropertyName transport -NotePropertyValue 'shared_folder' -Force
     } else {
-        $options = [pscustomobject]@{ capture_runtime = 'local'; runtime = 'local'; transport = 'shared_folder' }
+        $options = [pscustomobject]@{ capture_runtime = 'local'; runtime = 'local'; execution_profile = 'local'; transport = 'shared_folder' }
         if ($optionsProperty) { $optionsProperty.Value = $options } else { $payload | Add-Member -NotePropertyName options -NotePropertyValue $options -Force }
     }
     $startedAt = Get-Date
@@ -182,7 +306,12 @@ function Process-DetailCaptureRequest {
     if (-not $vmJobId) { throw 'VM 상세수집 워커가 job_id를 반환하지 않았습니다.' }
     $statusPath = Resolve-WorkerPath -Value $created.status_url -Fallback "/api/v1/detail-captures/$vmJobId"
     $resultPath = Resolve-WorkerPath -Value $created.result_url -Fallback "/api/v1/detail-captures/$vmJobId/results"
-    $deadline = (Get-Date).AddSeconds([Math]::Max(30, [int]$Request.job_timeout_sec))
+    $requestedTimeout = if ($Request.PSObject.Properties['job_timeout_sec'] -and [int]$Request.job_timeout_sec -gt 0) {
+        [int]$Request.job_timeout_sec
+    } else {
+        $JobTimeoutSeconds
+    }
+    $deadline = (Get-Date).AddSeconds([Math]::Max(30, $requestedTimeout))
     $terminal = @('success', 'partial_success', 'failed', 'error', 'cancelled', 'cancelled_partial')
     $last = $created
     do {
@@ -199,12 +328,90 @@ function Process-DetailCaptureRequest {
         if ($manualItems.Count -eq 0 -and $detailSummary -and $detailSummary.manual_items) { $manualItems = @($detailSummary.manual_items) }
         $progress = @{ percent = [math]::Max(0, [math]::Min(100, $percent)); current_market = [string]$last.current_product_id; accepted = $completed; elapsed_seconds = [int](((Get-Date) - $startedAt).TotalSeconds); message = [string]$last.status }
         Write-JobStatus -ResultDir $ResultDir -Status @{ ok = $true; job_id = $JobId; status = 'polling'; vm_job_id = $vmJobId; transport = 'shared_folder'; capture_runtime = 'vm'; worker_create_path = $detailPath; worker_scoped_error = $scopedError; worker_status = [string]$last.status; vm_status = [string]$last.status; completed = $completed; failed = $failed; total = $total; manual_action_required = $manualRequired; manual_items = $manualItems; manual_wait_remaining_sec = [int]($last.manual_wait_remaining_sec); detail_summary = $detailSummary; progress = $progress }
+        if ($manualRequired) {
+            try {
+                Invoke-WorkerJson -Method POST -Path "$statusPath/cancel" -Body @{} -TimeoutSeconds 15 | Out-Null
+            } catch {
+                Write-BridgeLog "detail job=$JobId manual_cancel_warning=$($_.Exception.Message)"
+            }
+            $manualResult = [ordered]@{
+                ok = $false
+                status = 'manual_required'
+                job_id = $JobId
+                vm_job_id = $vmJobId
+                transport = 'shared_folder'
+                capture_runtime = 'vm'
+                worker_status = [string]$last.status
+                manual_action_required = $true
+                manual_items = $manualItems
+                manual_wait_remaining_sec = [int]($last.manual_wait_remaining_sec)
+                completed = $completed
+                failed = $failed
+                total = $total
+                detail_summary = $detailSummary
+                progress = $progress
+                result = $last
+            }
+            Write-JsonAtomic -Path (Join-Path $ResultDir 'result.json') -Value $manualResult
+            Write-JobStatus -ResultDir $ResultDir -Status $manualResult
+            Write-BridgeLog "detail job=$JobId manual_required=true worker_job=$vmJobId auto_retry=stopped"
+            return
+        }
     } while ($terminal -notcontains ([string]$last.status).ToLowerInvariant() -and (Get-Date) -lt $deadline)
     if ($terminal -notcontains ([string]$last.status).ToLowerInvariant()) { throw "VM 상세수집 제한시간 초과: $vmJobId" }
-    if (@('failed', 'error', 'cancelled') -contains ([string]$last.status).ToLowerInvariant()) { throw ([string]$last.error) }
+    $workerTerminalStatus = ([string]$last.status).ToLowerInvariant()
+    $workerTerminalError = ([string]$last.error).Trim()
+    $silentNaverManualRequired = (
+        @('failed', 'error') -contains $workerTerminalStatus -and
+        -not $workerTerminalError -and
+        (Test-NaverDetailPayload -Payload $payload)
+    )
+    if ($silentNaverManualRequired) {
+        $naverProduct = @($payload.products) |
+            Where-Object {
+                (([string]$_.platform).Trim().ToLowerInvariant() -match 'naver|smartstore|네이버|스마트') -or
+                (([string]$_.product_url).Trim().ToLowerInvariant() -match 'naver\.com')
+            } |
+            Select-Object -First 1
+        $manualItem = [ordered]@{
+            product_id = [string]($naverProduct.product_id)
+            title = [string]($naverProduct.title)
+            platform = 'naver'
+            product_url = [string]($naverProduct.product_url)
+            status = 'manual_required'
+            manual_required = $true
+            manual_kind = 'receipt_or_human_verification'
+            manual_title = '네이버 영수증문제입니다'
+            manual_message = 'VM 화면에 표시된 답을 입력해주십시오. 입력 후 사용자 조치 완료 버튼으로 같은 상품을 다시 수집합니다.'
+            manual_location = 'VM 화면'
+        }
+        $manualResult = [ordered]@{
+            ok = $false
+            status = 'manual_required'
+            error_code = 'naver_manual_verification_suspected'
+            job_id = $JobId
+            vm_job_id = $vmJobId
+            transport = 'shared_folder'
+            capture_runtime = 'vm'
+            worker_status = [string]$last.status
+            manual_action_required = $true
+            manual_items = @($manualItem)
+            completed = [int]($last.completed)
+            failed = [int]($last.failed)
+            total = [int]($last.total)
+            detail_summary = $last.detail_summary
+            progress = $progress
+            result = $last
+        }
+        Write-JsonAtomic -Path (Join-Path $ResultDir 'result.json') -Value $manualResult
+        Write-JobStatus -ResultDir $ResultDir -Status $manualResult
+        Write-BridgeLog "detail job=$JobId blank_naver_failure=manual_required worker_job=$vmJobId"
+        return
+    }
+    if (@('failed', 'error', 'cancelled') -contains $workerTerminalStatus) { throw $workerTerminalError }
     $result = Invoke-WorkerJson -Method GET -Path $resultPath -TimeoutSeconds 90
     $artifactRoot = Join-Path $ResultDir 'artifacts'
-    New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+    Ensure-BridgeDirectory -Path $artifactRoot
     $manifest = @()
     $scraped = $result.scraped_data
     if ($scraped) {
@@ -216,7 +423,7 @@ function Process-DetailCaptureRequest {
             $safeId = [regex]::Replace($productId, '[^0-9A-Za-z_.\-\uAC00-\uD7A3]+', '_').Trim('._')
             if (-not $safeId) { $safeId = 'product' }
             $productDir = Join-Path $artifactRoot $safeId
-            New-Item -ItemType Directory -Force -Path $productDir | Out-Null
+            Ensure-BridgeDirectory -Path $productDir
             $artifactCount = [Math]::Max($urls.Count, $localSources.Count)
             for ($index = 0; $index -lt $artifactCount; $index++) {
                 $url = [string]$urls[$index]
@@ -230,7 +437,8 @@ function Process-DetailCaptureRequest {
                     if (-not $artifactPath) { continue }
                     Invoke-WebRequest -Method GET -Uri "$WorkerBase$artifactPath" -Headers (Get-WorkerHeaders) -OutFile $outPath -TimeoutSec 90 | Out-Null
                 }
-                $row = [ordered]@{ product_id = $productId; index = $index; path = $outPath; file_name = [IO.Path]::GetFileName($outPath) }
+                $fileName = [IO.Path]::GetFileName($outPath)
+                $row = [ordered]@{ product_id = $productId; index = $index; path = $outPath; relative_path = "artifacts/$safeId/$fileName"; file_name = $fileName }
                 if ($Request.identity -is [psobject]) { foreach ($identityProperty in $Request.identity.PSObject.Properties) { $row[$identityProperty.Name] = $identityProperty.Value } }
                 $manifest += [pscustomobject]$row
             }
@@ -249,8 +457,16 @@ function Process-Request {
     $operation = [string]$request.operation
     $resultDir = Join-Path $BridgeRoot "results\$jobId"
     $lockPath = Join-Path $resultDir '.processing'
-    New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
+    Ensure-BridgeDirectory -Path $resultDir
     try { New-Item -ItemType File -Path $lockPath -ErrorAction Stop | Out-Null } catch { return }
+    if (Test-Path -LiteralPath (Join-Path $resultDir 'cancelled.json') -PathType Leaf) { return }
+    $existingStatusPath = Join-Path $resultDir 'status.json'
+    if (Test-Path -LiteralPath $existingStatusPath -PathType Leaf) {
+        try {
+            $existingStatus = Get-Content -LiteralPath $existingStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (@('error', 'failed', 'cancelled') -contains ([string]$existingStatus.status).ToLowerInvariant()) { return }
+        } catch { return }
+    }
     try {
         if ($operation -eq 'detail_capture') {
             Process-DetailCaptureRequest -Request $request -JobId $jobId -ResultDir $resultDir
@@ -320,18 +536,58 @@ function Process-Request {
     }
 }
 
-New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
-Write-BridgeLog "started bridge=$BridgeRoot worker=$WorkerBase"
-while ($true) {
-    try {
-        $requestRoot = Join-Path $BridgeRoot 'requests'
-        if (Test-Path -LiteralPath $requestRoot -PathType Container) {
-            Get-ChildItem -LiteralPath $requestRoot -Filter '*.json' -File -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTimeUtc -Descending |
-                ForEach-Object {
-                Process-Request -RequestPath $_.FullName
+Ensure-BridgeDirectory -Path $StateRoot
+$hostLockPath = Join-Path $StateRoot 'candidate-bridge-host.lock'
+$hostLockStream = $null
+$heartbeatTimer = $null
+try {
+    $hostLockStream = [IO.File]::Open(
+        $hostLockPath,
+        [IO.FileMode]::OpenOrCreate,
+        [IO.FileAccess]::ReadWrite,
+        [IO.FileShare]::None
+    )
+} catch [IO.IOException] {
+    Write-BridgeLog 'duplicate watcher ignored because this host already owns the bridge lock'
+    exit 0
+}
+
+try {
+    $heartbeatTimer = [VmCandidateBridgeHeartbeat]::new($HeartbeatPath, 1000)
+    $processedRequestTokens = @{}
+    Write-BridgeLog "started bridge=$BridgeRoot worker=$WorkerBase"
+    Update-BridgeHeartbeat
+    while ($true) {
+        try {
+            $requestRoot = Join-Path $BridgeRoot 'requests'
+            if (Test-Path -LiteralPath $requestRoot -PathType Container) {
+                $requestFiles = @(
+                    Get-ChildItem -LiteralPath $requestRoot -Filter '*.json' -File -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTimeUtc -Descending
+                )
+                foreach ($requestFile in $requestFiles) {
+                    $requestPath = $requestFile.FullName
+                    $requestToken = '{0}|{1}|{2}' -f $requestPath, $requestFile.LastWriteTimeUtc.Ticks, $requestFile.Length
+                    if ($processedRequestTokens.ContainsKey($requestPath) -and $processedRequestTokens[$requestPath] -eq $requestToken) {
+                        continue
+                    }
+                    if (Test-RequestAlreadyTerminal -RequestPath $requestPath) {
+                        $processedRequestTokens[$requestPath] = $requestToken
+                        continue
+                    }
+                    try {
+                        Process-Request -RequestPath $requestPath
+                    } finally {
+                        $processedRequestTokens[$requestPath] = $requestToken
+                    }
+                    break
+                }
             }
-        }
-    } catch { Write-BridgeLog "loop error=$($_.Exception.Message)" }
-    Start-Sleep -Milliseconds ([math]::Max(500, $PollMilliseconds))
+        } catch { Write-BridgeLog "loop error=$($_.Exception.Message)" }
+        Update-BridgeHeartbeat
+        Start-Sleep -Milliseconds ([math]::Max(500, $PollMilliseconds))
+    }
+} finally {
+    if ($null -ne $heartbeatTimer) { $heartbeatTimer.Dispose() }
+    if ($null -ne $hostLockStream) { $hostLockStream.Dispose() }
 }

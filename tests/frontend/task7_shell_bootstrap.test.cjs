@@ -36,6 +36,7 @@ const SIDEBAR_ROUTES = Object.freeze([
   'factory',
   'automation',
   'modelsettings',
+  'reports',
   'manual',
 ]);
 const HYDRATION_ENVELOPE = Object.freeze({
@@ -208,7 +209,7 @@ test('T7 shell target boundary는 네 개의 명시적 ESM 모듈을 요구한�
   assert.equal(typeof diagnostics.createLegacyDiagnosticBridge, 'function');
 });
 
-test('T7 route controller는 module registry의 12 sidebar route만 선택하고 gate redirect를 적용한다', async () => {
+test('T7 route controller는 module registry의 13 sidebar route만 선택하고 gate redirect를 적용한다', async () => {
   const [{ createRouteController }, { createRenderLifecycleCoordinator }, { moduleRegistry }] = await Promise.all([
     importTarget(TARGETS.routeController),
     importTarget(TARGETS.renderLifecycle),

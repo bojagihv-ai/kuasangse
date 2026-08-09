@@ -5,8 +5,9 @@ import { bindOptionSorterResults } from './optionsorter-result-bindings.mjs';
 import { bindOptionSorterSlots } from './optionsorter-slot-bindings.mjs';
 
 const EVENT_PROPERTIES = Object.freeze([
-  'onclick', 'onchange', 'oninput', 'onblur', 'onfocus', 'onkeydown',
+  'onclick', 'ondblclick', 'onchange', 'oninput', 'onblur', 'onfocus', 'onkeydown',
   'ondragstart', 'ondragover', 'ondragleave', 'ondrop',
+  'onpointerdown', 'onpointermove', 'onpointerup', 'onpointercancel',
 ]);
 
 export function bindOptionSorter(root, dependencies) {

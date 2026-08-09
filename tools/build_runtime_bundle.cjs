@@ -10,6 +10,76 @@ function readRuntimeManifest(root = ROOT) {
   return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 }
 
+function runtimeSourceFilesForManifest(manifest) {
+  return [...new Set([
+    manifest.loader,
+    manifest.authorityModule,
+    ...(Array.isArray(manifest.modules) ? manifest.modules : []),
+    ...(Array.isArray(manifest.scripts) ? manifest.scripts : []),
+  ].filter(file => typeof file === 'string' && file.trim()))];
+}
+
+function runtimeSourceDigestForManifest(root = ROOT, manifest = readRuntimeManifest(root)) {
+  if (!manifest.bundle || !Array.isArray(manifest.scripts) || !manifest.scripts.length) {
+    throw new Error('runtime manifest bundle/scripts 계약이 올바르지 않습니다.');
+  }
+  const sources = runtimeSourceFilesForManifest(manifest).map(file => ({
+    file,
+    content: fs.readFileSync(path.join(root, file), 'utf8').replace(/\s+$/, ''),
+  }));
+  return crypto.createHash('sha256')
+    .update(sources.map(item => item.file + '\0' + item.content).join('\0'))
+    .digest('hex');
+}
+
+function readExistingRuntimeBundleMetadata(bundlePath) {
+  if (!fs.existsSync(bundlePath)) return null;
+  try {
+    const content = fs.readFileSync(bundlePath, 'utf8');
+    const marker = 'window.__KUASANGSE_BUNDLE_METADATA__ = ';
+    const start = content.indexOf(marker);
+    const end = start < 0 ? -1 : content.indexOf(';\n', start);
+    return start >= 0 && end >= 0
+      ? JSON.parse(content.slice(start + marker.length, end))
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function nextRuntimeBuildId(buildId = '') {
+  const current = String(buildId || '').trim() || 'runtime';
+  const marker = current.lastIndexOf('v');
+  const version = Number(current.slice(marker + 1));
+  if (marker >= 0 && Number.isInteger(version) && version >= 0) {
+    return current.slice(0, marker + 1) + String(version + 1);
+  }
+  return current + '-v2';
+}
+
+function syncRuntimeManifestBuildId(root = ROOT, manifest = readRuntimeManifest(root)) {
+  const bundlePath = path.join(root, manifest.bundle || '');
+  const existingMetadata = readExistingRuntimeBundleMetadata(bundlePath);
+  const sourceDigest = runtimeSourceDigestForManifest(root, manifest);
+  if (
+    !existingMetadata?.sourceDigest ||
+    existingMetadata.sourceDigest === sourceDigest ||
+    String(existingMetadata.buildId || '') !== String(manifest.buildId || '')
+  ) {
+    return manifest;
+  }
+  const nextManifest = {
+    ...manifest,
+    buildId: nextRuntimeBuildId(manifest.buildId),
+  };
+  fs.writeFileSync(
+    path.join(root, 'src', 'runtime-manifest.json'),
+    JSON.stringify(nextManifest, null, 2) + '\n',
+    'utf8',
+  );
+  return nextManifest;
+}
+
 function runtimeBundleContent(root = ROOT, manifest = readRuntimeManifest(root)) {
   if (!manifest.bundle || !Array.isArray(manifest.scripts) || !manifest.scripts.length) {
     throw new Error('runtime manifest bundle/scripts 계약이 올바르지 않습니다.');
@@ -18,9 +88,7 @@ function runtimeBundleContent(root = ROOT, manifest = readRuntimeManifest(root))
     file,
     content: fs.readFileSync(path.join(root, file), 'utf8').replace(/\s+$/, ''),
   }));
-  const sourceDigest = crypto.createHash('sha256')
-    .update(sources.map(item => `${item.file}\0${item.content}`).join('\0'))
-    .digest('hex');
+  const sourceDigest = runtimeSourceDigestForManifest(root, manifest);
   const metadata = {
     schema: 'kuasangse.runtime.bundle.v1',
     buildId: manifest.buildId,
@@ -43,7 +111,7 @@ function verifyRuntimeBundle(root = ROOT) {
 }
 
 function writeRuntimeBundle(root = ROOT) {
-  const manifest = readRuntimeManifest(root);
+  const manifest = syncRuntimeManifestBuildId(root);
   const bundlePath = path.join(root, manifest.bundle);
   fs.mkdirSync(path.dirname(bundlePath), { recursive: true });
   fs.writeFileSync(bundlePath, runtimeBundleContent(root, manifest), 'utf8');
@@ -63,4 +131,11 @@ if (require.main === module) {
   }
 }
 
-module.exports = { readRuntimeManifest, runtimeBundleContent, verifyRuntimeBundle, writeRuntimeBundle };
+module.exports = {
+  readRuntimeManifest,
+  runtimeBundleContent,
+  verifyRuntimeBundle,
+  writeRuntimeBundle,
+  nextRuntimeBuildId,
+  syncRuntimeManifestBuildId,
+};

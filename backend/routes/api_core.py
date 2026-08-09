@@ -1,4 +1,11 @@
 """API domain routes: core. Auto-split from api.py — behavior unchanged."""
+import ipaddress
+import socket
+import ssl
+import tempfile
+
+import urllib3
+
 import routes.api_shared as _api_shared
 from routes.api_shared import api  # noqa: F401
 globals().update({k: v for k, v in vars(_api_shared).items() if not k.startswith("__")})
@@ -8,6 +15,337 @@ globals().update({k: v for k, v in vars(_api_archive).items() if not k.startswit
 
 import routes.api_marketplus as _api_marketplus
 globals().update({k: v for k, v in vars(_api_marketplus).items() if not k.startswith("__") and k != "api"})
+
+from services.sinhwa_pdp_client import SinhwaPdpApiError, SinhwaPdpClient
+
+
+_IMAGE_PROXY_MAX_BYTES = 8 * 1024 * 1024
+_IMAGE_PROXY_HEADERS = {
+    "Accept": "image/*,*/*",
+    "User-Agent": "kuasangse-local-image-proxy/1.0",
+}
+
+
+class _ImageProxyPolicyError(Exception):
+    pass
+
+
+class _PinnedImageProxyResponse:
+    def __init__(self, pool, response):
+        self._pool = pool
+        self._response = response
+        self.status = response.status
+        self.headers = response.headers
+
+    def stream(self, chunk_size):
+        return self._response.stream(chunk_size)
+
+    def close(self):
+        self._response.release_conn()
+        self._pool.close()
+
+
+def _image_proxy_resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    addresses = socket.getaddrinfo(
+        hostname,
+        port,
+        family=socket.AF_UNSPEC,
+        type=socket.SOCK_STREAM,
+    )
+    return tuple(sorted({str(address[4][0]).split("%", 1)[0] for address in addresses}))
+
+
+def _image_proxy_review_addresses(addresses) -> tuple[str, ...]:
+    reviewed = []
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if (
+            not parsed.is_global
+            or parsed.is_private
+            or parsed.is_loopback
+            or parsed.is_link_local
+            or parsed.is_multicast
+            or parsed.is_reserved
+            or parsed.is_unspecified
+        ):
+            raise _ImageProxyPolicyError("non_public_image_address")
+        reviewed.append(parsed.compressed)
+    if not reviewed:
+        raise _ImageProxyPolicyError("image_address_missing")
+    return tuple(sorted(set(reviewed)))
+
+
+def _image_proxy_request_hop(url: str, hostname: str, ip_address: str):
+    parsed = urlparse(url)
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    pool = urllib3.HTTPSConnectionPool(
+        ip_address,
+        port=443,
+        timeout=urllib3.Timeout(connect=5.0, read=15.0),
+        maxsize=1,
+        block=True,
+        retries=False,
+        cert_reqs=ssl.CERT_REQUIRED,
+        ca_certs=requests.certs.where(),
+        assert_hostname=hostname,
+        server_hostname=hostname,
+    )
+    try:
+        response = pool.urlopen(
+            "GET",
+            target,
+            headers={**_IMAGE_PROXY_HEADERS, "Host": hostname},
+            redirect=False,
+            preload_content=False,
+            retries=False,
+        )
+    except urllib3.exceptions.HTTPError:
+        pool.close()
+        raise
+    return _PinnedImageProxyResponse(pool, response)
+
+
+def _sinhwa_pdp_error_response(error: SinhwaPdpApiError):
+    status = error.status if error.status in {401, 403, 404, 409, 413, 415, 422} else 502
+    return jsonify({
+        "error": {
+            "code": error.code,
+            "message": "신화사 상세페이지 자산 API 요청에 실패했습니다.",
+        },
+        "authoritativeSaved": False,
+        "localFallbackRequired": True,
+    }), status
+
+
+@api.route("/sinhwa-pdp/products/<int:jcode>/context", methods=["GET"])
+def sinhwa_pdp_context(jcode):
+    try:
+        return jsonify(SinhwaPdpClient().get_product_context(jcode))
+    except SinhwaPdpApiError as error:
+        return _sinhwa_pdp_error_response(error)
+
+
+@api.route("/sinhwa-pdp/products/search", methods=["GET"])
+def sinhwa_pdp_product_search():
+    query = str(request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"error": {"code": "query_required"}}), 422
+    try:
+        limit = max(1, min(int(request.args.get("limit", "8")), 100))
+    except (TypeError, ValueError):
+        return jsonify({"error": {"code": "limit_invalid"}}), 422
+    try:
+        return jsonify(SinhwaPdpClient().search_products(query, limit))
+    except SinhwaPdpApiError as error:
+        return _sinhwa_pdp_error_response(error)
+
+
+@api.route("/sinhwa-pdp/status", methods=["GET"])
+def sinhwa_pdp_status():
+    client = SinhwaPdpClient()
+    return jsonify({
+        "configured": client.configured,
+        "serviceKeyExposed": False,
+    })
+
+
+@api.route("/sinhwa-pdp/products/<int:jcode>/sync", methods=["POST"])
+def sinhwa_pdp_sync(jcode):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or not isinstance(body.get("idempotencyKey"), str) or not body["idempotencyKey"].strip():
+        return jsonify({"error": {"code": "idempotency_key_required"}, "authoritativeSaved": False}), 422
+    client = SinhwaPdpClient()
+    results = []
+    try:
+        field = body.get("field")
+        if field is not None:
+            if not isinstance(field, dict):
+                return jsonify({"error": {"code": "field_invalid"}, "authoritativeSaved": False}), 422
+            results.append({"kind": "field", "value": client.save_field(
+                jcode,
+                field,
+                body["idempotencyKey"],
+                body.get("expectedVersion"),
+            )})
+        for index, section in enumerate(body.get("sections", [])):
+            if not isinstance(section, dict):
+                return jsonify({"error": {"code": "section_invalid", "index": index}, "authoritativeSaved": False}), 422
+            key = str(section.get("idempotencyKey") or f'{body["idempotencyKey"]}:section:{index}')
+            results.append({"kind": "section", "value": client.save_section(jcode, section.get("payload") or {}, key)})
+        composition = body.get("composition")
+        if composition is not None:
+            if not isinstance(composition, dict):
+                return jsonify({"error": {"code": "composition_invalid"}, "authoritativeSaved": False}), 422
+            results.append({"kind": "composition", "value": client.save_composition(
+                jcode,
+                composition.get("payload") or {},
+                f'{body["idempotencyKey"]}:composition',
+            )})
+    except SinhwaPdpApiError as error:
+        response, status = _sinhwa_pdp_error_response(error)
+        response.set_data(jsonify({
+            "error": {"code": error.code, "message": "신화사 상세페이지 자산 API 요청에 실패했습니다."},
+            "authoritativeSaved": False,
+            "localFallbackRequired": True,
+            "completed": results,
+        }).get_data())
+        return response, status
+    return jsonify({"authoritativeSaved": True, "localFallbackRequired": False, "results": results})
+
+
+def _work_bundle_manifest_request():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return None, None
+    idempotency_key = body.get("idempotencyKey")
+    manifest = body.get("manifest")
+    if (
+        not isinstance(idempotency_key, str)
+        or not idempotency_key.strip()
+        or not isinstance(manifest, dict)
+        or not isinstance(manifest.get("bundleKey"), str)
+        or not manifest["bundleKey"].strip()
+    ):
+        return None, None
+    return manifest, idempotency_key.strip()
+
+
+@api.route("/sinhwa-pdp/work-bundles/sync", methods=["POST"])
+def sinhwa_pdp_work_bundle_sync():
+    manifest, idempotency_key = _work_bundle_manifest_request()
+    if manifest is None or idempotency_key is None:
+        return jsonify({
+            "error": {"code": "work_bundle_manifest_invalid"},
+            "authoritativeSaved": False,
+            "localFallbackRequired": True,
+        }), 422
+    client = SinhwaPdpClient()
+    try:
+        try:
+            bundle = client.create_work_bundle(manifest, idempotency_key)
+        except SinhwaPdpApiError as error:
+            if error.code != "bundle_exists":
+                raise
+            page = client.list_work_bundles(manifest["bundleKey"], 50)
+            items = page.get("items") if isinstance(page, dict) else None
+            existing = next(
+                (
+                    item
+                    for item in (items if isinstance(items, list) else [])
+                    if isinstance(item, dict)
+                    and item.get("bundleKey") == manifest["bundleKey"]
+                ),
+                None,
+            )
+            if existing is None:
+                raise SinhwaPdpApiError(
+                    "work_bundle_not_found",
+                    status=404,
+                ) from error
+            bundle_id = existing.get("id")
+            current_version = existing.get("version")
+            if (
+                not isinstance(bundle_id, str)
+                or isinstance(current_version, bool)
+                or not isinstance(current_version, int)
+                or current_version < 1
+            ):
+                raise SinhwaPdpApiError("invalid_response") from error
+            bundle = client.update_work_bundle(
+                bundle_id,
+                manifest,
+                idempotency_key,
+                current_version,
+            )
+        bundle_id = bundle.get("id") if isinstance(bundle, dict) else None
+        if not isinstance(bundle_id, str) or not bundle_id:
+            raise SinhwaPdpApiError("invalid_response")
+        bundle = client.get_work_bundle(bundle_id)
+    except SinhwaPdpApiError as error:
+        return _sinhwa_pdp_error_response(error)
+    return jsonify({
+        "authoritativeSaved": True,
+        "localFallbackRequired": False,
+        "bundle": bundle,
+    })
+
+
+@api.route("/sinhwa-pdp/work-bundles/activity", methods=["POST"])
+def sinhwa_pdp_work_bundle_activity():
+    body = request.get_json(silent=True) or {}
+    bundle_key = body.get("bundleKey") if isinstance(body, dict) else None
+    client_id = body.get("clientId") if isinstance(body, dict) else None
+    if (
+        not isinstance(bundle_key, str)
+        or not bundle_key.strip()
+        or not isinstance(client_id, str)
+        or not client_id.strip()
+    ):
+        return jsonify({
+            "error": {"code": "work_bundle_activity_invalid"},
+        }), 422
+    try:
+        activity = SinhwaPdpClient().mark_work_bundle_activity(
+            bundle_key.strip(),
+            client_id.strip(),
+        )
+    except SinhwaPdpApiError as error:
+        return _sinhwa_pdp_error_response(error)
+    return jsonify(activity)
+
+
+@api.route(
+    "/sinhwa-pdp/work-bundles/<bundle_id>/assets/<asset_id>/content",
+    methods=["PUT"],
+)
+def sinhwa_pdp_work_bundle_asset_content(bundle_id, asset_id):
+    idempotency_key = str(request.headers.get("Idempotency-Key") or "").strip()
+    filename = str(request.headers.get("X-Asset-Filename") or "").strip()
+    mime_type = str(request.mimetype or "").strip().lower()
+    if not idempotency_key:
+        return jsonify({"error": {"code": "idempotency_key_required"}}), 422
+    if not filename:
+        return jsonify({"error": {"code": "asset_filename_required"}}), 422
+    if mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+        return jsonify({"error": {"code": "media_type_unsupported"}}), 415
+    try:
+        expected_version = int(str(request.headers.get("If-Match") or "").strip('"'))
+    except ValueError:
+        expected_version = 0
+    if expected_version < 1:
+        return jsonify({"error": {"code": "expected_version_required"}}), 422
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as buffered_stream:
+            copied_bytes = 0
+            while chunk := request.stream.read(1024 * 1024):
+                buffered_stream.write(chunk)
+                copied_bytes += len(chunk)
+            if (
+                request.content_length is not None
+                and copied_bytes != request.content_length
+            ):
+                return jsonify({
+                    "error": {"code": "asset_content_incomplete"},
+                    "authoritativeSaved": False,
+                    "localFallbackRequired": True,
+                }), 422
+            buffered_stream.seek(0)
+            result = SinhwaPdpClient().upload_work_bundle_asset(
+                bundle_id,
+                asset_id,
+                buffered_stream,
+                mime_type,
+                filename,
+                idempotency_key,
+                expected_version,
+                copied_bytes,
+            )
+    except SinhwaPdpApiError as error:
+        return _sinhwa_pdp_error_response(error)
+    return jsonify(result)
+
 
 @api.route("/projects", methods=["POST"])
 def create_project():
@@ -387,6 +725,12 @@ def cafe24_control_start():
                 **status,
                 "message": "Cafe24 Control Tower가 이미 실행 중입니다. API Hub 후보 수집을 다시 시작합니다.",
             })
+        if status.get("portConflict"):
+            return jsonify({
+                **status,
+                "ok": False,
+                "error": f"포트 {status.get('port')}에 다른 프로그램이 실행 중입니다.",
+            }), 409
         if not _CAFE24_CONTROL_SCRIPT.is_file():
             return jsonify({
                 **status,
@@ -450,6 +794,12 @@ def jepum_scraper_start():
                 **status,
                 "message": "JepumScraper가 이미 실행 중입니다. VM 후보 수집을 계속합니다.",
             })
+        if status.get("portConflict"):
+            return jsonify({
+                **status,
+                "ok": False,
+                "error": f"포트 {status.get('port')}에 다른 프로그램이 실행 중입니다.",
+            }), 409
         python_path = _jepum_scraper_python_executable()
         if not _JEPUM_MAIN.is_file() or not python_path:
             return jsonify({
@@ -523,6 +873,12 @@ def sinhwa_db_start():
             **status,
             "message": "신화사DB 프로그램이 이미 실행 중입니다. 후보 수집을 다시 시도할 수 있습니다.",
         })
+    if status.get("portConflict"):
+        return jsonify({
+            **status,
+            "ok": False,
+            "error": f"포트 {status.get('port')}에 다른 프로그램이 실행 중입니다.",
+        }), 409
     if not _SINHWA_DB_SCRIPT.is_file():
         return jsonify({
             **status,
@@ -617,52 +973,83 @@ def image_proxy():
     if not raw_url:
         return jsonify({"ok": False, "error": "url 파라미터가 필요합니다."}), 400
     current_url = raw_url
-    max_bytes = 8 * 1024 * 1024
-    try:
-        for _ in range(4):
+    response = None
+    for _ in range(4):
+        try:
             parsed = urlparse(current_url)
-            if parsed.scheme not in {"http", "https"} or parsed.hostname not in _IMAGE_PROXY_ALLOWED_HOSTS:
-                return jsonify({"ok": False, "error": "허용되지 않은 이미지 호스트입니다."}), 400
-            resp = requests.get(
-                current_url,
-                headers={"Accept": "image/*,*/*", "User-Agent": "kuasangse-local-image-proxy/1.0"},
-                timeout=15,
-                stream=True,
-                allow_redirects=False,
+            hostname = str(parsed.hostname or "").lower()
+            port = parsed.port
+            if (
+                parsed.scheme != "https"
+                or hostname not in _IMAGE_PROXY_ALLOWED_HOSTS
+                or port not in {None, 443}
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise _ImageProxyPolicyError("image_host_not_allowed")
+            addresses = _image_proxy_review_addresses(
+                _image_proxy_resolve_addresses(hostname, 443),
             )
-            if 300 <= resp.status_code < 400:
-                location = resp.headers.get("location")
-                resp.close()
+            response = _image_proxy_request_hop(
+                current_url,
+                hostname,
+                addresses[0],
+            )
+            if 300 <= response.status < 400:
+                location = response.headers.get("location") or response.headers.get("Location")
+                response.close()
+                response = None
                 if not location:
                     return jsonify({"ok": False, "error": "이미지 redirect 위치가 없습니다."}), 502
                 current_url = urljoin(current_url, location)
                 continue
-            resp.raise_for_status()
+            if response.status < 200 or response.status >= 300:
+                status = response.status
+                response.close()
+                response = None
+                return jsonify({"ok": False, "error": f"이미지 요청 실패: HTTP {status}"}), 502
             break
-        else:
-            return jsonify({"ok": False, "error": "이미지 redirect가 너무 많습니다."}), 502
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"이미지 요청 실패: {e}"}), 502
-    content_type = (resp.headers.get("content-type") or mimetypes.guess_type(parsed.path)[0] or "image/jpeg").split(";")[0].strip()
+        except (_ImageProxyPolicyError, ValueError):
+            return jsonify({"ok": False, "error": "허용되지 않은 이미지 호스트 또는 주소입니다."}), 400
+        except (socket.gaierror, urllib3.exceptions.HTTPError, OSError) as error:
+            return jsonify({"ok": False, "error": f"이미지 요청 실패: {error}"}), 502
+    else:
+        return jsonify({"ok": False, "error": "이미지 redirect가 너무 많습니다."}), 502
+    if response is None:
+        return jsonify({"ok": False, "error": "이미지 응답이 없습니다."}), 502
+    content_type = (
+        response.headers.get("content-type")
+        or response.headers.get("Content-Type")
+        or mimetypes.guess_type(parsed.path)[0]
+        or "image/jpeg"
+    ).split(";")[0].strip().lower()
     if not content_type.startswith("image/"):
+        response.close()
         return jsonify({"ok": False, "error": f"이미지가 아닌 응답입니다: {content_type}"}), 400
-    content_length = int(resp.headers.get("content-length") or 0)
-    if content_length > max_bytes:
-        resp.close()
+    try:
+        content_length = int(
+            response.headers.get("content-length")
+            or response.headers.get("Content-Length")
+            or 0
+        )
+    except ValueError:
+        response.close()
+        return jsonify({"ok": False, "error": "이미지 크기 응답이 올바르지 않습니다."}), 502
+    if content_length > _IMAGE_PROXY_MAX_BYTES:
+        response.close()
         return jsonify({"ok": False, "error": "이미지가 8MB를 초과합니다."}), 413
     chunks = []
     total_bytes = 0
     try:
-        for chunk in resp.iter_content(chunk_size=64 * 1024):
+        for chunk in response.stream(64 * 1024):
             if not chunk:
                 continue
             total_bytes += len(chunk)
-            if total_bytes > max_bytes:
-                resp.close()
+            if total_bytes > _IMAGE_PROXY_MAX_BYTES:
                 return jsonify({"ok": False, "error": "이미지가 8MB를 초과합니다."}), 413
             chunks.append(chunk)
     finally:
-        resp.close()
+        response.close()
     content = b"".join(chunks)
     if request.args.get("raw") == "1":
         return Response(content, mimetype=content_type, headers={"Cache-Control": "private, max-age=300"})

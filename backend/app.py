@@ -7,6 +7,8 @@ from flask import Flask, send_from_directory
 from flask_cors import CORS
 from routes.api import api
 from routes.automation import auto_bp, start_automation_scheduler
+from routes.public_api import health as public_health
+from routes.public_api import openapi_document, public_api
 from config import Config
 from services.maintenance import start_maintenance_scheduler
 
@@ -37,6 +39,8 @@ def create_app():
     CORS(app, resources={
         r"/api/*": {"origins": cors_origins},
         r"/pdp/*": {"origins": cors_origins},
+        r"/health": {"origins": cors_origins},
+        r"/openapi.json": {"origins": cors_origins},
     })
 
     @app.after_request
@@ -53,6 +57,15 @@ def create_app():
 
     # Register API blueprint
     app.register_blueprint(api, url_prefix="/api")
+    app.register_blueprint(public_api, url_prefix="/api/v1")
+
+    @app.route("/health")
+    def public_health_alias():
+        return public_health()
+
+    @app.route("/openapi.json")
+    def public_openapi_alias():
+        return openapi_document()
 
     # Register automation blueprint at /pdp
     app.register_blueprint(auto_bp, url_prefix="/pdp")

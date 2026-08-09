@@ -32,7 +32,7 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryImportOptionSorterResults)', 60000);
 
-    await evaluate(cdp, `(() => {
+    await evaluate(cdp, `(async () => {
       window.scheduleLastWorkSave = () => {};
       window.saveLastWorkNow = () => {};
       const state = window.state;
@@ -47,6 +47,8 @@ async function main() {
       state.step = 'factory';
       state.currentProjectId = workspaceId;
       state.productName = productKey;
+      const authority = await window.ensureWorkspaceEditAuthority('project:' + workspaceId, { force: true });
+      if (authority?.mode !== 'editing') throw new Error('option sync fixture did not acquire edit authority: ' + (authority?.mode || 'missing'));
       state.optionSorter = window.normalizeOptionSorterState({
         ...window.defaultOptionSorterState(),
         optionColorImageUsage: 'use',

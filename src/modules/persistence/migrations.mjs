@@ -12,7 +12,7 @@ const ENVELOPE_KEYS = new Set([
   'metadata', 'persistence', 'workspaceRevision', 'fencingToken', 'operationId',
   'snapshot', 'payload', 'lightweight', 'assets', 'workspaceScope', 'workspaceId',
   'currentProjectId', 'id', 'project', 'format', 'app', 'manifest', 'summary',
-  'digest', 'workspaceEnvelope', 'persistenceEnvelope', 'envelope', 'extensions',
+  'digest', 'workspaceEnvelope', 'persistenceEnvelope', 'envelope', 'extensions', 'snapshotRef',
 ]);
 const MAX_SANITIZE_DEPTH = 64;
 const MAX_SANITIZE_NODES = 50000;
@@ -113,7 +113,7 @@ function alreadyCurrent(value) {
   return value?.schema === WORKSPACE_PERSISTENCE_SCHEMA
     && Number(value?.version) === WORKSPACE_PERSISTENCE_VERSION
     && value?.scopeId
-    && value?.snapshot;
+    && (value?.snapshot || value?.snapshotRef);
 }
 
 function scopeFrom(source, snapshot = source) {
@@ -221,6 +221,14 @@ export function migrateServerSnapshot(value) {
     ? value.snapshot.persistenceEnvelope
     : (alreadyCurrent(value?.snapshot) ? value.snapshot : value);
   const source = nested && typeof nested === 'object' ? nested : {};
+  const snapshotRef = text(source.snapshotRef);
+  if (snapshotRef) {
+    const stored = value?.snapshot && typeof value.snapshot === 'object' ? value.snapshot : {};
+    const referenced = snapshotRef === '$'
+      ? Object.fromEntries(Object.entries(stored).filter(([key]) => key !== 'persistenceEnvelope'))
+      : (snapshotRef === '$.lightweight' ? stored.lightweight : (snapshotRef === '$.assets' ? stored.assets : null));
+    if (referenced && typeof referenced === 'object') return envelope(source, referenced, 'server-last-work');
+  }
   const serverSnapshot = source.snapshot && source.snapshot.snapshot ? source.snapshot : (source.snapshot || source);
   return envelope(source, serverSnapshot.snapshot || serverSnapshot.assets || serverSnapshot, 'server-last-work');
 }

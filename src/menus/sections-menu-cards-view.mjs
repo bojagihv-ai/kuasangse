@@ -41,6 +41,15 @@ export function renderSectionCards(view, helpers) {
         const resultSource = getSectionResultSourceInfo(s.id);
         const isBatchGeneratable = !view.sectionLocks?.[s.id] && !view.sectionContents?.[s.id];
         const isBatchSelected = !!view.sectionBatchSelection?.[s.id] && isBatchGeneratable;
+        const batchPreview = view.sectionBatchPreview || {};
+        const effectiveBatchBasis = batchPreview.basisMode && batchPreview.basisMode !== 'keep'
+          ? { id: batchPreview.basisMode, label: batchPreview.basisLabel }
+          : { id: basisInfo.id, label: basisInfo.label };
+        const effectiveBatchGeneration = batchPreview.generationMode && batchPreview.generationMode !== 'keep'
+          ? { id: batchPreview.generationMode, label: batchPreview.generationLabel }
+          : { id: modeInfo.id, label: modeInfo.label };
+        const hasBatchOverride = (!!batchPreview.basisMode && batchPreview.basisMode !== 'keep')
+          || (!!batchPreview.generationMode && batchPreview.generationMode !== 'keep');
         return `
         <div class="section-card" data-section-toggle="${s.id}" data-section-id="${s.id}">
           <div class="head">
@@ -63,8 +72,19 @@ export function renderSectionCards(view, helpers) {
               <span class="section-source-pill" title="${escAttr(resultSource.detail || '')}"><span class="material-icons-outlined" style="font-size:13px">history</span> 결과: <strong>${escapeHtml(resultSource.label)}</strong></span>
               <span class="section-source-pill" title="이미지 생성 시 원본 상품의 형태, 비율, 장식, 색상 배치를 우선 보존합니다."><span class="material-icons-outlined" style="font-size:13px">verified</span> 원본 보존: <strong>우선</strong></span>
             </div>
+            ${isBatchGeneratable ? `<div class="section-batch-execution-preview"
+              data-section-batch-preview="${escAttr(s.id)}"
+              data-batch-basis="${escAttr(effectiveBatchBasis.id)}"
+              data-batch-generation="${escAttr(effectiveBatchGeneration.id)}">
+              <span class="material-icons-outlined">playlist_play</span>
+              <div>
+                <span>남은/선택 섹션 일괄 실행 예정</span>
+                <strong>${escapeHtml(effectiveBatchBasis.label)} · ${escapeHtml(effectiveBatchGeneration.label)}</strong>
+                <small>${hasBatchOverride ? '상단 일괄 설정이 아래 개별 설정보다 우선합니다.' : '아래 개별 설정을 그대로 사용합니다.'}</small>
+              </div>
+            </div>` : ''}
             ${view.activeSectionEdit===s.id ? '' : `${renderSectionCompactPromptPreview(s.id)}${renderSectionCompetitorPlanNotice(s.id)}`}
-            <div class="actions">
+            <div class="actions" data-section-individual-settings="${escAttr(s.id)}">
               <span class="status-chip ${isLoading ? 'busy' : (!isError && isDone) ? 'ok' : ''}" ${isError ? 'style="color:var(--err);border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.08)"' : ''}>
                 ${isLoading ? '<span class="spinner" style="width:13px;height:13px;border-width:2px"></span> 생성 중' : isError ? '<span class="material-icons-outlined" style="font-size:14px">error</span> 실패' : isDone ? '<span class="material-icons-outlined" style="font-size:14px">check_circle</span> 생성됨' : '대기'}
               </span>
@@ -73,11 +93,11 @@ export function renderSectionCards(view, helpers) {
                 : driveStatus==='error' ? `<span class="status-chip" style="color:var(--err);border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.08)"><span class="material-icons-outlined" style="font-size:14px">cloud_off</span> Drive 실패</span>`
                 : ''
               }
-              <span class="section-mode-label"><span class="material-icons-outlined" style="font-size:14px">rule</span>기준</span>
+              <span class="section-mode-label" title="이 카드의 개별 생성 버튼에 적용됩니다."><span class="material-icons-outlined" style="font-size:14px">rule</span>개별 기준</span>
               <select class="section-basis-select" data-section-basis="${s.id}" title="${escAttr(getSectionBasisDetail(s.id))}" >
                 ${SECTION_BASIS_MODES.map(m => `<option value="${m.id}" ${basisInfo.id === m.id ? 'selected' : ''}>${escapeHtml(typeof sectionBasisOptionLabel === 'function' ? sectionBasisOptionLabel(m, s.id) : m.label)}</option>`).join('')}
               </select>
-              <span class="section-mode-label"><span class="material-icons-outlined" style="font-size:14px">tune</span>방식</span>
+              <span class="section-mode-label" title="이 카드의 개별 생성 버튼에 적용됩니다."><span class="material-icons-outlined" style="font-size:14px">tune</span>개별 방식</span>
               <select class="section-mode-select" data-section-mode="${s.id}" title="${escAttr(modeInfo.desc)}" >
                 ${SECTION_GENERATION_MODES.map(m => `<option value="${m.id}" ${modeInfo.id === m.id ? 'selected' : ''}>${escapeHtml(m.label)}</option>`).join('')}
               </select>

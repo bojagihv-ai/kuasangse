@@ -9,7 +9,10 @@ const path = require('path');
 function resolveTestScopePaths(scopeId, knownPath = '', repoRoot = process.cwd()) {
   if (!/^project:project_[a-z0-9_]+$/i.test(String(scopeId || ''))) throw new Error(`DB-03 cleanup rejected non-test scope: ${scopeId}`);
   const digest = crypto.createHash('sha256').update(scopeId).digest('hex');
-  const safeRoot = path.resolve(repoRoot, 'backend', '.local', 'pdp-last-work-scoped');
+  const stateRoot = process.env.KUASANGSE_LOCAL_STATE_FOLDER
+    ? path.resolve(process.env.KUASANGSE_LOCAL_STATE_FOLDER)
+    : path.resolve(repoRoot, 'backend', '.local');
+  const safeRoot = path.join(stateRoot, 'pdp-last-work-scoped');
   const livePath = path.resolve(knownPath || path.join(safeRoot, `${digest}.json`));
   const relative = path.relative(safeRoot, livePath);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.basename(livePath) !== `${digest}.json`) throw new Error(`DB-03 cleanup path escaped test scope: ${livePath}`);

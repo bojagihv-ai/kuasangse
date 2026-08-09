@@ -165,6 +165,7 @@ const ROUTE_CONTROLS = Object.freeze({
     c('[data-comp-market-preview-image]', 'click', { compMarketPreviewImage: 'image-1' }),
     c('#compMarketCloseImagePreview'), c('#compMarketCloseImagePreviewFixed'),
     c('#compMarketOpenVisibleVm'), c('#compMarketManualOpenVm'), c('#compMarketManualResume'),
+    c('#compMarketManualOpenVmCompact'), c('#compMarketManualResumeCompact'),
     c('#compMarketOpenVmLoginSession'), c('#compMarketSelectAllImages'), c('#compMarketClearImageSelection'),
     c('#compMarketAnalyzeSelectedImages'), c('#compMarketAnalyzeAllImages'),
     c('[data-comp-remove-img]', 'click', { compRemoveImg: '0' }), c('#compHtmlInput', 'change'),
@@ -172,6 +173,8 @@ const ROUTE_CONTROLS = Object.freeze({
     c('#compPingBtn'), c('#compStartAnalyze'), c('#compLoadReport'), c('#compLoadPlan'),
     c('#compViewPlan'), c('#compGenPlan'), c('.comp-plan-toggle', 'change', { sid: 'hero' }),
     c('.comp-plan-input', 'input', { sid: 'hero' }),
+    c('.section-basis-select', 'change', { sectionBasis: 'hero' }),
+    c('.section-mode-select', 'change', { sectionMode: 'hero' }),
     c('[data-comp-gen-section]', 'click', { compGenSection: 'hero' }),
     c('#compApplyGenerate'), c('#compApplySections'),
     c('[data-comp-preview-img]', 'click', { compPreviewImg: '0' }),
@@ -290,7 +293,8 @@ async function createRouteMenu(route, calls = []) {
       'previewUploadedImage', 'closeUploadedImagePreview', 'openEvidencePreview', 'closeEvidencePreview',
       'removeUploadedImage', 'importHtmlFile', 'updateHtmlText', 'updateUrl', 'updateScraperBase',
       'pingBackend', 'startAnalysis', 'loadSavedReport', 'loadSavedPlan', 'updatePlanEnabled',
-      'updatePlanInstructions', 'generateSection', 'applyPlan', 'maybeRecoverDetailImages',
+      'updatePlanInstructions', 'setSectionBasisMode', 'setSectionGenerationMode',
+      'generateSection', 'applyPlan', 'maybeRecoverDetailImages',
     ];
     return (await importMenu('competitor-menu.mjs')).createCompetitorMenu(domainCapabilities(names, {
       actions: Object.fromEntries(names.map(name => [name, (value, context) => calls.push([name, value, context.operationToken])])),
@@ -386,7 +390,8 @@ async function createRouteMenu(route, calls = []) {
     return (await importMenu('optionsorter-menu.mjs')).createOptionSorterMenu(functions({
       getSnapshot: () => ({ optionSorter: { images: [], pool: [], slots: [], subStep: 'input' } }),
       assertMutable() {}, mutateOptions() {}, persistOptions() {}, loadVisionColors: async () => ({}),
-      applyVisionColors() {}, requestRender() {}, getOperationToken: () => 'workspace:a:fence:1',
+      applyVisionColors() {}, restoreArchivedSourceImages: async () => ({ restored: 0 }),
+      requestRender() {}, getOperationToken: () => 'workspace:a:fence:1',
       reportError() {}, bindHelpers: functions({ getCurrentStep: () => 'other', getSortable: () => null }),
       renderHelpers: functions(),
     }));
@@ -493,8 +498,12 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
       fire(planToggle, 'change', {}, root);
       const planInput = root.nodes.get('.comp-plan-input'); planInput.value = 'plan-instruction';
       fire(planInput, 'input', {}, root);
+      const planBasis = root.nodes.get('.section-basis-select'); planBasis.value = 'combined';
+      fire(planBasis, 'change', {}, root);
+      const planMode = root.nodes.get('.section-mode-select'); planMode.value = 'full_image';
+      fire(planMode, 'change', {}, root);
       const semanticCalls = calls.filter(([name]) => name !== 'maybeRecoverDetailImages');
-      assert.deepEqual(semanticCalls.slice(0, 9), [
+      assert.deepEqual(semanticCalls.slice(0, 11), [
         ['setMode', 'image', 'workspace:a:fence:1'],
         ['importImages', imageFiles, 'workspace:a:fence:1'],
         ['importHtmlFile', htmlFile, 'workspace:a:fence:1'],
@@ -504,11 +513,13 @@ for (const route of Object.keys(ROUTE_CONTROLS)) {
         ['toggleCandidate', 'candidate-1', 'workspace:a:fence:1'],
         ['updatePlanEnabled', { sectionId: 'hero', enabled: true }, 'workspace:a:fence:1'],
         ['updatePlanInstructions', { sectionId: 'hero', instructions: 'plan-instruction' }, 'workspace:a:fence:1'],
+        ['setSectionBasisMode', { sectionId: 'hero', basisId: 'combined' }, 'workspace:a:fence:1'],
+        ['setSectionGenerationMode', { sectionId: 'hero', modeId: 'full_image' }, 'workspace:a:fence:1'],
       ]);
       const staleClick = [...root.rootListeners.get('click')][0];
       menu.onLeave();
       staleClick({ target: root.nodes.get('#compMarketStart'), preventDefault() {}, stopPropagation() {} });
-      assert.equal(calls.length, 10, 'stale competitor listener must be a no-op after workspace switch');
+      assert.equal(calls.length, 12, 'stale competitor listener must be a no-op after workspace switch');
       menu.onEnter();
     }
     if (route === 'sections') {
@@ -943,6 +954,32 @@ test('Task 7 B1 B2 preview evaluation completion is ignored after route leave', 
   assert.equal(calls.length, 1, 'route leave must fence stale evaluation completion');
   assert.equal(root.rootListeners.size, 0, 'route leave must dispose evaluation listener');
   dispose();
+});
+
+test('Task 7 B1 B3 active preview rebases candidate clicks after an authority token refresh', async () => {
+  const calls = [];
+  let token = 'workspace:a:fence:1';
+  const names = ['setViewport', 'navigate', 'startGenerating', 'applySectionVariantImage'];
+  const preview = (await importMenu('preview-menu.mjs')).createPreviewMenu(domainCapabilities(names, {
+    getOperationToken: () => token,
+    actions: Object.fromEntries(names.map(name => [name, (value, context) => {
+      calls.push([name, value, context.operationToken]);
+    }])),
+  }));
+  const root = domRoot([
+    c('[data-apply-variant-image]', 'click', { applyVariantImage: 'hero:variant-a' }),
+  ]);
+
+  preview.onEnter();
+  const dispose = preview.bind(root);
+  token = 'workspace:a:fence:2';
+  fire(root.nodes.get('[data-apply-variant-image]'), 'click', {}, root);
+  assert.deepEqual(calls, [[
+    'applySectionVariantImage',
+    { sectionId: 'hero', variantId: 'variant-a' },
+    'workspace:a:fence:2',
+  ]]);
+  dispose(); preview.onLeave();
 });
 
 test('Task 7 B1 B2 preview evaluation rebind fences the old completion and leaves no listeners', async () => {

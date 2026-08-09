@@ -1,4 +1,4 @@
-function factoryBuildCafe24OptionSyncPlan(factory = factoryRuntimeReadFactory(), finalDb = factory.product?.finalDb || {}, optionModel = null) {
+function factoryBuildCafe24OptionSyncPlan(factory = factoryRuntimeReadFactory(), finalDb = factory.product?.finalDb || {}, optionModel = null, syncOptions = {}) {
   const target = factoryCafe24TargetCandidate(factory, { allowFallback: !!factory.product.candidateAutoApply });
   const raw = parseCafe24Raw(target);
   const optionFinalDb = factoryCafe24OptionSettingsFinalDb(factory, finalDb);
@@ -65,12 +65,19 @@ function factoryBuildCafe24OptionSyncPlan(factory = factoryRuntimeReadFactory(),
     .filter(item => Object.keys(item.body || {}).length);
   const sourceInventoryMap = factoryCafe24SourceVariantInventoryMap(factory, productNo);
   const editedVariantKeys = new Set(Object.keys(variantEdits || {}));
-  const shouldSyncAutoInventory = optionHasChanges;
+  const forceInventory = syncOptions.forceInventory === true;
+  const forceInventoryQuantity = /^\d+$/.test(String(syncOptions.forceInventoryQuantity || '').trim())
+    ? String(syncOptions.forceInventoryQuantity).trim()
+    : '';
+  const shouldSyncAutoInventory = optionHasChanges || forceInventory;
   const autoInventoryUpdates = shouldSyncAutoInventory ? rows
     .filter(row => row.variant_code && !editedVariantKeys.has(row.key))
     .map(row => {
       const seed = factoryCafe24SourceInventoryForRow(row, sourceInventoryMap);
       const inventory = factoryCafe24AutoInventoryPayload(row, seed);
+      if (forceInventoryQuantity) {
+        inventory.quantity = factoryCafe24PayloadValue('quantity', forceInventoryQuantity);
+      }
       return {
         variantCode: row.variant_code,
         path: productNo ? `/api/v2/admin/products/${encodeURIComponent(productNo)}/variants/${encodeURIComponent(row.variant_code)}/inventories` : '',
@@ -103,7 +110,7 @@ function factoryBuildCafe24OptionSyncPlan(factory = factoryRuntimeReadFactory(),
     optionExtrasTouched,
     variantEditsTouched: Object.keys(variantEdits).length > 0,
     hasExplicitChanges: optionHasChanges,
-    hasChanges: optionHasChanges && !!(optionUpdate || variantUpdates.length || mergedInventoryUpdates.length),
+    hasChanges: !!(optionUpdate || variantUpdates.length || mergedInventoryUpdates.length),
     optionSettingsOnly: !!(optionUpdate && !optionStructureTouched),
     productOptions,
     optionUpdate,
@@ -579,8 +586,8 @@ async function factorySyncCafe24ProductImages(options = {}) {
         render: false,
       }),
     );
-    saveLastWorkNow({ sync: false });
     if (options.render !== false) render();
+    await saveLastWorkNow({ sync: false });
     return receipt.result;
   }
   const factory = options.factory;
@@ -615,7 +622,10 @@ async function factorySyncCafe24ProductImages(options = {}) {
   try {
     const body = await callCafe24Console('POST', `/api/v2/admin/products/${encodeURIComponent(productNo)}/images`, {
       mallId,
-      body: payload,
+      body: {
+        shop_no: 1,
+        request: payload,
+      },
       executeDirect: true,
     }, `Upload Cafe24 product images ${productNo}`);
     await factoryExecuteCafe24ControlBody(body, {
@@ -634,10 +644,21 @@ async function factorySyncCafe24ProductImages(options = {}) {
     factoryLog(current.product.cafe24ApiStatus, 'ok', current);
     emitProgress(current.product.cafe24ApiStatus, options.progressEnd || 98, 'ok');
     try {
-      const detail = await fetchCafe24ProductFullByNo(productNo, mallId);
-      if (detail) {
+      let detail = null;
+      let verification = null;
+      for (let attempt = 1; attempt <= 30; attempt += 1) {
+        detail = await fetchCafe24ProductFullByNo(productNo, mallId);
+        verification = detail
+          ? factoryVerifyCafe24ImageEcho(payload, parseCafe24Raw(detail) || detail.raw || detail)
+          : null;
+        if (verification && !verification.missing.length) break;
+        if (attempt < 30) {
+          emitProgress(`Cafe24 이미지 재조회 ${attempt}/30 확인 중`, options.progressEnd || 98, 'info');
+          await factoryCafe24Delay(1000);
+        }
+      }
+      if (detail && verification) {
         current.product.cafe24Candidates = factoryMergeCafe24Candidates(current.product.cafe24Candidates, [normalizeCafe24ProductCandidate(detail, `images-saved:${productNo}`, 999, 0)]);
-        const verification = factoryVerifyCafe24ImageEcho(payload, parseCafe24Raw(detail) || detail.raw || detail);
         factoryRememberCafe24SyncResult(current, 'images', {
           productNo,
           endpoint: `/api/v2/admin/products/${productNo}/images`,
@@ -649,6 +670,7 @@ async function factorySyncCafe24ProductImages(options = {}) {
           factoryLog(`Cafe24 이미지 재조회 확인 완료: ${verification.present}/${verification.checked}개 이미지 경로 확인`, 'ok', current);
         } else {
           factoryLog(`Cafe24 이미지 재조회 확인 필요: ${verification.missing.join(', ')} 경로가 응답에서 비어 있습니다.`, 'error', current);
+          return false;
         }
       } else {
         factoryRememberCafe24SyncResult(current, 'images', {
@@ -657,6 +679,7 @@ async function factorySyncCafe24ProductImages(options = {}) {
           ok: false,
           summary: '이미지 업로드 후 상세 재조회 결과가 비어 있습니다.',
         });
+        return false;
       }
     } catch(e) {
       current.product.cafe24SyncResults = current.product.cafe24SyncResults || {};
@@ -719,8 +742,8 @@ async function factorySyncCafe24AdditionalImages(mode = 'create', options = {}) 
         render: false,
       }),
     );
-    saveLastWorkNow({ sync: false });
     if (options.render !== false) render();
+    await saveLastWorkNow({ sync: false });
     return receipt.result;
   }
   const factory = options.factory;
@@ -879,6 +902,32 @@ function factoryCafe24DetailImageSrcValues(html = '') {
   return Array.from(new Set(values));
 }
 
+function factoryCafe24DescriptionImageUrlsFromBody(body = {}, factory = factoryRuntimeReadFactory()) {
+  const pools = [
+    body?.data?.response?.images,
+    body?.response?.images,
+    body?.images,
+    body?.data?.images,
+    body?.data?.response?.image,
+    body?.response?.image,
+    body?.image,
+    body?.data?.image,
+  ];
+  const values = pools.find(Array.isArray)
+    || pools.find(value => value && typeof value === 'object')
+    || [];
+  return (Array.isArray(values) ? values : [values])
+    .map(item => {
+      if (typeof item === 'string') return item;
+      if (!item || typeof item !== 'object') return '';
+      return item.path || item.url || item.src || item.image || '';
+    })
+    .map(value => typeof factoryCafe24ImageDisplayUrl === 'function'
+      ? factoryCafe24ImageDisplayUrl(value, factory)
+      : String(value || '').trim())
+    .filter(Boolean);
+}
+
 function factoryCafe24IsLocalDetailImageUrl(url = '') {
   const raw = String(url || '').trim();
   if (!raw) return false;
@@ -887,8 +936,20 @@ function factoryCafe24IsLocalDetailImageUrl(url = '') {
     /^https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/api\/local-archive\//i.test(raw);
 }
 
+function factoryCafe24IsTransferDetailImageUrl(url = '') {
+  const raw = String(url || '').trim();
+  if (!raw || raw.startsWith('data:image/')) return false;
+  return factoryCafe24IsLocalDetailImageUrl(raw) ||
+    raw.startsWith('blob:') ||
+    raw.startsWith('http://127.0.0.1:8081/') ||
+    raw.startsWith('http://localhost:8081/') ||
+    raw.startsWith('http://127.0.0.1:5050/') ||
+    raw.startsWith('http://localhost:5050/');
+}
+
 function factoryCafe24ResolveLocalDetailImageUrl(url = '') {
   const raw = String(url || '').trim();
+  if (raw.startsWith('blob:') || raw.startsWith('data:image/')) return raw;
   if (/^https?:\/\//i.test(raw)) return raw;
   const base = (typeof factoryBackendBaseUrl === 'function'
     ? factoryBackendBaseUrl()
@@ -907,7 +968,7 @@ async function factoryCafe24BlobToDataUrl(blob) {
 
 async function factoryCafe24HydrateLocalDetailImages(html = '', options = {}) {
   let next = String(html || '');
-  const localUrls = factoryCafe24DetailImageSrcValues(next).filter(factoryCafe24IsLocalDetailImageUrl).slice(0, 20);
+  const localUrls = factoryCafe24DetailImageSrcValues(next).filter(factoryCafe24IsTransferDetailImageUrl).slice(0, 20);
   if (!localUrls.length) return { html: next, replaced: 0 };
   const emitProgress = (message, progress, type = 'info') => {
     if (typeof options.onProgress === 'function') {
@@ -920,9 +981,31 @@ async function factoryCafe24HydrateLocalDetailImages(html = '', options = {}) {
     const url = factoryCafe24ResolveLocalDetailImageUrl(original);
     emitProgress(`상세페이지 로컬 이미지 원본 연결 ${index + 1}/${localUrls.length}`, options.progressStart || 96, 'info');
     const res = await fetch(url, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`상세페이지 로컬 이미지 원본을 읽지 못했습니다: HTTP ${res.status}`);
-    const blob = await res.blob();
-    const dataUrl = await factoryCafe24BlobToDataUrl(blob);
+    let dataUrl = '';
+    if (res.ok) {
+      const blob = await res.blob();
+      dataUrl = await factoryCafe24BlobToDataUrl(blob);
+    } else {
+      const archiveMatch = url.match(/\/api\/local-archive\/assets\/([^/?#]+)\/image(?:[?#].*)?$/i);
+      if (archiveMatch) {
+        const archivePath = '/api/local-archive/';
+        const metadataBase = url.slice(0, url.indexOf(archivePath));
+        const metadataUrl = `${metadataBase}/api/local-archive/assets/${encodeURIComponent(archiveMatch[1])}`;
+        const metadataRes = await fetch(metadataUrl, { cache: 'no-store' });
+        if (metadataRes.ok) {
+          const metadata = await metadataRes.json();
+          dataUrl = [
+            metadata?.imageDataUrl,
+            metadata?.asset?.imageDataUrl,
+            metadata?.record?.imageDataUrl,
+            metadata?.dataUrl,
+            metadata?.asset?.dataUrl,
+            metadata?.record?.dataUrl,
+          ].map(value => String(value || '').trim()).find(value => /^data:image\//i.test(value)) || '';
+        }
+      }
+      if (!dataUrl) throw new Error(`상세페이지 로컬 이미지 원본을 읽지 못했습니다: HTTP ${res.status}`);
+    }
     if (!/^data:image\//i.test(dataUrl)) throw new Error('상세페이지 로컬 이미지가 이미지 원본으로 변환되지 않았습니다.');
     next = next.split(original).join(dataUrl);
     replaced += 1;
@@ -947,24 +1030,28 @@ async function factoryUploadCafe24DetailInlineImages(productNo, mallId, html = '
   const factory = options.factory || factoryRuntimeReadFactory();
   const payloadImages = dataUrls.map(factoryCafe24DetailBase64FromDataUrl).filter(Boolean);
   emitProgress(`상세페이지 이미지 Cafe24 업로드 준비: ${payloadImages.length}장`, options.progressStart || 97, 'info');
-  const body = await callCafe24Console('POST', `/api/v2/admin/products/${encodeURIComponent(id)}/additionalimages`, {
+  const body = await callCafe24Console('POST', '/api/v2/admin/products/images', {
     mallId,
-    body: { additional_image: payloadImages },
+    body: { request: null, requests: payloadImages.map(image => ({ image })) },
     executeDirect: true,
   }, `Upload Cafe24 detail section images ${id}`);
-  await factoryExecuteCafe24ControlBody(body, {
-    attempts: 60,
-    delayMs: 1000,
-    onProgress: ({ attempt, attempts, job }) => {
-      const status = String(job?.status || '대기 중');
-      const start = Number(options.progressStart || 97);
-      const end = Number(options.progressMid || 98);
-      const progress = Math.min(end, start + Math.round((attempt / attempts) * Math.max(1, end - start)));
-      emitProgress(`상세페이지 이미지 업로드 실행 확인 ${attempt}/${attempts}: ${status}`, progress, status === 'failed' || status === 'partial' ? 'error' : 'info');
-    },
-  });
-  const responseRaw = factoryCafe24AdditionalImageResponseRaw(body);
-  const responseUrls = factoryCafe24AdditionalImageUrlsFromRaw(responseRaw, factory);
+  const executed = factoryCafe24ControlPlanFromBody(body)
+    ? await factoryExecuteCafe24ControlBody(body, {
+      attempts: 60,
+      delayMs: 1000,
+      onProgress: ({ attempt, attempts, job }) => {
+        const status = String(job?.status || '대기 중');
+        const start = Number(options.progressStart || 97);
+        const end = Number(options.progressMid || 98);
+        const progress = Math.min(end, start + Math.round((attempt / attempts) * Math.max(1, end - start)));
+        emitProgress(`상세페이지 이미지 업로드 실행 확인 ${attempt}/${attempts}: ${status}`, progress, status === 'failed' || status === 'partial' ? 'error' : 'info');
+      },
+    })
+    : { body, job: null };
+  const responseUrls = [
+    ...factoryCafe24DescriptionImageUrlsFromBody(body, factory),
+    ...factoryCafe24DescriptionImageUrlsFromBody(executed.job || {}, factory),
+  ];
   const uploadedUrls = responseUrls.slice(Math.max(0, responseUrls.length - payloadImages.length));
   if (uploadedUrls.length < payloadImages.length) {
     throw new Error(`상세페이지 이미지 URL 확인 실패: 업로드 ${payloadImages.length}장, 재조회 URL ${uploadedUrls.length}장`);
@@ -1005,9 +1092,21 @@ async function factoryVerifyCafe24SavedDetailHtml(productNo, mallId, options = {
     lastCheck = typeof factoryCafe24DetailPayloadPreflight === 'function'
       ? factoryCafe24DetailPayloadPreflight({ description: lastHtml, mobile_description: lastHtml })
       : { ok: true, issues: [] };
+    const imageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+      ? factoryCafe24DetailImageSrcValues(lastHtml).length
+      : 0;
+    const minImageCount = Math.max(0, Number(options.minImageCount || 0));
+    if (minImageCount > 0 && imageCount < minImageCount) {
+      lastCheck = {
+        ...lastCheck,
+        ok: false,
+        imageCount,
+        issues: [...(lastCheck.issues || []), '상세 이미지 ' + imageCount + '/' + minImageCount + '장만 저장됨'],
+      };
+    }
     if (lastHtml.trim() && lastCheck.ok) {
       emitProgress(`Cafe24 상세페이지 재조회 확인 완료: ${index + 1}/${attempts}`, options.progressEnd || 99, 'ok');
-      return { detail: lastDetail, html: lastHtml, check: lastCheck, attempts: index + 1 };
+      return { detail: lastDetail, html: lastHtml, check: lastCheck, imageCount, attempts: index + 1 };
     }
     const issueText = lastHtml.trim()
       ? ((lastCheck?.issues || []).join(' ') || '상세 HTML 안전검사 미통과')
@@ -1020,7 +1119,7 @@ async function factoryVerifyCafe24SavedDetailHtml(productNo, mallId, options = {
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
-  return { detail: lastDetail, html: lastHtml, check: lastCheck, attempts };
+  return { detail: lastDetail, html: lastHtml, check: lastCheck, imageCount: typeof factoryCafe24DetailImageSrcValues === 'function' ? factoryCafe24DetailImageSrcValues(lastHtml).length : 0, attempts };
 }
 
 async function factoryPublishCafe24ScopedDetailHtml(productNo, options = {}) {
@@ -1050,6 +1149,9 @@ async function factoryPublishCafe24ScopedDetailHtml(productNo, options = {}) {
     ? factoryCafe24ExpandLightImageHtmlForTransfer(rawHtmlBase).trim()
     : rawHtmlBase;
   if (!rawHtml) throw new Error('상세페이지 저장 중단: 현재 작업 상세페이지 HTML이 없습니다.');
+  const expectedImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(rawHtml).length
+    : 0;
   const emitProgress = (message, progress, type = 'info') => {
     if (typeof options.onProgress === 'function') {
       try { options.onProgress(message, progress, type); } catch(_) {}
@@ -1069,6 +1171,12 @@ async function factoryPublishCafe24ScopedDetailHtml(productNo, options = {}) {
     progressMid: options.progressMid || 98,
   });
   const html = uploadResult.html;
+  const transferredImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(html).length
+    : 0;
+  if (expectedImageCount > 0 && transferredImageCount === 0) {
+    throw new Error('상세페이지 이미지 전송 중단: 원본 ' + expectedImageCount + '장 중 전송 가능한 이미지가 0장입니다.');
+  }
   const product = {
     description: html,
     mobile_description: html,
@@ -1086,28 +1194,31 @@ async function factoryPublishCafe24ScopedDetailHtml(productNo, options = {}) {
     body: { product },
     executeDirect: html.length > 100000,
   }, `Update Cafe24 product detail HTML ${id}`);
-  await factoryExecuteCafe24ControlBody(body, {
-    attempts: 60,
-    delayMs: 1000,
-    onProgress: ({ attempt, attempts, job }) => {
-      const status = String(job?.status || '대기 중');
-      const start = Number(options.progressMid || 98);
-      const end = Number(options.progressEnd || 99);
-      const progress = Math.min(end, start + Math.round((attempt / attempts) * Math.max(1, end - start)));
-      emitProgress(`상세페이지 HTML 저장 확인 ${attempt}/${attempts}: ${status}`, progress, status === 'failed' || status === 'partial' ? 'error' : 'info');
-    },
-  });
+  if (factoryCafe24ControlPlanFromBody(body)) {
+    await factoryExecuteCafe24ControlBody(body, {
+      attempts: 60,
+      delayMs: 1000,
+      onProgress: ({ attempt, attempts, job }) => {
+        const status = String(job?.status || '대기 중');
+        const start = Number(options.progressMid || 98);
+        const end = Number(options.progressEnd || 99);
+        const progress = Math.min(end, start + Math.round((attempt / attempts) * Math.max(1, end - start)));
+        emitProgress(`상세페이지 HTML 저장 확인 ${attempt}/${attempts}: ${status}`, progress, status === 'failed' || status === 'partial' ? 'error' : 'info');
+      },
+    });
+  }
   const verification = await factoryVerifyCafe24SavedDetailHtml(id, mallId, {
     onProgress: emitProgress,
     progressMid: options.progressMid || 98,
     progressEnd: options.progressEnd || 99,
     attempts: options.verifyAttempts || 30,
     delayMs: options.verifyDelayMs || 2000,
+    minImageCount: expectedImageCount,
   });
   const detail = verification.detail;
   const savedHtml = verification.html;
-  if (!savedHtml.trim() || !verification.check?.ok) {
-    throw new Error('상세페이지 HTML 저장 후 재조회에서 base64 이미지가 남았거나 상세설명이 비어 있습니다.');
+  if (!savedHtml.trim() || !verification.check?.ok || (expectedImageCount > 0 && verification.imageCount < expectedImageCount)) {
+    throw new Error('상세페이지 HTML 저장 후 재조회에서 이미지가 누락되었거나 상세설명이 비어 있습니다. 기대 ' + expectedImageCount + '장, 확인 ' + (verification.imageCount || 0) + '장');
   }
   const current = factory;
   current.product.cafe24Candidates = factoryMergeCafe24Candidates(current.product.cafe24Candidates, [normalizeCafe24ProductCandidate(detail, `detail-html-saved:${id}`, 999, 0)]);
@@ -2428,7 +2539,10 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
   }
   const factory = options.factory;
   const model = factoryUpdateFinalDbFromFields(factory);
-  const plan = factoryBuildCafe24OptionSyncPlan(factory, model.finalDb);
+  const plan = factoryBuildCafe24OptionSyncPlan(factory, model.finalDb, null, {
+    forceInventory: options.forceInventory === true,
+    forceInventoryQuantity: options.forceInventoryQuantity,
+  });
   if (!plan.productNo) {
     factoryLog('Cafe24 옵션/품목 동기화 중단: 먼저 Cafe24 후보를 확정해서 상품번호를 가져와야 합니다.', 'error', factory);
     return false;
@@ -2469,7 +2583,9 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
         body: item.body,
         executeDirect: true,
       }, `Update Cafe24 inventory ${item.variantCode}`);
-      await factoryExecuteCafe24ControlBody(inventoryBody, { attempts: 35, delayMs: 700 });
+      if (factoryCafe24ControlPlanFromBody(inventoryBody)) {
+        await factoryExecuteCafe24ControlBody(inventoryBody, { attempts: 35, delayMs: 700 });
+      }
     }
     const current = factory;
     current.product.cafe24ApiStatus = `Cafe24 옵션/품목 실행 완료, 재조회 확인 중: 옵션그룹 ${plan.optionGroupCount}개 · 옵션값 ${plan.optionValueTotal}개 · 품목 ${plan.variantUpdates.length}건`;
@@ -2496,6 +2612,7 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
         } else {
           current.product.cafe24ApiStatus = `Cafe24 옵션/품목 저장 후 확인 필요: ${verification.message}`;
           factoryLog(`Cafe24 옵션/품목 재조회 확인 필요: ${verification.message}`, 'error', current);
+          return false;
         }
       } else {
         current.product.cafe24ApiStatus = `Cafe24 옵션/품목 저장 후 재조회 결과 없음: #${plan.productNo}`;
@@ -2506,6 +2623,7 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
           summary: '옵션 동기화 후 상세 재조회 결과가 비어 있습니다.',
           detail: `옵션그룹 ${plan.optionGroupCount}개 · 옵션값 ${plan.optionValueTotal}개 · 추가입력 ${plan.optionExtras?.additionalOptions?.length || 0}개 · 품목 수정 ${plan.variantUpdates.length}건 · 재고 수정 ${plan.inventoryUpdates.length}건`,
         });
+        return false;
       }
     } catch(e) {
       factoryRememberCafe24SyncResult(current, 'options', {
@@ -2517,6 +2635,7 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
         error: e.message || String(e),
       });
       factoryLog(`옵션 동기화 후 Cafe24 재조회 보류: ${e.message || e}`, 'error', current);
+      return false;
     }
     return true;
   } catch(e) {
@@ -2722,11 +2841,36 @@ function factoryRemoveCafe24UnsupportedProductPayloadFields(product = {}, notes 
   return removed;
 }
 
+function factoryNormalizeCafe24AdditionalInformationForSave(value) {
+  return factoryCafe24AdditionalInformationPayload(value)
+    .map(row => ({
+      key: String(row?.key || '').trim(),
+      value: String(row?.value ?? '').trim(),
+    }))
+    .filter(row => row.key);
+}
+
 function factoryNormalizeCafe24ProductPayloadForSave(product = {}, notes = []) {
   const next = { ...(product || {}) };
   factoryRemoveCafe24UnsupportedProductPayloadFields(next, notes);
   if (typeof factoryRemoveCafe24InvalidReferenceCodePayloadFields === 'function') {
     factoryRemoveCafe24InvalidReferenceCodePayloadFields(next, notes);
+  }
+  if (Array.isArray(next.points_amount) && next.points_amount.length) {
+    const previousPointsFlag = String(next.points_by_product || '').trim().toUpperCase();
+    const previousPaymentSetting = String(next.points_setting_by_payment || '').trim().toUpperCase();
+    next.points_by_product = 'T';
+    next.points_setting_by_payment = /^[BC]$/.test(previousPaymentSetting)
+      ? previousPaymentSetting
+      : (next.points_amount.some(row => String(row?.payment_method || '').trim()) ? 'C' : 'B');
+    if (previousPointsFlag !== 'T' || !/^[BC]$/.test(previousPaymentSetting)) {
+      notes.push('적립금 행을 저장할 때 Cafe24 필수 상위 설정(개별설정/결제방식)을 함께 전송합니다.');
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'additional_information')) {
+    const normalized = factoryNormalizeCafe24AdditionalInformationForSave(next.additional_information);
+    if (normalized.length) next.additional_information = normalized;
+    else delete next.additional_information;
   }
   if (Object.prototype.hasOwnProperty.call(next, 'product_volume')) {
     const normalized = factoryNormalizeCafe24ProductVolumeForSave(next.product_volume);
@@ -3023,9 +3167,11 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
   );
   const target = selectedFieldMode && !hasExplicitSelectedTarget
     ? null
-    : factoryCafe24TargetCandidate(factory, { allowFallback: selectedFieldMode ? false : !!factory.product.candidateAutoApply });
+    : factoryCafe24TargetCandidate(factory, { allowFallback: selectedFieldMode ? false : !!factory.product.candidateAutoApply, preferSelected: selectedFieldMode });
   const raw = parseCafe24Raw(target);
-  const productNo = target?.product_no || raw.product_no || model.finalDb.product_no || model.finalDb.cafe24_product_no || '';
+  const productNo = selectedFieldMode
+    ? (target?.product_no || raw.product_no || '')
+    : (target?.product_no || raw.product_no || model.finalDb.product_no || model.finalDb.cafe24_product_no || '');
   const requireSingleField = options.requireSingleField === true;
   if (!productNo) {
     factoryLog('Cafe24 저장 중단: 저장 대상 product_no가 없습니다. 먼저 Cafe24 상품정보를 가져오거나 후보를 확정해주세요.', 'error', factory);
@@ -3047,10 +3193,17 @@ async function factorySaveCafe24ProductFromFinalDb(options = {}) {
   if (options.forceName && (!selectedFieldMode || selectedFieldIds.includes('product_name'))) {
     product.product_name = String(options.forceName || '').trim();
   }
+  if (Object.prototype.hasOwnProperty.call(options, 'forceSalePrice')) {
+    product.price = factoryCafe24MoneyText(options.forceSalePrice);
+  }
   if (!selectedFieldMode && options.applyFinalRegistrationSettings !== false && typeof factoryApplyFinalCafe24StatusToProduct === 'function') {
     factoryApplyFinalCafe24StatusToProduct(product, factory);
   }
   const fieldNames = Object.keys(product);
+  if (Object.prototype.hasOwnProperty.call(product, 'price') && !factoryCafe24PositiveMoneyText(product.price)) {
+    factoryLog('Cafe24 저장 중단: 판매가는 0보다 큰 금액이어야 합니다. 현재 작업의 판매가를 5000처럼 입력한 뒤 다시 저장해주세요.', 'error', factory);
+    return false;
+  }
   if (!fieldNames.length) {
     factoryLog('Cafe24 기본 저장 중단: 수정한 상품 기본 입력칸이 없습니다. 옵션/품목/재고, 카테고리, 이미지, 태그, SEO는 전용 동기화 버튼에서 따로 저장해주세요.', 'error', factory);
     return false;
@@ -3398,6 +3551,7 @@ async function factoryRunCafe24ReadySync(options = {}) {
   try {
     const nestedOptions = { skipConfirm: true, factory, render: false };
     await runAction('product', '상품 기본정보', () => factorySaveCafe24ProductFromFinalDb(nestedOptions));
+    await runAction('detailHtml', '상세페이지 HTML', () => factoryPublishCafe24ScopedDetailHtml(plan.productNo, nestedOptions));
     await runAction('category', '카테고리 연결', () => factorySyncCafe24CategoryLink(nestedOptions));
     await runAction('options', '옵션/품목/재고', () => factorySyncCafe24OptionsAndVariants(nestedOptions));
     await runAction('images', '상품 이미지', () => factorySyncCafe24ProductImages(nestedOptions));
@@ -3486,6 +3640,8 @@ async function factoryRunCafe24PostCreateSync(actions = [], options = {}) {
         progressStart: stepStart,
         progressEnd: progressFor(finishedCount + 1),
         onProgress: emitProgress,
+        forceInventory: options.forceInventory === true,
+        forceInventoryQuantity: options.forceInventoryQuantity,
         factory,
         render: false,
       });
@@ -3498,7 +3654,6 @@ async function factoryRunCafe24PostCreateSync(actions = [], options = {}) {
       failures.push({ key, label, message, required: requiredKeys.has(key) });
       factoryLog(`Cafe24 후속 단계 실패: ${label} · ${message}`, requiredKeys.has(key) ? 'error' : 'warn', factory);
       emitProgress(`Cafe24 후속 단계 실패: ${label} · ${message}`, progressFor(finishedCount + 1), requiredKeys.has(key) ? 'error' : 'warn');
-      if (requiredKeys.has(key)) throw e;
       return false;
     }
   };
@@ -3515,23 +3670,28 @@ async function factoryRunCafe24PostCreateSync(actions = [], options = {}) {
     await runAction('memos', '관리 메모', step => factorySyncCafe24Memo(factory.product.cafe24MemoDraft?.memoNo ? 'update' : 'create', { skipConfirm: true, ...step }));
     await runAction('mains', '메인 진열', step => factorySyncCafe24MainProduct({ skipConfirm: true, ...step }));
     const current = factory;
+    const requiredFailures = failures.filter(item => item.required);
     factoryRememberCafe24SyncResult(current, 'postCreate', {
       productNo,
       endpoint: 'Cafe24 새 상품 등록 후 전용 API',
-      ok: !failures.some(item => item.required),
-      summary: failures.length
-        ? `필수 후속 단계 완료, 선택 단계 ${failures.length}개 확인 필요`
+      ok: !requiredFailures.length,
+      summary: requiredFailures.length
+        ? `필수 후속 단계 실패: ${requiredFailures.map(item => item.label).join(', ')}`
+        : failures.length
+          ? `필수 후속 단계 완료, 선택 단계 ${failures.length}개 확인 필요`
         : `${readyActions.length}개 후속 단계 완료`,
       detail: failures.length
         ? `완료/시도: ${readyActions.map(action => action.label).join(', ')} · 확인 필요: ${failures.map(item => item.label).join(', ')}`
         : readyActions.map(action => action.label).join(', '),
       error: failures.length ? failures.map(item => `${item.label}: ${item.message}`).join(' | ') : undefined,
     });
-    current.product.cafe24ApiStatus = failures.length
-      ? `Cafe24 새 상품 필수 후속 동기화 완료, 선택 단계 확인 필요: ${failures.map(item => item.label).join(', ')}`
+    current.product.cafe24ApiStatus = requiredFailures.length
+      ? `Cafe24 새 상품 필수 후속 동기화 실패: ${requiredFailures.map(item => item.label).join(', ')}`
+      : failures.length
+        ? `Cafe24 새 상품 필수 후속 동기화 완료, 선택 단계 확인 필요: ${failures.map(item => item.label).join(', ')}`
       : `Cafe24 새 상품 등록 후 전용 API 동기화 완료: ${readyActions.map(action => action.label).join(', ')}`;
-    factoryLog(current.product.cafe24ApiStatus, failures.length ? 'warn' : 'ok', current);
-    return true;
+    factoryLog(current.product.cafe24ApiStatus, requiredFailures.length ? 'error' : (failures.length ? 'warn' : 'ok'), current);
+    return !requiredFailures.length;
   } catch(e) {
     const current = factory;
     factoryRememberCafe24SyncResult(current, 'postCreate', {
@@ -3752,6 +3912,15 @@ function factoryAttachCafe24ProductAsCurrentTarget(product, source = 'Cafe24 상
   };
 }
 
+function factoryPromoteCreatedCafe24ProductToUpdateTarget(product, source = 'created', factory) {
+  const attached = factoryAttachCafe24ProductAsCurrentTarget(product, source, factory);
+  if (!attached?.productNo) return attached;
+  const sync = factoryEnsureOpenMarketSync(factory);
+  sync.cafe24RegistrationMode = 'update';
+  sync.cafe24RegistrationModeUserTouched = true;
+  return attached;
+}
+
 async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
   if (!options.factory) {
     const receipt = await factoryRuntimeUpdateOwnedFactory(
@@ -3773,6 +3942,24 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
   if (options.applyFinalRegistrationSettings !== false && typeof factoryApplyFinalCafe24StatusToDb === 'function') {
     factoryApplyFinalCafe24StatusToDb(factory);
     model = factoryUpdateFinalDbFromFields(factory);
+  }
+  try {
+    if (typeof factoryHydrateCafe24ImagesFromLocalArchive === 'function') {
+      await factoryHydrateCafe24ImagesFromLocalArchive({ stages: ['hero'], factory, render: false });
+    }
+  } catch(e) {
+    factory.product.cafe24ApiStatus = `Cafe24 새 상품 등록 중단: 대표이미지 원본 복원 실패 · ${e.message || e}`;
+    factoryLog(factory.product.cafe24ApiStatus, 'error', factory);
+    return false;
+  }
+  const createImagePayload = typeof factoryCafe24ImagePayload === 'function' ? factoryCafe24ImagePayload(factory) : {};
+  const createImageSlots = typeof FACTORY_CAFE24_IMAGE_SLOTS !== 'undefined' && Array.isArray(FACTORY_CAFE24_IMAGE_SLOTS)
+    ? FACTORY_CAFE24_IMAGE_SLOTS
+    : [];
+  if (!createImageSlots.some(slot => createImagePayload?.[slot.key])) {
+    factory.product.cafe24ApiStatus = 'Cafe24 새 상품 등록 중단: 대표이미지 원본을 확보하지 못했습니다. 빈 이미지 상품은 생성하지 않습니다.';
+    factoryLog(factory.product.cafe24ApiStatus, 'error', factory);
+    return false;
   }
   const providedDetailHtml = String(options.detailHtml || options.scopedDetailHtml || options.currentDetailHtml || '').trim();
   const providedDetailSource = String(options.detailSource || options.scopedDetailSource || '').trim();
@@ -3807,6 +3994,8 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
   const product = factoryBuildCafe24UpdatePayload(model.finalDb, model.fields, factory, {
     recordDetailPreflight: true,
     allowSafeDetailFallback: options.allowSafeDetailFallback === true,
+    includeResolvedSizeAdditionalInformation: true,
+    includeCreateReferenceDefaults: true,
     detailHtml: scopedDetailHtmlBeforeCreate,
     detailSource: scopedDetailBeforeCreate?.source || '',
   });
@@ -3819,6 +4008,10 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
   factoryAttachCafe24OptionsToProductPayload(product, factory, model.finalDb);
   factoryAttachCafe24CategoryToProductPayload(product, factory);
   if (options.forceName) product.product_name = String(options.forceName || '').trim();
+  const forcedSalePrice = typeof factoryCafe24PositiveMoneyText === 'function'
+    ? factoryCafe24PositiveMoneyText(options.forceSalePrice)
+    : String(options.forceSalePrice || '').trim();
+  if (forcedSalePrice) product.price = forcedSalePrice;
   if (options.forceHiddenTest) {
     product.display = 'F';
     product.selling = 'F';
@@ -3877,10 +4070,21 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
       factoryLog(`동일 상품명 Cafe24 확인 보류: ${e.message || e}. 새 상품 등록 절차를 계속합니다.`, 'error', factory);
     }
   }
-  const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, model.finalDb);
-  let postCreatePlan = factoryCafe24CreatePostSyncPlan(factory);
+  const forceInventoryQuantityInput = String(
+    options.forceInventoryQuantity ??
+    (typeof document !== 'undefined' ? document.getElementById('factoryCafe24InventoryAll')?.value : '') ??
+    ''
+  ).trim();
+  const forceInventoryQuantity = /^\d+$/.test(forceInventoryQuantityInput)
+    ? forceInventoryQuantityInput
+    : '';
+  const optionPlan = factoryBuildCafe24OptionSyncPlan(factory, model.finalDb, null, {
+    forceInventory: true,
+    forceInventoryQuantity,
+  });
+  let postCreatePlan = factoryCafe24CreatePostSyncPlan(factory, { forceInventory: true, forceInventoryQuantity });
   const fieldNames = Object.keys(product);
-  if (!product.product_name || !product.price) {
+  if (!product.product_name || !factoryCafe24PositiveMoneyText(product.price)) {
     factoryLog('Cafe24 새 상품 등록 중단: 상품명과 판매가는 필수입니다. Cafe24 상품 입력판에서 먼저 채워주세요.', 'error', factory);
     return false;
   }
@@ -3963,6 +4167,11 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
         product_name: String(product.product_name || created.product_name || current.product.userProductName || current.product.productName || state.productName || '').trim(),
         cafe24_product_name: created.product_name || current.product.finalDb?.cafe24_product_name || '',
       };
+      factoryPromoteCreatedCafe24ProductToUpdateTarget(
+        created,
+        `created:${created.product_no || created.product_name || ''}`,
+        current,
+      );
       current.product.cafe24ApiStatus = `Cafe24 새 상품 등록 완료: #${created.product_no || '-'} ${created.product_name || product.product_name}`;
       emitCreateProgress(current.product.cafe24ApiStatus, 70, 'ok');
       current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
@@ -4028,25 +4237,31 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
           factoryLog(`새 상품 등록 후 Cafe24 상세 재조회 보류: ${e.message || e}`, 'error', current);
         }
       }
+      let detailPublishError = null;
       if (created.product_no && shouldPublishDetailAfterCreate) {
         const beforeDetail = factory;
         beforeDetail.product.cafe24ApiStatus = 'Cafe24 상세페이지 섹션 이미지를 URL로 변환해 상세설명에 저장합니다.';
         factoryLog(beforeDetail.product.cafe24ApiStatus, 'ok', beforeDetail);
         emitCreateProgress(beforeDetail.product.cafe24ApiStatus, 92, 'info');
-        await factoryPublishCafe24ScopedDetailHtml(created.product_no, {
-          mallId: CAFE24_CONTROL_API.defaultMallId,
-          html: scopedDetailHtmlBeforeCreate,
-          source: scopedDetailBeforeCreate?.source || 'current-section-export',
-          progressStart: 92,
-          progressMid: 94,
-          progressEnd: 96,
-          onProgress: emitCreateProgress,
-          factory,
-          render: false,
-        });
+        try {
+          await factoryPublishCafe24ScopedDetailHtml(created.product_no, {
+            mallId: CAFE24_CONTROL_API.defaultMallId,
+            html: scopedDetailHtmlBeforeCreate,
+            source: scopedDetailBeforeCreate?.source || 'current-section-export',
+            progressStart: 92,
+            progressMid: 94,
+            progressEnd: 96,
+            onProgress: emitCreateProgress,
+            factory,
+            render: false,
+          });
+        } catch(e) {
+          detailPublishError = e;
+          factoryLog(`Cafe24 상세페이지 후속 저장 실패, 나머지 이미지/재고 후속 단계는 계속합니다: ${e.message || e}`, 'error', factory);
+        }
       }
       if (created.product_no && typeof factoryCafe24CreatePostSyncPlan === 'function') {
-        postCreatePlan = factoryCafe24CreatePostSyncPlan(factory);
+        postCreatePlan = factoryCafe24CreatePostSyncPlan(factory, { forceInventory: true, forceInventoryQuantity });
       }
       if (created.product_no && postCreatePlan.readyActions.length) {
         const beforePost = factory;
@@ -4059,6 +4274,9 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
           progressStart: 96,
           progressEnd: 99,
           onProgress: emitCreateProgress,
+          forceInventory: true,
+          forceInventoryQuantity,
+          requiredKeys: ['images', 'additionalImages', 'options'],
           factory,
           render: false,
         });
@@ -4066,6 +4284,7 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
           throw new Error('Cafe24 새 상품 등록 후 대표이미지/옵션/카테고리 후속 동기화가 실패했습니다.');
         }
       }
+      if (detailPublishError) throw detailPublishError;
       if (created.product_no) {
         const finalCheckNeedsDetail = shouldPublishDetailAfterCreate;
         const finalCheckNeedsImage = postCreatePlan.imageSlotCount > 0;
@@ -4131,10 +4350,13 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
     return body;
   } catch(e) {
     const current = factory;
-    current.product.cafe24ApiStatus = `Cafe24 새 상품 등록 실패: ${e.message || e}`;
+    const partialProductNo = String(current.product.finalDb?.product_no || current.product.finalDb?.cafe24_product_no || '').trim();
+    current.product.cafe24ApiStatus = partialProductNo
+      ? `Cafe24 새 상품 #${partialProductNo} 본체 생성 후 후속 동기화 실패: ${e.message || e}`
+      : `Cafe24 새 상품 등록 실패: ${e.message || e}`;
     current.product.cafe24LastSaveVerification = factoryCafe24SaveVerificationRecord({
       type: 'create',
-      productNo: '',
+      productNo: partialProductNo,
       product,
       verification: { checked: fieldNames.length, matched: 0, missing: [], mismatches: [] },
       error: e.message || String(e),
@@ -4145,14 +4367,15 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
 }
 
 function factorySetDbFieldManualValue(fieldId, value, options = {}) {
-  if (!options.factory) {
+  const providedFactory = options.factory;
+  if (!providedFactory) {
     return factoryRuntimeUpdateOwnedFactory(
       'factory/runtime:setDbFieldManualValue',
       'product-db',
       draft => factorySetDbFieldManualValue(fieldId, value, { ...options, factory: draft }),
     ).result;
   }
-  const factory = options.factory;
+  const factory = providedFactory;
   const nextValue = value === null || value === undefined ? '' : String(value);
   if (FACTORY_CAFE24_PRODUCT_SCOPED_OPTION_FIELDS.has(fieldId) || fieldId === 'search_keywords') {
     factoryResetCafe24DraftsForProduct(factory);
@@ -4925,6 +5148,33 @@ function factoryAnalysisImportFirst(...values) {
   return values.map(factoryAnalysisImportText).find(Boolean) || '';
 }
 
+function factoryAnalysisImportCategoryText(value) {
+  if (Array.isArray(value)) {
+    return value.map(factoryAnalysisImportCategoryText).filter(Boolean).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    return [
+      value.category_name,
+      value.display_name,
+      value.full_category_name,
+      value.path,
+      value.name,
+      value.label,
+      value.title,
+      value.category,
+    ].map(factoryAnalysisImportCategoryText).find(Boolean) || '';
+  }
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if ((text.startsWith('[') || text.startsWith('{')) && /(?:category_no|recommend|new)/i.test(text)) return '';
+  if (/\bcategory_no\b\s*[:=]/i.test(text)) return '';
+  return text;
+}
+
+function factoryAnalysisImportCategoryFirst(...values) {
+  return values.map(factoryAnalysisImportCategoryText).find(Boolean) || '';
+}
+
 function factoryAnalysisImportDataUrlParts(preview, fallbackMime = 'image/png') {
   const text = String(preview || '');
   const match = /^data:([^;,]+);base64,(.+)$/i.exec(text);
@@ -4978,6 +5228,10 @@ function factoryAnalysisImportDimensionText(value, defaultUnit = 'mm') {
   return text;
 }
 
+function factoryAnalysisImportDimensionHasUnit(value) {
+  return /(?:mm|cm|㎜|㎝|미리|센티|밀리|인치)\b/i.test(factoryAnalysisImportText(value));
+}
+
 function factoryAnalysisImportDimensionNumber(value) {
   const text = factoryAnalysisImportText(value);
   const match = /([0-9]+(?:\.[0-9]+)?)/.exec(text);
@@ -4995,10 +5249,15 @@ function factoryAnalysisImportDimensions(finalDb = {}, confirmedDb = {}, rows = 
     confirmedDb.dimensions,
     factorySourceRowsValueByAliases(rows, ['size', 'dimensions', 'dimension', 'spec', 'specification', '규격', '크기', '사이즈'])
   );
+  const raw = {
+    width: factoryAnalysisImportFirst(finalDb.width_mm, finalDb.width, spec.width_mm, factorySourceRowsValueByAliases(rows, ['width', 'product_width', '가로', '폭', '너비'])),
+    depth: factoryAnalysisImportFirst(finalDb.depth_mm, finalDb.depth, finalDb.height, spec.depth_mm, factorySourceRowsValueByAliases(rows, ['depth', 'height', 'product_height', '세로', '길이'])),
+    height: factoryAnalysisImportFirst(finalDb.height_mm, spec.height_mm, factorySourceRowsValueByAliases(rows, ['height_mm', '높이', '두께', 'thickness'])),
+  };
   const out = {
-    width: factoryAnalysisImportDimensionText(spec.width_mm || finalDb.width_mm || finalDb.width || factorySourceRowsValueByAliases(rows, ['width', 'product_width', '가로', '폭', '너비'])),
-    depth: factoryAnalysisImportDimensionText(spec.depth_mm || finalDb.depth_mm || finalDb.depth || finalDb.height || factorySourceRowsValueByAliases(rows, ['depth', 'height', 'product_height', '세로', '길이'])),
-    height: factoryAnalysisImportDimensionText(spec.height_mm || finalDb.height_mm || factorySourceRowsValueByAliases(rows, ['height_mm', '높이', '두께', 'thickness'])),
+    width: factoryAnalysisImportDimensionText(raw.width),
+    depth: factoryAnalysisImportDimensionText(raw.depth),
+    height: factoryAnalysisImportDimensionText(raw.height),
     summary: sizeText,
   };
   const labeledPatterns = [
@@ -5007,17 +5266,20 @@ function factoryAnalysisImportDimensions(finalDb = {}, confirmedDb = {}, rows = 
     ['height', /(높이|두께|thickness)\s*[:：=]?\s*([0-9]+(?:\.[0-9]+)?\s*(?:mm|cm|㎜|㎝|미리|센티)?)/i],
   ];
   labeledPatterns.forEach(([key, pattern]) => {
-    if (out[key] || !sizeText) return;
+    if (!sizeText || (out[key] && factoryAnalysisImportDimensionHasUnit(raw[key]))) return;
     const match = pattern.exec(sizeText);
     if (match) out[key] = factoryAnalysisImportDimensionText(match[2]);
   });
-  if ((!out.width || !out.depth) && sizeText) {
+  const needsWidthFromSummary = !out.width || !factoryAnalysisImportDimensionHasUnit(raw.width);
+  const needsDepthFromSummary = !out.depth || !factoryAnalysisImportDimensionHasUnit(raw.depth);
+  const needsHeightFromSummary = !out.height || !factoryAnalysisImportDimensionHasUnit(raw.height);
+  if ((needsWidthFromSummary || needsDepthFromSummary) && sizeText) {
     const match = /([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|㎜|㎝)?\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|㎜|㎝)?(?:\s*(?:x|X|×|\*)\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|㎜|㎝)?)?/i.exec(sizeText);
     if (match) {
       const unit = match[2] || match[4] || match[6] || 'mm';
-      if (!out.width) out.width = `${match[1]}${unit}`;
-      if (!out.depth) out.depth = `${match[3]}${unit}`;
-      if (!out.height && match[5]) out.height = `${match[5]}${unit}`;
+      if (needsWidthFromSummary) out.width = `${match[1]}${unit}`;
+      if (needsDepthFromSummary) out.depth = `${match[3]}${unit}`;
+      if (needsHeightFromSummary && match[5]) out.height = `${match[5]}${unit}`;
     }
   }
   if (!out.summary) {
@@ -5123,7 +5385,7 @@ function factoryApplyLatestToAnalysisHub(options = {}) {
     cafe24Raw.product_name,
     state.productName
   );
-  const category = factoryAnalysisImportFirst(
+  const category = factoryAnalysisImportCategoryFirst(
     finalDb.category,
     factorySourceRowsValueByAliases(rows, ['category', 'categories', 'category_name', 'display_category', '분류', '카테고리']),
     cafe24Raw.category_name,
@@ -5520,7 +5782,10 @@ function factoryCandidateSearchTerms(factory = factoryRuntimeReadFactory()) {
   const terms = [];
   const manualName = cleanDbSearchTerm(factory.product.productName || '');
   const stateName = cleanDbSearchTerm(state.productName || '');
-  const hint = cleanDbSearchTerm(factory.product.naturalHint || '');
+  const hintExpressions = String(factory.product.naturalHint || '')
+    .split(/[,/|·;\r\n]+/)
+    .map(cleanDbSearchTerm)
+    .filter(Boolean);
   const primaryName = manualName || stateName;
   factoryAddSearchTerm(terms, primaryName);
   if (primaryName) {
@@ -5528,9 +5793,11 @@ function factoryCandidateSearchTerms(factory = factoryRuntimeReadFactory()) {
     factoryAddSearchTerm(terms, primaryName.replace(/\([^)]*\)/g, '').trim());
     factoryAddSearchTermVariants(terms, primaryName);
   }
-  if (hint && primaryName) factoryAddSearchTerm(terms, `${primaryName} ${hint}`);
-  if (hint) factoryAddSearchTermVariants(terms, hint);
-  if (!primaryName && hint) factoryAddSearchTerm(terms, hint);
+  hintExpressions.forEach(expression => factoryAddSearchTerm(terms, expression));
+  hintExpressions.forEach(expression => factoryAddSearchTermVariants(terms, expression));
+  if (primaryName) {
+    hintExpressions.forEach(expression => factoryAddSearchTerm(terms, `${primaryName} ${expression}`));
+  }
   return terms.slice(0, 10);
 }
 
@@ -5590,9 +5857,19 @@ function factorySlimCafe24ReviewRaw(raw = {}) {
     'category_no',
     'manufacturer_name',
     'supplier_name',
+    'has_option',
+    'option_type',
+    'option_list_type',
+    'select_one_by_option',
+    'use_additional_option',
+    'use_attached_file_option',
   ].forEach(key => {
     if (raw[key] === undefined || raw[key] === null) return;
     keep[key] = typeof raw[key] === 'string' ? factorySlimReviewText(raw[key], 500) : raw[key];
+  });
+  ['option', 'options', 'product_options', 'variants', 'additional_options'].forEach(key => {
+    if (raw[key] === undefined || raw[key] === null) return;
+    keep[key] = Array.isArray(raw[key]) ? raw[key].slice(0, 120) : raw[key];
   });
   ['images', 'additional_images'].forEach(key => {
     if (!Array.isArray(raw[key])) return;
@@ -5648,10 +5925,15 @@ function factorySlimSinhwaReviewCandidate(candidate = {}) {
   return out;
 }
 
-function factorySlimReviewCandidateList(candidates = [], type = 'cafe24', limit = 24) {
-  const reviewProductScopeKey = factoryCandidateReviewScopeKey();
-  const reviewProductIdentityKey = factoryCandidateReviewIdentityKey();
-  const reviewProductName = factoryCandidateReviewProductName();
+function factorySlimReviewCandidateList(
+  candidates = [],
+  type = 'cafe24',
+  limit = 24,
+  factory = factoryRuntimeReadFactory(),
+) {
+  const reviewProductScopeKey = factoryCandidateReviewScopeKey(factory);
+  const reviewProductIdentityKey = factoryCandidateReviewIdentityKey(factory);
+  const reviewProductName = factoryCandidateReviewProductName(factory);
   const list = type === 'sinhwa'
     ? factoryDedupeSinhwaCandidates(candidates).map(factorySlimSinhwaReviewCandidate)
     : factoryDedupeCafe24Candidates(candidates).map(factorySlimCafe24ReviewCandidate);
@@ -5867,8 +6149,15 @@ async function factorySearchCafe24DirectReviewCandidates(terms = [], limit = 24,
     clueTerms: [],
     imageOnlyMode: false,
   };
-  for (const term of cleanTerms.slice(0, 3)) {
-    const rows = await fetchCafe24ProductsByQuery(term, Math.max(36, Math.min(72, limit * 2)));
+  const searchedTerms = cleanTerms.slice(0, 10);
+  const searchResults = await Promise.allSettled(searchedTerms.map(term =>
+    fetchCafe24ProductsByQuery(term, Math.max(36, Math.min(72, limit * 2)))
+  ));
+  for (let termIndex = 0; termIndex < searchResults.length; termIndex += 1) {
+    const result = searchResults[termIndex];
+    if (result.status === 'rejected') continue;
+    const term = searchedTerms[termIndex];
+    const rows = result.value;
     rows.forEach((row, index) => {
       const candidate = normalizeCafe24ProductCandidate(row, term, 0, index);
       const localScore = scoreCafe24ProductCandidate(candidate, info, index);
@@ -5879,6 +6168,9 @@ async function factorySearchCafe24DirectReviewCandidates(terms = [], limit = 24,
       candidate.rank_warning = 'Cafe24 직접 검색 결과를 후보로 보존했습니다.';
       fallback.push(candidate);
     });
+  }
+  if (!fallback.length && searchResults.length && searchResults.every(result => result.status === 'rejected')) {
+    throw searchResults.find(result => result.status === 'rejected').reason;
   }
   return factorySlimReviewCandidateList(factoryDedupeCafe24Candidates(fallback)
     .sort((a, b) => (factoryCandidateScore(b, 'cafe24') || 0) - (factoryCandidateScore(a, 'cafe24') || 0))
@@ -5969,34 +6261,33 @@ function factoryStartCafe24CandidateRerank(terms = [], candidates = [], options 
   factory.product.cafe24RerankRunning = true;
   factory.product.cafe24RerankKey = key;
   factory.product.cafe24ApiStatus = `Cafe24 후보 ${candidates.length}건 표시 완료 · ${label} 이미지 재점수 진행 중입니다.`;
+  const operationToken = factoryCafe24CaptureOperationToken();
   setTimeout(() => {
+    if (operationToken && !factoryRuntimeIsOperationCurrent(operationToken)) return;
     const snapshot = factoryRuntimeReadFactory();
     if (snapshot.product.cafe24RerankKey !== key) return;
-    const operationToken = factoryCafe24CaptureOperationToken();
-    const transaction = factoryCafe24RunOwnedDraftMutation(
-      'factory/cafe24:rerank-candidates',
-      { operationToken },
-      async current => {
-        try {
-          const termInfo = {
-            terms,
-            manualTerms: terms,
-            nameTerms: terms,
-            clueTerms: [],
-            imageOnlyMode: false,
-            candidateLimit: Math.max(candidates.length, 24),
-            settings: { ...(settings || {}), naturalText: current.product?.naturalHint || '' },
-          };
-          const imageLimit = getCafe24CandidateImageAttachLimit(rankEngine);
-          const imageCandidates = selectCafe24CandidatesForImagePayloads(candidates, imageLimit, termInfo);
-          const imageFetch = await fetchCafe24CandidateImagePayloads(imageCandidates, imageLimit);
-          const ranked = await rerankCafe24CandidatesWithGpt(termInfo, candidates, { candidateImages: imageFetch.payloads });
-          if (current.product.cafe24RerankKey !== key) return;
+    const termInfo = {
+      terms,
+      manualTerms: terms,
+      nameTerms: terms,
+      clueTerms: [],
+      imageOnlyMode: false,
+      candidateLimit: Math.max(candidates.length, 24),
+      settings: { ...(settings || {}), naturalText: snapshot.product?.naturalHint || '' },
+    };
+    const imageLimit = getCafe24CandidateImageAttachLimit(rankEngine);
+    const imageCandidates = selectCafe24CandidatesForImagePayloads(candidates, imageLimit, termInfo);
+    const commitRerankSuccess = ranked => {
+      return factoryCafe24RunOwnedDraftMutation(
+        'factory/cafe24:rerank-candidates',
+        { operationToken },
+        current => {
+          if (current.product.cafe24RerankKey !== key) return false;
           const hasSelectedCafe24 = !!current.product.selectedCafe24CandidateKey;
           const keepLimit = Math.max(24, candidates.length);
           const next = factorySlimReviewCandidateList(factoryDedupeCafe24Candidates(ranked.candidates || candidates)
             .sort((a, b) => (factoryCandidateScore(b, 'cafe24') || 0) - (factoryCandidateScore(a, 'cafe24') || 0))
-            .slice(0, keepLimit), 'cafe24', keepLimit);
+            .slice(0, keepLimit), 'cafe24', keepLimit, current);
           current.product.pendingCafe24Candidates = next;
           current.product.cafe24RerankRunning = false;
           current.product.cafe24ApiStatus = `Cafe24 후보 ${next.length}건 재점수 완료: ${ranked.engineLabel || label}${ranked.warning ? ` · ${ranked.warning}` : ''}`;
@@ -6005,17 +6296,33 @@ function factoryStartCafe24CandidateRerank(terms = [], candidates = [], options 
           }
           factoryUpdateCandidateReviewStageStatus(current);
           return true;
-        } catch(e) {
-          if (current.product.cafe24RerankKey !== key) return;
+        },
+      );
+    };
+    const commitRerankFailure = error => {
+      return factoryCafe24RunOwnedDraftMutation(
+        'factory/cafe24:rerank-candidates',
+        { operationToken },
+        current => {
+          if (current.product.cafe24RerankKey !== key) return false;
           current.product.cafe24RerankRunning = false;
-          current.product.cafe24ApiStatus = `Cafe24 후보는 표시했습니다. 이미지/LLM 재점수만 실패했습니다: ${e.message || e}`;
+          current.product.cafe24ApiStatus = `Cafe24 후보는 표시했습니다. 이미지/LLM 재점수만 실패했습니다: ${error.message || error}`;
           if (!current.product.selectedCafe24CandidateKey) factoryLog(current.product.cafe24ApiStatus, 'error', current);
           return false;
-        }
-      },
-    );
-    if (transaction && typeof transaction.then === 'function') {
-      Promise.resolve(transaction).catch(error => console.error('Cafe24 후보 재점수 결과 반영 실패', error));
+        },
+      );
+    };
+    const rerankWork = (async () => {
+      try {
+        const imageFetch = await fetchCafe24CandidateImagePayloads(imageCandidates, imageLimit);
+        const ranked = await rerankCafe24CandidatesWithGpt(termInfo, candidates, { candidateImages: imageFetch.payloads });
+        return await Promise.resolve(commitRerankSuccess(ranked));
+      } catch (error) {
+        return await Promise.resolve(commitRerankFailure(error));
+      }
+    })();
+    if (rerankWork && typeof rerankWork.then === 'function') {
+      Promise.resolve(rerankWork).catch(error => console.error('Cafe24 후보 재점수 결과 반영 실패', error));
     }
   }, 0);
 }
@@ -6159,7 +6466,8 @@ function factoryRestoreLockedProductName(factory, productName = '') {
 
 function factoryClearProductScopedDbManualFields(factory, reason = 'product-change', options = {}) {
   if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
-  const lockedProductName = factoryCaptureLockedProductName(factory);
+  const lockedProductName = String(options.nextProductName || '').trim()
+    || factoryCaptureLockedProductName(factory);
   const product = factory.product || {};
   const keepDb = options.preserveDb === true;
   const keepCafe24 = options.preserveCafe24 === true;
@@ -6178,6 +6486,22 @@ function factoryClearProductScopedDbManualFields(factory, reason = 'product-chan
     cafe24CandidateResolution: product.cafe24CandidateResolution || '',
     cafe24DraftProductKey: product.cafe24DraftProductKey || '',
   } : null;
+  const preserveManualFields = options.preserveManualFields === true;
+  const savedManualFields = preserveManualFields && product.dbFieldSettings && typeof product.dbFieldSettings === 'object'
+    ? Object.fromEntries(FACTORY_PRODUCT_SCOPED_DB_FIELD_IDS
+      .filter(fieldId => product.dbFieldSettings[fieldId]?.manualTouched === true)
+      .map(fieldId => [fieldId, cloneData(product.dbFieldSettings[fieldId])]))
+    : {};
+  const savedFieldReview = preserveManualFields && factory.automation?.fieldReview && typeof factory.automation.fieldReview === 'object'
+    ? Object.fromEntries(Object.keys(savedManualFields)
+      .filter(fieldId => factory.automation.fieldReview[fieldId])
+      .map(fieldId => [fieldId, cloneData(factory.automation.fieldReview[fieldId])]))
+    : {};
+  const savedLegacyManualValues = preserveManualFields && state.productInfoManualValues && typeof state.productInfoManualValues === 'object'
+    ? Object.fromEntries(FACTORY_PRODUCT_SCOPED_DB_FIELD_IDS
+      .filter(fieldId => fieldId in state.productInfoManualValues)
+      .map(fieldId => [fieldId, state.productInfoManualValues[fieldId]]))
+    : {};
   if (product.dbFieldSettings && typeof product.dbFieldSettings === 'object') {
     FACTORY_PRODUCT_SCOPED_DB_FIELD_IDS.forEach(fieldId => {
       if (product.dbFieldSettings[fieldId]) {
@@ -6230,6 +6554,25 @@ function factoryClearProductScopedDbManualFields(factory, reason = 'product-chan
     product.cafe24DraftProductKey = savedCafe24.cafe24DraftProductKey;
   }
   factoryRestoreLockedProductName(factory, lockedProductName);
+  if (Object.keys(savedManualFields).length) {
+    product.dbFieldSettings = {
+      ...(product.dbFieldSettings || {}),
+      ...savedManualFields,
+    };
+  }
+  if (Object.keys(savedFieldReview).length) {
+    factory.automation = factory.automation || {};
+    factory.automation.fieldReview = {
+      ...(factory.automation.fieldReview || {}),
+      ...savedFieldReview,
+    };
+  }
+  if (Object.keys(savedLegacyManualValues).length) {
+    state.productInfoManualValues = {
+      ...(state.productInfoManualValues || {}),
+      ...savedLegacyManualValues,
+    };
+  }
   product.dbContextClearReason = reason;
   product.dbContextRefreshedAt = new Date().toISOString();
 }
@@ -6261,6 +6604,7 @@ function factorySetSelectedProductAutoField(factory, fieldId, value, sourceLabel
   if (!fieldId || !text) return false;
   if (!factory.product.dbFieldSettings || typeof factory.product.dbFieldSettings !== 'object') factory.product.dbFieldSettings = {};
   const setting = factoryDbFieldSetting(factory, fieldId, true);
+  if (setting?.manualTouched === true) return false;
   setting.manualValue = text;
   setting.manualTouched = false;
   setting.enabled = true;
@@ -6466,6 +6810,23 @@ function factoryScheduleSizeCutAfterCandidateConfirm(sourceLabel = 'DB 확정', 
   }
   if (typeof factory !== 'object') throw new TypeError('factory draft is required');
   factory.automation = factory.automation || {};
+  const sizeStage = factory.stages?.size || {};
+  const completedSizeAssets = typeof factoryUsableAssetsForStage === 'function'
+    ? factoryUsableAssetsForStage('size', factory)
+    : [];
+  const preservedSizeAssets = completedSizeAssets.length
+    ? completedSizeAssets
+    : (typeof factoryCompletedAssetsForCurrentStageRun === 'function'
+      ? factoryCompletedAssetsForCurrentStageRun('size', factory)
+      : []);
+  if (sizeStage.status === 'done' && preservedSizeAssets.length > 0) {
+    factoryLog(
+      `기존 사이즈이미지 ${preservedSizeAssets.length}개 유지: ${sourceLabel} 후보 확정이 완료 상태를 낮추지 않습니다.`,
+      'info',
+      factory,
+    );
+    return true;
+  }
   const hasSize = typeof factoryHasSizeFacts === 'function' && factoryHasSizeFacts(factory);
   if (!hasSize) {
     factory.automation.lastAutoSizeRunKey = '';
@@ -6494,32 +6855,319 @@ function factoryScheduleSizeCutAfterCandidateConfirm(sourceLabel = 'DB 확정', 
   return false;
 }
 
+function factoryCaptureCandidateReviewRequestIdentity(type, candidate, factory = factoryRuntimeReadFactory()) {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const isCafe24 = type === 'cafe24';
+  const raw = isCafe24 && typeof parseCafe24Raw === 'function' ? parseCafe24Raw(candidate) || {} : {};
+  const candidateKey = String(
+    (isCafe24 ? factoryCafe24CandidateKey(candidate) : factorySinhwaCandidateKey(candidate)) || '',
+  ).trim();
+  const productNo = isCafe24
+    ? String(candidate.product_no || raw.product_no || candidate.productNo || raw.productNo || '').trim()
+    : '';
+  const jcode = String(candidate.jcode || candidate.id || '').trim();
+  const productCode = isCafe24 ? String(candidate.product_code || raw.product_code || '').trim() : '';
+  if (!candidateKey && !productNo && !jcode && !productCode) return null;
+  const scopeKey = String(
+    (typeof factoryCandidateReviewScopeKeyFromCandidate === 'function'
+      ? factoryCandidateReviewScopeKeyFromCandidate(candidate)
+      : '') ||
+    (typeof factoryCandidateReviewScopeKey === 'function' ? factoryCandidateReviewScopeKey(factory) : '') || '',
+  ).trim();
+  const identityKey = String(
+    candidate.reviewProductIdentityKey ||
+    (typeof factoryCandidateReviewIdentityKey === 'function' ? factoryCandidateReviewIdentityKey(factory) : '') || '',
+  ).trim();
+  return Object.freeze({ type, candidateKey, productNo, jcode, productCode, scopeKey, identityKey });
+}
+
+function factoryCaptureCandidateReviewRequest(type, index, factory = factoryRuntimeReadFactory()) {
+  const number = Number(index);
+  if (!Number.isInteger(number) || number < 0) return null;
+  const product = factory?.product || {};
+  const pending = type === 'cafe24' ? product.pendingCafe24Candidates : product.pendingDbCandidates;
+  const fallback = type === 'cafe24' ? product.cafe24Candidates : product.dbCandidates;
+  const candidate = (Array.isArray(pending) ? pending[number] : null) || (Array.isArray(fallback) ? fallback[number] : null);
+  return factoryCaptureCandidateReviewRequestIdentity(type, candidate, factory);
+}
+
+function factoryCandidateReviewRequestMatches(candidate, identity, factory) {
+  if (!candidate || !identity || !['cafe24', 'sinhwa'].includes(identity.type)) return false;
+  const isCafe24 = identity.type === 'cafe24';
+  const raw = isCafe24 && typeof parseCafe24Raw === 'function' ? parseCafe24Raw(candidate) || {} : {};
+  const candidateKey = String(
+    (isCafe24 ? factoryCafe24CandidateKey(candidate) : factorySinhwaCandidateKey(candidate)) || '',
+  ).trim();
+  const productNo = isCafe24
+    ? String(candidate.product_no || raw.product_no || candidate.productNo || raw.productNo || '').trim()
+    : '';
+  const jcode = String(candidate.jcode || candidate.id || '').trim();
+  const productCode = isCafe24 ? String(candidate.product_code || raw.product_code || '').trim() : '';
+  if (!identity.candidateKey && !identity.productNo && !identity.jcode && !identity.productCode) return false;
+  if (identity.candidateKey && candidateKey !== identity.candidateKey) return false;
+  if (identity.productNo && productNo !== identity.productNo) return false;
+  if (identity.jcode && jcode !== identity.jcode) return false;
+  if (identity.productCode && productCode !== identity.productCode) return false;
+  const candidateScopeKey = typeof factoryCandidateReviewScopeKeyFromCandidate === 'function'
+    ? String(factoryCandidateReviewScopeKeyFromCandidate(candidate) || '').trim()
+    : '';
+  if (identity.scopeKey && candidateScopeKey && candidateScopeKey !== identity.scopeKey) return false;
+  let scopeMatched = false;
+  if (identity.scopeKey) {
+    const currentScopeKey = typeof factoryCandidateReviewScopeKey === 'function'
+      ? String(factoryCandidateReviewScopeKey(factory) || '').trim()
+      : '';
+    if (!currentScopeKey || currentScopeKey !== identity.scopeKey) return false;
+    scopeMatched = !candidateScopeKey || candidateScopeKey === identity.scopeKey;
+  }
+  if (!scopeMatched && identity.identityKey && typeof factoryCandidateReviewIdentityKey === 'function') {
+    const currentIdentityKey = String(factoryCandidateReviewIdentityKey(factory) || '').trim();
+    if (currentIdentityKey && currentIdentityKey !== identity.identityKey) return false;
+  }
+  return true;
+}
+
+function factoryFindCandidateReviewByRequestIdentity(factory, identity) {
+  if (!factory || !identity) return null;
+  const product = factory.product || {};
+  const lists = identity.type === 'cafe24'
+    ? [product.pendingCafe24Candidates, product.cafe24Candidates]
+    : [product.pendingDbCandidates, product.dbCandidates];
+  for (const candidates of lists) {
+    if (!Array.isArray(candidates)) continue;
+    const candidate = candidates.find(item => factoryCandidateReviewRequestMatches(item, identity, factory));
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function factoryApplyDbCandidateSelectionFromReview(index, options = {}) {
+  const factory = options.factory;
+  const candidates = factory.product.pendingDbCandidates || [];
+  const candidate = options.candidateIdentity
+    ? factoryFindCandidateReviewByRequestIdentity(factory, options.candidateIdentity)
+    : candidates[Number(index)] || factory.product.dbCandidates?.[Number(index)] || null;
+  if (!candidate) {
+    return options.candidateIdentity
+      ? factoryBlockCandidateReviewSelection(factory, '신화사DB', options)
+      : false;
+  }
+  const key = factorySinhwaCandidateKey(candidate);
+  if (!factoryCandidateReviewCanApply(candidate, factory)) {
+    return factoryBlockCandidateReviewSelection(factory, '신화사DB', options);
+  }
+  factory.product.selectedDbCandidateKey = key;
+  factory.product.dbCandidateResolution = 'selected';
+  factory.product.dbCandidates = factoryDedupeSinhwaCandidates([
+    candidate,
+    ...candidates.filter(item => factorySinhwaCandidateKey(item) !== key),
+  ]).slice(0, 12);
+  factory.product.candidateReviewStatus = '신화사DB 상품을 선택했습니다. 상세 정보와 필수값을 이어서 불러옵니다.';
+  factoryUpdateCandidateReviewStageStatus(factory);
+  factoryLog(`신화사DB 후보 선택: ${candidate.product_name || candidate.jname || key} · 선택값을 먼저 저장하고 상세 조회를 계속합니다.`, 'ok', factory);
+  return {
+    ok: true,
+    detailKey: candidate.jcode || candidate.id || key,
+    selectedKey: key,
+  };
+}
+
+function factoryCandidateReviewOperationIsCurrent(options = {}) {
+  if (options.operationSignal?.aborted) return false;
+  const operationToken = options.operationToken;
+  if (!operationToken || typeof factoryRuntimeRequireStore !== 'function') return true;
+  return factoryRuntimeRequireStore().isOperationCurrent(operationToken);
+}
+
+async function factoryApplyCandidateWithImmediateSelection(type, index, options = {}, candidateIdentity) {
+  if (typeof factoryRuntimeBridgeAction !== 'function') return null;
+  const isCafe24 = type === 'cafe24';
+  const selectionAction = isCafe24
+    ? 'factory/cafe24:apply-cafe24-candidate'
+    : 'factory/cafe24:apply-db-candidate';
+  const selection = isCafe24
+    ? factoryApplyCafe24CandidateSelectionFromReview
+    : factoryApplyDbCandidateSelectionFromReview;
+  const selectionReceipt = await factoryRuntimeBridgeAction(
+    selectionAction,
+    { operationToken: options.operationToken },
+    draft => selection(index, {
+      ...options,
+      factory: draft,
+      render: false,
+      candidateIdentity,
+    }),
+    { render: options.render !== false, patchTab: 'db', forceSave: true },
+  );
+  const selected = selectionReceipt?.value;
+  if (!selected?.ok) return false;
+  if (!factoryCandidateReviewOperationIsCurrent({
+    ...options,
+    operationToken: selectionReceipt.operationToken,
+  })) return false;
+
+  await saveLastWorkNow({
+    sync: false,
+    factory: typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null,
+  });
+  if (!factoryCandidateReviewOperationIsCurrent({
+    ...options,
+    operationToken: selectionReceipt.operationToken,
+  })) return false;
+  if (isCafe24 && !selected.productNo) {
+    return options.returnReceipt === true
+      ? factoryRuntimeFollowupCommandReceipt(selectionReceipt, true)
+      : true;
+  }
+
+  let detail = null;
+  let detailError = '';
+  try {
+    detail = isCafe24
+      ? await fetchCafe24ProductFullByNo(selected.productNo, selected.mallId)
+      : await fetchSinhwaProductDetail(selected.detailKey);
+  } catch (error) {
+    detailError = error?.message || String(error || `${isCafe24 ? 'Cafe24' : '신화사DB'} 상세 조회 실패`);
+  }
+  if (!factoryCandidateReviewOperationIsCurrent({
+    ...options,
+    operationToken: selectionReceipt.operationToken,
+  })) return false;
+
+  const detailAction = isCafe24
+    ? 'factory/cafe24:refresh-selected-cafe24-candidate'
+    : 'factory/cafe24:apply-db-candidate';
+  const detailApply = isCafe24
+    ? factoryApplyCafe24CandidateFromReview
+    : factoryApplyDbCandidateFromReview;
+  const detailToken = typeof factoryRuntimeRequireStore === 'function'
+    ? factoryRuntimeRequireStore().getOperationToken()
+    : selectionReceipt.operationToken;
+  const detailReceipt = await factoryRuntimeBridgeAction(
+    detailAction,
+    { operationToken: detailToken },
+    draft => detailApply(index, {
+      ...options,
+      factory: draft,
+      render: false,
+      candidateIdentity,
+      phase: 'detail',
+      detail,
+      detailError,
+      expectedSelectedKey: selected.selectedKey,
+    }),
+    { render: options.render !== false, patchTab: 'db', forceSave: true },
+  );
+  await saveLastWorkNow({
+    sync: false,
+    factory: typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null,
+  });
+  return options.returnReceipt === true ? detailReceipt : detailReceipt?.value;
+}
+
 async function factoryApplyDbCandidateFromReview(index, options = {}) {
+  const candidateIdentity = !options.factory
+    ? options.candidateIdentity || factoryCaptureCandidateReviewRequest('sinhwa', index)
+    : options.candidateIdentity;
+  if (!options.factory && !candidateIdentity) return false;
+  if (!options.factory && options.operationLeaseHeld !== true) {
+    if (typeof factoryRuntimeBridgeAction === 'function') {
+      return factoryApplyCandidateWithImmediateSelection('sinhwa', index, options, candidateIdentity);
+    }
+    return factoryRuntimeWithOperationLease(
+      'factory/cafe24:apply-db-candidate',
+      { operationToken: options.operationToken, queueWhenBusy: true },
+      operation => factoryApplyDbCandidateFromReview(index, {
+        ...options,
+        candidateIdentity,
+        operationToken: operation.operationToken,
+        operationSignal: operation.operationSignal,
+        operationLeaseHeld: true,
+      }),
+    );
+  }
   if (!options.factory) {
-    const receipt = await factoryRuntimeUpdateOwnedFactory(
+    const updateOwnedFactory = options.operationLeaseHeld === true
+      ? factoryRuntimeUpdateOwnedFactoryDuringLease
+      : factoryRuntimeUpdateOwnedFactory;
+    const selectionReceipt = await updateOwnedFactory(
       'factory/cafe24:apply-db-candidate',
       'cafe24',
-      draft => factoryApplyDbCandidateFromReview(index, { ...options, factory: draft, render: false }),
+      draft => factoryApplyDbCandidateSelectionFromReview(index, {
+        ...options,
+        factory: draft,
+        render: false,
+        candidateIdentity,
+      }),
     );
-    saveLastWorkNow({ sync: false });
     if (options.render !== false) render();
-    return receipt.result;
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    await saveLastWorkNow({ sync: false, factory: selectionReceipt.snapshot.factory });
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    const selection = selectionReceipt.result;
+    if (!selection?.ok) return false;
+
+    let detail = null;
+    let detailError = '';
+    try {
+      detail = await fetchSinhwaProductDetail(selection.detailKey);
+    } catch (error) {
+      detailError = error?.message || String(error || '신화사DB 상세 조회 실패');
+    }
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    const detailReceipt = await updateOwnedFactory(
+      'factory/cafe24:apply-db-candidate',
+      'cafe24',
+      draft => factoryApplyDbCandidateFromReview(index, {
+        ...options,
+        factory: draft,
+        render: false,
+        candidateIdentity,
+        phase: 'detail',
+        detail,
+        detailError,
+        expectedSelectedKey: selection.selectedKey,
+      }),
+    );
+    if (options.render !== false) render();
+    await saveLastWorkNow({ sync: false, factory: detailReceipt.snapshot.factory });
+    return detailReceipt.result;
   }
   const factory = options.factory;
+  const phase = options.phase || 'complete';
+  if (phase === 'select') {
+    return factoryApplyDbCandidateSelectionFromReview(index, options);
+  }
   const lockedProductName = factoryCaptureLockedProductName(factory);
   const candidates = factory.product.pendingDbCandidates || [];
-  const candidate = candidates[Number(index)] || factory.product.dbCandidates?.[Number(index)] || null;
-  if (!candidate) return false;
+  const candidate = options.candidateIdentity
+    ? factoryFindCandidateReviewByRequestIdentity(factory, options.candidateIdentity)
+    : candidates[Number(index)] || factory.product.dbCandidates?.[Number(index)] || null;
+  if (!candidate) {
+    return options.candidateIdentity
+      ? factoryBlockCandidateReviewSelection(factory, '신화사DB', options)
+      : false;
+  }
   const key = factorySinhwaCandidateKey(candidate);
   if (!factoryCandidateReviewCanApply(candidate, factory)) return factoryBlockCandidateReviewSelection(factory, '신화사DB', options);
-  factory.product.candidateReviewStatus = '선택한 신화사DB 상품 상세 정보를 불러오는 중입니다.';
+  if (phase === 'detail' && String(factory.product.selectedDbCandidateKey || '') !== String(options.expectedSelectedKey || key)) {
+    return false;
+  }
   try {
-    const detail = await fetchSinhwaProductDetail(candidate.jcode || candidate.id || key);
+    if (options.detailError) throw new Error(options.detailError);
+    const detail = phase === 'detail'
+      ? options.detail
+      : await fetchSinhwaProductDetail(candidate.jcode || candidate.id || key);
     const match = normalizeSinhwaDbMatch(candidate, detail, candidate.match_query || factory.product.productName || state.productName || key, candidates);
     match.match_score = candidate.score || candidate.match_score || match.match_score || 0;
     const current = factory;
     if (!factoryCandidateReviewCanApply(candidate, current)) return factoryBlockCandidateReviewSelection(current, '신화사DB', options);
-    factoryClearProductScopedDbManualFields(current, 'sinhwa-candidate-change', { preserveCafe24: true });
+    const preserveManualFields = Boolean(String(current.product.selectedDbCandidateKey || '').trim())
+      && String(current.product.selectedDbCandidateKey || '').trim() === String(key || '').trim();
+    factoryClearProductScopedDbManualFields(current, 'sinhwa-candidate-change', {
+      preserveCafe24: true,
+      preserveManualFields,
+    });
     current.product.confirmedDb = cloneData(match);
     current.product.selectedDbCandidateKey = factorySinhwaCandidateKey(match) || key;
     current.product.dbCandidateResolution = 'selected';
@@ -6547,32 +7195,170 @@ async function factoryApplyDbCandidateFromReview(index, options = {}) {
   }
 }
 
-async function factoryApplyCafe24CandidateFromReview(index, options = {}) {
-  if (!options.factory) {
-    const receipt = await factoryRuntimeUpdateOwnedFactory(
-      'factory/cafe24:apply-cafe24-candidate',
-      'cafe24',
-      draft => factoryApplyCafe24CandidateFromReview(index, { ...options, factory: draft, render: false }),
-    );
-    saveLastWorkNow({ sync: false });
-    if (options.render !== false) render();
-    return receipt.result;
-  }
+function factoryApplyCafe24CandidateSelectionFromReview(index, options = {}) {
   const factory = options.factory;
   const lockedProductName = factoryCaptureLockedProductName(factory);
   const candidates = factory.product.pendingCafe24Candidates || [];
-  const candidate = candidates[Number(index)] || factory.product.cafe24Candidates?.[Number(index)] || null;
-  if (!candidate) return false;
+  const candidate = options.candidateIdentity
+    ? factoryFindCandidateReviewByRequestIdentity(factory, options.candidateIdentity)
+    : candidates[Number(index)] || factory.product.cafe24Candidates?.[Number(index)] || null;
+  if (!candidate) {
+    return options.candidateIdentity
+      ? factoryBlockCandidateReviewSelection(factory, 'Cafe24', options)
+      : false;
+  }
+  const raw = parseCafe24Raw(candidate);
+  const productNo = candidate.product_no || raw.product_no || '';
+  const key = factoryCafe24CandidateKey(candidate);
+  if (!key) return false;
+  if (!factoryCandidateReviewCanApply(candidate, factory)) {
+    return factoryBlockCandidateReviewSelection(factory, 'Cafe24', options);
+  }
+
+  factory.product.candidateReviewStatus = 'Cafe24 상품을 확정했습니다. 상세 입력값과 옵션을 이어서 불러옵니다.';
+  const current = factory;
+  const preserveManualFields = Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
+    && String(current.product.selectedCafe24CandidateKey || '').trim() === String(key || '').trim();
+  factoryClearProductScopedDbManualFields(current, 'cafe24-candidate-change', {
+    preserveDb: true,
+    preserveManualFields,
+  });
+  current.product.selectedCafe24CandidateKey = key;
+  current.product.cafe24CandidateResolution = 'selected';
+  factoryResetCafe24DraftsForProduct(current, key);
+  current.product.confirmedCafe24ProductKey = key;
+  current.product.cafe24DraftProductKey = key;
+  current.product.cafe24Candidates = factoryMergeCafe24Candidates([], [
+    candidate,
+    ...candidates.filter(item => factoryCafe24CandidateKey(item) !== key),
+  ]).slice(0, 24);
+  current.product.cafe24ApiStatus = productNo
+    ? `Cafe24 후보 #${productNo}를 확정했습니다. 상세 입력값과 옵션을 불러오는 중입니다.`
+    : `Cafe24 확정 상품 ${key} 상세 입력값을 불러왔습니다.`;
+  const autoEnabled = factoryEnableCafe24CoreDbFields(current);
+  current.product.dbContextRefreshedAt = new Date().toISOString();
+  const autoFilled = factoryAutofillRequiredFieldsFromSelectedProduct(current, 'Cafe24 선택 상품');
+  factoryUpdateFinalDbFromFields(current);
+  factoryRestoreLockedProductName(current, lockedProductName);
+  factorySyncAutomationOptionModeFromDbSources(current);
+  current.product.candidateReviewStatus = `Cafe24 확정: ${factoryCandidateName(candidate, 'cafe24')}${autoFilled ? ` · 필수값 ${autoFilled}개 반영` : autoEnabled ? ` · 핵심 DB ${autoEnabled}개 자동 사용` : ''}${productNo ? ' · 상세 입력값/옵션 조회 중' : ''}`;
+  factoryUpdateCandidateReviewStageStatus(current);
+  factoryLog(`Cafe24 후보 확정: ${factoryCandidateName(candidate, 'cafe24')} · 선택값을 먼저 저장하고 상세 조회를 계속합니다.`, 'ok', current);
+  factoryScheduleSizeCutAfterCandidateConfirm('Cafe24 확정', current, { persist: false, render: false });
+  return {
+    ok: true,
+    productNo: String(productNo || ''),
+    mallId: candidate.mall_id || raw.mall_id || CAFE24_CONTROL_API.defaultMallId,
+    selectedKey: key,
+  };
+}
+
+async function factoryApplyCafe24CandidateFromReview(index, options = {}) {
+  const candidateIdentity = !options.factory
+    ? options.candidateIdentity || factoryCaptureCandidateReviewRequest('cafe24', index)
+    : options.candidateIdentity;
+  if (!options.factory && !candidateIdentity) return false;
+  if (!options.factory && options.operationLeaseHeld !== true) {
+    if (typeof factoryRuntimeBridgeAction === 'function') {
+      return factoryApplyCandidateWithImmediateSelection('cafe24', index, options, candidateIdentity);
+    }
+    return factoryRuntimeWithOperationLease(
+      'factory/cafe24:apply-cafe24-candidate',
+      { operationToken: options.operationToken, queueWhenBusy: true },
+      operation => factoryApplyCafe24CandidateFromReview(index, {
+        ...options,
+        candidateIdentity,
+        operationToken: operation.operationToken,
+        operationSignal: operation.operationSignal,
+        operationLeaseHeld: true,
+      }),
+    );
+  }
+  if (!options.factory) {
+    const updateOwnedFactory = options.operationLeaseHeld === true
+      ? factoryRuntimeUpdateOwnedFactoryDuringLease
+      : factoryRuntimeUpdateOwnedFactory;
+    const selectionReceipt = await updateOwnedFactory(
+      'factory/cafe24:apply-cafe24-candidate',
+      'cafe24',
+      draft => factoryApplyCafe24CandidateSelectionFromReview(index, {
+        ...options,
+        factory: draft,
+        render: false,
+        candidateIdentity,
+      }),
+    );
+    if (options.render !== false) render();
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    await saveLastWorkNow({ sync: false, factory: selectionReceipt.snapshot.factory });
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    const selection = selectionReceipt.result;
+    if (!selection?.ok) return false;
+    if (!selection.productNo) return true;
+
+    let detail = null;
+    let detailError = '';
+    try {
+      detail = await fetchCafe24ProductFullByNo(selection.productNo, selection.mallId);
+    } catch (error) {
+      detailError = error?.message || String(error || 'Cafe24 상세 조회 실패');
+    }
+    if (!factoryCandidateReviewOperationIsCurrent(options)) return false;
+    const detailReceipt = await updateOwnedFactory(
+      'factory/cafe24:refresh-selected-cafe24-candidate',
+      'cafe24',
+      draft => factoryApplyCafe24CandidateFromReview(index, {
+        ...options,
+        factory: draft,
+        render: false,
+        candidateIdentity,
+        phase: 'detail',
+        detail,
+        detailError,
+        expectedSelectedKey: selection.selectedKey,
+      }),
+    );
+    if (options.render !== false) render();
+    await saveLastWorkNow({ sync: false, factory: detailReceipt.snapshot.factory });
+    return detailReceipt.result;
+  }
+  const factory = options.factory;
+  const phase = options.phase || 'complete';
+  if (phase === 'select') {
+    return factoryApplyCafe24CandidateSelectionFromReview(index, options);
+  }
+  const lockedProductName = factoryCaptureLockedProductName(factory);
+  const candidates = factory.product.pendingCafe24Candidates || [];
+  const candidate = options.candidateIdentity
+    ? factoryFindCandidateReviewByRequestIdentity(factory, options.candidateIdentity)
+    : candidates[Number(index)] || factory.product.cafe24Candidates?.[Number(index)] || null;
+  if (!candidate) {
+    return options.candidateIdentity
+      ? factoryBlockCandidateReviewSelection(factory, 'Cafe24', options)
+      : false;
+  }
   const raw = parseCafe24Raw(candidate);
   const productNo = candidate.product_no || raw.product_no || '';
   const key = factoryCafe24CandidateKey(candidate);
   if (!key) return false;
   if (!factoryCandidateReviewCanApply(candidate, factory)) return factoryBlockCandidateReviewSelection(factory, 'Cafe24', options);
-  factory.product.candidateReviewStatus = '선택한 Cafe24 상품의 상세 입력값과 옵션을 불러오는 중입니다.';
+  if (phase === 'detail' && String(factory.product.selectedCafe24CandidateKey || '') !== String(options.expectedSelectedKey || key)) {
+    return false;
+  }
+  factory.product.candidateReviewStatus = phase === 'detail'
+    ? '확정한 Cafe24 상품의 상세 입력값과 옵션을 반영하는 중입니다.'
+    : 'Cafe24 상품을 확정했습니다. 상세 입력값과 옵션을 이어서 불러옵니다.';
 
   let selected = candidate;
-  let detailError = '';
-  if (productNo) {
+  let detailError = String(options.detailError || '');
+  if (phase === 'detail') {
+    if (options.detail) {
+      selected = factoryMergeCafe24CandidateData(
+        candidate,
+        normalizeCafe24ProductCandidate(options.detail, `product_no:${productNo}`, 999, 0),
+      );
+    }
+  } else if (phase === 'complete' && productNo) {
     try {
       const detail = await fetchCafe24ProductFullByNo(productNo, candidate.mall_id || raw.mall_id || CAFE24_CONTROL_API.defaultMallId);
       if (detail) selected = factoryMergeCafe24CandidateData(candidate, normalizeCafe24ProductCandidate(detail, `product_no:${productNo}`, 999, 0));
@@ -6583,19 +7369,29 @@ async function factoryApplyCafe24CandidateFromReview(index, options = {}) {
   const current = factory;
   if (!factoryCandidateReviewCanApply(candidate, current)) return factoryBlockCandidateReviewSelection(current, 'Cafe24', options);
   const selectedKey = factoryCafe24CandidateKey(selected) || key;
-  factoryClearProductScopedDbManualFields(current, 'cafe24-candidate-change', { preserveDb: true });
-  current.product.selectedCafe24CandidateKey = selectedKey;
-  current.product.cafe24CandidateResolution = 'selected';
-  factoryResetCafe24DraftsForProduct(current, selectedKey);
-  current.product.confirmedCafe24ProductKey = selectedKey;
-  current.product.cafe24DraftProductKey = selectedKey;
+  if (phase !== 'detail') {
+    const preserveManualFields = Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
+      && String(current.product.selectedCafe24CandidateKey || '').trim() === String(selectedKey || '').trim();
+    factoryClearProductScopedDbManualFields(current, 'cafe24-candidate-change', {
+      preserveDb: true,
+      preserveManualFields,
+    });
+    current.product.selectedCafe24CandidateKey = selectedKey;
+    current.product.cafe24CandidateResolution = 'selected';
+    factoryResetCafe24DraftsForProduct(current, selectedKey);
+    current.product.confirmedCafe24ProductKey = selectedKey;
+    current.product.cafe24DraftProductKey = selectedKey;
+  }
   current.product.cafe24Candidates = factoryMergeCafe24Candidates([], [
     selected,
     ...candidates.filter(item => factoryCafe24CandidateKey(item) !== key),
   ]).slice(0, 24);
-  current.product.cafe24ApiStatus = detailError
-    ? `Cafe24 후보 ${productNo ? `#${productNo}` : selectedKey}를 로컬 작업파일에 확정했습니다. 상세 조회는 보류: ${detailError}`
-    : `Cafe24 확정 상품 ${productNo ? `#${productNo}` : selectedKey} 상세 입력값을 불러왔습니다.`;
+  const detailPending = phase === 'select' && !!productNo;
+  current.product.cafe24ApiStatus = detailPending
+    ? `Cafe24 후보 ${productNo ? `#${productNo}` : selectedKey}를 확정했습니다. 상세 입력값과 옵션을 불러오는 중입니다.`
+    : detailError
+      ? `Cafe24 후보 ${productNo ? `#${productNo}` : selectedKey}를 로컬 작업파일에 확정했습니다. 상세 조회는 보류: ${detailError}`
+      : `Cafe24 확정 상품 ${productNo ? `#${productNo}` : selectedKey} 상세 입력값을 불러왔습니다.`;
   const autoEnabled = factoryEnableCafe24CoreDbFields(current);
   current.product.dbContextRefreshedAt = new Date().toISOString();
   const autoFilled = factoryAutofillRequiredFieldsFromSelectedProduct(current, 'Cafe24 선택 상품');
@@ -6603,10 +7399,20 @@ async function factoryApplyCafe24CandidateFromReview(index, options = {}) {
   factoryRestoreLockedProductName(current, lockedProductName);
   factorySyncAutomationOptionModeFromDbSources(current);
   const detailNote = detailError ? ' · 상세 조회는 나중에 다시 시도할 수 있습니다' : '';
-  current.product.candidateReviewStatus = `Cafe24 확정: ${factoryCandidateName(selected, 'cafe24')}${autoFilled ? ` · 필수값 ${autoFilled}개 반영` : autoEnabled ? ` · 핵심 DB ${autoEnabled}개 자동 사용` : ''}${detailNote}`;
+  current.product.candidateReviewStatus = `Cafe24 확정: ${factoryCandidateName(selected, 'cafe24')}${autoFilled ? ` · 필수값 ${autoFilled}개 반영` : autoEnabled ? ` · 핵심 DB ${autoEnabled}개 자동 사용` : ''}${detailPending ? ' · 상세 입력값/옵션 조회 중' : detailNote}`;
   factoryUpdateCandidateReviewStageStatus(current);
-  factoryLog(`Cafe24 후보 확정: ${factoryCandidateName(selected, 'cafe24')}${detailError ? ' · OAuth/상세 조회 없이 로컬 후보를 보존했습니다.' : ''}`, detailError ? 'warn' : 'ok', current);
-  factoryScheduleSizeCutAfterCandidateConfirm('Cafe24 확정', current, { persist: false, render: false });
+  factoryLog(`Cafe24 후보 확정: ${factoryCandidateName(selected, 'cafe24')}${detailPending ? ' · 선택값을 먼저 저장하고 상세 조회를 계속합니다.' : detailError ? ' · OAuth/상세 조회 없이 로컬 후보를 보존했습니다.' : ''}`, detailError ? 'warn' : 'ok', current);
+  if (phase !== 'detail') {
+    factoryScheduleSizeCutAfterCandidateConfirm('Cafe24 확정', current, { persist: false, render: false });
+  }
+  if (phase === 'select') {
+    return {
+      ok: true,
+      productNo: String(productNo || ''),
+      mallId: candidate.mall_id || raw.mall_id || CAFE24_CONTROL_API.defaultMallId,
+      selectedKey,
+    };
+  }
   return true;
 }
 
@@ -6631,6 +7437,30 @@ function factoryConfirmNoDbCandidate(options = {}) {
   factory.product.candidateReviewStatus = `신화사DB 후보 없음 확정: ${productName}은(는) 신제품으로 필수값 검수 단계에 진행합니다.`;
   factoryUpdateCandidateReviewStageStatus(factory);
   factoryLog(`신화사DB 후보 없음 확정: ${productName} · 신제품 필수값 검수로 진행`, 'ok', factory);
+  return true;
+}
+
+function factoryClearDbCandidateSelection(options = {}) {
+  if (!options.factory) {
+    return factoryCafe24RunOwnedDraftMutation(
+      'factory/db:clearDbCandidateSelection',
+      { ...options, owner: 'product-db' },
+      draft => factoryClearDbCandidateSelection({ ...options, factory: draft, render: false }),
+    );
+  }
+  const factory = options.factory;
+  if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
+  const productName = factoryCaptureLockedProductName(factory) || factory.product.productName || state.productName || '현재 상품';
+  factory.product.confirmedDb = null;
+  factory.product.selectedDbCandidateKey = '';
+  factory.product.dbCandidateResolution = '';
+  factory.product.dbLocked = false;
+  factoryRestoreLockedProductName(factory, productName);
+  factoryUpdateFinalDbFromFields(factory);
+  factorySyncAutomationOptionModeFromDbSources(factory);
+  factory.product.candidateReviewStatus = `신화사DB 선택 해제: ${productName} 후보 목록에서 다시 선택하거나 후보 없음으로 진행할 수 있습니다.`;
+  factoryUpdateCandidateReviewStageStatus(factory);
+  factoryLog(`신화사DB 후보 선택 해제: ${productName}`, 'ok', factory);
   return true;
 }
 
@@ -6660,6 +7490,31 @@ function factoryConfirmNoCafe24Candidate(options = {}) {
   return true;
 }
 
+function factoryClearCafe24CandidateSelection(options = {}) {
+  if (!options.factory) {
+    return factoryCafe24RunOwnedDraftMutation(
+      'factory/db:clearCafe24CandidateSelection',
+      { ...options, owner: 'product-db' },
+      draft => factoryClearCafe24CandidateSelection({ ...options, factory: draft, render: false }),
+    );
+  }
+  const factory = options.factory;
+  if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
+  const productName = factoryCaptureLockedProductName(factory) || factory.product.productName || state.productName || '현재 상품';
+  factory.product.selectedCafe24CandidateKey = '';
+  factory.product.confirmedCafe24ProductKey = '';
+  factory.product.cafe24DraftProductKey = '';
+  factory.product.cafe24CandidateResolution = '';
+  factoryRestoreLockedProductName(factory, productName);
+  factoryUpdateFinalDbFromFields(factory);
+  factorySyncAutomationOptionModeFromDbSources(factory);
+  factory.product.candidateReviewStatus = `Cafe24 선택 해제: ${productName} 후보 목록에서 다시 선택하거나 신제품으로 진행할 수 있습니다.`;
+  factory.product.cafe24ApiStatus = 'Cafe24 기존 상품 선택을 해제했습니다. 후보를 다시 고르거나 신제품 등록으로 진행해주세요.';
+  factoryUpdateCandidateReviewStageStatus(factory);
+  factoryLog(`Cafe24 후보 선택 해제: ${productName}`, 'ok', factory);
+  return true;
+}
+
 function factorySetSinhwaDbProgramIssue(product, error) {
   const raw = String(error?.message || error || '').trim();
   const detail = typeof compactCafe24ApiErrorText === 'function'
@@ -6675,6 +7530,11 @@ function factorySetSinhwaDbProgramIssue(product, error) {
     detail,
   };
   product.candidateReviewStatus = '신화사DB 후보가 꺼져 있어서 DB 수집을 할 수 없습니다. 아래 버튼으로 실행한 뒤 다시 수집할 수 있습니다.';
+}
+
+function factoryReportCandidateParallelProgress(factory, taskId, progress, status, message, options = {}) {
+  if (typeof factorySetParallelTaskProgress !== 'function') return null;
+  return factorySetParallelTaskProgress(taskId, progress, status, message, { ...options, factory });
 }
 
 async function factoryCollectProductCandidatesForReview(options = {}) {
@@ -6706,6 +7566,8 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
   factoryUpdateFinalDbFromFields(factory);
   factoryLog(`신화사DB 후보 조회 중: ${terms.join(' / ')} · API Hub 경로 · 최대 20건`, 'info', factory);
   factoryLog(`Cafe24 후보 조회 중: ${terms.join(' / ')} · API Hub 경로 · 최대 24건`, 'info', factory);
+  factoryReportCandidateParallelProgress(factory, 'sinhwa', 10, 'running', '신화사DB 연결 확인 중');
+  factoryReportCandidateParallelProgress(factory, 'cafe24', 10, 'running', 'Cafe24 연결/OAuth 확인 중');
 
   const [sinhwaStatusResult, cafe24StatusResult, cafe24OAuthStatusResult] = await Promise.allSettled([
     typeof fetchSinhwaDbLocalStatus === 'function' ? fetchSinhwaDbLocalStatus() : Promise.resolve(null),
@@ -6732,18 +7594,33 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
     }
   }
   ensureCollectionScope();
+  factoryReportCandidateParallelProgress(factory, 'sinhwa', 45, 'running', '신화사DB 후보 요청 전송');
+  factoryReportCandidateParallelProgress(factory, 'cafe24', 45, 'running', 'Cafe24 후보 요청 전송');
 
   const [dbResult, cafe24Result] = await Promise.allSettled([
-    factorySearchSinhwaReviewCandidates(terms, 20),
+    factorySearchSinhwaReviewCandidates(terms, 20).then(candidates => {
+      factoryReportCandidateParallelProgress(factory, 'sinhwa', 90, 'running', `후보 ${Array.isArray(candidates) ? candidates.length : 0}건 응답 · 결과 정리 중`, {
+        completedItemCount: Array.isArray(candidates) ? candidates.length : 0,
+      });
+      return candidates;
+    }),
     cafe24OAuthStatus?.needsReauth || cafe24OAuthStatus?.state === 'scope_required'
       ? Promise.reject(new Error('Cafe24 OAuth 재연결 또는 권한 확인이 필요합니다.'))
-      : factorySearchCafe24ReviewCandidates(terms, 24),
+      : factorySearchCafe24ReviewCandidates(terms, 24).then(candidates => {
+        factoryReportCandidateParallelProgress(factory, 'cafe24', 90, 'running', `후보 ${Array.isArray(candidates) ? candidates.length : 0}건 응답 · 결과 정리 중`, {
+          completedItemCount: Array.isArray(candidates) ? candidates.length : 0,
+        });
+        return candidates;
+      }),
   ]);
   ensureCollectionScope();
   const current = factory;
   if (dbResult.status === 'fulfilled') {
-    current.product.pendingDbCandidates = factorySlimReviewCandidateList(dbResult.value, 'sinhwa', 20);
+    current.product.pendingDbCandidates = factorySlimReviewCandidateList(dbResult.value, 'sinhwa', 20, current);
     current.product.sinhwaDbProgramStatus = null;
+    factoryReportCandidateParallelProgress(current, 'sinhwa', 100, 'done', `신화사DB 후보 ${current.product.pendingDbCandidates.length}건`, {
+      completedItemCount: current.product.pendingDbCandidates.length,
+    });
     factoryLog(`신화사DB 후보 조회 완료: ${current.product.pendingDbCandidates.length}건`, 'ok', current);
   } else {
     const isOffline = typeof isSinhwaDbUnavailableError === 'function'
@@ -6755,14 +7632,23 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
       factoryLog('신화사DB 후보 조회 실패: 로컬 신화사DB 서비스가 응답하지 않습니다. 신화사DB 실행 버튼을 표시했습니다.', 'error', current);
     } else if (isNoCandidate) {
       current.product.sinhwaDbProgramStatus = null;
+      factoryReportCandidateParallelProgress(current, 'sinhwa', 100, 'done', '신화사DB 후보 0건', { completedItemCount: 0 });
       factoryLog(`신화사DB 후보 조회 완료: 0건 · ${dbResult.reason?.message || dbResult.reason}`, 'warn', current);
     } else {
       factoryLog(`신화사DB 후보 조회 실패: API Hub 또는 신화사DB 응답 오류 · ${dbResult.reason?.message || dbResult.reason}`, 'error', current);
     }
+    if (!isNoCandidate) factoryReportCandidateParallelProgress(current, 'sinhwa', 45, 'error', isOffline ? '신화사DB 프로그램 실행 필요' : '신화사DB 응답 오류');
   }
   if (cafe24Result.status === 'fulfilled') {
-    current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(cafe24Result.value, 'cafe24', 24);
+    current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(cafe24Result.value, 'cafe24', 24, current);
     current.product.cafe24ProgramStatus = null;
+    if (current.product.pendingCafe24Candidates.length) {
+      factoryReportCandidateParallelProgress(current, 'cafe24', 100, 'done', `Cafe24 후보 ${current.product.pendingCafe24Candidates.length}건`, {
+        completedItemCount: current.product.pendingCafe24Candidates.length,
+      });
+    } else {
+      factoryReportCandidateParallelProgress(current, 'cafe24', 75, 'running', '후보 0건 · 직접 검색 복구 준비');
+    }
     factoryLog(`Cafe24 후보 조회 완료: ${current.product.pendingCafe24Candidates.length}건`, 'ok', current);
   } else {
     const isOffline = typeof isCafe24ControlUnavailableError === 'function'
@@ -6786,6 +7672,7 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
     } else {
       factoryLog(`Cafe24 후보 조회 실패: Cafe24 Control Tower 또는 API Hub 응답 오류 · ${cafe24Result.reason?.message || cafe24Result.reason}`, 'error', current);
     }
+    factoryReportCandidateParallelProgress(current, 'cafe24', 45, 'error', oauthBlocked ? 'Cafe24 OAuth 확인 필요' : (isOffline ? 'Cafe24 Control Tower 실행 필요' : 'Cafe24 응답 오류'));
   }
   const cafe24Offline = cafe24Result.status === 'rejected'
     && (cafe24PreflightOffline
@@ -6797,13 +7684,18 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
     try {
       ensureCollectionScope();
       factoryLog(`Cafe24 후보 0건: 직접 검색 복구를 시작합니다 · ${terms.join(' / ')}`, 'warn', current);
+      factoryReportCandidateParallelProgress(current, 'cafe24', 75, 'running', 'Cafe24 직접 검색 복구 중');
       const directCafe24 = await factorySearchCafe24DirectReviewCandidates(terms, 24);
       ensureCollectionScope();
       if (directCafe24.length) {
-        current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(directCafe24, 'cafe24', 24);
+        current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(directCafe24, 'cafe24', 24, current);
         factoryLog(`Cafe24 직접 검색 복구 완료: 후보 ${directCafe24.length}건을 표시합니다.`, 'ok', current);
       }
+      factoryReportCandidateParallelProgress(current, 'cafe24', 100, 'done', `Cafe24 후보 ${current.product.pendingCafe24Candidates.length}건`, {
+        completedItemCount: current.product.pendingCafe24Candidates.length,
+      });
     } catch(e) {
+      factoryReportCandidateParallelProgress(current, 'cafe24', 75, 'error', 'Cafe24 직접 검색 응답 오류');
       factoryLog(`Cafe24 직접 검색 복구 실패: Control Tower 응답을 받지 못했습니다 · ${e.message || e}`, 'error', current);
     }
   }
@@ -6828,17 +7720,19 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
     current.product.candidateReviewStatus = `후보 조회 완료: 신화사DB 0건 · Cafe24 0건. 로그에서 각 연결 실패 여부를 확인하세요. 실제 신제품이면 각 패널에서 후보 없음으로 확정할 수 있습니다.`;
   }
   const restoredSelection = factoryRestoreCandidateReviewSelection(current, previousSelection);
+  const retainedDbSelection = restoredSelection && !!previousSelection.selectedDbCandidateKey;
+  const retainedCafe24Selection = restoredSelection && !!previousSelection.selectedCafe24CandidateKey;
 
   if (current.product.candidateAutoApply) {
-    if (dbCount) {
+    if (dbCount && !retainedDbSelection) {
       await factoryApplyDbCandidateFromReview(0, { render: false, factory: current });
       ensureCollectionScope();
     }
-    if (cafeCount) {
+    if (cafeCount && !retainedCafe24Selection) {
       await factoryApplyCafe24CandidateFromReview(0, { render: false, factory: current });
       ensureCollectionScope();
     }
-    current.product.candidateReviewStatus = `최상위 후보 자동 확정 완료: 신화사DB ${dbCount ? '적용' : '없음'} · Cafe24 ${cafeCount ? '적용' : '없음'}`;
+    current.product.candidateReviewStatus = `최상위 후보 자동 확정 완료: 신화사DB ${retainedDbSelection ? '기존 확정 유지' : (dbCount ? '적용' : '없음')} · Cafe24 ${retainedCafe24Selection ? '기존 확정 유지' : (cafeCount ? '적용' : '없음')}`;
   } else {
     factoryUpdateCandidateReviewStageStatus(current);
     if (restoredSelection) {
@@ -6870,6 +7764,8 @@ async function factoryCollectCafe24CandidatesForReviewOnly(options = {}) {
   factory.product.candidateReviewStatus = `Cafe24 후보 검색어: ${terms.join(' / ')}`;
   factory.product.cafe24ApiStatus = `Cafe24 후보 검색 중: ${terms.join(' / ')}`;
   factoryUpdateFinalDbFromFields(factory);
+  factoryReportCandidateParallelProgress(factory, 'sinhwa', 100, 'skipped', 'Cafe24만 수집하도록 선택됨');
+  factoryReportCandidateParallelProgress(factory, 'cafe24', 10, 'running', 'Cafe24 연결/OAuth 확인 중');
 
   let cafe24PreflightOffline = false;
   try {
@@ -6888,6 +7784,7 @@ async function factoryCollectCafe24CandidatesForReviewOnly(options = {}) {
   } catch (_) {
     cafe24OAuthStatus = null;
   }
+  factoryReportCandidateParallelProgress(factory, 'cafe24', 45, 'running', 'Cafe24 후보 요청 전송');
   let candidates;
   try {
     if (cafe24PreflightOffline) throw new Error('Cafe24 Control Tower가 꺼져 있습니다.');
@@ -6912,12 +7809,19 @@ async function factoryCollectCafe24CandidatesForReviewOnly(options = {}) {
       };
       factoryLog('Cafe24 후보 조회 실패: Control Tower가 꺼져 있습니다. 실행 버튼을 표시했습니다.', 'error', current);
     }
+    factoryReportCandidateParallelProgress(current, 'cafe24', 45, 'error', cafe24OAuthStatus?.needsReauth || cafe24OAuthStatus?.state === 'scope_required'
+      ? 'Cafe24 OAuth 확인 필요'
+      : (cafe24PreflightOffline ? 'Cafe24 Control Tower 실행 필요' : 'Cafe24 응답 오류'));
     throw error;
   }
   const current = factory;
-  current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(candidates, 'cafe24', 24);
+  current.product.pendingCafe24Candidates = factorySlimReviewCandidateList(candidates, 'cafe24', 24, current);
   const restoredSelection = factoryRestoreCandidateReviewSelection(current, previousSelection);
+  const retainedCafe24Selection = restoredSelection && !!previousSelection.selectedCafe24CandidateKey;
   const cafeCount = candidates.length;
+  factoryReportCandidateParallelProgress(current, 'cafe24', 100, 'done', `Cafe24 후보 ${cafeCount}건`, {
+    completedItemCount: cafeCount,
+  });
   current.product.candidateReviewStatus = `Cafe24 후보 수집 완료: ${cafeCount}건. ${current.product.candidateAutoApply ? '자동 확정 모드입니다.' : '후보 사진과 점수를 보고 실제 상품을 선택해주세요.'}${restoredSelection ? ' 이전에 확정한 후보 선택은 유지했습니다.' : ''}`;
   current.product.cafe24ApiStatus = cafeCount
     ? `Cafe24 후보 ${cafeCount}건을 불러왔습니다. 후보를 확정하면 해당 상품의 옵션/가격/상품번호를 상세 입력판에 반영합니다.`
@@ -6927,8 +7831,12 @@ async function factoryCollectCafe24CandidatesForReviewOnly(options = {}) {
   }
 
   if (current.product.candidateAutoApply) {
-    await factoryApplyCafe24CandidateFromReview(0, { render: false, factory: current });
-    current.product.candidateReviewStatus = `Cafe24 1순위 후보 자동 확정 완료: ${factoryCandidateName(current.product.cafe24Candidates?.[0], 'cafe24') || '선택 상품'}`;
+    if (!retainedCafe24Selection) {
+      await factoryApplyCafe24CandidateFromReview(0, { render: false, factory: current });
+    }
+    current.product.candidateReviewStatus = retainedCafe24Selection
+      ? `Cafe24 기존 확정 유지: #${previousSelection.selectedCafe24CandidateKey}`
+      : `Cafe24 1순위 후보 자동 확정 완료: ${factoryCandidateName(current.product.cafe24Candidates?.[0], 'cafe24') || '선택 상품'}`;
   } else {
     factoryUpdateCandidateReviewStageStatus(current);
     factoryStartCafe24CandidateRerank(terms, candidates, { factory: current });
@@ -6996,10 +7904,10 @@ async function factoryCollectAdditionalCafe24CandidatesForReview(options = {}) {
   const basePending = Array.isArray(current.product.pendingCafe24Candidates) ? current.product.pendingCafe24Candidates : [];
   const baseSaved = Array.isArray(current.product.cafe24Candidates) ? current.product.cafe24Candidates : [];
   const visibleBase = basePending.length ? basePending : baseSaved;
-  current.product.pendingCafe24Candidates = factoryDedupeCafe24Candidates([
+  current.product.pendingCafe24Candidates = factorySlimReviewCandidateList([
     ...taggedAdditions,
     ...visibleBase,
-  ]).map(factorySlimCafe24ReviewCandidate).slice(0, 48);
+  ], 'cafe24', 48, current);
   current.product.cafe24Candidates = factoryDedupeCafe24Candidates(baseSaved).map(factorySlimCafe24ReviewCandidate).slice(0, 24);
   current.product.candidateReviewStatus = additions.length
     ? `Cafe24 추가검색 완료: 기존 후보 ${existing.length}건 제외, 새 후보 ${additions.length}건을 목록 맨 위에 추가.`
@@ -7028,7 +7936,7 @@ async function factoryRunCafe24CandidateAdditionalSearch(options = {}) {
       'cafe24',
       draft => factoryRunCafe24CandidateAdditionalSearch({ ...options, factory: draft, render: false }),
     );
-    saveLastWorkNow({ sync: false });
+    await saveLastWorkNow({ sync: false, factory: receipt.snapshot.factory });
     if (options.render !== false) render();
     return receipt.result;
   }
@@ -7089,13 +7997,24 @@ async function factoryRunCafe24CandidateAdditionalSearch(options = {}) {
 }
 
 async function factoryRunCafe24CandidateSearchOnly(options = {}) {
+  if (!options.factory && options.operationLeaseHeld !== true) {
+    return factoryRuntimeWithOperationLease(
+      'factory/cafe24:run-candidate-search-only',
+      { operationToken: options.operationToken },
+      operation => factoryRunCafe24CandidateSearchOnly({
+        ...options,
+        operationToken: operation.operationToken,
+        operationLeaseHeld: true,
+      }),
+    );
+  }
   if (!options.factory) {
     const receipt = await factoryRuntimeUpdateOwnedFactory(
       'factory/cafe24:run-candidate-search-only',
       'cafe24',
       draft => factoryRunCafe24CandidateSearchOnly({ ...options, factory: draft, render: false }),
     );
-    saveLastWorkNow({ sync: false });
+    await saveLastWorkNow({ sync: false, factory: receipt.snapshot.factory });
     if (options.render !== false) render();
     return receipt.result;
   }
@@ -7107,7 +8026,6 @@ async function factoryRunCafe24CandidateSearchOnly(options = {}) {
     factoryLog('Cafe24 후보 검색 중단: 제품명 직접 입력이 필요합니다.', 'error', factory);
     return false;
   }
-  factoryResetDbContextForNewCollection(factory, { resetDb: false, resetCafe24: true });
   factorySetStageStatus('db', 'running', 'Cafe24 후보를 이름과 이미지 단서 기준으로 수집합니다.', factory);
   factoryLog('Cafe24 후보 검색 시작: 직접 입력 제품명을 우선하고, 설정된 후보 판독 엔진이 있으면 이미지 재랭킹까지 적용합니다.', 'info', factory);
   try {

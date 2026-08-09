@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
+from config import Config
 from routes.api_shared import api, jsonify, request
 from services.workspace_lock_service import LeaseSnapshot, WorkspaceConflict, WorkspaceLockService
 from services.workspace_mutation import StagedFilesystemMutation
 
 
 ResultT = TypeVar("ResultT")
-_DEFAULT_STATE_PATH = Path(os.path.dirname(__file__)) / ".." / ".local" / "workspace-authority.json"
+_DEFAULT_STATE_PATH = Path(Config.LOCAL_STATE_FOLDER) / "workspace-authority.json"
 _SERVICE = WorkspaceLockService(_DEFAULT_STATE_PATH.resolve())
 
 

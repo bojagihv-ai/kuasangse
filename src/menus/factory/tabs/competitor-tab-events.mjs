@@ -24,7 +24,9 @@ function isDisabled(node) {
 }
 
 function settle(result) {
-  if (result && typeof result.catch === 'function') result.catch(() => undefined);
+  if (result && typeof result.catch === 'function') {
+    result.catch(error => console.error('경쟁사 탭 작업 실행 실패:', error));
+  }
 }
 
 function stopEvent(event) {

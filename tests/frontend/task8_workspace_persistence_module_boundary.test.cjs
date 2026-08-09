@@ -8,6 +8,9 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const MODULES = Object.freeze({
   facade: 'src/modules/workspace-persistence.mjs',
   envelope: 'src/modules/persistence-envelope.mjs',
+  authorityRuntime: 'src/modules/persistence/authority-runtime.mjs',
+  operationCache: 'src/modules/persistence/operation-cache.mjs',
+  commitEngine: 'src/modules/persistence/commit-engine.mjs',
   orchestrator: 'src/modules/workspace-persistence-orchestrator.mjs',
 });
 

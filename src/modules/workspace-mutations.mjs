@@ -9,6 +9,7 @@ import { scopedSessionAssetId } from './persistence/indexeddb-adapter.mjs';
 const APP_GLOBAL_AUTHORITY = Object.freeze({
   scopeId: 'app-global', leaseId: '', fencingToken: 0, revision: 0,
 });
+const APP_GLOBAL_RECOVERY_KEYS = new Set(['pdp_last_work_draft_scope_v1']);
 
 function projectRecordScope(value) {
   return normalizeProjectScope(
@@ -81,12 +82,12 @@ export function createGuardedWorkspaceMutations({ adapters, authority } = {}) {
   }
 
   return Object.freeze({
-    writeRecoveryValue: (key, value) => run(
-      activeScope(), context => adapters.session.setItem(key, value, context),
-    ),
-    clearRecoveryValue: key => run(
-      activeScope(), context => adapters.session.removeItem(key, context),
-    ),
+    writeRecoveryValue: (key, value) => APP_GLOBAL_RECOVERY_KEYS.has(key)
+      ? runAppGlobal(context => adapters.session.setItem(key, value, context))
+      : run(activeScope(), context => adapters.session.setItem(key, value, context)),
+    clearRecoveryValue: key => APP_GLOBAL_RECOVERY_KEYS.has(key)
+      ? runAppGlobal(context => adapters.session.removeItem(key, context))
+      : run(activeScope(), context => adapters.session.removeItem(key, context)),
     saveArchiveFile: (handle, value, scopeId = activeScope()) => run(
       scopeId, context => adapters.archive.writeHandle(handle, value, context),
     ),

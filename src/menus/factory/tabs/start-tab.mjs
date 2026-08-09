@@ -17,9 +17,7 @@ const ACTION_NAMES = Object.freeze({
 });
 
 function ownRuntime(source) {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) {
-    throw new TypeError('start tab capabilities must be an object');
-  }
+  if (!source || typeof source !== 'object' || Array.isArray(source)) throw new TypeError('start tab capabilities must be an object');
   const runtime = {};
   for (const name of RUNTIME_FIELDS) {
     const descriptor = Object.getOwnPropertyDescriptor(source, name);
@@ -31,10 +29,7 @@ function ownRuntime(source) {
   return runtime;
 }
 
-function helper(renderHelpers, name, fallback) {
-  const value = renderHelpers?.[name];
-  return typeof value === 'function' ? value : fallback;
-}
+function helper(renderHelpers, name, fallback) { const value = renderHelpers?.[name]; return typeof value === 'function' ? value : fallback; }
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -43,9 +38,7 @@ function escapeHtml(value) {
 }
 
 function textHelper(helpers) { return helper(helpers, 'escapeHtml', escapeHtml); }
-function attrHelper(helpers) {
-  return helper(helpers, 'escapeAttr', helper(helpers, 'escAttr', escapeHtml));
-}
+function attrHelper(helpers) { return helper(helpers, 'escapeAttr', helper(helpers, 'escAttr', escapeHtml)); }
 
 function productImage(product = {}) {
   const input = Array.isArray(product.inputImages)
@@ -70,6 +63,8 @@ function storedProductImage(factory = {}) {
 
 function countsFor(factory = {}) {
   const product = factory.product || {};
+  const metadataOnlyInput = Array.isArray(product.inputImages)
+    && product.inputImages.some(item => item?.hasImage === true && !(item?.preview || item?.base64 || item?.dataUrl));
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
   const stageCount = stage => assets.filter(asset => String(asset?.stageId || '') === stage).length;
   const candidates = name => Array.isArray(product[name]) ? product[name].length : 0;
@@ -79,6 +74,7 @@ function countsFor(factory = {}) {
   return {
     hasImage: !!preview || !!stored?.src,
     hasProductImagePayload: !!preview,
+    metadataOnlyInput,
     stored,
     hasName: !!String(product.productName || product.userProductName || '').trim(),
     heroAssets: stageCount('hero'),
@@ -128,8 +124,10 @@ function renderProductDrop(factory, counts, helpers) {
 }
 
 function statusCard(label, value, detail, done, text) {
-  return `<div class="factory-automation-status-card ${done ? 'done' : 'warn'}"><span>${text(label)}</span><strong>${text(String(value))}</strong><span>${text(detail)}</span></div>`;
+  return `<div class="factory-automation-status-card ${done ? 'done' : 'warn'}"${label === '제품명' ? ' data-factory-product-name-status="1"' : ''}><span>${text(label)}</span><strong>${text(String(value))}</strong><span>${text(detail)}</span></div>`;
 }
+
+function patchProductNameStatus(root, value) { const card = root?.querySelector?.('[data-factory-product-name-status]'); if (!card) return false; const productName = String(value ?? '').trim(); const valueNode = card.querySelector?.('strong'); const detailNode = card.querySelectorAll?.('span')?.[1]; if (valueNode) valueNode.textContent = productName || '미입력'; if (detailNode) detailNode.textContent = productName ? 'DB/Cafe24/VM 검색어로 사용됩니다.' : '제품명을 입력해야 수집이 시작됩니다.'; card.classList?.toggle?.('done', !!productName); card.classList?.toggle?.('warn', !productName); return true; }
 
 function renderTask(task, helpers) {
   const text = textHelper(helpers);
@@ -148,15 +146,20 @@ function renderStart(snapshot, helpers) {
   const naturalHint = String(product.naturalHint || '');
   const tasks = tasksFor(factory, counts);
   const candidateCount = counts.dbCandidates + counts.cafe24Candidates;
+  const preflight = factory.automation?.localServicePreflight || {
+    state: 'idle', running: false,
+    message: '실행 버튼을 누르면 Cafe24, 신화사DB, VM 후보 수집기 연결을 확인합니다.',
+  };
+  const preflightPanel = `<div class="factory-automation-status-card ${preflight.state === 'ready' ? 'done' : 'warn'}" data-factory-local-service-preflight="${attr(preflight.state || 'idle')}" aria-live="polite" style="margin-top:10px"><span>실행 준비 상태</span><strong>${text(preflight.running ? '확인 중' : preflight.state === 'ready' ? '준비 완료' : preflight.state === 'failed' ? '실패' : preflight.state === 'idle' ? '실행 대기' : '확인 필요')}</strong><span>${text(preflight.message)}</span></div>`;
   const cards = [
-    ['제품 이미지', counts.hasProductImagePayload ? '원본 고정됨' : counts.stored ? '보관본 복구 가능' : '대기', counts.hasProductImagePayload ? '모든 생성 입력으로 사용됩니다.' : counts.stored ? '현재 작업 보관본을 기본 원본으로 고정해 생성에 연결합니다.' : '제품 이미지를 넣어주세요.', counts.hasImage],
+    ['제품 이미지', counts.hasProductImagePayload ? '원본 고정됨' : counts.stored ? '보관본 복구 가능' : counts.metadataOnlyInput ? '복원 불가' : '대기', counts.hasProductImagePayload ? '모든 생성 입력으로 사용됩니다.' : counts.stored ? '현재 작업 보관본을 기본 원본으로 고정해 생성에 연결합니다.' : counts.metadataOnlyInput ? '원본 저장파일에 복원 locator 없음' : '제품 이미지를 넣어주세요.', counts.hasImage],
     ['제품명', counts.hasName ? productName : '미입력', counts.hasName ? 'DB/Cafe24/VM 검색어로 사용됩니다.' : '제품명을 입력해야 수집이 시작됩니다.', counts.hasName],
     ['확보된 대표이미지', counts.heroAssets ? `${counts.heroAssets}개` : counts.stored ? '보관본 1개' : '0개', counts.heroAssets ? '이미 만들어져 보관함에 남아 있는 대표이미지입니다.' : '이미 만들어져 보관함에 남아 있는 대표이미지입니다.', counts.heroAssets > 0 || !!counts.stored],
     ['확보된 이미지컷', `${counts.cutAssets}개`, '이미 만들어져 보관함에 남아 있는 이미지컷입니다.', counts.cutAssets > 0],
     ['확보된 VM 후보', `${counts.competitorCandidates}건`, '이미 수집된 경쟁사 후보입니다. 상세수집은 선택 뒤 진행합니다.', counts.competitorCandidates > 0],
     ['확보된 DB 후보', `${candidateCount}건`, '이미 수집된 DB/Cafe24 후보입니다.', candidateCount > 0],
   ];
-  return `<div class="factory-automation-grid" data-factory-tab="start"><div class="factory-automation-panel"><h4>1. 시작</h4><p>제품 이미지와 제품명을 넣고 시작하면 대표이미지 생성, 이미지컷 생성, VM 후보수집, DB 후보수집을 동시에 돌립니다. 화면은 바로 DB 확정으로 넘어갑니다.</p>${renderProductDrop(factory, counts, helpers)}<div class="factory-input-row"><div><label class="label">제품명</label><input class="input" id="factoryGuideProductName" value="${attr(productName)}" placeholder="예: 크리스탈보자기"></div><div><label class="label">자연어 힌트</label><input class="input" id="factoryGuideNaturalHint" value="${attr(naturalHint)}" placeholder="예: 색동, 지갑형, 선물용"></div></div><div class="factory-automation-actions"><button class="btn-primary" type="button" data-factory-guide-action="run-db"><span class="material-icons-outlined" style="font-size:16px">rocket_launch</span>DB/경쟁사 수집 및 대표/이미지컷 생성</button><button class="btn-sm" type="button" data-factory-guide-action="focus-product-panel">기존 입력판으로 이동</button></div></div><div class="factory-automation-panel"><h4>이미 확보된 자료</h4><div class="factory-automation-status-grid">${cards.map(card => statusCard(...card, text)).join('')}</div><h4 style="margin-top:14px">이번 시작 버튼으로 실행할 수량</h4><p>기존 결과가 있으면 0으로 두고 건너뛸 수 있습니다. 이미지컷은 4로 두면 1번 프롬프트부터 4번 프롬프트까지만 생성합니다.</p><div class="factory-automation-status-grid">${[['hero', '대표이미지 생성 수', 4, '대표이미지 프롬프트 앞에서부터 생성'], ['cuts', '이미지컷 생성 수', 4, '이미지컷 프롬프트 앞에서부터 생성'], ['competitors', 'VM 후보 수집 수', 3, '사이트별 Top 후보 수집']].map(([key, label, max, detail]) => `<label class="factory-automation-status-card" style="display:block"><span>${text(label)}</span><input class="input" type="number" min="0" max="${max}" data-factory-start-count="${key}" value="${attr(factory.automation?.startRunCounts?.[key] ?? max)}" style="margin-top:7px;min-height:34px"><span>${text(detail)} · 0이면 이번 실행에서 건너뜁니다. 최대 ${max}.</span></label>`).join('')}</div>${candidateCount ? `<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)"><h4>이번 시작에서 확보된 같은상품 후보</h4><p>1번 시작으로 수집된 신화사DB/Cafe24 후보입니다. 사진과 상품명을 확인한 뒤 맞는 상품을 확정하세요.</p></div>` : ''}<div class="factory-automation-step-list">${tasks.map(task => renderTask(task, helpers)).join('')}</div></div></div>`;
+  return `<div class="factory-automation-grid" data-factory-tab="start"><div class="factory-automation-panel"><h4>1. 시작</h4><p>제품 이미지와 제품명을 넣고 시작하면 대표이미지 생성, 이미지컷 생성, VM 후보수집, DB 후보수집을 동시에 돌립니다. 신화사DB 작업 중에는 카페24 전용 경로를 선택할 수 있습니다.</p>${renderProductDrop(factory, counts, helpers)}<div class="factory-input-row"><div><label class="label">제품명</label><input class="input" id="factoryGuideProductName" value="${attr(productName)}" placeholder="예: 크리스탈보자기"></div><div><label class="label">자연어 힌트</label><input class="input" id="factoryGuideNaturalHint" value="${attr(naturalHint)}" placeholder="예: 색동, 지갑형, 선물용"></div></div><div class="factory-automation-actions"><button class="btn-primary" type="button" data-factory-guide-action="run-db"><span class="material-icons-outlined" style="font-size:16px">rocket_launch</span>DB/경쟁사 수집 및 대표/이미지컷 생성</button><button class="btn-sm" type="button" data-factory-guide-action="run-cafe24-only"><span class="material-icons-outlined" style="font-size:16px">storefront</span>카페24만 수집 + 경쟁사/이미지 생성</button><button class="btn-sm" type="button" data-factory-guide-action="focus-product-panel">기존 입력판으로 이동</button></div>${preflightPanel}</div><div class="factory-automation-panel"><h4>이미 확보된 자료</h4><div class="factory-automation-status-grid">${cards.map(card => statusCard(...card, text)).join('')}</div><h4 style="margin-top:14px">이번 시작 버튼으로 실행할 수량</h4><p>기존 결과가 있으면 0으로 두고 건너뛸 수 있습니다. 이미지컷은 4로 두면 1번 프롬프트부터 4번 프롬프트까지만 생성합니다.</p><div class="factory-automation-status-grid">${[['hero', '대표이미지 생성 수', 4, '대표이미지 프롬프트 앞에서부터 생성'], ['cuts', '이미지컷 생성 수', 4, '이미지컷 프롬프트 앞에서부터 생성'], ['competitors', 'VM 후보 수집 수', 3, '사이트별 Top 후보 수집']].map(([key, label, max, detail]) => `<label class="factory-automation-status-card" style="display:block"><span>${text(label)}</span><input class="input" type="number" min="0" max="${max}" data-factory-start-count="${key}" value="${attr(factory.automation?.startRunCounts?.[key] ?? max)}" style="margin-top:7px;min-height:34px"><span>${text(detail)} · 0이면 이번 실행에서 건너뜁니다. 최대 ${max}.</span></label>`).join('')}</div>${candidateCount ? `<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)"><h4>이번 시작에서 확보된 같은상품 후보</h4><p>1번 시작으로 수집된 신화사DB/Cafe24 후보입니다. 사진과 상품명을 확인한 뒤 맞는 상품을 확정하세요.</p></div>` : ''}<div class="factory-automation-step-list">${tasks.map(task => renderTask(task, helpers)).join('')}</div></div></div>`;
 }
 
 export function createStartFactoryTab(capabilities = {}) {
@@ -194,9 +197,9 @@ export function createStartFactoryTab(capabilities = {}) {
     select: () => getSnapshot(), render: view => renderStart(view, renderHelpers),
     bind(root) {
       const disposers = [];
-      const listen = (type, listener) => {
-        if (!root?.addEventListener) return;
-        root.addEventListener(type, listener); disposers.push(() => root.removeEventListener?.(type, listener));
+      const listen = (type, listener, target = root) => {
+        if (!target?.addEventListener) return;
+        target.addEventListener(type, listener); disposers.push(() => target.removeEventListener?.(type, listener));
       };
       const closest = (event, selector) => {
         const target = event?.target;
@@ -208,7 +211,9 @@ export function createStartFactoryTab(capabilities = {}) {
         const direct = /^(INPUT|TEXTAREA|SELECT)$/.test(String(target?.tagName || '')) ? target?.value : '';
         return direct || root?.querySelector?.(selector)?.value || '';
       };
+      let productNameComposing = false; const commitProductName = target => invokeFromEvent('setProductName', target?.value);
       listen('click', event => {
+        if (event?.target?.id === 'factoryGuideProductFile') return;
         const guide = closest(event, '[data-factory-guide-action]');
         const confirm = closest(event, '[data-factory-confirm-task]');
         const skip = closest(event, '[data-factory-skip-task]');
@@ -216,7 +221,11 @@ export function createStartFactoryTab(capabilities = {}) {
         if (guide) {
           event.preventDefault?.();
           const actionName = guide.dataset?.factoryGuideAction;
-          if (actionName === 'run-db') invokeFromEvent('runDb', { productName: valueFrom('#factoryGuideProductName', event), naturalHint: valueFrom('#factoryGuideNaturalHint', event) });
+          if (actionName === 'run-db' || actionName === 'run-cafe24-only') invokeFromEvent('runDb', {
+            productName: valueFrom('#factoryGuideProductName', event),
+            naturalHint: valueFrom('#factoryGuideNaturalHint', event),
+            sourceMode: actionName === 'run-cafe24-only' ? 'cafe24-only' : 'all',
+          });
           else if (actionName === 'focus-product-panel') invokeFromEvent('focusProductPanel');
           else if (actionName === 'promote-stored-product-image') invokeFromEvent('promoteStoredProductImage');
           return;
@@ -227,18 +236,21 @@ export function createStartFactoryTab(capabilities = {}) {
         const productDrop = closest(event, '#factoryGuideProductDrop');
         if (productDrop) { event.preventDefault?.(); root?.querySelector?.('#factoryGuideProductFile')?.click?.(); }
       });
+      listen('compositionstart', event => { if (event?.target?.id === 'factoryGuideProductName') productNameComposing = true; });
+      listen('compositionend', event => {
+        const target = event?.target; if (target?.id !== 'factoryGuideProductName') return;
+        productNameComposing = false; commitProductName(target); patchProductNameStatus(root, target.value);
+      });
       listen('input', event => {
-        const target = event?.target;
-        if (target?.id === 'factoryGuideProductName') invokeFromEvent('setProductName', target.value);
-        else if (target?.id === 'factoryGuideNaturalHint') invokeFromEvent('setNaturalHint', target.value);
-        else if (target?.dataset?.factoryStartCount) invokeFromEvent('setStartCount', { key: target.dataset.factoryStartCount, value: target.value });
+        const target = event?.target; if (target?.id === 'factoryGuideProductName') {
+          patchProductNameStatus(root, target.value);
+          if (!event?.isComposing && !productNameComposing) commitProductName(target);
+        }
+        else if (target?.id === 'factoryGuideNaturalHint') invokeFromEvent('setNaturalHint', target.value); else if (target?.dataset?.factoryStartCount) invokeFromEvent('setStartCount', { key: target.dataset.factoryStartCount, value: target.value });
       });
       listen('change', event => {
-        const target = event?.target;
-        if (target?.id !== 'factoryGuideProductFile') return;
-        const file = target.files?.[0];
-        if (file) invokeFromEvent('setProductImage', file);
-        if (target) target.value = '';
+        const target = event?.target; if (target?.id !== 'factoryGuideProductFile') return;
+        const file = target.files?.[0]; if (file) invokeFromEvent('setProductImage', file); if (target) target.value = '';
       });
       listen('dragover', event => { if (closest(event, '#factoryGuideProductDrop')) event.preventDefault?.(); });
       listen('drop', event => {

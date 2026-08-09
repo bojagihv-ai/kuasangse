@@ -52,7 +52,10 @@ async function main() {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: STORAGE_PROBE_URL });
     await waitFor(cdp, `document.readyState === 'complete'`, 15000);
-    originalStorage = await evaluate(cdp, `Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(Boolean).map(key => [key, localStorage.getItem(key)]))`);
+    originalStorage = await evaluate(cdp, `({
+      local: Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(Boolean).map(key => [key, localStorage.getItem(key)])),
+      session: Object.fromEntries(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)).filter(Boolean).map(key => [key, sessionStorage.getItem(key)])),
+    })`);
     const installed = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: startupSeedScript(seed, { appOrigin: new URL(APP_URL).origin, backendOrigin: new URL(BACKEND_BASE).origin }),
     });
@@ -60,16 +63,55 @@ async function main() {
     const verifyUrl = new URL(APP_URL);
     verifyUrl.searchParams.set('candidateStartupRestore', `verify-v223-${seed.projectId}`);
     await cdp.send('Page.navigate', { url: verifyUrl.href });
-    await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
-      && state.currentProjectId === ${JSON.stringify(seed.projectId)}
-      && typeof factoryCandidateReviewScopeKey === 'function'
-      && typeof factoryCandidateReviewCanApply === 'function'
-      && typeof getCurrentLastWorkWorkspaceScope === 'function'
-      && typeof workspacePersistenceApi === 'function'`, 60000);
+    try {
+      await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
+        && state.currentProjectId === ${JSON.stringify(seed.projectId)}
+        && typeof factoryCandidateReviewScopeKey === 'function'
+        && typeof factoryCandidateReviewCanApply === 'function'
+        && typeof getCurrentLastWorkWorkspaceScope === 'function'
+        && typeof workspacePersistenceApi === 'function'`, 60000);
+    } catch (error) {
+      const diagnostic = await evaluate(cdp, `({
+        readyState: document.readyState,
+        stateProjectId: typeof state === 'object' ? state.currentProjectId || '' : '',
+        stateProductName: typeof state === 'object' ? state.productName || '' : '',
+        stateStep: typeof state === 'object' ? state.step || '' : '',
+        factoryProjectId: typeof state === 'object' ? state.factory?.workspace?.id || '' : '',
+        draftScope: sessionStorage.getItem('pdp_last_work_draft_scope_v1') || '',
+        hasSession: !!sessionStorage.getItem('pdp_session'),
+        hasBootstrap: !!sessionStorage.getItem('pdp_last_work_bootstrap_v1'),
+        storageWarning: typeof state === 'object' ? state.storageWarning || '' : '',
+        loadErrors: globalThis.__KUASANGSE_LOAD_ERRORS__ || [],
+        startupConsole: globalThis.__DB05_NETWORK_PROBE__?.console || [],
+        sessionProbe: (() => {
+          try {
+            const parsed = JSON.parse(sessionStorage.getItem('pdp_session') || '{}');
+            const validation = workspacePersistenceApi().validateSnapshotIdentity(parsed);
+            const bound = bindWorkspaceSnapshotToCurrentBranch(structuredClone(parsed));
+            let loaded = null;
+            let loadError = '';
+            try { loaded = loadPersistentSession(); } catch (innerError) { loadError = String(innerError?.stack || innerError); }
+            return {
+              validation,
+              boundProjectId: bound?.currentProjectId || '',
+              boundScope: bound?.workspaceScope?.id || '',
+              loadedProjectId: loaded?.currentProjectId || '',
+              loadedScope: loaded?.workspaceScope?.id || '',
+              loadError,
+            };
+          } catch (probeError) {
+            return { probeError: String(probeError?.stack || probeError) };
+          }
+        })(),
+        bodyText: String(document.body?.innerText || '').slice(0, 1200),
+      })`);
+      throw new Error(`${error.message}\nstartupDiagnostic=${JSON.stringify(diagnostic)}`);
+    }
     await new Promise(resolve => setTimeout(resolve, 1200));
     proof = await evaluateFactoryCdpFixture(cdp, `async ({ readAppState, readFactory, readOperationToken }) => {
       const app = readAppState();
       const factory = readFactory();
+      const persistenceScope = getCurrentLastWorkWorkspaceScope();
       const view = candidate => ({
         scope: candidate?.reviewProductScopeKey || '',
         identity: candidate?.reviewProductIdentityKey || '',
@@ -103,7 +145,8 @@ async function main() {
       return {
         appWorkspaceId: app.currentProjectId || '',
         factoryWorkspaceId: factory.workspace?.id || factory.currentProjectId || '',
-        persistenceScope: getCurrentLastWorkWorkspaceScope(),
+        persistenceScope,
+        branch: currentWorkspaceBranch(persistenceScope, app.currentProjectId),
         currentScope: factoryCandidateReviewScopeKey(factory),
         token, settledToken, authority, settledAuthority,
         db: (factory.product?.pendingDbCandidates || []).map(view),
@@ -134,8 +177,17 @@ async function main() {
         if (cdp && originalStorage !== null) {
           await cdp.send('Page.navigate', { url: STORAGE_PROBE_URL });
           await waitFor(cdp, `document.readyState === 'complete'`, 15000);
-          await evaluate(cdp, `(() => { localStorage.clear(); for (const [key, value] of Object.entries(${JSON.stringify(originalStorage)})) localStorage.setItem(key, value); })()`);
-          const restored = await evaluate(cdp, `Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(Boolean).map(key => [key, localStorage.getItem(key)]))`);
+          await evaluate(cdp, `(() => {
+            const original = ${JSON.stringify(originalStorage)};
+            localStorage.clear();
+            sessionStorage.clear();
+            for (const [key, value] of Object.entries(original.local || {})) localStorage.setItem(key, value);
+            for (const [key, value] of Object.entries(original.session || {})) sessionStorage.setItem(key, value);
+          })()`);
+          const restored = await evaluate(cdp, `({
+            local: Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).filter(Boolean).map(key => [key, localStorage.getItem(key)])),
+            session: Object.fromEntries(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)).filter(Boolean).map(key => [key, sessionStorage.getItem(key)])),
+          })`);
           cleanup.beforeStorage = storageFingerprint(originalStorage);
           cleanup.afterStorage = storageFingerprint(restored);
           cleanup.storageRestored = JSON.stringify(originalStorage) === JSON.stringify(restored);
@@ -173,7 +225,7 @@ async function main() {
   }
 
   const expected = {
-    projectId: seed.projectId, projectScope: seed.projectScope,
+    projectId: seed.projectId, projectScope: seed.projectScope, draftWorkspaceId: seed.draftWorkspaceId,
     currentScope: seed.currentScope, currentIdentity: seed.currentIdentity,
     foreignScope: seed.foreignScope, foreignIdentity: seed.foreignIdentity,
     appOrigin: new URL(APP_URL).origin, backendOrigin: new URL(BACKEND_BASE).origin,

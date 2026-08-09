@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from urllib.parse import quote
+
+from flask import Flask
+import pytest
+
 from routes import api_archive
 
 
@@ -35,6 +42,77 @@ def test_scope_requires_all_five_identity_fields() -> None:
     assert api_archive._local_archive_scope_is_complete(identity) is True
     assert api_archive._local_archive_scope_is_complete(None) is False
     assert missing_results == {field: False for field in identity}
+
+
+def test_last_work_identity_reads_fingerprint_from_factory_product() -> None:
+    # Given: 섹션 범위에는 지문이 없고 상품 상태에만 지문이 남은 작업 스냅샷을 준비한다.
+    snapshot = {
+        "workspaceId": "project-a",
+        "assets": {
+            "currentProjectId": "project-a",
+            "productName": "모시바둑파우치",
+            "factory": {
+                "product": {
+                    "productKey": "모시바둑파우치",
+                    "inputImageFingerprint": "image-a",
+                },
+            },
+        },
+    }
+
+    # When: 작업파일별 자료함의 식별값을 계산한다.
+    identity = api_archive._last_work_archive_identity(snapshot)
+
+    # Then: 상품 상태의 입력 이미지 지문을 잃지 않아야 한다.
+    assert identity["inputImageFingerprint"] == "image-a"
+
+
+def test_local_asset_fetcher_reads_known_local_image_reference(tmp_path: Path) -> None:
+    # Given: 경쟁사 상세수집 결과가 로컬 이미지 API 주소로 저장된 상태를 준비한다.
+    image = tmp_path / "competitor.jpg"
+    image.write_bytes(b"competitor-detail")
+    url = f"http://127.0.0.1:5012/api/local_image?path={quote(str(image))}"
+
+    # When: 작업파일 자료함이 로컬 이미지 참조를 해석한다.
+    result = api_archive._local_asset_fetch_local_reference(url, ())
+
+    # Then: HTTP 재요청 없이 실제 이미지 바이트를 회수해야 한다.
+    assert result == ("image/jpeg", b"competitor-detail")
+
+
+def test_source_image_route_reads_only_jepum_or_managed_local_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 수집기 폴더 안 원본과 폴더 밖 원본을 각각 준비한다.
+    image = tmp_path / "data" / "detail-pages" / "competitor.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"competitor-detail")
+    outside = tmp_path.parent / "outside-competitor.jpg"
+    outside.write_bytes(b"outside")
+    monkeypatch.setattr(api_archive, "_JEPUM_ROOT", tmp_path)
+    client, _archive_root = _local_archive_folder_client(tmp_path, monkeypatch)
+
+    # When: 신화사 저장용 로컬 원본 읽기 경계로 두 주소를 요청한다.
+    accepted = client.get(
+        "/api/local-archive/source-image",
+        query_string={
+            "source": f"http://127.0.0.1:5012/api/local_image?path={quote(str(image))}",
+        },
+    )
+    rejected = client.get(
+        "/api/local-archive/source-image",
+        query_string={
+            "source": f"http://127.0.0.1:5012/api/local_image?path={quote(str(outside))}",
+        },
+    )
+
+    # Then: 수집기 관리 폴더의 이미지 바이트만 반환해야 한다.
+    assert accepted.status_code == 200
+    assert accepted.mimetype == "image/jpeg"
+    assert accepted.data == b"competitor-detail"
+    assert accepted.headers["X-Content-Type-Options"] == "nosniff"
+    assert rejected.status_code == 404
 
 
 def test_workfile_folder_name_is_stable_and_workspace_specific() -> None:
@@ -96,6 +174,34 @@ def test_stage_classifier_maps_every_generated_image_usage() -> None:
     assert kinds == ["hero", "size", "option", "cut", "section", "detail"]
 
 
+def test_option_archive_response_exposes_result_id_from_asset_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 인덱스에는 sourceMap이 없고 옵션 자산 manifest에만 결과 ID가 남은 과거 보관본을 준비한다.
+    asset_path = tmp_path / "asset.json"
+    asset_path.write_text(
+        json.dumps({"sourceMap": {"optionResultId": "result-old-a"}}),
+        encoding="utf-8",
+    )
+    record = {
+        "archiveId": "archive-old-a",
+        "stageId": "options",
+        "files": {"assetPath": str(asset_path)},
+    }
+    monkeypatch.setattr(
+        api_archive,
+        "_local_archive_safe_existing_file",
+        lambda path: asset_path if path == str(asset_path) else None,
+    )
+
+    # When: 로컬 아카이브 목록 응답으로 정규화한다.
+    response = api_archive._local_archive_record_for_response(record)
+
+    # Then: 브라우저가 과거 옵션 결과와 정확히 재연결할 수 있는 ID가 노출된다.
+    assert response["optionResultId"] == "result-old-a"
+
+
 def test_asset_identity_prefers_explicit_request_scope_and_trims_values() -> None:
     # Given: 자산 내부 값과 요청 본문의 현재 작업 값이 서로 다른 입력을 준비한다.
     asset = {
@@ -140,6 +246,43 @@ def test_same_asset_deduplication_requires_every_scope_field() -> None:
     ) is False
 
 
+def test_latest_stage_records_checks_payload_only_after_scope_match(monkeypatch) -> None:
+    # Given: 현재 작업 레코드 앞에 다른 작업파일의 많은 자산이 있을 수 있는 인덱스를 준비한다.
+    unrelated = {
+        **_complete_identity(),
+        "archiveId": "unrelated",
+        "workspaceId": "workspace-other",
+    }
+    current = {
+        **_complete_identity(),
+        "archiveId": "current",
+        "savedAt": "2026-07-23T13:00:00",
+    }
+    payload_checks: list[str] = []
+    monkeypatch.setattr(
+        api_archive,
+        "_local_archive_load_index",
+        lambda: {"assets": [unrelated, current]},
+    )
+    monkeypatch.setattr(
+        api_archive,
+        "_local_archive_record_has_payload",
+        lambda record: payload_checks.append(record["archiveId"]) is None or True,
+    )
+
+    # When: 현재 작업의 최신 단계 자산을 찾는다.
+    records, stage_runs = api_archive._local_archive_latest_stage_records(
+        "workspace-a",
+        "나비수저집",
+        "image-a",
+    )
+
+    # Then: 다른 작업파일은 디스크 payload 검사 전에 제외되어야 한다.
+    assert payload_checks == ["current"]
+    assert [record["archiveId"] for record in records] == ["current"]
+    assert stage_runs == {"hero": "run-a"}
+
+
 def test_competitor_archive_reports_missing_mismatched_and_wrong_stage_scope() -> None:
     # Given: 완전한 경쟁사 범위, 필드 누락, 상충 값, 잘못된 단계를 준비한다.
     complete_body = {**_complete_identity(), "stageId": "competitors"}
@@ -167,6 +310,71 @@ def test_competitor_archive_reports_missing_mismatched_and_wrong_stage_scope() -
     assert missing_error == "competitor archive identity required: stageId"
     assert mismatch_error == "competitor archive identity mismatch: productKey"
     assert wrong_stage_error == "competitor archive identity mismatch: stageId must be competitors"
+
+
+def _local_archive_folder_client(tmp_path: Path, monkeypatch):
+    archive_root = tmp_path / "local-archive"
+    monkeypatch.setattr(api_archive.Config, "LOCAL_ARCHIVE_FOLDER", str(archive_root))
+    monkeypatch.setattr(api_archive, "_LOCAL_ARCHIVE_INDEX_PATH", str(archive_root / "index.json"))
+    app = Flask(__name__)
+    app.register_blueprint(api_archive.api, url_prefix="/api")
+    return app.test_client(), archive_root
+
+
+def test_open_local_archive_folder_uses_server_scoped_category_not_client_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # Given: 현재 작업 식별자와 외부 경로를 함께 보낸 요청을 준비한다.
+    client, archive_root = _local_archive_folder_client(tmp_path, monkeypatch)
+    opened: list[Path] = []
+    monkeypatch.setattr(api_archive.os, "startfile", lambda path: opened.append(Path(path)), raising=False)
+
+    # When: 이미지컷 보관 카테고리 폴더를 연다.
+    response = client.post(
+        "/api/local-archive/folders/open",
+        json={
+            **_complete_identity(),
+            "stageId": "cuts",
+            "scope": "category",
+            "folder": str(tmp_path / "outside"),
+            "path": str(tmp_path / "outside"),
+        },
+    )
+
+    # Then: 서버가 계산한 현재 작업 이미지컷 폴더만 열어야 한다.
+    assert response.status_code == 200
+    opened_folder = opened[0].resolve()
+    assert opened_folder.is_relative_to(archive_root.resolve())
+    assert opened_folder.name == "10_OUTPUT_이미지컷"
+    assert response.get_json()["relativePath"].endswith("/10_OUTPUT_이미지컷")
+
+
+def test_open_local_archive_folder_rejects_unsafe_record_folder_but_opens_safe_asset_parent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # Given: 레코드 폴더는 root 밖이지만 실제 이미지 파일은 root 안에 있는 보관 자산이다.
+    client, archive_root = _local_archive_folder_client(tmp_path, monkeypatch)
+    image_path = archive_root / "workfiles" / "safe" / "asset.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+    monkeypatch.setattr(api_archive, "_local_archive_load_index", lambda: {
+        "assets": [{
+            "archiveId": "safe-asset",
+            "folder": str(tmp_path / "outside"),
+            "files": {"imagePath": str(image_path)},
+        }],
+    })
+    opened: list[Path] = []
+    monkeypatch.setattr(api_archive.os, "startfile", lambda path: opened.append(Path(path)), raising=False)
+
+    # When: archiveId만 전달해 저장 폴더를 연다.
+    response = client.post("/api/local-archive/folders/open", json={"archiveId": "safe-asset"})
+
+    # Then: 신뢰할 수 없는 record.folder는 무시하고 root 안의 실제 자산 폴더만 연다.
+    assert response.status_code == 200
+    assert opened == [image_path.parent]
 
 
 def _last_work_snapshot(

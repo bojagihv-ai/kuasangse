@@ -60,8 +60,238 @@ test('two logical projects retain distinct physical session asset records', asyn
   assert.equal((await adapter.getSessionAssets('beta')).imageBase64, 'beta-image');
 });
 
-test('새 lease의 더 높은 fence는 같은 accepted revision의 scoped assets 복원을 막지 않는다', async () => {
-  // Given: 저장본은 직전 lease에서 승인됐고 reload가 같은 revision으로 새 lease를 받았다.
+test('draft session assets retain the saved document they branched from', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const driver = memoryDriver();
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  const workspaceBranch = {
+    schema: 'kuasangse.work-branch.v1',
+    branchId: 'tab-a',
+    scopeId: 'draft:tab-a',
+    documentId: 'alpha',
+    documentScopeId: 'project:alpha',
+    createdAt: 0,
+  };
+
+  await adapter.putSessionAssets('draft:tab-a', {
+    currentProjectId: 'alpha',
+    workspaceBranch,
+    imageBase64: 'branch-image',
+  });
+
+  const stored = await adapter.getSessionAssets('draft:tab-a');
+  assert.equal(stored.scopeId, 'draft:tab-a');
+  assert.equal(stored.currentProjectId, 'alpha');
+  assert.deepEqual(stored.workspaceBranch, workspaceBranch);
+});
+
+test('authoritative draft commit retains its document binding and rejects a conflicting one', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const driver = memoryDriver();
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  const workspaceBranch = {
+    schema: 'kuasangse.work-branch.v1',
+    branchId: 'tab-a',
+    scopeId: 'draft:tab-a',
+    documentId: 'alpha',
+    documentScopeId: 'project:alpha',
+    createdAt: 0,
+  };
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'draft:tab-a', savedAt: 123,
+    digest: 'fnv1a32:draft',
+    metadata: {
+      operationId: 'draft-commit', fencingToken: 1, leaseId: 'draft-lease',
+      revision: { scopeId: 'draft:tab-a', counter: 1, updatedAt: 123, writerId: 'tab-a' },
+    },
+    snapshot: { currentProjectId: 'alpha', workspaceBranch },
+  };
+
+  await adapter.write(envelope, {
+    sessionAssets: { currentProjectId: 'alpha', workspaceBranch, marker: 'accepted' },
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+  const stored = await adapter.getSessionAssets('draft:tab-a');
+  assert.equal(stored.currentProjectId, 'alpha');
+  assert.equal(stored.marker, 'accepted');
+
+  await assert.rejects(
+    adapter.putSessionAssets('draft:tab-a', {
+      currentProjectId: 'beta',
+      workspaceBranch,
+    }),
+    /document id conflicts/,
+  );
+});
+
+test('offline draft authoritative IndexedDB write forwards same-revision permission only when explicitly granted', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const fencingPath = path.join(ROOT, 'src', 'modules', 'persistence', 'fencing.mjs');
+  const { assertReplicaCanPublish } = await import(
+    `${pathToFileURL(fencingPath).href}?offline-draft-authoritative=${Date.now()}-${Math.random()}`,
+  );
+  const driver = memoryDriver();
+  const originalCompareAndPutMany = driver.compareAndPutMany.bind(driver);
+  driver.compareAndPutMany = async (entries, guard = {}) => {
+    const current = await driver.get(guard.storeName, guard.key);
+    assertReplicaCanPublish(current, guard.envelope, {
+      allowSameRevisionMutation: guard.allowSameRevisionMutation === true,
+    });
+    return originalCompareAndPutMany(entries, guard);
+  };
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  const scopeId = 'draft:tab-authoritative-same-revision';
+  const before = {
+    schema: 'kuasangse.workspace', version: 2, scopeId, savedAt: 1,
+    digest: 'fnv1a32:before',
+    metadata: {
+      operationId: 'before', leaseId: '', fencingToken: 0,
+      revision: { scopeId, counter: 11, updatedAt: 1, writerId: 'tab-a' },
+    },
+    snapshot: { currentProjectId: '', workspaceScope: { id: scopeId }, value: 'before' },
+  };
+  const after = {
+    ...before,
+    savedAt: 2,
+    digest: 'fnv1a32:after',
+    metadata: {
+      ...before.metadata,
+      operationId: 'after',
+      revision: { ...before.metadata.revision, updatedAt: 2 },
+    },
+    snapshot: { ...before.snapshot, value: 'after' },
+  };
+
+  await adapter.write(before, { assertAuthority() {}, assertCompletion() {} });
+  await adapter.write(after, {
+    allowSameRevisionMutation: true,
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+
+  assert.equal((await adapter.read(scopeId)).snapshot.value, 'after');
+});
+
+test('document migration reads matching old assets without deleting or rewriting the source', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const driver = memoryDriver();
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  await driver.put('sessionAssets', {
+    id: 'session-assets:project:alpha',
+    scopeId: 'project:alpha',
+    currentProjectId: 'alpha',
+    marker: 'scoped-source',
+  });
+  await driver.put('sessionAssets', {
+    id: 'current',
+    currentProjectId: 'beta',
+    marker: 'legacy-other-document',
+  });
+
+  const source = await adapter.getDocumentSessionAssetsForBranchMigration('project:alpha');
+  assert.equal(source.marker, 'scoped-source');
+  assert.equal(driver.raw('sessionAssets', 'session-assets:project:alpha').marker, 'scoped-source');
+  assert.equal(driver.raw('sessionAssets', 'current').marker, 'legacy-other-document');
+  assert.equal(await adapter.getDocumentSessionAssetsForBranchMigration('project:gamma'), null);
+});
+
+test('session assets unwrap nested reactive values before IndexedDB structured cloning', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const driver = memoryDriver();
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  const reactive = new Proxy({
+    label: 'clone-safe',
+    transientCallback() {},
+  }, {});
+
+  await adapter.putSessionAssets('alpha', { nested: reactive });
+  assert.equal(driver.raw('sessionAssets', 'session-assets:project:alpha').nested.label, 'clone-safe');
+  assert.equal(driver.raw('sessionAssets', 'session-assets:project:alpha').nested.transientCallback, undefined);
+
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 123,
+    digest: 'fnv1a32:clone-safe',
+    metadata: {
+      operationId: 'clone-safe-session-assets', fencingToken: 1,
+      revision: { scopeId: 'project:alpha', counter: 1, updatedAt: 123, writerId: 'test' },
+    },
+    snapshot: { currentProjectId: 'alpha' },
+  };
+  await adapter.write(envelope, { sessionAssets: { nested: reactive } });
+  const committed = driver.raw('sessionAssets', 'session-assets:project:alpha');
+  assert.equal(committed.nested.label, 'clone-safe');
+  assert.equal(committed.nested.transientCallback, undefined);
+});
+
+test('current lease can refine scoped session assets within its accepted revision', async () => {
+  const { createIndexedDbPersistenceAdapter } = await loadAdapter();
+  const fencingPath = path.join(ROOT, 'src', 'modules', 'persistence', 'fencing.mjs');
+  const { assertReplicaCanPublish } = await import(
+    `${pathToFileURL(fencingPath).href}?same-revision=${Date.now()}-${Math.random()}`
+  );
+  const driver = memoryDriver();
+  const originalCompareAndPut = driver.compareAndPut.bind(driver);
+  driver.compareAndPut = async (name, value, guard = {}) => {
+    const current = await driver.get(name, value.id);
+    assertReplicaCanPublish(current, guard.envelope || guard, {
+      allowSameRevisionMutation: guard.allowSameRevisionMutation === true,
+    });
+    return originalCompareAndPut(name, value, guard);
+  };
+  const adapter = createIndexedDbPersistenceAdapter({ driver });
+  const authority = {
+    scopeId: 'project:alpha', leaseId: 'live-lease', fencingToken: 8,
+    revision: 12,
+  };
+  await driver.put('sessionAssets', {
+    id: 'session-assets:project:alpha', scopeId: 'project:alpha', imageBase64: 'old-image',
+    persistenceAuthority: {
+      ...authority, operationId: 'accepted-operation', digest: 'accepted-digest',
+    },
+  });
+
+  await adapter.putSessionAssets('project:alpha', { imageBase64: 'new-image' }, {
+    persistenceAuthority: authority,
+    assertAuthority: () => true,
+    assertCompletion: () => true,
+  });
+
+  assert.equal((await adapter.getSessionAssets('project:alpha')).imageBase64, 'new-image');
+});
+
+test('explicit persistence authority outranks stale payload workspace revision during image refinement', async () => {
+  const fencingPath = path.join(ROOT, 'src', 'modules', 'persistence', 'fencing.mjs');
+  const { assertReplicaCanPublish, persistenceFence } = await import(
+    `${pathToFileURL(fencingPath).href}?authority-precedence=${Date.now()}-${Math.random()}`
+  );
+  const authority = {
+    scopeId: 'project:alpha',
+    leaseId: 'live-lease',
+    fencingToken: 8,
+    revision: 13,
+  };
+  const existing = {
+    scopeId: 'project:alpha',
+    workspaceRevision: { scopeId: 'project:alpha', counter: 12 },
+    persistenceAuthority: authority,
+  };
+  const candidate = {
+    scopeId: 'project:alpha',
+    workspaceRevision: { scopeId: 'project:alpha', counter: 11 },
+    persistenceAuthority: authority,
+  };
+
+  assert.equal(persistenceFence(existing).revision, 13);
+  assert.equal(persistenceFence(candidate).revision, 13);
+  assert.equal(
+    assertReplicaCanPublish(existing, candidate, { allowSameRevisionMutation: true }),
+    'publish',
+  );
+});
+
+test('새 lease는 같은 작업파일의 과거 image revision을 보완 복원하되 미래 revision은 거절한다', async () => {
+  // Given: 이미지 저장본은 직전 lease에서 승인됐고 reload 중 메타데이터 revision만 한 칸 앞섰다.
   const { sessionAssetRecordMatchesAuthority } = await loadAdapter();
   const record = {
     id: 'session-assets:project:alpha', scopeId: 'project:alpha',
@@ -71,12 +301,51 @@ test('새 lease의 더 높은 fence는 같은 accepted revision의 scoped assets
     mode: 'editing', scopeId: 'project:alpha', fencingToken: 50, revision: 46,
   };
 
-  // When/Then: fence 세대가 바뀌어도 accepted revision이 같으면 복원하고, revision 불일치는 거절한다.
+  // When/Then: 같은 scope의 같거나 과거 revision은 이미지 보완본으로 복원한다.
   assert.equal(sessionAssetRecordMatchesAuthority(record, reloadedAuthority, 'project:alpha'), true);
   assert.equal(sessionAssetRecordMatchesAuthority(
     record,
     { ...reloadedAuthority, revision: 47 },
     'project:alpha',
+  ), true);
+
+  // And: 현재 권위보다 미래이거나 다른 작업파일인 저장본은 계속 거절한다.
+  assert.equal(sessionAssetRecordMatchesAuthority(
+    { ...record, persistenceAuthority: { ...record.persistenceAuthority, revision: 48 } },
+    { ...reloadedAuthority, revision: 47 },
+    'project:alpha',
+  ), false);
+  assert.equal(sessionAssetRecordMatchesAuthority(
+    { ...record, scopeId: 'project:beta', persistenceAuthority: { scopeId: 'project:beta', revision: 46 } },
+    reloadedAuthority,
+    'project:alpha',
+  ), false);
+});
+
+test('F5 뒤 같은 탭 draft의 더 최신 필수값 session은 현재 authority보다 앞서도 복원한다', async () => {
+  const { sessionAssetRecordMatchesAuthority } = await loadAdapter();
+  const record = {
+    id: 'session-assets:draft:tab-a',
+    scopeId: 'draft:tab-a',
+    workspaceBranch: {
+      schema: 'kuasangse.work-branch.v1',
+      branchId: 'tab-a',
+      scopeId: 'draft:tab-a',
+      documentId: 'alpha',
+      documentScopeId: 'project:alpha',
+      createdAt: 0,
+    },
+    persistenceAuthority: { scopeId: 'draft:tab-a', fencingToken: 0, revision: 48 },
+  };
+  const reloadedAuthority = {
+    mode: 'offline-edit', scopeId: 'draft:tab-a', fencingToken: 0, revision: 47,
+  };
+
+  assert.equal(sessionAssetRecordMatchesAuthority(record, reloadedAuthority, 'draft:tab-a'), true);
+  assert.equal(sessionAssetRecordMatchesAuthority(
+    { ...record, scopeId: 'draft:tab-b', persistenceAuthority: { ...record.persistenceAuthority, scopeId: 'draft:tab-b' } },
+    reloadedAuthority,
+    'draft:tab-a',
   ), false);
 });
 
@@ -170,9 +439,52 @@ test('real server adapter round-trips the full v2 persistence envelope', async (
   await adapter.write(envelope);
   const { persistenceEnvelope, ...legacySnapshot } = stored;
   assert.deepEqual(legacySnapshot, envelope.snapshot, 'server keeps legacy last-work fields readable');
-  assert.deepEqual(persistenceEnvelope, envelope, 'server carries the exact v2 envelope alongside legacy fields');
+  const { snapshot: _snapshot, ...envelopeHeader } = envelope;
+  assert.deepEqual(persistenceEnvelope, { ...envelopeHeader, snapshotRef: '$' }, 'server carries a compact v2 envelope header alongside legacy fields');
   const restored = await adapter.read('project:alpha');
 
+  assert.deepEqual(restored, envelope);
+});
+
+test('server adapter sends one physical copy of a large workspace snapshot', async () => {
+  const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
+  const { createServerLastWorkAdapter } = await import(`${pathToFileURL(serverPath).href}?compact=${Date.now()}-${Math.random()}`);
+  const uniqueImage = `data:image/webp;base64,UNIQUE-${'x'.repeat(200_000)}`;
+  let stored = null;
+  let postedBody = '';
+  const adapter = createServerLastWorkAdapter({
+    fetchImpl: async (_url, options = {}) => {
+      if (options.method === 'POST') {
+        postedBody = String(options.body || '');
+        stored = JSON.parse(postedBody).snapshot;
+        return { ok: true, json: async () => ({ accepted: true, revision: 12 }) };
+      }
+      return { ok: true, json: async () => ({ hasSnapshot: true, snapshot: structuredClone(stored) }) };
+    },
+    bases: () => ['http://local.test'],
+  });
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 654,
+    digest: 'fnv1a32:compact',
+    metadata: {
+      operationId: 'server-compact',
+      revision: { scopeId: 'project:alpha', counter: 12, updatedAt: 653, writerId: 'writer-c' },
+      fencingToken: 'carry-only-12',
+    },
+    snapshot: {
+      currentProjectId: 'alpha',
+      productName: 'A',
+      factory: { assets: [{ id: 'hero-1', image: uniqueImage }] },
+    },
+  };
+
+  await adapter.write(envelope);
+
+  const posted = JSON.parse(postedBody);
+  assert.equal(posted.snapshot.persistenceEnvelope.snapshot, undefined);
+  assert.equal(posted.snapshot.persistenceEnvelope.snapshotRef, '$');
+  assert.equal(postedBody.indexOf(uniqueImage), postedBody.lastIndexOf(uniqueImage));
+  const restored = await adapter.read('project:alpha');
   assert.deepEqual(restored, envelope);
 });
 
@@ -228,6 +540,74 @@ test('server adapter classifies an exact richer-snapshot keep as protected no-op
     digest: 'fnv1a32:no-op',
     metadata: {
       operationId: 'server-no-op',
+      revision: { scopeId: 'project:alpha', counter: 2, updatedAt: 1, writerId: 'writer' },
+      fencingToken: '2',
+    },
+    snapshot: { productName: 'A' },
+  };
+
+  const result = await adapter.write(envelope, { expectedRevision: 1 });
+  assert.equal(result.protectedNoOp, true);
+  assert.equal(result.scopeId, 'project:alpha');
+  assert.equal(result.revision, 1);
+});
+
+test('server adapter classifies an exact protected-data keep as protected no-op at the current accepted revision', async () => {
+  const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
+  const { createServerLastWorkAdapter } = await import(`${pathToFileURL(serverPath).href}?protected-no-op=${Date.now()}-${Math.random()}`);
+  const adapter = createServerLastWorkAdapter({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        accepted: false,
+        keptExisting: true,
+        protectedNoOp: true,
+        reason: 'incoming snapshot changed work identity or dropped protected work data',
+        scopeId: 'project:alpha',
+        revision: 1,
+      }),
+    }),
+    bases: () => ['http://local.test'],
+  });
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 1,
+    digest: 'fnv1a32:protected-no-op',
+    metadata: {
+      operationId: 'server-protected-no-op',
+      revision: { scopeId: 'project:alpha', counter: 2, updatedAt: 1, writerId: 'writer' },
+      fencingToken: '2',
+    },
+    snapshot: { productName: 'A' },
+  };
+
+  const result = await adapter.write(envelope, { expectedRevision: 1 });
+  assert.equal(result.protectedNoOp, true);
+  assert.equal(result.scopeId, 'project:alpha');
+  assert.equal(result.revision, 1);
+});
+
+test('server adapter classifies a required-field drop as protected no-op at the current accepted revision', async () => {
+  const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
+  const { createServerLastWorkAdapter } = await import(`${pathToFileURL(serverPath).href}?required-field-no-op=${Date.now()}-${Math.random()}`);
+  const adapter = createServerLastWorkAdapter({
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        accepted: false,
+        keptExisting: true,
+        protectedNoOp: true,
+        reason: 'incoming snapshot dropped protected required fields',
+        scopeId: 'project:alpha',
+        revision: 1,
+      }),
+    }),
+    bases: () => ['http://local.test'],
+  });
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 1,
+    digest: 'fnv1a32:required-field-no-op',
+    metadata: {
+      operationId: 'server-required-field-no-op',
       revision: { scopeId: 'project:alpha', counter: 2, updatedAt: 1, writerId: 'writer' },
       fencingToken: '2',
     },
@@ -299,6 +679,7 @@ test('server adapter may persist a richer server representation for the same fen
 
   assert.deepEqual(posted.snapshot.lightweight, envelope.snapshot);
   assert.equal(posted.snapshot.assets.factory.assets[0].id, 'protected-image');
-  assert.deepEqual(posted.snapshot.persistenceEnvelope, envelope);
+  const { snapshot: _snapshot, ...envelopeHeader } = envelope;
+  assert.deepEqual(posted.snapshot.persistenceEnvelope, { ...envelopeHeader, snapshotRef: '$.lightweight' });
   assert.equal(posted.repair, true);
 });

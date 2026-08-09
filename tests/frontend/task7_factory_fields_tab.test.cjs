@@ -111,6 +111,25 @@ test('fields tab write command is rejected by read-only authority before action'
   assert.equal(fixture.calls.some(call => call[0] === 'commit'), false);
 });
 
+test('fields tab marks blur drafts as persistence boundaries', async () => {
+  const namespace = await load();
+  const fixture = harness();
+  const tab = namespace.createFieldsFactoryTab(fixture.capabilities);
+  tab.bind(fixture.root);
+  const input = {
+    value: '',
+    dataset: {
+      factoryWizardField: 'size',
+      factoryWizardLabel: '사이즈/규격',
+      factoryWizardPreviousValue: '가로21cm*세로14cm',
+    },
+    closest(selector) { return selector === '[data-factory-wizard-field]' ? this : null; },
+  };
+  fixture.root.listeners.get('blur')({ target: input });
+  const draft = fixture.calls.find(call => call[0] === 'draft')?.[1];
+  assert.equal(draft?.eventType, 'blur');
+});
+
 test('fields tab transfer completion is rejected after workspace fence changes', async () => {
   let resolve;
   const deferred = { promise: new Promise(done => { resolve = done; }) };

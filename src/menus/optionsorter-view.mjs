@@ -7,6 +7,12 @@ export function renderOptionSorterView(view, helpers) {
   const os = view.optionSorter;
   ensureOptionSorterDefaults(os);
   const missingPayloadCount = optMissingImagePayloadCount(os);
+  const slotNamePresets = Array.isArray(view.slotNamePresets) ? view.slotNamePresets : [];
+  const selectedPresetId = slotNamePresets.some(item => item.id === os.optionSlotPresetId)
+    ? os.optionSlotPresetId
+    : (slotNamePresets[0]?.id || '');
+  const sourceArchiveStatus = String(os.optionSourceArchiveStatus || '').trim();
+  const resultArchiveStatus = String(os.optionResultArchiveStatus || '').trim();
 
   // ── 정렬 화면 ──────────────────────────────────────────────────
   if (os.subStep === 'sort') {
@@ -16,7 +22,9 @@ export function renderOptionSorterView(view, helpers) {
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
         <div>
           <h1 class="page-title" style="margin-bottom:2px">옵션 분류기</h1>
-          <p style="font-size:12px;color:var(--text-m)">이미지를 드래그해서 슬롯에 배정 · ${assigned}/${total}장 배정됨${missingPayloadCount ? ` · ${missingPayloadCount}장 원본 복원 중` : ''}</p>
+          <p id="optHeaderAssignmentStatus" style="font-size:12px;color:var(--text-m)">이미지를 드래그해서 슬롯에 배정 · ${assigned}/${total}장 배정됨${missingPayloadCount ? ` · ${missingPayloadCount}장 원본 복원 중` : ''}</p>
+          ${sourceArchiveStatus ? `<p style="font-size:12px;color:var(--ok);margin-top:4px">${escapeHtml(sourceArchiveStatus)}</p>` : ''}
+          ${resultArchiveStatus ? `<p style="font-size:12px;color:var(--ok);margin-top:4px">${escapeHtml(resultArchiveStatus)}</p>` : ''}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-sm" id="optAddImagesBtn" ${disabledAttr(total >= 30, '옵션 이미지는 최대 30장까지 추가할 수 있습니다.')}>
@@ -25,15 +33,25 @@ export function renderOptionSorterView(view, helpers) {
           <input type="file" id="optFileInput" accept="image/*" multiple style="display:none">
           <button class="btn-sm" id="optAddSlot">+ 슬롯 추가</button>
           <button class="btn-sm" id="optBackInput">← 이미지 변경</button>
+          <button class="btn-primary" id="optAutoNameColors" ${disabledAttr(assigned === 0 || os.optionVisionColorBusy, os.optionVisionColorBusy ? 'GPT OAuth로 색상을 판정하는 중입니다.' : '사진을 슬롯에 먼저 배정해주세요.')}>
+            <span class="material-icons-outlined">${os.optionVisionColorBusy ? 'hourglass_empty' : 'palette'}</span>
+            ${os.optionVisionColorBusy ? '색상명 판정 중' : 'GPT OAuth 색상명 자동 생성'}
+          </button>
+          <button class="btn-sm" type="button" data-factory-open-local-archive-folder="options" data-factory-local-archive-scope="category">
+            <span class="material-icons-outlined" style="font-size:15px">folder_open</span>색상옵션 폴더 열기
+          </button>
+          <span class="factory-small" data-factory-local-archive-folder-status="options" aria-live="polite"></span>
           <button class="btn-primary" id="optDlAll" style="padding:6px 16px;font-size:13px">
             <span class="material-icons-outlined" style="font-size:15px">download</span> 전체 다운로드
           </button>
         </div>
       </div>
+      <p class="opt-slot-preset-note" aria-live="polite" style="margin:-6px 0 12px">${escapeHtml(os.optionAutoColorNameStatus || '미배정 사진을 더블클릭하면 다음 빈 슬롯에 바로 들어갑니다. 색상명 자동 생성은 배정된 사진을 GPT OAuth로 판독해 1.자주 형식으로 저장합니다.')}</p>
 
       ${renderOptionSorterSourceStrip(os)}
       ${renderOptionSorterAssignmentWorkspace(os)}
       ${renderOptionImageGeneratorPanel(os)}
+      ${renderOptionSorterImagePreviewModal(os)}
     </div>`;
   }
 
@@ -41,6 +59,8 @@ export function renderOptionSorterView(view, helpers) {
   return `<div class="fade-in">
     <h1 class="page-title">옵션 분류기</h1>
     <p class="page-desc">이미지를 업로드한 후 슬롯에 마우스로 드래그해서 원하는 옵션에 직접 배정하세요. 슬롯 이름도 자유롭게 변경할 수 있습니다.</p>
+    ${sourceArchiveStatus ? `<div class="app-notice" style="margin-bottom:14px"><span class="material-icons-outlined">save</span><span>${escapeHtml(sourceArchiveStatus)}</span></div>` : ''}
+    ${resultArchiveStatus ? `<div class="app-notice" style="margin-bottom:14px"><span class="material-icons-outlined">image</span><span>${escapeHtml(resultArchiveStatus)}</span></div>` : ''}
 
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -75,11 +95,23 @@ export function renderOptionSorterView(view, helpers) {
 
     <!-- 슬롯 미리보기 + 이름 변경 -->
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <h2 style="font-size:15px;font-weight:700">슬롯 이름 미리 설정 (선택)</h2>
         <button class="btn-sm" id="optAddSlotInput">+ 슬롯 추가</button>
       </div>
       <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">기본 ${os.slots.length}개 슬롯 · 이름 클릭하여 수정 · 분류 화면에서도 변경 가능</p>
+      <div class="opt-slot-preset-toolbar">
+        <select id="optSlotPresetSelect" aria-label="슬롯 이름 프리셋 선택">
+          <option value="">저장된 프리셋 선택</option>
+          ${slotNamePresets.map(preset => `<option value="${escapeHtml(preset.id)}" ${preset.id === selectedPresetId ? 'selected' : ''}>${escapeHtml(preset.name)} · ${preset.slotNames.length}개</option>`).join('')}
+        </select>
+        <input id="optSlotPresetName" maxlength="40" value="${escapeHtml(slotNamePresets.find(item => item.id === selectedPresetId)?.name || '')}" placeholder="프리셋 이름">
+        <button class="btn-sm" id="optSaveSlotPreset">프리셋 저장</button>
+        <button class="btn-sm" id="optLoadSlotPreset" ${disabledAttr(!selectedPresetId, '먼저 저장된 프리셋을 선택해주세요.')}>불러오기</button>
+      </div>
+      <p class="opt-slot-preset-note">${os.optionSlotPresetNotice
+        ? escapeHtml(os.optionSlotPresetNotice)
+        : `저장된 프리셋 ${slotNamePresets.length}개 · 불러올 때 기존 이미지 배정은 유지됩니다.`}</p>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         ${os.slots.map((slot, idx) => `
           <div style="display:flex;align-items:center;gap:5px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:5px 10px">

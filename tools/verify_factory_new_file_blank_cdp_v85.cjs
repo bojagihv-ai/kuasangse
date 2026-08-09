@@ -8,6 +8,7 @@ const {
   factoryCdpFixtureReadyExpression,
   waitFor,
 } = require('./factory_cdp_test_utils.cjs');
+const { waitForArchiveQuiet } = require('./factory_archive_quiet.cjs');
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
@@ -18,7 +19,10 @@ const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
 const SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-new-file-blank-cdp-v85.png');
 const RELOAD_SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-new-file-blank-reload-cdp-v85.png');
 const RESULT_PATH = path.join(OUT_DIR, 'factory-new-file-blank-cdp-v85-result.json');
-const ARCHIVE_ROOT = path.join(process.cwd(), 'output', 'local-archive');
+const ARCHIVE_ROOT = path.resolve(
+  process.env.KUASANGSE_LOCAL_ARCHIVE_FOLDER
+    || path.join(process.cwd(), 'output', 'local-archive'),
+);
 let activeCdp = null;
 let activeCdpRuntime = null;
 
@@ -81,6 +85,7 @@ function addedArchiveFiles(before, after) {
 
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  await waitForArchiveQuiet(ARCHIVE_ROOT);
   const archiveBefore = archiveSnapshot(ARCHIVE_ROOT);
   const cdpRuntime = await ensureCdp(CDP_URL);
   activeCdpRuntime = cdpRuntime;
@@ -115,17 +120,25 @@ async function main() {
     await Promise.resolve(window.__KUASANGSE_STARTUP_RESTORE_PROMISE__);
     return true;
   })()`);
+  const authorityScope = `draft:save03_${Date.now()}_${process.pid}`;
   const proof = await evaluate(cdp, `(async () => {
     const img = ${JSON.stringify(svgDataUrl('new-file-before-v85-isolated', '#be123c'))};
     const base64 = img.split(',', 2)[1] || '';
     const productName = '새파일검증이전상품';
-    const workspaceId = 'project_new_file_old_v85';
+    const workspaceId = '';
+    const previousProjectId = 'save03_previous_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const previousWorkspaceScope = workspacePersistenceApi().normalizeProjectScope(previousProjectId);
+    const authorityScope = getCurrentLastWorkWorkspaceScope();
     const runId = 'run_new_file_old_v85';
-    const inputFingerprint = 'fingerprint_new_file_old_v85';
+    const inputFingerprint = window.factoryImagePayloadFingerprint(base64);
     const productKey = window.factoryNormalizeIdentityText(productName);
+    const authorityBeforeSeed = await ensureWorkspaceEditAuthority(authorityScope, { force: true });
+    if (authorityBeforeSeed?.mode !== 'offline-edit' || authorityBeforeSeed?.scopeId !== authorityScope) {
+      throw new Error('SAVE-03 isolated workspace authority acquisition failed: ' + JSON.stringify(authorityBeforeSeed));
+    }
 
     window.state.step = 'factory';
-    window.state.currentProjectId = workspaceId;
+    window.state.currentProjectId = '';
     window.state.currentProjectName = productName;
     window.state.currentProjectCreatedAt = Date.now();
     window.state.workspaceDocumentDirty = true;
@@ -158,6 +171,8 @@ async function main() {
     window.state.compPage = { ...(window.state.compPage || {}), uploadedImages: [{ id: 'old_comp_upload_v85', dataUrl: img }], evidenceImages: [{ id: 'old_comp_evidence_v85', dataUrl: img }] };
     const factory = normalizeFactoryState({});
     factoryStampWorkspaceIdentity(factory, { projectId: workspaceId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
+    factory.workspace.id = previousProjectId;
+    factory.currentProjectId = '';
     factory.product.productName = productName;
     factory.product.userProductName = productName;
     factory.product.currentRunId = runId;
@@ -194,11 +209,12 @@ async function main() {
       sourceMap: { productName, productKey, currentRunId: runId, inputImageFingerprint: inputFingerprint, stageId: 'hero', workspaceId },
     }, 0)];
     factoryRuntimeReplaceFactorySnapshot(factory, { reason: 'save03-seed' });
-    window.localStorage.setItem('pdp_session', JSON.stringify(window.currentSessionAssetsPayload({ includeImages: true })));
+    window.sessionStorage.setItem('pdp_session', JSON.stringify(window.currentSessionAssetsPayload({ includeImages: true })));
     if (typeof compactProductImageBackupPayload === 'function' && typeof workspacePersistenceApi === 'function') {
       const imageBackup = compactProductImageBackupPayload();
       if (imageBackup?.primary) await workspacePersistenceApi().savePreference(imageBackup);
     }
+    await window.workspaceSessionSetItem('kuasangse.projectFileLocationLabel.v1', productName + '.kuasangse');
     window.confirmSaveBeforeLeavingWorkspace = async () => 'continue';
     await window.render();
 
@@ -218,8 +234,29 @@ async function main() {
       serverLastWorkHydrating: typeof serverLastWorkHydrating === 'undefined' ? null : serverLastWorkHydrating,
       workspaceBlankResetToken: typeof workspaceBlankResetToken === 'undefined' ? null : workspaceBlankResetToken,
     });
+    const fenceTrace = [];
+    const originalWorkspaceDocumentFenceIsCurrent = workspaceDocumentFenceIsCurrent;
+    workspaceDocumentFenceIsCurrent = fence => {
+      const result = originalWorkspaceDocumentFenceIsCurrent(fence);
+      if (fenceTrace.length < 24) {
+        fenceTrace.push({
+          fence: fence ? { ...fence } : null,
+          result,
+          currentScope: getCurrentLastWorkWorkspaceScope(),
+          factoryScope: factoryRuntimeReadFactory().workspace?.id || '',
+          resetToken: workspaceBlankResetToken,
+          resetInProgress: workspaceBlankResetInProgress,
+        });
+      }
+      return result;
+    };
     button.scrollIntoView({ block: 'center', inline: 'nearest' });
-    const resetPromise = window.startBlankWorkDraft();
+    const currentScopeBeforeReset = getCurrentLastWorkWorkspaceScope();
+    let resetError = '';
+    const resetPromise = window.startBlankWorkDraft().catch(error => {
+      resetError = String(error?.message || error || '새 작업 reset 실패');
+      return false;
+    });
     const resetTimeline = [sampleState('click-return')];
     await new Promise(resolve => setTimeout(resolve, 25));
     resetTimeline.push(sampleState('25ms'));
@@ -235,11 +272,12 @@ async function main() {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     await resetPromise;
+    workspaceDocumentFenceIsCurrent = originalWorkspaceDocumentFenceIsCurrent;
     const blankResetSettled = !workspaceBlankResetInProgress && !persistentStateSaving
       && !lastProductImageBackupSavePromise && !sessionAssetSavePromise && !lastWorkSaveTimer;
     const backupAfterReset = await workspacePersistenceApi().loadPreference('lastProductImageBackup').catch(() => null);
     const freshFactory = factoryRuntimeReadFactory();
-    const sessionRaw = window.localStorage.getItem('pdp_session') || '';
+    const sessionRaw = window.sessionStorage.getItem('pdp_session') || '';
     let session = {};
     try { session = sessionRaw ? JSON.parse(sessionRaw) : {}; } catch (_) {}
     const buttonIds = ['factoryNewWorkBtn', 'factoryWorkspaceNewWorkBtn', 'blankWorkBtn', 'exportProjectFileBtn', 'importProjectFileBtn'];
@@ -259,6 +297,11 @@ async function main() {
     });
     const afterText = document.body.innerText || '';
     return {
+      authorityBeforeSeed,
+      previousWorkspaceScope,
+      currentScopeBeforeReset,
+      resetError,
+      fenceTrace,
       beforeHadOldProduct: beforeText.includes(productName),
       clickedButtonId: button.id,
       blankResetSettled,
@@ -288,6 +331,8 @@ async function main() {
       factoryActiveTab: freshFactory.automation?.activeTab || '',
       sessionProductName: session.productName || session.factory?.product?.productName || '',
       sessionImageBase64Length: String(session.imageBase64 || session.factory?.product?.imageBase64 || '').length,
+      fileLocationLabel: window.factoryProjectFileLocationLabel() || '',
+      workspaceScope: getCurrentLastWorkWorkspaceScope(),
       bodyHasOldProductAfter: afterText.includes(productName),
       bodyHasNewWorkText: afterText.includes('새 작업') || afterText.includes('빈 문서'),
       buttons,
@@ -324,7 +369,7 @@ async function main() {
     const imageBackup = await persistence.loadPreference('lastProductImageBackup').catch(() => null);
     const server = await fetch(${JSON.stringify(BACKEND_BASE)} + '/api/last-work', { cache: 'no-store' }).then(response => response.json()).catch(() => ({}));
     let localSession = {};
-    try { localSession = JSON.parse(localStorage.getItem('pdp_session') || '{}'); } catch (_) {}
+    try { localSession = JSON.parse(sessionStorage.getItem('pdp_session') || '{}'); } catch (_) {}
     return {
       currentProjectId: window.state.currentProjectId || '',
       currentProjectName: window.state.currentProjectName || '',
@@ -340,6 +385,8 @@ async function main() {
       sessionAssetsImagePreview: sessionAssets?.imagePreview || sessionAssets?.factory?.product?.imagePreview || '',
       imageBackupExists: !!imageBackup,
       imageBackupProductName: imageBackup?.productName || '',
+      fileLocationLabel: factoryProjectFileLocationLabel() || '',
+      workspaceScope: getCurrentLastWorkWorkspaceScope(),
       serverProductName: server?.snapshot?.lightweight?.productName || server?.snapshot?.assets?.productName || '',
       serverScore: Number(server?.score || 0),
     };
@@ -350,7 +397,15 @@ async function main() {
   const archiveAfter = archiveSnapshot(ARCHIVE_ROOT);
   const missingArchive = missingArchiveFiles(archiveBefore, archiveAfter);
   const addedArchive = addedArchiveFiles(archiveBefore, archiveAfter);
-  const foreignAddedArchive = addedArchive.filter(file => !file.rel.includes('/새파일검증이전상품/'));
+  const archivedProjectIds = new Set(
+    addedArchive
+      .map(file => file.rel.match(/새파일검증이전상품_(project_[^/]+)/)?.[1] || '')
+      .filter(Boolean),
+  );
+  const foreignAddedArchive = addedArchive.filter(file => {
+    if (file.rel.includes('새파일검증이전상품')) return false;
+    return ![...archivedProjectIds].some(projectId => file.rel.startsWith(`workfiles/${projectId}__`));
+  });
   fs.writeFileSync(RESULT_PATH, JSON.stringify({ proof, reloadProof, missingArchive, addedArchive, foreignAddedArchive }, null, 2));
 
   console.log(JSON.stringify({
@@ -364,11 +419,15 @@ async function main() {
   }, null, 2));
 
   assertChecks([
+    { ok: proof.authorityBeforeSeed?.mode === 'offline-edit' && proof.authorityBeforeSeed?.scopeId === proof.currentScopeBeforeReset, message: `검증 fixture의 현재 탭 draft 편집권을 획득하지 못했습니다: ${JSON.stringify(proof.authorityBeforeSeed)}` },
+    { ok: /^draft:/.test(proof.currentScopeBeforeReset) && proof.currentScopeBeforeReset !== proof.workspaceScope, message: `새 작업이 이전 탭 브랜치와 분리되지 않았습니다: ${JSON.stringify({ before: proof.currentScopeBeforeReset, after: proof.workspaceScope })}` },
+    { ok: !proof.resetError, message: `새 작업 reset 중 오류가 발생했습니다: ${proof.resetError} · ${JSON.stringify(proof.fenceTrace)}` },
     { ok: proof.beforeHadOldProduct, message: '검증용 이전 작업 상태가 화면에 심기지 않았습니다.' },
     { ok: !!proof.clickedButtonId, message: '새 작업 버튼 클릭 경로를 통과하지 않았습니다.' },
     { ok: proof.blankResetSettled, message: '새 작업 저장/삭제 경계가 완료되지 않았습니다.' },
     { ok: !proof.backupAfterResetExists, message: '새 작업 완료 직후 이전 기본 이미지 백업이 남아 있습니다.' },
     { ok: proof.currentProjectId === '' && proof.currentProjectName === '', message: '새 작업 후 currentProject identity가 비워지지 않았습니다.' },
+    { ok: proof.fileLocationLabel === '', message: '새 작업 후 이전 .kuasangse 파일명이 현재 작업파일로 남아 있습니다.' },
     { ok: proof.productName === '' && proof.factoryProductName === '', message: '새 작업 후 상품명이 남아 있습니다.' },
     { ok: !proof.imagePreview && proof.imageBase64Length === 0, message: '새 작업 후 이전 기본 이미지가 남아 있습니다.' },
     { ok: proof.analysisImages === 0, message: '새 작업 후 이전 기본 이미지 기록이 남아 있습니다.' },
@@ -383,6 +442,8 @@ async function main() {
     { ok: !proof.sessionProductName && proof.sessionImageBase64Length === 0, message: '새 작업 후 pdp_session에 이전 상품/이미지가 남아 있습니다.' },
     { ok: !proof.bodyHasOldProductAfter, message: '새 작업 후 화면에 이전 상품명이 남아 있습니다.' },
     { ok: reloadProof.currentProjectId === '' && reloadProof.currentProjectName === '' && reloadProof.productName === '', message: '새 작업 후 새로고침에서 이전 작업 identity가 복원됐습니다.' },
+    { ok: reloadProof.fileLocationLabel === '', message: '새 작업 후 새로고침에서 이전 .kuasangse 파일명이 다시 표시됩니다.' },
+    { ok: reloadProof.workspaceScope === proof.workspaceScope, message: '새 작업 후 새로고침에서 새 초안 workspace scope가 유지되지 않았습니다.' },
     { ok: !reloadProof.imagePreview && reloadProof.imageBase64Length === 0 && reloadProof.analysisImages === 0, message: '새 작업 후 새로고침에서 이전 기본 이미지가 복원됐습니다.' },
     { ok: !reloadProof.factoryProductName && reloadProof.factoryAssets === 0 && !reloadProof.bodyHasOldProduct, message: '새 작업 후 새로고침 화면에 이전 상품/후보가 복원됐습니다.' },
     { ok: reloadProof.imageBackupExists === false && reloadProof.imageBackupProductName === '', message: '새 작업 후 이전 기본 이미지 백업이 남아 있습니다.' },

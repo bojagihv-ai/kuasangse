@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480" role="img" aria-labelledby="title description">
+  <title id="title">Factory live candidate A</title>
+  <desc id="description">Indigo product candidate used by the isolated runtime verification workspace.</desc>
+  <rect width="640" height="480" fill="#eef2ff"/>
+  <rect x="112" y="72" width="416" height="336" rx="48" fill="#4f46e5"/>
+  <circle cx="320" cy="224" r="96" fill="#c7d2fe"/>
+  <path d="M248 312h144" stroke="#ffffff" stroke-width="24" stroke-linecap="round"/>
+</svg>

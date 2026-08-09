@@ -4,29 +4,13 @@ import {
   canonicalFactoryTab,
   renderFactoryMenuShell,
 } from './factory-menu-shell.mjs';
-
-const FACTORY_TAB_VERSION = 'factory-tab:v1';
-const FACTORY_TAB_IDS = Object.freeze([
-  'factory/start',
-  'factory/db',
-  'factory/fields',
-  'factory/competitor',
-  'factory/assets',
-  'factory/sections',
-  'factory/publish',
-]);
+import {
+  FACTORY_TAB_IDS,
+  validateFactoryTabRegistry,
+  validateFactoryTabs,
+} from './factory-menu-validation.mjs';
 
 function clean(value) { return String(value ?? '').trim(); }
-
-function deepFrozen(value, seen = new WeakSet()) {
-  if (!value || typeof value !== 'object') return true;
-  if (seen.has(value)) return true;
-  if (!Object.isFrozen(value)) return false;
-  seen.add(value);
-  return Reflect.ownKeys(Object.getOwnPropertyDescriptors(value)).every(key => {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key); return descriptor && !descriptor.get && !descriptor.set && deepFrozen(descriptor.value, seen);
-  });
-}
 
 function freezeTree(value, seen = new WeakSet()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return value;
@@ -60,44 +44,6 @@ function staleOperationError(id) {
   error.code = 'STALE_FACTORY_MENU_OPERATION'; return error;
 }
 
-function validateTabRegistry(tabRegistry) {
-  if (!Array.isArray(tabRegistry) || tabRegistry.length !== FACTORY_TAB_IDS.length) throw new TypeError('factory tab registry must contain exactly seven descriptors');
-  const seen = new Set();
-  tabRegistry.forEach((descriptor, index) => {
-    if (!deepFrozen(descriptor)) throw new TypeError(`factory tab registry descriptor ${index} must be immutable`);
-    const id = clean(ownValue(descriptor, 'id'));
-    if (id !== FACTORY_TAB_IDS[index]) throw new Error(`factory tab registry order mismatch: ${id || '<empty>'}`);
-    if (seen.has(id)) throw new Error(`duplicate factory tab registry id: ${id}`);
-    seen.add(id);
-    if (ownValue(descriptor, 'kind') !== 'factory-tab' || ownValue(descriptor, 'order') !== index
-      || ownValue(descriptor, 'api') !== FACTORY_TAB_VERSION) {
-      throw new Error(`invalid factory tab registry descriptor: ${id}`);
-    }
-  });
-  return tabRegistry;
-}
-
-function validateTabs(tabs) {
-  if (!(tabs instanceof Map)) throw new TypeError('factory tabs must be a Map');
-  if (tabs.size !== FACTORY_TAB_IDS.length) throw new Error('factory tab registry missing or extra tabs: expected exactly seven');
-  const seen = new Set();
-  for (const id of FACTORY_TAB_IDS) {
-    if (!tabs.has(id)) throw new Error(`missing factory tab: ${id}`);
-    const tab = tabs.get(id);
-    if (seen.has(tab) || !deepFrozen(tab)
-      || ownValue(tab, 'version') !== FACTORY_TAB_VERSION
-      || ownValue(tab, 'id') !== id) {
-      throw new Error(`invalid factory tab: ${id}`);
-    }
-    for (const field of ['select', 'render', 'bind', 'onEnter', 'onLeave']) requiredFunction(tab, field);
-    seen.add(tab);
-  }
-  for (const id of tabs.keys()) {
-    if (!FACTORY_TAB_IDS.includes(id)) throw new Error(`unknown factory tab: ${clean(id)}`);
-  }
-  return tabs;
-}
-
 export function createFactoryMenu(capabilities = {}) {
   const getSnapshot = requiredFunction(capabilities, 'getSnapshot');
   const assertMutable = requiredFunction(capabilities, 'assertMutable');
@@ -116,8 +62,8 @@ export function createFactoryMenu(capabilities = {}) {
   const renderHelpers = ownValue(capabilities, 'renderHelpers');
   const renderFactoryAutomationRunStatus = requiredFunction(renderHelpers, 'renderFactoryAutomationRunStatus');
   const renderFactoryWorkspacePanel = typeof renderHelpers?.renderFactoryWorkspacePanel === 'function' ? renderHelpers.renderFactoryWorkspacePanel : () => '';
-  const tabs = validateTabs(ownValue(capabilities, 'tabs'));
-  validateTabRegistry(ownValue(capabilities, 'tabRegistry'));
+  const tabs = validateFactoryTabs(ownValue(capabilities, 'tabs'));
+  validateFactoryTabRegistry(ownValue(capabilities, 'tabRegistry'));
 
   let activeTabId = null;
   let entered = false;
@@ -131,14 +77,14 @@ export function createFactoryMenu(capabilities = {}) {
     try {
       id = actionId === 'selectTab' ? registryTabId(value) : clean(value);
       if (!id) throw new Error(`factory menu ${actionId} value is required`);
-      assertMutable('factory');
+      const shellRuntimeAction = actionId === 'runGuideAction'; if (!shellRuntimeAction) assertMutable('factory');
       const token = getOperationToken();
       const verify = output => {
         const receipt = output?.schema === 'factory-runtime-command-receipt:v1' ? output : null;
         if (!isOperationCurrent(receipt?.operationToken || token)) throw staleOperationError(id);
         return receipt ? receipt.value : output;
       };
-      const result = action.call(actions, id);
+      const result = action.call(actions, id); if (shellRuntimeAction) return result;
       return result && typeof result.then === 'function'
         ? Promise.resolve(result).then(verify).catch(reportAndThrow) : verify(result);
     } catch (error) { return reportAndThrow(error); }
@@ -185,7 +131,7 @@ export function createFactoryMenu(capabilities = {}) {
 
   function bindActive(root) {
     const tab = tabFor(activeTabId || 'start');
-    const tabRoot = root?.querySelector?.('.factory-automation-body') || root;
+    const tabRoot = root;
     const dispose = tab.bind(tabRoot);
     if (typeof dispose !== 'function') throw new TypeError(`factory tab ${tab.id} bind must return a disposer`);
     let live = true;
@@ -198,6 +144,13 @@ export function createFactoryMenu(capabilities = {}) {
     activeBinding = { root, tabRoot, dispose: wrapped };
     return wrapped;
   }
+
+  const shellHandlers = () => ({
+    selectTab: value => menu.invoke('selectTab', value),
+    jumpStage: value => menu.invoke('jumpStage', value),
+    setLogFilter: value => menu.invoke('setLogFilter', value),
+    runGuideAction: value => menu.invoke('runGuideAction', value),
+  });
 
   const menu = createMenuContract({
     version: MENU_CONTRACT_VERSION,
@@ -216,7 +169,7 @@ export function createFactoryMenu(capabilities = {}) {
       const shortId = snapshotTabId(snapshot);
       activate(shortId);
       const tabSnapshot = freezeTree(tabFor(shortId).select(snapshot));
-      return freezeTree({ activeTabId: `factory/${shortId}`, tabSnapshot });
+      return freezeTree({ activeTabId: `factory/${shortId}`, tabSnapshot, factory: snapshot.factory || {} });
     },
     render(view = {}) {
       const fullId = clean(view.activeTabId);
@@ -224,7 +177,7 @@ export function createFactoryMenu(capabilities = {}) {
       activate(shortId);
       const tabSnapshot = view.tabSnapshot === undefined ? freezeTree(tabFor(shortId).select(getSnapshot() || {})) : view.tabSnapshot;
       const tabMarkup = tabFor(shortId).render(tabSnapshot);
-      const factory = getSnapshot()?.factory || {};
+      const factory = view.factory === undefined ? (getSnapshot()?.factory || {}) : view.factory;
       return `${renderFactoryWorkspacePanel(factory)}${renderFactoryMenuShell({
         activeId: shortId,
         statusMarkup: renderFactoryAutomationRunStatus(factory, { rail: true }),
@@ -235,25 +188,40 @@ export function createFactoryMenu(capabilities = {}) {
       if (!activeTabId) activate(snapshotTabId(getSnapshot() || {}));
       if (rootBinding) return rootBinding.dispose;
       bindActive(root);
-      const disposeShell = bindFactoryMenuShell(root, {
-        selectTab: value => menu.invoke('selectTab', value),
-        jumpStage: value => menu.invoke('jumpStage', value),
-        setLogFilter: value => menu.invoke('setLogFilter', value),
-        runGuideAction: value => menu.invoke('runGuideAction', value),
-      });
-      let live = true;
-      const dispose = () => {
-        if (!live) return; live = false;
-        if (rootBinding?.dispose === dispose) rootBinding = null;
-        disposeShell(); disposeBinding();
+      const binding = {
+        root,
+        disposeShell: bindFactoryMenuShell(root, shellHandlers()),
+        live: true,
+        dispose: null,
       };
-      rootBinding = { root, dispose }; return dispose;
+      const dispose = () => {
+        if (!binding.live) return;
+        binding.live = false;
+        if (rootBinding === binding) rootBinding = null;
+        binding.disposeShell();
+        disposeBinding();
+      };
+      binding.dispose = dispose;
+      rootBinding = binding;
+      return dispose;
     },
     refresh(root) {
-      if (!rootBinding) return;
-      const nextTabRoot = root?.querySelector?.('.factory-automation-body') || root;
+      const nextRoot = root || rootBinding?.root;
+      if (!rootBinding) {
+        if (nextRoot) menu.bind(nextRoot);
+        return;
+      }
+      if (nextRoot !== rootBinding.root || rootBinding.root?.isConnected === false) {
+        rootBinding.disposeShell();
+        disposeBinding();
+        rootBinding.root = nextRoot;
+        bindActive(nextRoot);
+        rootBinding.disposeShell = bindFactoryMenuShell(nextRoot, shellHandlers());
+        return;
+      }
+      const nextTabRoot = nextRoot;
       if (activeBinding?.tabRoot === nextTabRoot && nextTabRoot?.isConnected !== false) return;
-      disposeBinding(); bindActive(rootBinding.root || root);
+      disposeBinding(); bindActive(nextRoot);
     },
     onEnter() {
       if (!activeTabId) activate(snapshotTabId(getSnapshot() || {}));

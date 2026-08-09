@@ -145,6 +145,20 @@ function factoryCafe24TargetCandidate(factory = factoryRuntimeReadFactory(), opt
   const allowFallback = options.allowFallback !== false;
   const finalDb = factory.product.finalDb || {};
   const candidates = factory.product.cafe24Candidates || [];
+  const selectedKey = factory.product.selectedCafe24CandidateKey || factory.product.confirmedCafe24ProductKey || '';
+  const selected = selectedKey ? candidates.find(candidate => {
+    const raw = parseCafe24Raw(candidate);
+    const keys = [
+      factoryCafe24CandidateKey(candidate),
+      cafe24ProductKey(candidate),
+      candidate?.product_no,
+      raw.product_no,
+      candidate?.product_code,
+      raw.product_code,
+    ].map(value => String(value || '').trim()).filter(Boolean);
+    return keys.includes(String(selectedKey).trim());
+  }) : null;
+  if (options.preferSelected === true && selected) return selected;
   const targetNo = finalDb.product_no || finalDb.cafe24_product_no || factory.product.confirmedDb?.product_no || factory.product.confirmedDb?.cafe24_product_no || '';
   if (targetNo) {
     const found = candidates.find(candidate => String(candidate.product_no || parseCafe24Raw(candidate).product_no || '') === String(targetNo));
@@ -165,22 +179,7 @@ function factoryCafe24TargetCandidate(factory = factoryRuntimeReadFactory(), opt
       },
     };
   }
-  const selectedKey = factory.product.selectedCafe24CandidateKey || factory.product.confirmedCafe24ProductKey || '';
-  if (selectedKey) {
-    const selected = candidates.find(candidate => {
-      const raw = parseCafe24Raw(candidate);
-      const keys = [
-        factoryCafe24CandidateKey(candidate),
-        cafe24ProductKey(candidate),
-        candidate?.product_no,
-        raw.product_no,
-        candidate?.product_code,
-        raw.product_code,
-      ].map(value => String(value || '').trim()).filter(Boolean);
-      return keys.includes(String(selectedKey).trim());
-    });
-    if (selected) return selected;
-  }
+  if (selected) return selected;
   if (!allowFallback) return null;
   return candidates.find(candidate => candidate?.product_no || parseCafe24Raw(candidate).product_no) || null;
 }
@@ -255,6 +254,16 @@ async function factoryRefreshCafe24ApiSources(options = {}) {
     current.product.cafe24ApiCatalog = catalog;
     current.product.cafe24ApiLastFetchedAt = Date.now();
     current.product.cafe24Candidates = factoryMergeCafe24Candidates(current.product.cafe24Candidates, incoming);
+    const refreshedVariantCatalog = incoming
+      .flatMap(candidate => {
+        const raw = parseCafe24Raw(candidate) || {};
+        return [raw.variants, candidate?.variants];
+      })
+      .find(variants => Array.isArray(variants) && variants.length > 1) || [];
+    if (refreshedVariantCatalog.length) {
+      current.product.cafe24VariantCatalog = refreshedVariantCatalog;
+      current.product.cafe24VariantCatalogProductNo = String(existingTarget?.product_no || '').trim();
+    }
     const selectedTarget = factoryCafe24TargetCandidate(current, { allowFallback: current.product.candidateAutoApply });
     const healthProductNo = selectedTarget?.product_no || parseCafe24Raw(selectedTarget).product_no || productNos[0] || '';
     if (healthProductNo) {
@@ -1071,6 +1080,12 @@ function factoryCafe24MoneyText(value) {
   return factoryCafe24NumericText(raw);
 }
 
+function factoryCafe24PositiveMoneyText(value) {
+  const normalized = factoryCafe24MoneyText(value);
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 ? normalized : '';
+}
+
 function factoryCafe24AdditionalInfoLinePayload(line, index = 0) {
   const raw = String(line ?? '').trim();
   if (!raw) return null;
@@ -1112,6 +1127,25 @@ function factoryCafe24AdditionalInformationPayload(value) {
   return factoryCafe24CleanAdditionalInfoRows(raw.split(/[\n;]+/)
     .map((line, index) => factoryCafe24AdditionalInfoLinePayload(line, index))
     .filter(Boolean));
+}
+
+function factoryCafe24MergeResolvedSizeAdditionalInformation(product = {}, finalDb = {}) {
+  const size = [finalDb.size, finalDb.dimensions, finalDb.size_text, finalDb.product_size]
+    .map(value => String(value ?? '').trim())
+    .find(Boolean);
+  if (!size) return product;
+  const rows = factoryCafe24AdditionalInformationPayload(product.additional_information);
+  const sizeIndex = rows.findIndex(row => /^(사이즈|규격|크기)$/i.test(String(row?.name || '').trim()));
+  if (sizeIndex >= 0) {
+    rows[sizeIndex] = { ...rows[sizeIndex], value: size };
+  } else {
+    const usedKeys = new Set(rows.map(row => String(row?.key || '').trim()).filter(Boolean));
+    let keyIndex = 1;
+    while (usedKeys.has(`custom_option${keyIndex}`)) keyIndex += 1;
+    rows.unshift({ key: `custom_option${keyIndex}`, name: '사이즈', value: size });
+  }
+  product.additional_information = rows;
+  return product;
 }
 
 function factoryCafe24ProductVolumePayload(value) {
@@ -1566,6 +1600,10 @@ const CAFE24_REFERENCE_LABEL_OVERRIDES = {
   },
   brands: {
     B0000000: '자체브랜드',
+    B00000PU: '보자기천국',
+  },
+  originPlaces: {
+    102: '국내 > 대구광역시 > 서구',
   },
   classifications: {
     C000000A: '기본 자체분류',
@@ -1590,7 +1628,7 @@ function factoryCafe24DefaultReferenceList(type) {
       { code: 'S0000000', name: '자체공급', label: '자체공급 (S0000000)', raw: { fallback: true } },
     ],
     brands: [
-      { code: 'B0000000', name: '자체브랜드', label: '자체브랜드 (B0000000)', raw: { fallback: true } },
+      { code: 'B00000PU', name: '보자기천국', label: '보자기천국 (B00000PU)', raw: { fallback: true } },
     ],
     classifications: [
       { code: 'C000000A', name: '기본 자체분류', label: '기본 자체분류 (C000000A)', raw: { fallback: true } },
@@ -1599,7 +1637,7 @@ function factoryCafe24DefaultReferenceList(type) {
       { code: 'T0000000', name: '기본트렌드', label: '기본트렌드 (T0000000)', raw: { fallback: true } },
     ],
     originPlaces: [
-      { code: '1798', name: '대한민국', label: '대한민국 (1798)', raw: { fallback: true } },
+      { code: '102', name: '국내 > 대구광역시 > 서구', label: '국내 > 대구광역시 > 서구 (102)', raw: { fallback: true } },
     ],
     shippingMethods: [
       { code: 'C', name: '택배/등기/소포', label: '택배/등기/소포 (C)', raw: { fallback: true } },
@@ -2342,6 +2380,24 @@ function factoryCafe24SanitizeDetailHtmlPayload(product = {}, finalDb = {}, fact
   return product;
 }
 
+function factoryCurrentPreviewSectionStatus(appState = (typeof state !== 'undefined' ? state : {})) {
+  const requiredSections = typeof orderedSections === 'function' ? orderedSections() : [];
+  const requiredIds = requiredSections.map(section => section.id).filter(Boolean);
+  const generatedIds = requiredIds.filter(id => !!(
+    appState.sectionContents?.[id] ||
+    appState.sectionGenerationMeta?.[id] ||
+    appState.sectionImages?.[id]
+  ));
+  return {
+    requiredSections,
+    requiredIds,
+    generatedIds,
+    generated: generatedIds.length,
+    total: requiredIds.length,
+    complete: requiredIds.length > 0 && generatedIds.length >= requiredIds.length,
+  };
+}
+
 function factoryCafe24ResolveSectionScopeCheck(appState = {}, currentScope = {}, requiredIds = [], currentSectionIds = []) {
   const required = Array.isArray(requiredIds) ? requiredIds.filter(Boolean) : [];
   const current = new Set(Array.isArray(currentSectionIds) ? currentSectionIds.filter(Boolean) : []);
@@ -2356,9 +2412,63 @@ function factoryCafe24ResolveSectionScopeCheck(appState = {}, currentScope = {},
       inferredFrom: 'verified-section-contents',
     };
   }
+  const sectionScopeRecords = typeof sectionWorkScopeFromContent === 'function'
+    ? Array.from(current).map(sectionId => sectionWorkScopeFromContent(
+        appState?.sectionContents?.[sectionId],
+        appState?.sectionGenerationMeta?.[sectionId] || {},
+      ))
+    : [];
+  const hasScopeIdentity = record => !!(
+    record?.scopeKey ||
+    record?.currentRunId ||
+    record?.generationRunId ||
+    record?.productKey ||
+    record?.inputImageFingerprint
+  );
+  const explicitSectionScopeRecords = sectionScopeRecords.filter(hasScopeIdentity);
+  const partialSectionScopeChecks = typeof sectionWorkScopeMatchesForDetailTransfer === 'function'
+    ? explicitSectionScopeRecords.map(record => sectionWorkScopeMatchesForDetailTransfer(record, currentScope))
+    : [];
+  const failedExplicitSectionScopeCheck = partialSectionScopeChecks.find(check => !check?.ok);
+  if (
+    explicitSectionScopeRecords.length > 0 &&
+    partialSectionScopeChecks.length === explicitSectionScopeRecords.length &&
+    partialSectionScopeChecks.every(check => check?.ok)
+  ) {
+    return {
+      ok: true,
+      blocked: false,
+      reason: '',
+      productKeyWarning: false,
+      message: '',
+       inferredFrom: explicitSectionScopeRecords.length === sectionScopeRecords.length
+         ? 'verified-partial-section-contents'
+         : 'verified-partial-section-contents-with-legacy',
+    };
+  }
+  if (failedExplicitSectionScopeCheck) return failedExplicitSectionScopeCheck;
   const record = appState?.sectionWorkScope || appState?.compPage?.sectionWorkScope || {};
   if (typeof sectionWorkScopeMatchesForDetailTransfer === 'function') {
-    return sectionWorkScopeMatchesForDetailTransfer(record, currentScope);
+    const aggregateCheck = sectionWorkScopeMatchesForDetailTransfer(record, currentScope);
+    if (aggregateCheck.ok) return aggregateCheck;
+    if (
+      currentSectionIds.some(sectionId => !!appState?.sectionContents?.[sectionId]) &&
+      explicitSectionScopeRecords.length === 0 &&
+      !hasScopeIdentity(record) &&
+      currentScope?.currentRunId &&
+      currentScope?.productKey &&
+      currentScope?.inputImageFingerprint
+    ) {
+      return {
+        ok: true,
+        blocked: false,
+        reason: '',
+        productKeyWarning: false,
+        message: '',
+        inferredFrom: 'legacy-partial-section-contents',
+      };
+    }
+    return aggregateCheck;
   }
   return {
     ok: typeof sectionWorkScopeMatches === 'function'
@@ -2402,35 +2512,24 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
   };
   let sectionExportBlocked = null;
   try {
-    const sectionContentKeys = appState.sectionContents && typeof appState.sectionContents === 'object'
-      ? Object.keys(appState.sectionContents || {})
-      : [];
-    const sectionImageKeys = appState.sectionImages && typeof appState.sectionImages === 'object'
-      ? Object.keys(appState.sectionImages || {})
-      : [];
-    const sectionCount = new Set([...sectionContentKeys, ...sectionImageKeys]).size;
+    const previewStatus = factoryCurrentPreviewSectionStatus(appState);
+    const sectionCount = previewStatus.generated;
     const currentSectionScope = typeof sectionWorkScopeMeta === 'function' ? sectionWorkScopeMeta() : {};
-    const requiredSections = typeof orderedSections === 'function' ? orderedSections() : [];
-    const requiredIds = requiredSections.map(section => section.id).filter(Boolean);
-    const currentSectionIds = requiredIds.filter(id => {
-      const content = appState.sectionContents?.[id];
-      if (!content) return false;
-      return typeof sectionContentBelongsToCurrentWork === 'function'
-        ? sectionContentBelongsToCurrentWork(id, content, currentSectionScope)
-        : true;
-    });
-    const missingOrStaleSections = requiredSections.filter(section => !currentSectionIds.includes(section.id));
+    const requiredSections = previewStatus.requiredSections;
+    const requiredIds = previewStatus.requiredIds;
+    const currentSectionIds = previewStatus.generatedIds;
+    const missingPreviewSections = requiredSections.filter(section => !currentSectionIds.includes(section.id));
     const sectionScopeCheck = factoryCafe24ResolveSectionScopeCheck(
       appState,
       currentSectionScope,
       requiredIds,
       currentSectionIds
     );
-      const sectionScopeOk = !!sectionScopeCheck.ok && (!requiredIds.length || missingOrStaleSections.length === 0);
-      if (sectionScopeOk && typeof buildExportHtml === 'function' && sectionCount) {
-        const rawHtml = buildExportHtml(appState.analysis || factory.product?.analysis || {}, appState.sectionContents, appState.sectionImages || {}, appState.detailImageBlocks || []);
-        const html = factoryCafe24StripDetailAdminLabels(rawHtml);
-        if (html && /<[^>]+>/.test(String(html))) {
+    const sectionScopeOk = !!sectionScopeCheck.ok;
+    if (sectionScopeOk && typeof buildExportHtml === 'function' && sectionCount) {
+      const rawHtml = buildExportHtml(appState.analysis || factory.product?.analysis || {}, appState.sectionContents, appState.sectionImages || {}, appState.detailImageBlocks || []);
+      const html = factoryCafe24StripDetailAdminLabels(rawHtml);
+      if (html && /<[^>]+>/.test(String(html))) {
         const safeCheck = factoryCafe24DetailHtmlPreflight(html);
         if (!safeCheck.ok && safeCheck.hasAdminLabels) {
           return {
@@ -2468,13 +2567,13 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
     if (sectionCount) {
       sectionExportBlocked = {
         html: '',
-        source: missingOrStaleSections.length ? 'section-content-scope-blocked' : 'section-scope-blocked',
+        source: missingPreviewSections.length ? 'section-preview-incomplete' : 'section-scope-blocked',
         blocked: true,
-        sectionCount: currentSectionIds.length || sectionCount,
+        sectionCount,
         totalSections: requiredIds.length,
-        message: missingOrStaleSections.length
-          ? `미리보기 섹션 ${currentSectionIds.length}/${requiredIds.length}개만 현재 상품/입력 이미지 기준을 통과했습니다. 현재 상품 기준으로 섹션을 다시 생성해주세요.`
-          : (sectionScopeCheck.message || '미리보기 섹션은 남아 있지만 현재 상품/입력 이미지 기준과 맞지 않아 전송 대상으로 쓰지 않습니다. 현재 상품 기준으로 섹션을 다시 생성해주세요.'),
+        message: missingPreviewSections.length
+          ? `실제 미리보기에 생성된 섹션이 ${sectionCount}/${requiredIds.length}개입니다. 남은 섹션을 생성하거나 미리보기에서 직접 채워주세요.`
+          : (sectionScopeCheck.message || '실제 미리보기 상세페이지를 전송 HTML로 만들 수 없습니다. 미리보기 상태를 확인해주세요.'),
       };
     }
   } catch(e) {
@@ -2653,6 +2752,23 @@ function factoryCafe24EnsureScopedDetailHtmlPayload(product = {}, finalDb = {}, 
   return product;
 }
 
+function factoryApplyCafe24CreateReferenceDefaults(product = {}) {
+  if (!String(product.manufacturer_code || '').trim() || product.manufacturer_code === 'M0000000') {
+    product.manufacturer_code = 'M0000CJP';
+  }
+  product.supplier_code ||= 'S0000000';
+  if (!String(product.brand_code || '').trim() || product.brand_code === 'B0000000') {
+    product.brand_code = 'B00000PU';
+  }
+  const hasOrigin = ['made_in_code', 'origin_classification', 'origin_place_value', 'origin_place_code', 'origin_place_no']
+    .some(field => String(product[field] ?? '').trim() !== '');
+  if (!hasOrigin) {
+    product.origin_classification = 'F';
+    product.origin_place_no = 102;
+  }
+  return product;
+}
+
 function factoryBuildCafe24UpdatePayload(finalDb = {}, fields = [], factory = factoryRuntimeReadFactory(), options = {}) {
   const product = {};
   const direct = [
@@ -2773,6 +2889,9 @@ function factoryBuildCafe24UpdatePayload(finalDb = {}, fields = [], factory = fa
   const selling = factoryTruthyCafe24Flag(finalDb.selling || finalDb.selling_status);
   if (selling) product.selling = selling;
   factoryMergeCafe24VisibleFormPayload(product, finalDb, factory);
+  if (options.includeResolvedSizeAdditionalInformation === true) {
+    factoryCafe24MergeResolvedSizeAdditionalInformation(product, finalDb);
+  }
   const inputProductName = typeof factoryAuthoritativeProductName === 'function'
     ? factoryAuthoritativeProductName(factory)
     : String(factory?.product?.userProductName || factory?.product?.productName || state?.productName || '').trim();
@@ -2789,6 +2908,9 @@ function factoryBuildCafe24UpdatePayload(finalDb = {}, fields = [], factory = fa
   });
   if (inputProductName) product.product_name = inputProductName;
   factoryRemoveCafe24InvalidReferenceCodePayloadFields(product);
+  if (options.includeCreateReferenceDefaults === true) {
+    factoryApplyCafe24CreateReferenceDefaults(product);
+  }
   factoryCafe24EnsureScopedDetailHtmlPayload(product, finalDb, factory, options);
   factoryCafe24SanitizeDetailHtmlPayload(product, finalDb, factory, options);
   factoryCafe24PruneEmptyProductPayload(product);
@@ -3025,7 +3147,8 @@ function factoryCafe24OptionStructureTouched(factory = factoryRuntimeReadFactory
   const settings = factory.product?.dbFieldSettings || {};
   const manualOptionTextTouched = ['option_name', 'option_values'].some(key => !!settings[key]?.manualTouched);
   const draftGroups = Array.isArray(factory.product?.cafe24OptionGroupsDraft) ? factory.product.cafe24OptionGroupsDraft : [];
-  return manualOptionTextTouched || draftGroups.length > 0;
+  const optionSorterDraft = factoryCafe24OptionSorterDraft();
+  return manualOptionTextTouched || draftGroups.length > 0 || optionSorterDraft.optionValues.length > 0;
 }
 
 function factoryCafe24VariantEditsForCurrent(factory = factoryRuntimeReadFactory()) {

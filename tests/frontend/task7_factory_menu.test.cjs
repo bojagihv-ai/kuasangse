@@ -51,13 +51,14 @@ async function menuHarness({ readOnly = false, deferred = null } = {}) {
   const reports = [];
   let token = 'workspace:a:fence:1';
   let leafListeners = 0;
+  let leafBindingRoot = null;
   const snapshot = frozen({ factory: { automation: { activeTab: 'start' } } });
   const tabs = new Map(IDS.map(id => [id, frozen({
     version: 'factory-tab:v1',
     id,
     select: () => frozen({ id }),
     render: () => `<div>${id}</div>`,
-    bind() { leafListeners += 1; return () => { leafListeners -= 1; }; },
+    bind(root) { leafBindingRoot = root; leafListeners += 1; return () => { leafListeners -= 1; }; },
     onEnter() {},
     onLeave() {},
   })]));
@@ -83,7 +84,11 @@ async function menuHarness({ readOnly = false, deferred = null } = {}) {
     tabs,
     tabRegistry,
   });
-  return { menu, calls, reports, setToken: value => { token = value; }, leafListeners: () => leafListeners };
+  return {
+    menu, calls, reports, setToken: value => { token = value; },
+    leafListeners: () => leafListeners,
+    leafBindingRoot: () => leafBindingRoot,
+  };
 }
 
 test('FACTORY-MENU owns seven shell tab clicks through selectTab', async () => {
@@ -93,9 +98,60 @@ test('FACTORY-MENU owns seven shell tab clicks through selectTab', async () => {
   const root = fakeRoot();
   const dispose = fixture.menu.bind(root);
   for (const id of IDS) assert.equal(root.click(id.split('/')[1]), true);
-  await Promise.resolve();
+  await new Promise(resolve => setTimeout(resolve, 0));
   assert.deepEqual(fixture.calls, IDS);
   dispose();
+  assert.equal(root.listeners.size, 0);
+  assert.equal(fixture.leafListeners(), 0);
+});
+
+test('FACTORY-MENU returns the pointer event before starting a tab render', async () => {
+  const fixture = await menuHarness();
+  const root = fakeRoot();
+  const dispose = fixture.menu.bind(root);
+
+  assert.equal(root.click('db'), true);
+  assert.deepEqual(fixture.calls, [], 'the click task must not synchronously enter the full tab render');
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(fixture.calls, ['factory/db']);
+  dispose();
+});
+
+test('FACTORY-MENU refresh rebinds shell and active tab listeners to a replaced root', async () => {
+  const fixture = await menuHarness();
+  const firstRoot = fakeRoot();
+  const nextRoot = fakeRoot();
+  const dispose = fixture.menu.bind(firstRoot);
+
+  fixture.menu.refresh(nextRoot);
+
+  assert.equal(firstRoot.click('fields'), false);
+  assert.equal(nextRoot.click('fields'), true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(fixture.calls, ['factory/fields']);
+  assert.equal(firstRoot.listeners.size, 0);
+  assert.equal(fixture.leafListeners(), 1);
+
+  dispose();
+  assert.equal(nextRoot.listeners.size, 0);
+  assert.equal(fixture.leafListeners(), 0);
+});
+
+test('FACTORY-MENU refresh repairs an initially rendered but unbound factory root', async () => {
+  const fixture = await menuHarness();
+  const root = fakeRoot();
+  const replaceableBody = fakeRoot();
+  root.querySelector = selector => selector === '.factory-automation-body' ? replaceableBody : null;
+
+  fixture.menu.refresh(root);
+
+  assert.strictEqual(fixture.leafBindingRoot(), root, 'active tab delegation must use the stable app root');
+  assert.equal(root.click('fields'), true, 'a visible factory shell must bind even before lifecycle bind runs');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(fixture.calls, ['factory/fields']);
+
+  fixture.menu.onLeave();
   assert.equal(root.listeners.size, 0);
   assert.equal(fixture.leafListeners(), 0);
 });
@@ -117,6 +173,13 @@ test('FACTORY-MENU blocks read-only selection before action dispatch', async () 
   assert.throws(() => fixture.menu.invoke('selectTab', 'db'), /READ_ONLY/);
   assert.deepEqual(fixture.calls, []);
   assert.equal(fixture.reports.length, 1);
+});
+
+test('FACTORY-MENU lets VM shell recovery actions run outside workspace mutation fencing', async () => {
+  const fixture = await menuHarness({ readOnly: true });
+  assert.equal(await fixture.menu.invoke('runGuideAction', 'resume-comp-market-detail'), 'resume-comp-market-detail');
+  assert.deepEqual(fixture.calls, ['guide:resume-comp-market-detail']);
+  assert.equal(fixture.reports.length, 0);
 });
 
 test('FACTORY-MENU rejects stale async selection completion', async () => {

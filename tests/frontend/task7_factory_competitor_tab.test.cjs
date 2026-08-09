@@ -232,6 +232,108 @@ test('FACTORY-COMP render keeps every legacy selector reachable with overflow-sa
   assert.doesNotMatch(html, /<unsafe>/);
 });
 
+test('FACTORY-COMP falls back to visible VM results when source caches are present but empty', async () => {
+  const namespace = await importFresh();
+  const vmRow = {
+    id: 'vm-visible-candidate',
+    title: '모시바둑파우치 후보',
+    platform: 'coupang',
+    product_url: 'https://example.test/vm-visible-candidate',
+    _search_runtime: 'vm',
+  };
+  const snapshot = deepFreeze({
+    factory: { automation: { activeTab: 'competitor' } },
+    competitors: {
+      compPage: {
+        marketScrape: {
+          candidateView: 'vm',
+          collectMode: 'vm',
+          vmResults: [],
+          vmGroupedResults: {},
+          results: [vmRow],
+          groupedResults: { coupang: [vmRow] },
+          selectedIds: [],
+          scrapedImages: [],
+        },
+      },
+    },
+  });
+  const harness = capabilities({ snapshot });
+  const html = namespace.createCompetitorFactoryTab(harness.value).render(snapshot);
+
+  assert.match(html, /data-comp-market-toggle-result="vm-visible-candidate"/);
+  assert.match(html, /VM 후보 1건 중/);
+  assert.doesNotMatch(html, /후보가 0건이면 선택할 카드가 없습니다/);
+});
+
+test('FACTORY-COMP prominently explains when VM failure forced a last-resort local fallback', async () => {
+  const namespace = await importFresh();
+  const fallbackRow = {
+    id: 'assisted-candidate',
+    title: '호박바늘쌈 후보',
+    platform: 'coupang',
+    product_url: 'https://example.test/assisted-candidate',
+    _search_runtime: 'market_assisted',
+    _assisted_fallback_for_vm: true,
+  };
+  const snapshot = deepFreeze({
+    factory: { automation: { activeTab: 'competitor' } },
+    competitors: {
+      compPage: {
+        marketScrape: {
+          candidateView: 'vm',
+          collectMode: 'vm',
+          phase: 'search-complete-assisted',
+          vmFallback: {
+            active: true,
+            reason: 'VM 워커 health 응답 시간 초과',
+            source: '오픈마켓 Chrome 보조수집',
+          },
+          results: [fallbackRow],
+          groupedResults: { coupang: [fallbackRow] },
+          selectedIds: [],
+          scrapedImages: [],
+        },
+      },
+    },
+  });
+  const harness = capabilities({ snapshot });
+  const html = namespace.createCompetitorFactoryTab(harness.value).render(snapshot);
+
+  assert.match(html, /data-factory-vm-fallback-warning/);
+  assert.match(html, /VM 워커 health 응답 시간 초과/);
+  assert.match(html, /오픈마켓 Chrome 보조수집/);
+  assert.match(html, /VM 결과가 아니라 보조수집 결과/);
+});
+
+test('FACTORY-COMP makes VM and Windows Chrome explicit collection choices', async () => {
+  const namespace = await importFresh();
+  const snapshot = deepFreeze({
+    factory: { automation: { activeTab: 'competitor' } },
+    competitors: {
+      compPage: {
+        marketScrape: {
+          collectMode: 'vm',
+          candidateView: 'vm',
+          results: [],
+          selectedIds: [],
+          scrapedImages: [],
+        },
+      },
+    },
+  });
+  const harness = capabilities({ snapshot });
+  const html = namespace.createCompetitorFactoryTab(harness.value).render(snapshot);
+
+  assert.match(html, /data-comp-market-collection-choice/);
+  assert.match(html, /data-factory-guide-action="rerun-vm-competitors"/);
+  assert.match(html, /data-factory-guide-action="rerun-local-competitors"/);
+  assert.doesNotMatch(html, /onclick=/);
+  assert.match(html, /VM에서 수집/);
+  assert.match(html, /내 Windows Chrome에서 수집/);
+  assert.match(html, /자동 전환하지 않습니다/);
+});
+
 test('FACTORY-COMP delegated root events use declared actions after authority', async () => {
   const namespace = await importFresh();
   const harness = capabilities();

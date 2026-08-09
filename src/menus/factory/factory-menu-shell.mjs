@@ -9,7 +9,12 @@ const TAB_PRESENTATION = Object.freeze([
 ]);
 
 const TAB_ALIASES = Object.freeze({ materials: 'start', collect: 'db', generate: 'assets' });
-const SHELL_GUIDE_ACTIONS = new Set(['open-vm-capture', 'resume-comp-market-detail']);
+const SHELL_GUIDE_ACTIONS = new Set([
+  'open-vm-capture',
+  'resume-comp-market-detail',
+  'rerun-vm-competitors',
+  'rerun-local-competitors',
+]);
 
 function clean(value) { return String(value ?? '').trim(); }
 
@@ -22,6 +27,24 @@ function attribute(button, name, datasetName) {
   if (value !== null && value !== undefined) return value;
   const descriptor = button?.dataset && Object.getOwnPropertyDescriptor(button.dataset, datasetName);
   return descriptor && !descriptor.get && !descriptor.set ? descriptor.value : '';
+}
+
+function markSelectedTab(root, selectedId) {
+  const tabButtons = root?.querySelectorAll?.('[data-factory-auto-tab]') || [];
+  for (const button of tabButtons) {
+    const selected = attribute(button, 'data-factory-auto-tab', 'factoryAutoTab') === selectedId;
+    button.classList?.toggle?.('active', selected);
+    button.setAttribute?.('aria-selected', selected ? 'true' : 'false');
+  }
+}
+
+function invokeDeferred(handler, value) {
+  setTimeout(() => {
+    try {
+      const result = handler?.(value);
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch {}
+  }, 0);
 }
 
 function buttons(activeId) {
@@ -50,7 +73,13 @@ export function bindFactoryMenuShell(root, handlers = {}) {
     if (root?.contains?.(tab || jump || filter || guide) === false) return;
     try {
       let result;
-      if (tab) result = handlers.selectTab?.(attribute(tab, 'data-factory-auto-tab', 'factoryAutoTab'));
+      if (tab) {
+        const tabId = attribute(tab, 'data-factory-auto-tab', 'factoryAutoTab');
+        event?.preventDefault?.();
+        markSelectedTab(root, tabId);
+        invokeDeferred(handlers.selectTab, tabId);
+        return;
+      }
       else if (jump) result = handlers.jumpStage?.(attribute(jump, 'data-factory-stage-jump', 'factoryStageJump'));
       else if (filter) result = handlers.setLogFilter?.(attribute(filter, 'data-factory-stage-log-filter', 'factoryStageLogFilter'));
       else {

@@ -14,6 +14,9 @@ DEFAULT_FRONTEND_PORT: Final = 8082
 DEFAULT_FACTORY_FRONTEND_URL: Final = "http://127.0.0.1:8081"
 DEFAULT_FACTORY_BACKEND_URL: Final = "http://127.0.0.1:5050"
 DEFAULT_API_HUB_URL: Final = "http://127.0.0.1:4321"
+DEFAULT_CACHE_ROOT: Final = "output/batch-control"
+DEFAULT_PDP_CONTROL_URL: Final = "http://127.0.0.1:8200/api/pdp-control/v1"
+DEFAULT_PDP_ASSETS_URL: Final = "http://127.0.0.1:8200/api/pdp-assets/v1"
 
 
 class ConfigurationError(Exception):
@@ -102,6 +105,10 @@ class ControlTowerConfig:
     factory_frontend_url: str = DEFAULT_FACTORY_FRONTEND_URL
     factory_backend_url: str = DEFAULT_FACTORY_BACKEND_URL
     api_hub_url: str = DEFAULT_API_HUB_URL
+    cache_root: str = DEFAULT_CACHE_ROOT
+    pdp_control_url: str = DEFAULT_PDP_CONTROL_URL
+    pdp_assets_url: str = DEFAULT_PDP_ASSETS_URL
+    pdp_service_key: str = ""
     cors_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -154,6 +161,10 @@ class ControlTowerConfig:
                 DEFAULT_FACTORY_BACKEND_URL,
             ).strip(),
             api_hub_url=_env_value(source, ("CONTROL_TOWER_API_HUB_URL",), DEFAULT_API_HUB_URL).strip(),
+            cache_root=_env_value(source, ("CONTROL_TOWER_CACHE_ROOT",), DEFAULT_CACHE_ROOT).strip(),
+            pdp_control_url=_env_value(source, ("PDP_CONTROL_BASE_URL",), DEFAULT_PDP_CONTROL_URL).strip(),
+            pdp_assets_url=_env_value(source, ("PDP_ASSETS_BASE_URL",), DEFAULT_PDP_ASSETS_URL).strip(),
+            pdp_service_key=_env_value(source, ("PDP_CONTROL_SERVICE_KEY",), ""),
             cors_origins=cors_origins,
         )
 

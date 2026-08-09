@@ -249,14 +249,54 @@ function factoryCafe24CandidateProductUrl(candidate = {}) {
   return `https://${mallHost}/product/detail.html?product_no=${encodeURIComponent(productNo)}`;
 }
 
-function renderFactoryCandidateCards(candidates = [], type = '') {
-  if (!candidates.length) {
-    return `<div class="factory-small">${type === 'cafe24'
-      ? '아직 Cafe24 후보가 없습니다. 제품명을 확인하고 Cafe24 후보만 찾기 또는 제품/DB 확보를 실행해주세요.'
-      : '아직 후보가 없습니다. 제품명을 확인하고 제품/DB 확보를 실행해주세요.'}</div>
-      ${type === 'cafe24' ? `<button class="btn-sm" data-factory-find-cafe24-inline type="button" style="margin-top:8px" title="현재 제품명/이미지 판독명을 기준으로 Cafe24 후보만 다시 검색합니다."><span class="material-icons-outlined" style="font-size:14px">manage_search</span>Cafe24 후보만 찾기</button>` : ''}`;
+function factoryCandidateCollectionStatusView(factory = {}, type = '', candidateCount = 0) {
+  const taskId = type === 'cafe24' ? 'cafe24' : 'sinhwa';
+  const progress = factory?.automation?.parallelProgress?.[taskId];
+  const status = String(progress?.status || '').trim();
+  const message = String(progress?.message || '').trim();
+  const count = Math.max(0, Number(candidateCount || 0));
+  if (status === 'queued') return { state: 'queued', label: '수집 대기', detail: message || '연결 확인을 기다리고 있습니다.' };
+  if (status === 'running') {
+    const ratio = Math.max(0, Math.min(100, Math.round(Number(progress?.progress || 0))));
+    return { state: 'running', label: '수집 중', detail: [ratio ? `${ratio}%` : '', message].filter(Boolean).join(' · ') || '후보를 확인하고 있습니다.' };
   }
-  const factory = factoryRuntimeReadFactory();
+  if (status === 'error') return { state: 'error', label: '수집 실패', detail: message || '연결 상태를 확인한 뒤 다시 시도해주세요.' };
+  if (status === 'skipped') return { state: 'skipped', label: '이번 수집에서 제외', detail: message || '선택한 수집 범위에 포함되지 않았습니다.' };
+  if (status === 'done') {
+    return count
+      ? { state: 'found', label: `후보 ${count}건`, detail: message || '실제 제품과 맞는 후보를 선택해주세요.' }
+      : { state: 'empty', label: '검색 결과 없음', detail: message || '신제품이면 아래 후보 없음으로 진행할 수 있습니다.' };
+  }
+  return count
+    ? { state: 'found', label: `후보 ${count}건`, detail: '저장된 후보를 확인해주세요.' }
+    : { state: 'idle', label: '아직 후보를 확인하지 않음', detail: '제품명 확인 후 후보 수집을 실행해주세요.' };
+}
+
+function factoryCandidateCollectionEmptyMessage(view = {}) {
+  if (view.state === 'running') return '후보를 수집하고 있습니다. 응답이 도착하면 이 목록에 표시됩니다.';
+  if (view.state === 'queued') return '후보 수집을 시작할 때까지 기다리고 있습니다.';
+  if (view.state === 'found') return '후보 수집을 마쳤습니다. 목록을 정리하고 있습니다.';
+  if (view.state === 'empty') return '검색 결과가 없습니다. 신제품이면 아래 후보 없음으로 진행할 수 있습니다.';
+  if (view.state === 'error') return '후보 수집에 실패했습니다. 위 상태를 확인한 뒤 다시 시도해주세요.';
+  return '아직 후보를 확인하지 않았습니다. 제품명을 확인하고 후보 수집을 실행해주세요.';
+}
+
+function renderFactoryCandidateCollectionStatus(factory = {}, type = '', candidateCount = 0) {
+  const view = factoryCandidateCollectionStatusView(factory, type, candidateCount);
+  return `<div class="factory-candidate-collection-status" data-factory-candidate-collection-status="${escAttr(type === 'cafe24' ? 'cafe24' : 'sinhwa')}" data-state="${escAttr(view.state)}" role="status" aria-live="polite" ${['queued', 'running'].includes(view.state) ? 'aria-busy="true"' : ''}>
+    <span class="factory-candidate-collection-marker" aria-hidden="true"></span>
+    <strong data-factory-candidate-collection-label>${escapeHtml(view.label)}</strong>
+    <span data-factory-candidate-collection-detail>${escapeHtml(view.detail)}</span>
+  </div>`;
+}
+
+function renderFactoryCandidateCards(candidates = [], type = '', factory = factoryRuntimeReadFactory()) {
+  if (!candidates.length) {
+    const collection = factoryCandidateCollectionStatusView(factory, type, 0);
+    const emptyMessage = factoryCandidateCollectionEmptyMessage(collection);
+    return `<div class="factory-small" data-factory-candidate-empty-state="${escAttr(type === 'cafe24' ? 'cafe24' : 'sinhwa')}">${escapeHtml(emptyMessage)}</div>
+      ${type === 'cafe24' ? `<button class="btn-sm" data-factory-find-cafe24-inline data-factory-guide-action="rerun-cafe24-query" type="button" style="margin-top:8px" title="현재 제품명/이미지 판독명을 기준으로 Cafe24 후보만 다시 검색합니다."><span class="material-icons-outlined" style="font-size:14px">manage_search</span>Cafe24 후보만 찾기</button>` : ''}`;
+  }
   const selectedKey = type === 'cafe24' ? factory.product.selectedCafe24CandidateKey : factory.product.selectedDbCandidateKey;
   return `<div class="factory-candidate-list">
     ${candidates.length > 20 ? `<div class="factory-small" style="margin-bottom:8px">${escapeHtml(type === 'cafe24' ? `Cafe24 후보 전체 ${candidates.length}건 중 현재 상위 20건을 표시합니다. 추가검색 새 후보는 맨 위에 먼저 표시됩니다.` : `후보 전체 ${candidates.length}건 중 현재 상위 20건을 표시합니다.`)}</div>` : ''}
@@ -267,6 +307,7 @@ function renderFactoryCandidateCards(candidates = [], type = '') {
       const query = candidate?.match_query || '';
       const meta = factoryCandidateMetaItems(candidate, type);
       const actionAttr = type === 'cafe24' ? 'data-factory-apply-cafe24-candidate' : 'data-factory-apply-db-candidate';
+      const clearActionAttr = type === 'cafe24' ? 'data-factory-clear-cafe24-candidate' : 'data-factory-clear-db-candidate';
       const actionText = type === 'cafe24' ? '이 Cafe24 상품 맞음' : '이 신화사DB 맞음';
       const selectable = typeof factoryCandidateReviewCanApply === 'function' ? factoryCandidateReviewCanApply(candidate, factory) : true;
       const candidateScopeKey = typeof factoryCandidateReviewScopeKeyFromCandidate === 'function'
@@ -292,7 +333,9 @@ function renderFactoryCandidateCards(candidates = [], type = '') {
           </div>
           <div class="factory-candidate-actions" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
             ${productUrl ? `<a class="btn-sm" href="${escAttr(productUrl)}" target="_blank" rel="noopener" title="Cafe24 쇼핑몰의 이 후보 상품을 새 탭에서 엽니다." style="text-decoration:none;white-space:nowrap"><span class="material-icons-outlined" style="font-size:14px">open_in_new</span>제품 링크</a>` : (type === 'cafe24' ? '<span class="factory-small" title="상품번호가 없어 제품 링크를 만들 수 없습니다.">제품 링크 없음</span>' : '')}
-            <button class="btn-sm" ${actionAttr}="${index}" type="button" title="${escAttr(actionTitle)}" ${selectable ? '' : 'disabled'}>${selected ? '확정됨' : (selectable ? actionText : '현재 제품 기준 아님')}</button>
+            ${selected
+              ? `<button class="btn-sm" ${actionAttr}="${index}" type="button" disabled>확정됨</button><button class="btn-sm" ${clearActionAttr} type="button" title="선택을 해제하고 후보 목록으로 돌아갑니다.">선택 해제</button>`
+              : `<button class="btn-sm" ${actionAttr}="${index}" type="button" title="${escAttr(actionTitle)}" ${selectable ? '' : 'disabled'}>${selectable ? actionText : '현재 제품 기준 아님'}</button>`}
           </div>
         </div>
         <div class="factory-candidate-meta">
@@ -397,20 +440,31 @@ function renderFactoryCafe24ProgramPrompt(factory) {
 function renderFactoryCandidateReviewPanels(factory) {
   const pendingDb = factory.product.pendingDbCandidates || [];
   const pendingCafe24 = factory.product.pendingCafe24Candidates || [];
-  const dbCandidates = pendingDb.length ? pendingDb : (factory.product.dbCandidates || []);
-  const cafe24Candidates = pendingCafe24.length ? pendingCafe24 : (factory.product.cafe24Candidates || []);
-  const hasAny = dbCandidates.length || cafe24Candidates.length || factory.product.candidateReviewStatus || factory.product.sinhwaDbProgramStatus || factory.product.cafe24ProgramStatus || factory.product.cafe24OAuthStatus || factory.product.dbCandidateResolution || factory.product.cafe24CandidateResolution;
+  const sourceDbCandidates = pendingDb.length ? pendingDb : (factory.product.dbCandidates || []);
+  const sourceCafe24Candidates = pendingCafe24.length ? pendingCafe24 : (factory.product.cafe24Candidates || []);
+  const dbCandidates = sourceDbCandidates.filter(candidate => factoryCandidateReviewCanApply(candidate, factory));
+  const cafe24Candidates = sourceCafe24Candidates.filter(candidate => factoryCandidateReviewCanApply(candidate, factory));
+  const hiddenCandidateCount = (sourceDbCandidates.length - dbCandidates.length)
+    + (sourceCafe24Candidates.length - cafe24Candidates.length);
+  const hasAny = sourceDbCandidates.length || sourceCafe24Candidates.length || factory.product.candidateReviewStatus || factory.product.sinhwaDbProgramStatus || factory.product.cafe24ProgramStatus || factory.product.cafe24OAuthStatus || factory.product.dbCandidateResolution || factory.product.cafe24CandidateResolution;
   if (!hasAny) return '';
   const dbAbsent = factory.product.dbCandidateResolution === 'none';
   const cafeAbsent = factory.product.cafe24CandidateResolution === 'none';
   const dbConfirmed = !!factory.product.selectedDbCandidateKey || !!factory.product.confirmedDb || dbAbsent;
   const cafeConfirmed = !!factory.product.selectedCafe24CandidateKey || cafeAbsent;
-  return `<div class="factory-candidate-review">
+  const hiddenCandidateNotice = hiddenCandidateCount ? `<div class="factory-card" data-factory-stale-candidate-notice style="margin:0 0 10px;padding:11px 12px;border-color:rgba(245,158,11,.58);background:rgba(245,158,11,.10)">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div><div style="font-size:13px;font-weight:950;color:var(--warn)">현재 작업과 다른 후보 ${hiddenCandidateCount}건을 숨겼습니다.</div><div class="factory-small" style="margin-top:3px">다른 제품이나 이전 작업의 후보는 선택할 수 없습니다. 현재 제품 기준으로 다시 검색해주세요.</div></div>
+      <button class="btn-sm" type="button" data-factory-guide-action="rerun-db-query">현재 제품 후보 다시 수집</button>
+    </div>
+  </div>` : '';
+  return `${hiddenCandidateNotice}<div class="factory-candidate-review">
     <div class="factory-candidate-panel ${dbConfirmed ? 'confirmed' : ''}">
       <h5>신화사DB 후보 확인</h5>
       <p>${dbAbsent ? '신화사DB에 없는 신제품으로 확정했습니다. 다음 단계에서 필수 상품 정보를 직접 검수합니다.' : (dbConfirmed ? '선택한 신화사DB 상품을 완성 DB 기준값으로 사용 중입니다.' : '아래 후보 중 실제 제품이 맞는지 골라주세요. 고르기 전에는 완성 DB에 자동 반영하지 않습니다.')}</p>
+      ${renderFactoryCandidateCollectionStatus(factory, 'sinhwa', dbCandidates.length)}
       ${renderFactorySinhwaDbProgramPrompt(factory)}
-      ${renderFactoryCandidateCards(dbCandidates, 'sinhwa')}
+      ${renderFactoryCandidateCards(dbCandidates, 'sinhwa', factory)}
       ${renderFactoryCandidateSizeGenerationWait(factory)}
       <button class="btn-sm" type="button" data-factory-confirm-no-db-candidate style="margin-top:8px" ${dbAbsent ? 'disabled' : ''}>${dbAbsent ? '신화사DB 후보 없음 확정됨' : '신화사DB 후보 없음으로 진행'}</button>
     </div>
@@ -419,12 +473,13 @@ function renderFactoryCandidateReviewPanels(factory) {
       <p>${cafeAbsent ? 'Cafe24에 없는 신제품으로 확정했습니다. 기존 상품 수정 없이 새 상품 등록 초안으로 다음 단계에 진행합니다.' : (cafeConfirmed
         ? '선택한 Cafe24 상품의 상세 입력값과 옵션을 불러왔습니다.'
         : (cafe24Candidates.length ? '저장된 Cafe24 후보가 있습니다. 새 후보를 찾거나 기존 후보를 확정할 수 있습니다.' : 'Cafe24도 별도로 확인합니다. 선택한 상품만 옵션/가격/상품번호 기준으로 올라갑니다.'))}</p>
+      ${renderFactoryCandidateCollectionStatus(factory, 'cafe24', cafe24Candidates.length)}
       ${renderFactoryCafe24ProgramPrompt(factory)}
-      ${renderFactoryCandidateCards(cafe24Candidates, 'cafe24')}
+      ${renderFactoryCandidateCards(cafe24Candidates, 'cafe24', factory)}
       <button class="btn-sm" type="button" data-factory-confirm-no-cafe24-candidate style="margin-top:8px" ${cafeAbsent ? 'disabled' : ''}>${cafeAbsent ? 'Cafe24 후보 없음 · 신제품 확정됨' : 'Cafe24 후보 없음 · 신제품으로 진행'}</button>
     </div>
   </div>
-  ${factory.product.candidateReviewStatus ? `<div class="factory-small" style="margin-top:8px">${escapeHtml(factory.product.candidateReviewStatus)}</div>` : ''}`;
+  ${factory.product.candidateReviewStatus ? `<div class="factory-small" data-factory-candidate-review-status style="margin-top:8px">${escapeHtml(factory.product.candidateReviewStatus)}</div>` : ''}`;
 }
 
 function renderFactoryCandidateSizeGenerationWait(factory = factoryRuntimeReadFactory()) {
@@ -434,14 +489,16 @@ function renderFactoryCandidateSizeGenerationWait(factory = factoryRuntimeReadFa
   const review = typeof factoryAutomationSizeReviewStatus === 'function'
     ? factoryAutomationSizeReviewStatus(factory)
     : null;
-  const canGenerate = !!review?.confirmed;
+  const canGenerate = !!review
+    && !review.requiredMissing.length
+    && review.fields.some(item => String(item?.value || '').trim());
   const disabledReason = '가로/세로/규격을 확인한 뒤 사이즈이미지를 생성할 수 있습니다.';
   return `<div class="factory-card" data-factory-candidate-size-wait style="margin:10px 8px 0 0;max-width:calc(100% - 8px);box-sizing:border-box;padding:12px;border-color:rgba(245,158,11,.58);background:rgba(245,158,11,.10)">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap">
       <div style="min-width:220px;flex:1">
         <div style="font-size:13px;font-weight:950;color:var(--warn)">사이즈이미지 생성 대기</div>
         <div style="font-size:12px;color:var(--text);font-weight:800;line-height:1.55;margin-top:4px;word-break:keep-all;overflow-wrap:break-word;line-break:strict">${escapeHtml(message)}</div>
-        <div class="factory-small" style="margin-top:5px;word-break:keep-all;overflow-wrap:break-word;line-break:strict">${canGenerate ? '자동으로 시작하지 않았습니다. 이 버튼 또는 전체 자동 실행에서만 생성이 시작됩니다.' : disabledReason}</div>
+        <div class="factory-small" style="margin-top:5px;word-break:keep-all;overflow-wrap:break-word;line-break:strict">${canGenerate ? '현재 값을 생성 버튼에서 자동 확인한 뒤 바로 생성합니다.' : disabledReason}</div>
       </div>
       <div class="factory-automation-actions" style="margin:0;justify-content:flex-end">
         <button class="btn-primary" type="button" data-factory-run-stage="size" onclick="return factoryRunStageButtonInline(this,event)" style="white-space:nowrap" ${disabledAttr(!canGenerate, disabledReason)}><span class="material-icons-outlined" style="font-size:15px">play_arrow</span>사이즈이미지 생성</button>
@@ -453,14 +510,18 @@ function renderFactoryCandidateSizeGenerationWait(factory = factoryRuntimeReadFa
 
 function factoryGoalRunNeedsAttention(goal = {}, stageText = '') {
   const text = `${String(stageText || goal.currentStage || '')} ${String(goal.failureReason || '')}`;
-  return !goal.running && /확인 필요|후보 0건|후보 선택 대기|이전 이미지 생성이 화면 복원 중/.test(text);
+  return !goal.running && /확인 필요|후보 0건|후보 선택 대기|이전 이미지 생성이 화면 복원 중|신화사 자산관(?: 자동)? 동기화.*(?:실패|보류)/.test(text);
 }
 
 function factoryGoalRunHasFailure(goal = {}, stageText = '') {
   const text = `${String(stageText || goal.currentStage || '')} ${String(goal.failureReason || '')}`;
+  const explicitFailure = /실패|error|오류|중단|fetch failed|조회 실패/i.test(text);
   const recoveryWarningOnly = /이전 이미지 생성이 화면 복원 중 끊겨 진행 표시를 해제했습니다/.test(String(goal.failureReason || ''))
     && !/실패|error|오류|중단|fetch failed|조회 실패/i.test(text.replace(/이전 이미지 생성이 화면 복원 중 끊겨 진행 표시를 해제했습니다/g, ''));
-  return !recoveryWarningOnly && (!!String(goal.failureReason || '').trim() || /실패|error|오류|중단|fetch failed|조회 실패/i.test(text));
+  const backgroundServiceWarningOnly = /Cafe24 OAuth 자동 점검 (?:실패|보류)|신화사 자산관(?: 자동)? 동기화.*(?:실패|보류)/.test(text);
+  const attentionOnly = factoryGoalRunNeedsAttention(goal, stageText) && !explicitFailure;
+  return !recoveryWarningOnly && !backgroundServiceWarningOnly && !attentionOnly
+    && (!!String(goal.failureReason || '').trim() || explicitFailure);
 }
 
 function factoryGoalRunDisplayProgress(goal = {}, stageText = '') {
@@ -700,8 +761,14 @@ function factoryRememberLightImage(src = '') {
   const key = factoryLightImageKey(text);
   if (store.has(key)) {
     const current = store.get(key);
+    if (current !== text) {
+      const urls = window.__factoryLightImageUrls;
+      const staleObjectUrl = urls?.get?.(key);
+      if (urls?.delete) urls.delete(key);
+      try { if (staleObjectUrl) URL.revokeObjectURL(staleObjectUrl); } catch(e) {}
+    }
     store.delete(key);
-    store.set(key, current);
+    store.set(key, text);
   } else {
     store.set(key, text);
   }
@@ -728,6 +795,12 @@ function renderFactoryLightImage(src = '', alt = '이미지', attrs = '', label 
     : ' onerror="if(window.factoryHandleRenderedImageError)window.factoryHandleRenderedImageError(this,event)"';
   if (/^data:image\//i.test(displaySrc) && displaySrc.length > FACTORY_LIGHT_IMAGE_SRC_LIMIT) {
     const key = factoryRememberLightImage(displaySrc);
+    const cachedObjectUrl = key && typeof window !== 'undefined'
+      ? window.__factoryLightImageUrls?.get?.(key)
+      : '';
+    if (cachedObjectUrl) {
+      return `<img src="${escAttr(cachedObjectUrl)}" data-factory-light-image-key="${escAttr(key)}" data-factory-light-loaded="1" alt="${safeAlt}"${loadingAttr} decoding="async"${priorityAttr}${errorAttr} ${attrText}>`;
+    }
     const placeholder = factoryLightImagePlaceholder(label || alt || '이미지 보관됨');
     return `<img src="${escAttr(placeholder)}" data-factory-light-image-key="${escAttr(key)}" alt="${safeAlt}"${loadingAttr} decoding="async"${priorityAttr}${errorAttr} ${attrText}>`;
   }
@@ -1850,13 +1923,7 @@ function factoryRenderCacheFinalCafe24Model(factory = factoryRuntimeReadFactory(
 }
 
 function factoryRenderCacheFinalBasicInfoModel(factory = factoryRuntimeReadFactory(), cache = null) {
-  if (!cache || typeof cache !== 'object') return factoryFinalRegistrationBasicInfoModel(factory);
-  if (!factoryRenderCacheHas(cache, 'finalBasicInfoModel')) {
-    cache.finalBasicInfoModel = factoryFinalRegistrationBasicInfoModel(factory, {
-      createModel: factoryRenderCacheCreateModel(factory, cache),
-    });
-  }
-  return cache.finalBasicInfoModel;
+  return factoryFinalRegistrationBasicInfoModel(factory);
 }
 
 function factoryRenderCacheFinalDetailModel(factory = factoryRuntimeReadFactory(), cache = null) {
@@ -5472,15 +5539,52 @@ function factoryFinalRegistrationAuthoritativeProductName(factory = factoryRunti
   );
 }
 
+function factoryFinalRegistrationCreateModel(factory, options) {
+  const config = options || {};
+  if (Object.prototype.hasOwnProperty.call(config, 'createModel') && config.createModel !== undefined) return config.createModel;
+  return typeof factoryCafe24CreatePreviewModel === 'function' ? factoryCafe24CreatePreviewModel(factory) : null;
+}
+
 function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFactory(), options = {}) {
-  const createModel = Object.prototype.hasOwnProperty.call(options, 'createModel')
-    ? options.createModel
-    : (typeof factoryCafe24CreatePreviewModel === 'function'
-      ? factoryCafe24CreatePreviewModel(factory)
-      : null);
+  const createModel = factoryFinalRegistrationCreateModel(factory, options);
   const product = createModel?.product || {};
   const finalDb = createModel?.dbModel?.finalDb || factory?.product?.finalDb || {};
   const finalRegistration = factory?.product?.cafe24FinalRegistration || {};
+  const liveFactory = typeof factoryRuntimeReadCommittedFactory === 'function'
+    ? factoryRuntimeReadCommittedFactory()
+    : factory;
+  const automationSalePrice = typeof factoryAutomationFieldValue === 'function'
+    ? factoryAutomationFieldValue(factory, 'sale_price', ['price', 'selling_price', '판매가격']).value
+    : '';
+  const liveAutomationSalePrice = typeof factoryAutomationFieldValue === 'function'
+    ? factoryAutomationFieldValue(liveFactory, 'sale_price', ['price', 'selling_price', '판매가격']).value
+    : '';
+  const reviewedSaleField = factory?.automation?.fieldReview?.sale_price;
+  const liveReviewedSaleField = liveFactory?.automation?.fieldReview?.sale_price;
+  const reviewedSalePrice = reviewedSaleField
+    && typeof factoryFieldReviewMatchesCurrentWork === 'function'
+    && factoryFieldReviewMatchesCurrentWork(reviewedSaleField, factory)
+    ? String(reviewedSaleField.value ?? '').trim()
+    : '';
+  const liveReviewedSalePrice = liveReviewedSaleField
+    && typeof factoryFieldReviewMatchesCurrentWork === 'function'
+    && factoryFieldReviewMatchesCurrentWork(liveReviewedSaleField, liveFactory)
+    ? String(liveReviewedSaleField.value ?? '').trim()
+    : '';
+  const salePriceCandidates = [
+    finalRegistration.price,
+    finalRegistration.salePrice,
+    finalRegistration.sale_price,
+    automationSalePrice,
+    liveAutomationSalePrice,
+    reviewedSalePrice,
+    liveReviewedSalePrice,
+    product.price,
+    finalDb.sale_price,
+    finalDb.price,
+  ].map(value => String(value ?? '').trim());
+  const salePrice = salePriceCandidates.find(value => factoryCafe24PositiveMoneyText(value))
+    || factoryFinalRegistrationFirstText(...salePriceCandidates);
   const productName = factoryFinalRegistrationFirstText(
     finalRegistration.productName,
     finalRegistration.product_name,
@@ -5489,6 +5593,26 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
     factory?.product?.confirmedDb?.product_name,
     factoryFinalRegistrationAuthoritativeProductName(factory),
   );
+  const originPlaceNo = product.origin_place_no || product.origin_place_code;
+  const originClassification = { F: '국내', T: '국외', E: '기타' }[String(product.origin_classification || '').toUpperCase()] || '';
+  const originValue = String(product.origin_place_value || '').trim()
+    || (typeof factoryCafe24ReferenceOverrideName === 'function'
+      ? factoryCafe24ReferenceOverrideName('originPlaces', originPlaceNo)
+      : '')
+    || [originClassification, originPlaceNo].filter(Boolean).join(' > ')
+    || String(product.made_in_code || '').trim();
+  const createReferenceDefaults = [
+    { label: '제조사', apiField: 'manufacturer_code', type: 'manufacturers', code: product.manufacturer_code },
+    { label: '공급사', apiField: 'supplier_code', type: 'suppliers', code: product.supplier_code },
+    { label: '브랜드', apiField: 'brand_code', type: 'brands', code: product.brand_code },
+    { label: '원산지', apiField: 'origin_classification · origin_place_no', value: originValue },
+  ].map(item => ({
+    label: item.label,
+    apiField: item.apiField,
+    value: item.value || (typeof factoryCafe24ReferenceOverrideName === 'function'
+      ? factoryCafe24ReferenceOverrideName(item.type, item.code)
+      : '') || String(item.code || '').trim(),
+  }));
   const rows = [
     {
       fieldId: 'product_name',
@@ -5503,7 +5627,7 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
       fieldId: 'sale_price',
       apiField: 'price',
       label: '판매가',
-      value: factoryFinalRegistrationFirstText(finalRegistration.price, finalRegistration.salePrice, finalRegistration.sale_price, product.price, finalDb.sale_price, finalDb.price),
+      value: salePrice,
       required: true,
       inputMode: 'numeric',
       help: 'Cafe24 판매가입니다.',
@@ -5529,6 +5653,7 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
   ];
   return {
     rows,
+    createReferenceDefaults,
     productName,
     salePrice: rows.find(row => row.fieldId === 'sale_price')?.value || '',
     requiredMissing: rows.filter(row => row.required && !String(row.value || '').trim()).map(row => row.label),
@@ -5536,9 +5661,7 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
 }
 
 function renderFactoryFinalRegistrationBasicInfoPanel(factory = factoryRuntimeReadFactory(), options = {}) {
-  const model = options.model || (options.renderCache
-    ? factoryRenderCacheFinalBasicInfoModel(factory, options.renderCache)
-    : factoryFinalRegistrationBasicInfoModel(factory, options));
+  const model = factoryFinalRegistrationBasicInfoModel(factory, options);
   const missing = model.requiredMissing;
   return `<div class="factory-cafe24-save-panel" data-factory-final-basic-info-panel="1" style="margin-top:10px;border-color:${missing.length ? 'rgba(245,158,11,.38)' : 'rgba(99,102,241,.26)'};background:${missing.length ? 'rgba(245,158,11,.055)' : 'rgba(15,23,42,.30)'}">
     <div class="factory-cafe24-save-head">
@@ -5559,6 +5682,10 @@ function renderFactoryFinalRegistrationBasicInfoPanel(factory = factoryRuntimeRe
         <input class="input" data-factory-final-basic-field="${escAttr(row.fieldId)}" value="${escAttr(row.value)}" inputmode="${escAttr(row.inputMode)}" placeholder="${row.required ? '필수 입력' : '선택 입력'}" title="${escAttr(row.help)}">
       </label>`).join('')}
     </div>
+    <div class="factory-cafe24-save-stats" data-factory-final-create-reference-defaults="1" style="margin-top:8px">
+      ${model.createReferenceDefaults.map(item => `<div class="factory-cafe24-save-stat"><b>${escapeHtml(item.value)}</b><span>${escapeHtml(item.label)} · ${escapeHtml(item.apiField)}</span></div>`).join('')}
+    </div>
+    <div class="factory-small" data-factory-final-origin-default-note="1" style="color:var(--text-m);line-height:1.5">새 상품 등록 기준입니다. 원산지는 신화사DB/Cafe24 값을 우선하고, 둘 다 없을 때 국내 &gt; 대구광역시 &gt; 서구를 사용합니다.</div>
     ${missing.length ? `<div class="factory-cafe24-save-note">필수 기본정보가 비어 있습니다: ${escapeHtml(missing.join(', '))}</div>` : `<div class="factory-small" style="color:var(--text-m);line-height:1.5">상품명과 판매가는 기본정보 적용을 누르거나 최종 등록 실행 시 반영됩니다.</div>`}
   </div>`;
 }
@@ -5604,6 +5731,10 @@ function factorySetFinalRegistrationBasicValue(factory, fieldId, value) {
     setting.manualTouched = true;
   }
   factory.product.finalDb[fieldId] = normalizedValue;
+  if (factory.automation?.fieldDrafts && typeof factory.automation.fieldDrafts === 'object') {
+    const { [fieldId]: _appliedDraft, ...remainingDrafts } = factory.automation.fieldDrafts;
+    factory.automation.fieldDrafts = remainingDrafts;
+  }
   if (typeof document !== 'undefined') {
     document.querySelectorAll('[data-factory-final-basic-field]').forEach(input => {
       if (input?.dataset?.factoryFinalBasicField !== fieldId) return;
@@ -5671,19 +5802,16 @@ function factoryApplyFinalRegistrationBasicInfoInputs(options = {}) {
 }
 
 function factoryFinalRegistrationDetailModel(factory) {
-  const requiredSections = typeof orderedSections === 'function' ? orderedSections() : [];
-  const requiredIds = requiredSections.map(section => section.id).filter(Boolean);
-  const total = requiredIds.length;
-  const currentScope = typeof sectionWorkScopeMeta === 'function' ? sectionWorkScopeMeta() : null;
-  const generated = requiredIds.length
-    ? requiredIds.filter(id => {
-        const content = state.sectionContents?.[id];
-        if (content && typeof sectionContentBelongsToCurrentWork === 'function') {
-          return sectionContentBelongsToCurrentWork(id, content, currentScope);
-        }
-        return !!(content || state.sectionImages?.[id]);
-      }).length
-    : 0;
+  const previewStatus = typeof factoryCurrentPreviewSectionStatus === 'function'
+    ? factoryCurrentPreviewSectionStatus(state)
+    : (() => {
+        const requiredSections = typeof orderedSections === 'function' ? orderedSections() : [];
+        const requiredIds = requiredSections.map(section => section.id).filter(Boolean);
+        const generatedIds = requiredIds.filter(id => !!state.sectionContents?.[id]);
+        return { generated: generatedIds.length, total: requiredIds.length };
+      })();
+  const total = previewStatus.total;
+  const generated = previewStatus.generated;
   const detailAssets = typeof factoryUsableAssetsForStage === 'function'
     ? factoryUsableAssetsForStage('detail', factory).length
     : 0;
@@ -5692,8 +5820,13 @@ function factoryFinalRegistrationDetailModel(factory) {
     : { html: '' };
   const hasCurrentDetailHtml = !!String(scoped?.html || '').trim();
   const sourceBlocked = !!scoped?.blocked;
+  const partialPreview = total > 0 && generated > 0 && generated < total;
+  const partialGateAllowed = partialPreview && sourceBlocked && [
+    'section-preview-incomplete',
+    'section-scope-blocked',
+  ].includes(String(scoped?.source || ''));
   const ok = hasCurrentDetailHtml && !sourceBlocked && (detailAssets > 0 || (total > 0 && generated >= total));
-  const canProceed = hasCurrentDetailHtml && !sourceBlocked;
+  const canProceed = (hasCurrentDetailHtml && !sourceBlocked) || partialGateAllowed;
   const label = total > 0
     ? `${generated}/${total}개 섹션 생성`
     : (detailAssets ? `${detailAssets}개 상세페이지 자산` : '상세페이지 조각 확인 필요');
@@ -5730,9 +5863,126 @@ function factoryFinalRegistrationDetailModel(factory) {
 
 function factoryEnsureCurrentDetailHtmlAsset(factory) {
   if (typeof factoryCafe24CurrentScopedDetailHtml !== 'function') return { stored: false };
-  const scoped = factoryCafe24CurrentScopedDetailHtml(factory);
-  const html = String(scoped?.html || '').trim();
-  if (!html || scoped.source !== 'current-section-export') return { ...scoped, stored: false };
+  let scoped = factoryCafe24CurrentScopedDetailHtml(factory);
+  let html = String(scoped?.html || '').trim();
+  const previewStatus = typeof factoryCurrentPreviewSectionStatus === 'function'
+    ? factoryCurrentPreviewSectionStatus(state)
+    : null;
+  const incompletePreview = !!(
+    previewStatus &&
+    previewStatus.generated > 0 &&
+    previewStatus.generated < previewStatus.total
+  );
+  const imageRefs = typeof factoryRegistrationDetailImageRefs === 'function'
+    ? factoryRegistrationDetailImageRefs(factory, { includeTransferSrc: true })
+      .filter(ref => String(ref?.src || ref?.transferSrc || '').trim())
+    : [];
+  const renderedImageRefs = imageRefs.map(ref => {
+    const transferSrc = String(ref?.transferSrc || '').trim();
+    const source = String(ref?.src || transferSrc || '').trim();
+    const label = String(ref?.label || '상세 이미지').trim() || '상세 이미지';
+    const lightKey = transferSrc && typeof factoryRememberLightImage === 'function'
+      ? factoryRememberLightImage(transferSrc)
+      : '';
+    const renderedSource = lightKey && typeof factoryLightImagePlaceholder === 'function'
+      ? factoryLightImagePlaceholder(label)
+      : source;
+    const lightAttr = lightKey ? ` data-factory-light-image-key="${escAttr(lightKey)}"` : '';
+    return {
+      source,
+      renderedSource,
+      lightKey,
+      label,
+      html: `<img src="${escAttr(renderedSource)}"${lightAttr} alt="${escAttr(label)}" style="display:block;max-width:100%;height:auto;margin:0 auto">`,
+    };
+  });
+  const wrapImageHtml = refs => refs.length
+    ? `<div style="max-width:860px;margin:0 auto;background:#fff;text-align:center">${refs.map(ref => ref.html).join('')}</div>`
+    : '';
+  const imageHtml = wrapImageHtml(renderedImageRefs);
+  if (html && renderedImageRefs.length) {
+    const labelCounts = renderedImageRefs.reduce((counts, ref) => {
+      counts.set(ref.label, (counts.get(ref.label) || 0) + 1);
+      return counts;
+    }, new Map());
+    const missingImageRefs = renderedImageRefs.filter(ref => {
+      const markers = [
+        ref.source,
+        ref.source ? escAttr(ref.source) : '',
+        ref.renderedSource,
+        ref.renderedSource ? escAttr(ref.renderedSource) : '',
+        ref.lightKey,
+      ].filter(Boolean);
+      if (labelCounts.get(ref.label) === 1) {
+        const escapedLabel = escAttr(ref.label);
+        markers.push(`alt="${escapedLabel}"`, `alt='${escapedLabel}'`);
+      }
+      return !markers.some(marker => html.includes(marker));
+    });
+    const missingImageHtml = wrapImageHtml(missingImageRefs);
+    if (missingImageHtml) {
+      const bodyClose = html.search(/<\/body\s*>/i);
+      const htmlClose = html.search(/<\/html\s*>/i);
+      const insertAt = bodyClose >= 0 ? bodyClose : htmlClose;
+      html = insertAt >= 0
+        ? `${html.slice(0, insertAt)}${missingImageHtml}${html.slice(insertAt)}`
+        : `${html}${missingImageHtml}`;
+      scoped = { ...scoped, html };
+    }
+  }
+  const partialPreview = !!(
+    incompletePreview &&
+    ['section-preview-incomplete', 'section-scope-blocked'].includes(String(scoped?.source || ''))
+  );
+  if (!html && partialPreview && typeof buildExportHtml === 'function') {
+    try {
+      const rawHtml = buildExportHtml(
+        state.analysis || factory.product?.analysis || {},
+        state.sectionContents || {},
+        state.sectionImages || {},
+        state.detailImageBlocks || [],
+      );
+      const candidateHtml = typeof factoryCafe24StripDetailAdminLabels === 'function'
+        ? factoryCafe24StripDetailAdminLabels(rawHtml)
+        : String(rawHtml || '').trim();
+      const safeCheck = typeof factoryCafe24DetailHtmlPreflight === 'function'
+        ? factoryCafe24DetailHtmlPreflight(candidateHtml)
+        : { ok: true };
+      const foreignCheck = typeof factoryCafe24DetailForeignProductCheck === 'function'
+        ? factoryCafe24DetailForeignProductCheck(candidateHtml, factory, state)
+        : { ok: true };
+      if (candidateHtml && /<img\b/i.test(candidateHtml) && safeCheck.ok && foreignCheck.ok) {
+        scoped = {
+          ...scoped,
+          html: candidateHtml,
+          source: 'current-section-export-partial',
+          blocked: false,
+          partialExport: true,
+          sectionCount: previewStatus.generated,
+          message: `${previewStatus.generated}/${previewStatus.total}개 섹션과 현재 이미지 자산으로 상세설명을 구성했습니다.`,
+        };
+        html = candidateHtml;
+      }
+    } catch(_) {}
+  }
+  if (!html && partialPreview && typeof factoryCafe24BuildMarketSafeDetailHtml === 'function') {
+    const fallbackHtml = factoryCafe24BuildMarketSafeDetailHtml(factory.product?.finalDb || {}, factory);
+    if (fallbackHtml) {
+      scoped = {
+        ...scoped,
+        html: `${fallbackHtml}${imageHtml}`,
+        source: 'partial-safe-fallback',
+        blocked: false,
+        partialFallback: true,
+        sectionCount: previewStatus.generated,
+        message: `${previewStatus.generated}/${previewStatus.total}개 섹션 상태로 현재 상품 기준 안전 상세설명을 사용합니다.`,
+      };
+      html = `${fallbackHtml}${imageHtml}`;
+    }
+  }
+  if (!html || !['current-section-export', 'current-section-export-partial', 'partial-safe-fallback'].includes(String(scoped?.source || ''))) {
+    return { ...scoped, stored: false };
+  }
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
   const existing = assets.find(asset =>
     asset &&
@@ -5803,7 +6053,7 @@ function factoryPreserveCurrentDetailHtmlBeforeSectionReset(reason = '섹션 초
   }
 }
 
-function factoryRegistrationImageRef(src = '', label = '이미지', source = '') {
+function factoryRegistrationImageRef(src = '', label = '이미지', source = '', options = {}) {
   const image = typeof factoryCoerceImageSrc === 'function'
     ? factoryCoerceImageSrc(src)
     : (typeof displayableImageSrc === 'function' ? displayableImageSrc(src) : String(src || ''));
@@ -5813,21 +6063,23 @@ function factoryRegistrationImageRef(src = '', label = '이미지', source = '')
     label: String(label || '이미지').trim(),
     source: String(source || '').trim(),
     src: tooLarge ? '' : image,
+    ...(tooLarge && options.includeTransferSrc === true ? { transferSrc: image } : {}),
     hasImage: true,
     storedLarge: tooLarge,
   };
 }
 
-function factoryRegistrationCollectImageRefsFromValue(value, label = '상세이미지', source = '', out = [], seen = new WeakSet()) {
-  if (out.length >= 8 || value == null) return out;
+function factoryRegistrationCollectImageRefsFromValue(value, label = '상세이미지', source = '', out = [], seen = new WeakSet(), options = {}) {
+  const limit = 24;
+  if (out.length >= limit || value == null) return out;
   if (typeof value === 'string') {
-    const ref = factoryRegistrationImageRef(value, label, source);
+    const ref = factoryRegistrationImageRef(value, label, source, options);
     if (ref) out.push(ref);
     return out;
   }
   if (Array.isArray(value)) {
-    value.slice(0, 12).forEach((item, index) => {
-      factoryRegistrationCollectImageRefsFromValue(item, `${label} ${index + 1}`, source, out, seen);
+    value.slice(0, limit).forEach((item, index) => {
+      factoryRegistrationCollectImageRefsFromValue(item, `${label} ${index + 1}`, source, out, seen, options);
     });
     return out;
   }
@@ -5836,8 +6088,8 @@ function factoryRegistrationCollectImageRefsFromValue(value, label = '상세이�
   seen.add(value);
   const preferredKeys = ['image', 'dataUrl', 'preview', 'imageUrl', 'url', 'src', 'thumbnail', 'thumb', 'result'];
   preferredKeys.forEach(key => {
-    if (out.length >= 8 || value[key] == null) return;
-    factoryRegistrationCollectImageRefsFromValue(value[key], value.label || value.title || label, source || key, out, seen);
+    if (out.length >= limit || value[key] == null) return;
+    factoryRegistrationCollectImageRefsFromValue(value[key], value.label || value.title || label, source || key, out, seen, options);
   });
   return out;
 }
@@ -5863,10 +6115,11 @@ function factoryRegistrationHeroImageRef(factory = factoryRuntimeReadFactory()) 
   return factoryRegistrationImageRef(productImage, '제품 기준 이미지', 'product');
 }
 
-function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory()) {
+function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory(), options = {}) {
+  const limit = 24;
   const refs = [];
   const add = (src, label, source) => {
-    const ref = factoryRegistrationImageRef(src, label, source);
+    const ref = factoryRegistrationImageRef(src, label, source, options);
     if (!ref) return;
     const key = ref.src || `${ref.label}|${ref.source}|${ref.storedLarge}`;
     if (refs.some(item => (item.src || `${item.label}|${item.source}|${item.storedLarge}`) === key)) return;
@@ -5874,7 +6127,7 @@ function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory(
   };
   const sections = typeof orderedSections === 'function' ? orderedSections({ includeHidden: true, includeAutoExcluded: true }) : [];
   sections.forEach(section => {
-    if (refs.length >= 8) return;
+    if (refs.length >= limit) return;
     const image = state.sectionImages?.[section.id];
     if (image) add(image, section.name || section.id || '상세 섹션', `section:${section.id || ''}`);
     const variants = Array.isArray(state.sectionVariants?.[section.id]) ? state.sectionVariants[section.id] : [];
@@ -5885,16 +6138,18 @@ function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory(
       state.sectionContents?.[section.id],
       section.name || section.id || '상세 섹션',
       `content:${section.id || ''}`,
-      []
+      [],
+      new WeakSet(),
+      options,
     );
     contentRefs.forEach(ref => {
-      if (refs.length >= 8) return;
+      if (refs.length >= limit) return;
       const key = ref.src || `${ref.label}|${ref.source}|${ref.storedLarge}`;
       if (!refs.some(item => (item.src || `${item.label}|${item.source}|${item.storedLarge}`) === key)) refs.push(ref);
     });
   });
   (Array.isArray(state.detailImageBlocks) ? state.detailImageBlocks : []).forEach(block => {
-    if (refs.length >= 8) return;
+    if (refs.length >= limit) return;
     add(block?.dataUrl, block?.label || '추가 상세 이미지', `detailBlock:${block?.afterSectionId || ''}`);
   });
   const detailAssets = [
@@ -5902,11 +6157,11 @@ function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory(
     ...(typeof factoryUsableAssetsForStage === 'function' ? factoryUsableAssetsForStage('detail', factory) : []),
   ];
   detailAssets.forEach(asset => {
-    if (refs.length >= 8) return;
+    if (refs.length >= limit) return;
     const image = typeof factoryAssetDisplayImage === 'function' ? factoryAssetDisplayImage(asset) : asset?.image;
     add(image, asset?.title || '상세페이지 자산', `asset:${asset?.stageId || 'detail'}`);
   });
-  return refs.slice(0, 8);
+  return refs.slice(0, limit);
 }
 
 function factoryRegistrationFindRelatedProject(productName = '', productNo = '') {
@@ -6016,11 +6271,57 @@ function factoryBuildRegistrationHistoryRecord(options = {}) {
 
 async function factoryRecordFinalRegistrationHistory(options = {}) {
   const record = factoryBuildRegistrationHistoryRecord(options);
-  const saved = await prependFactoryRegistrationHistoryRecord(record, { render: options.render !== false });
+  const publicationReceipt = factoryApplyCafe24PublicationReceipt(
+    options.factory || factoryRuntimeReadFactory(),
+    record,
+  );
+  const saved = await prependFactoryRegistrationHistoryRecord({
+    ...record,
+    sourceWorkfileName: publicationReceipt.sourceWorkfileName,
+    publicationReceipt,
+  }, { render: options.render !== false });
   if (typeof factoryLog === 'function' && saved) {
     factoryLog(`등록 이력 저장 완료: ${saved.productName}${saved.productNo ? ` #${saved.productNo}` : ''}`, 'ok', options.factory);
   }
   return saved;
+}
+
+async function factoryResumeLatestExactCafe24Product(options = {}) {
+  if (!options.factory) {
+    const receipt = await factoryRuntimeUpdateOwnedFactory(
+      'factory/cafe24:resume-exact-product',
+      'cafe24',
+      draft => factoryResumeLatestExactCafe24Product({ ...options, factory: draft, render: false }),
+    );
+    await saveLastWorkNow({ sync: false, factory: receipt.snapshot.factory });
+    if (options.render !== false) renderPreservingMainScroll();
+    return receipt.result;
+  }
+  if (typeof window.ensureCafe24Modules === 'function') await window.ensureCafe24Modules();
+  const factory = options.factory;
+  const basicInfo = factoryFinalRegistrationBasicInfoModel(factory);
+  const productName = String(basicInfo.productName || '').trim();
+  if (!productName) {
+    factoryOpenMarketLog('동일명 Cafe24 상품 조회 중단: 상품명이 비어 있습니다.', 'error', factory);
+    return null;
+  }
+  factory.product.cafe24ApiStatus = `동일명 최신 Cafe24 상품 조회 중: ${productName}`;
+  factoryOpenMarketLog(factory.product.cafe24ApiStatus, 'info', factory);
+  try {
+    const product = await factoryFindLiveCafe24ProductByExactName(productName, CAFE24_CONTROL_API.defaultMallId);
+    const attached = factoryAttachCafe24ProductAsCurrentTarget(product, `final-resume:${productName}`, factory);
+    if (!attached?.productNo) throw new Error(`${productName} 상품을 Cafe24에서 찾지 못했습니다.`);
+    const sync = factoryEnsureOpenMarketSync(factory);
+    sync.cafe24RegistrationMode = 'update';
+    sync.cafe24RegistrationModeUserTouched = true;
+    factory.product.cafe24ApiStatus = `동일명 최신 Cafe24 상품 이어서 수정: #${attached.productNo} ${attached.productName || productName}`;
+    factoryOpenMarketLog(factory.product.cafe24ApiStatus, 'ok', factory);
+    return attached;
+  } catch (error) {
+    factory.product.cafe24ApiStatus = `동일명 최신 Cafe24 상품 조회 실패: ${error.message || error}`;
+    factoryOpenMarketLog(factory.product.cafe24ApiStatus, 'error', factory);
+    return null;
+  }
 }
 
 function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = {}) {
@@ -6068,6 +6369,9 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
         </div>
       </div>`
     : '';
+  const cafe24OptionEditorHtml = typeof renderFactoryCafe24OptionEditor === 'function'
+    ? renderFactoryCafe24OptionEditor(factory, factoryCafe24OptionEditorModel(factory))
+    : '';
   return `<div id="factoryFinalRegistrationPanel" data-factory-final-registration="1" style="border:1px solid rgba(99,102,241,.38);background:rgba(99,102,241,.075);border-radius:12px;padding:12px;margin-top:12px">
     <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
       <div style="min-width:0">
@@ -6077,8 +6381,11 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
         </div>
       </div>
       <div class="factory-stage-actions" style="justify-content:flex-end">
-        <button class="btn-sm primary" type="button" id="factoryRunFinalRegistration" ${disabledAttr(!canRun, disabledReason || '최종 등록 조건을 확인해주세요.')} title="${escAttr(runTitle)}">
-          <span class="material-icons-outlined" style="font-size:14px">${sync.finalRegistrationRunning ? 'hourglass_empty' : 'rocket_launch'}</span>${sync.finalRegistrationRunning ? '최종 등록 중' : '최종 등록 실행'}
+        <button class="btn-sm" type="button" data-factory-resume-exact-cafe24-product="1" data-factory-guide-action="resume-exact-cafe24-product" onclick="return window.factoryResumeExactCafe24ButtonInline(this,event)" ${disabledAttr(sync.finalRegistrationRunning, '최종 등록이 끝난 뒤 다시 선택할 수 있습니다.')} title="현재 상품명과 정확히 같은 최신 Cafe24 상품을 찾아 기존 상품 수정 대상으로 선택합니다.">
+          <span class="material-icons-outlined" style="font-size:14px">manage_search</span>동일명 최신 Cafe24 상품 이어서 수정
+        </button>
+        <button class="btn-primary" type="button" id="factoryRunFinalRegistration" data-factory-guide-action="run-final-registration" onclick="return window.factoryRunFinalRegistrationButtonInline(this,event)" ${disabledAttr(!canRun, disabledReason || '최종 등록 조건을 확인해주세요.')} title="${escAttr(runTitle)}">
+          <span class="material-icons-outlined" style="font-size:16px">${sync.finalRegistrationRunning ? 'hourglass_empty' : 'rocket_launch'}</span>${sync.finalRegistrationRunning ? 'Cafe24 최종 등록 중' : 'Cafe24 최종 등록'}
         </button>
       </div>
     </div>
@@ -6115,6 +6422,7 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
       createModel: options.createModel,
       model: options.basicInfoModel,
     })}
+    ${cafe24OptionEditorHtml}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:7px;margin-top:10px">
       <div class="api-badge" style="justify-content:flex-start">상세페이지 ${escapeHtml(detailModel.label)}</div>
       <div class="api-badge" style="justify-content:flex-start">Cafe24 ${escapeHtml(cafe24Model.label)}</div>
@@ -6125,7 +6433,7 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
     </div>
     ${detailWarning && !sync.finalRegistrationRunning ? `<div class="factory-small" style="margin-top:8px;color:var(--warn);font-weight:900">${escapeHtml(detailWarning)}. 실행하면 확인창에서 계속 진행할지 묻습니다.</div>` : ''}
     ${detailRecoveryHtml}
-    ${shownStatus ? `<div data-final-registration-status-box style="margin-top:10px;border:1px solid ${staleCompletedStatus ? 'rgba(245,158,11,.34)' : 'rgba(148,163,184,.20)'};background:${staleCompletedStatus ? 'rgba(245,158,11,.07)' : 'rgba(15,23,42,.34)'};border-radius:9px;padding:8px">
+    <div data-final-registration-status-box style="display:${shownStatus ? 'block' : 'none'};margin-top:10px;border:1px solid ${staleCompletedStatus ? 'rgba(245,158,11,.34)' : 'rgba(148,163,184,.20)'};background:${staleCompletedStatus ? 'rgba(245,158,11,.07)' : 'rgba(15,23,42,.34)'};border-radius:9px;padding:8px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div class="factory-small" data-final-registration-status style="color:${staleCompletedStatus ? 'var(--warn)' : (sync.finalRegistrationRunning ? 'var(--primary-h)' : 'var(--text)')};font-weight:950">${escapeHtml(shownStatus)}</div>
         <span class="api-badge" data-final-registration-progress-label>${progress}%</span>
@@ -6134,7 +6442,7 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
       <div class="progress-outer" style="max-width:none;height:10px;margin-top:7px">
         <div class="progress-inner" data-final-registration-progress-bar style="width:${progress}%;min-width:0;font-size:0"></div>
       </div>
-    </div>` : ''}
+    </div>
   </div>`;
 }
 
@@ -6147,6 +6455,7 @@ function factoryPatchFinalRegistrationStatusInPlace(sync = factoryEnsureOpenMark
   const progressBar = panel.querySelector('[data-final-registration-progress-bar]');
   if (!statusBox || !statusEl || !progressLabel || !progressBar) return false;
   const progress = Math.max(0, Math.min(100, Number(sync.finalRegistrationProgress || 0)));
+  statusBox.style.display = 'block';
   statusEl.textContent = formatAppErrorMessage(sync.finalRegistrationStatus || '');
   statusEl.style.color = sync.finalRegistrationRunning ? 'var(--primary-h)' : 'var(--text)';
   progressLabel.textContent = `${progress}%`;
@@ -6154,7 +6463,7 @@ function factoryPatchFinalRegistrationStatusInPlace(sync = factoryEnsureOpenMark
   const runBtn = document.getElementById('factoryRunFinalRegistration');
   if (runBtn && sync.finalRegistrationRunning) {
     runBtn.disabled = true;
-    runBtn.innerHTML = '<span class="material-icons-outlined" style="font-size:14px">hourglass_empty</span>최종 등록 중';
+    runBtn.innerHTML = '<span class="material-icons-outlined" style="font-size:16px">hourglass_empty</span>Cafe24 최종 등록 중';
   }
   return true;
 }
@@ -6258,6 +6567,20 @@ async function factoryPrepareFinalRegistrationLocalAssets(options = {}) {
     return { ok: false, reason: e.message || String(e) };
   }
 
+  const previewStatus = typeof factoryCurrentPreviewSectionStatus === 'function'
+    ? factoryCurrentPreviewSectionStatus(state)
+    : null;
+  const currentDetailImageCount = typeof factoryRegistrationDetailImageRefs === 'function'
+    ? factoryRegistrationDetailImageRefs(factory, { includeTransferSrc: true }).length
+    : 0;
+  if (previewStatus?.generated > currentDetailImageCount
+    && typeof factoryRecoverPreviewSectionsFromLocalArchive === 'function') {
+    const recovery = await factoryRecoverPreviewSectionsFromLocalArchive({ render: false, persist: false });
+    if (recovery?.restored) {
+      emit(`현재 상세 이미지 로컬 보관본 복구 완료: ${recovery.restored}/${recovery.total || recovery.restored}개`, 5, 'ok');
+    }
+  }
+
   let restored = { ok: false, restored: 0, total: 0 };
   if (options.restoreCurrentWork === true && typeof factoryRestoreLocalArchiveToCurrentWork === 'function') {
     const targets = typeof factoryLocalArchiveRestoreTargets === 'function'
@@ -6298,7 +6621,53 @@ async function factoryPrepareFinalRegistrationLocalAssets(options = {}) {
   };
 }
 
+function factoryPromptFinalRegistrationConfirmation(lines = []) {
+  return new Promise(resolve => {
+    document.getElementById('factoryFinalRegistrationConfirmDialog')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'factoryFinalRegistrationConfirmDialog';
+    overlay.className = 'factory-asset-preview-overlay';
+    overlay.innerHTML = `
+      <div class="factory-asset-preview-modal" role="dialog" aria-modal="true" aria-labelledby="factoryFinalRegistrationConfirmTitle" style="width:min(560px,96vw);grid-template-rows:auto minmax(0,1fr) auto">
+        <div class="factory-asset-preview-head">
+          <div class="factory-asset-preview-title" id="factoryFinalRegistrationConfirmTitle">Cafe24 최종 등록 확인</div>
+        </div>
+        <div class="factory-asset-preview-body" style="display:block;color:var(--text-d);font-size:13px;line-height:1.65;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere">${escapeHtml((Array.isArray(lines) ? lines : [lines]).join('\n'))}</div>
+        <div class="factory-stage-actions" style="justify-content:flex-end;padding:12px 14px;border-top:1px solid var(--border);flex-wrap:wrap">
+          <button class="btn-sm" type="button" data-factory-final-registration-confirm="cancel">취소</button>
+          <button class="btn-sm primary" type="button" data-factory-final-registration-confirm="confirm">확인하고 등록 실행</button>
+        </div>
+      </div>`;
+    const finish = confirmed => {
+      overlay.remove();
+      resolve(confirmed);
+    };
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) finish(false);
+    });
+    overlay.addEventListener('keydown', event => {
+      if (event.key === 'Escape') finish(false);
+    });
+    overlay.querySelector('[data-factory-final-registration-confirm="cancel"]')?.addEventListener('click', () => finish(false));
+    const confirmButton = overlay.querySelector('[data-factory-final-registration-confirm="confirm"]');
+    confirmButton?.addEventListener('click', () => finish(true));
+    document.body.appendChild(overlay);
+    confirmButton?.focus();
+  });
+}
+
 async function factoryRunFinalRegistration(options = {}) {
+  if (!options.factory && options.operationLeaseHeld !== true) {
+    return factoryRuntimeWithOperationLease(
+      'factory/final-registration:run',
+      { operationToken: options.operationToken },
+      operation => factoryRunFinalRegistration({
+        ...options,
+        operationToken: operation.operationToken,
+        operationLeaseHeld: true,
+      }),
+    );
+  }
   if (!options.factory) {
     const receipt = await factoryRuntimeUpdateOwnedFactory(
       'factory/final-registration:run',
@@ -6309,7 +6678,7 @@ async function factoryRunFinalRegistration(options = {}) {
         render: false,
       }),
     );
-    saveLastWorkNow({ sync: false });
+    await saveLastWorkNow({ sync: false, factory: receipt.snapshot.factory });
     if (options.render !== false) renderPreservingMainScroll();
     return receipt.result;
   }
@@ -6339,7 +6708,7 @@ async function factoryRunFinalRegistration(options = {}) {
   factoryApplyFinalCafe24StatusToDb(factory);
   if (typeof factoryUpdateFinalDbFromFields === 'function') factoryUpdateFinalDbFromFields(factory);
   if (options.skipLocalAssetPrepare !== true) {
-    await factoryPrepareFinalRegistrationLocalAssets({ factory, render: false });
+    await factoryPrepareFinalRegistrationLocalAssets({ factory, render: false, restoreCurrentWork: true });
     sync = factoryEnsureOpenMarketSync(factory);
     factoryApplyFinalCafe24StatusToDb(factory);
     if (typeof factoryUpdateFinalDbFromFields === 'function') factoryUpdateFinalDbFromFields(factory);
@@ -6348,6 +6717,12 @@ async function factoryRunFinalRegistration(options = {}) {
   const detailModel = factoryFinalRegistrationDetailModel(factory);
   const cafe24Model = factoryFinalRegistrationCafe24Model(factory);
   const basicInfo = factoryFinalRegistrationBasicInfoModel(factory);
+  const inventoryQuantityInput = String(
+    options.forceInventoryQuantity ??
+    (typeof document !== 'undefined' ? document.getElementById('factoryCafe24InventoryAll')?.value : '') ??
+    ''
+  ).trim();
+  const forceInventoryQuantity = /^\d+$/.test(inventoryQuantityInput) ? inventoryQuantityInput : '';
   if (!detailModel.canProceed) {
     factoryUpdateFinalRegistrationStatus(detailModel.reason || '상세페이지 조각이 아직 없습니다.', 0, 'error', { factory, render: false });
     return false;
@@ -6383,7 +6758,7 @@ async function factoryRunFinalRegistration(options = {}) {
     '',
     '외부 Cafe24/오픈마켓 데이터가 실제로 변경될 수 있습니다. 계속할까요?',
   ];
-  const ok = options.skipConfirm === true || window.confirm(confirmLines.join('\n'));
+  const ok = options.skipConfirm === true || await factoryPromptFinalRegistrationConfirmation(confirmLines);
   if (!ok) return false;
   if (!detailModel.ok) {
     factoryOpenMarketLog(`상세페이지 일부 섹션 미완성 상태로 최종 등록을 계속합니다: ${detailModel.label}`, 'warn', factory);
@@ -6425,7 +6800,19 @@ async function factoryRunFinalRegistration(options = {}) {
     factoryUpdateFinalRegistrationStatus('최종 등록 중단: 현재 미리보기 상세페이지 HTML을 확보하지 못했습니다. 상세페이지를 다시 확인한 뒤 전송해주세요.', 0, 'error', { factory, render: false });
     return false;
   }
-  if (preservedDetail?.stored) {
+  const expectedDetailImageCount = Math.max(0, Number(preservedDetail?.sectionCount || detailModel.generated || 0));
+  const preservedDetailImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(preservedDetailHtml).length
+    : (preservedDetailHtml.match(/<img\b[^>]*\bsrc\s*=/gi) || []).length;
+  if (expectedDetailImageCount && preservedDetailImageCount < expectedDetailImageCount) {
+    const message = `최종 등록 중단: 상세 이미지 ${preservedDetailImageCount}/${expectedDetailImageCount}장만 전송 HTML에 연결됐습니다. Cafe24에는 전송하지 않습니다.`;
+    factoryUpdateFinalRegistrationStatus(message, 0, 'error', { factory, render: false });
+    factoryOpenMarketLog(message, 'error', factory);
+    return false;
+  }
+  if (preservedDetail?.partialFallback) {
+    factoryOpenMarketLog(`부분 상세페이지 ${preservedDetail.sectionCount || detailModel.generated}/${detailModel.total || 0} 상태라 상품 기준 안전 상세설명을 등록 전 보존했습니다.`, 'warn', factory);
+  } else if (preservedDetail?.stored) {
     factoryOpenMarketLog(`현재 미리보기 상세페이지 HTML을 등록 전 자산으로 보존했습니다: ${preservedDetail.sectionCount || detailModel.generated}개 섹션`, 'ok', factory);
   } else if (preservedDetail?.reused) {
     factoryOpenMarketLog('현재 미리보기 상세페이지 HTML은 이미 보존된 자산을 다시 사용합니다.', 'info', factory);
@@ -6447,13 +6834,59 @@ async function factoryRunFinalRegistration(options = {}) {
       factoryPatchFinalRegistrationStatusInPlace(sync);
     };
     const cafe24Result = cafe24Model.mode === 'update'
-      ? await factorySaveCafe24ProductFromFinalDb({ skipConfirm: true, applyFinalRegistrationSettings: true, deferInitialSave: true, forceName: basicInfo.productName, detailHtml: preservedDetailHtml, detailSource: preservedDetailSource, onProgress: reportCafe24Progress, factory, render: false })
-      : await factoryCreateCafe24ProductFromFinalDb({ skipConfirm: true, applyFinalRegistrationSettings: true, allowSelectedSource: true, forceName: basicInfo.productName, detailHtml: preservedDetailHtml, detailSource: preservedDetailSource, onProgress: reportCafe24Progress, factory, render: false });
+      ? await factorySaveCafe24ProductFromFinalDb({ skipConfirm: true, applyFinalRegistrationSettings: true, deferInitialSave: true, forceName: basicInfo.productName, forceSalePrice: basicInfo.salePrice, detailHtml: preservedDetailHtml, detailSource: preservedDetailSource, onProgress: reportCafe24Progress, factory, render: false })
+      : await factoryCreateCafe24ProductFromFinalDb({ skipConfirm: true, applyFinalRegistrationSettings: true, allowSelectedSource: true, forceName: basicInfo.productName, forceSalePrice: basicInfo.salePrice, forceInventoryQuantity, detailHtml: preservedDetailHtml, detailSource: preservedDetailSource, onProgress: reportCafe24Progress, factory, render: false });
     if (cafe24Result === false) {
       const apiStatus = String(factory.product?.cafe24ApiStatus || '').trim();
       const verificationError = String(factory.product?.cafe24LastSaveVerification?.error || '').trim();
       const detailedReason = [apiStatus, verificationError].filter(Boolean).join(' · ');
       throw new Error(detailedReason || 'Cafe24 등록/저장 단계가 실패했거나 중단되었습니다.');
+    }
+    if (cafe24Model.mode === 'update') {
+      const productNo = String(cafe24Model.productNo || '').trim();
+      if (!productNo) throw new Error('Cafe24 기존 상품 후속 등록 중단: 상품번호가 없습니다.');
+      reportCafe24Progress(`Cafe24 기존 상품 상세페이지 후속 저장 중: #${productNo}`, 92, 'info');
+      await factoryPublishCafe24ScopedDetailHtml(productNo, {
+        mallId: factoryCafe24TargetInfo(factory)?.mallId || CAFE24_CONTROL_API.defaultMallId,
+        html: preservedDetailHtml,
+        source: preservedDetailSource || 'final-registration-preserved',
+        progressStart: 92,
+        progressMid: 95,
+        progressEnd: 97,
+        onProgress: reportCafe24Progress,
+        factory,
+        render: false,
+      });
+      const presentationPlan = typeof factoryCafe24CreatePostSyncPlan === 'function'
+        ? factoryCafe24CreatePostSyncPlan(factory)
+        : { imageSlotCount: 0, readyActions: [] };
+      const requiredPresentationActions = (presentationPlan.readyActions || [])
+        .filter(action => ['images', 'category'].includes(action?.key));
+      if (requiredPresentationActions.length) {
+        const presentationOk = await factoryRunCafe24PostCreateSync(requiredPresentationActions, {
+          productNo,
+          mallId: factoryCafe24TargetInfo(factory)?.mallId || CAFE24_CONTROL_API.defaultMallId,
+          progressStart: 97,
+          progressEnd: 99,
+          onProgress: reportCafe24Progress,
+          requiredKeys: ['images', 'category'],
+          factory,
+          render: false,
+        });
+        if (presentationOk === false) throw new Error('Cafe24 기존 상품 이미지/카테고리 후속 동기화가 실패했습니다.');
+      }
+      const finalDetail = await fetchCafe24ProductFullByNo(productNo, factoryCafe24TargetInfo(factory)?.mallId || CAFE24_CONTROL_API.defaultMallId);
+      const finalRaw = parseCafe24Raw(finalDetail) || finalDetail?.raw || finalDetail || {};
+      const finalHtml = String(finalRaw.description || finalRaw.mobile_description || '').trim();
+      const finalHasImage = [finalRaw.detail_image, finalRaw.list_image, finalRaw.small_image, finalRaw.tiny_image]
+        .some(value => String(value || '').trim());
+      const finalIssues = [
+        !finalHtml ? '상세페이지 HTML 비어 있음' : '',
+        Number(presentationPlan.imageSlotCount || 0) > 0 && !finalHasImage ? '대표/목록 이미지 비어 있음' : '',
+      ].filter(Boolean);
+      if (finalIssues.length) throw new Error(`Cafe24 기존 상품 후속 등록 검증 실패: #${productNo} ${finalIssues.join(' · ')}`);
+      factoryOpenMarketLog(`Cafe24 기존 상품 후속 등록 검증 완료: #${productNo} 상세페이지/대표이미지 반영 확인`, 'ok', factory);
+      reportCafe24Progress(`Cafe24 기존 상품 후속 등록 검증 완료: #${productNo}`, 99, 'ok');
     }
     sync = factoryEnsureOpenMarketSync(factory);
     if (!settings.includeOpenMarket) {
@@ -6782,6 +7215,9 @@ function renderFactoryOptionColorControls(factory = factoryRuntimeReadFactory(),
         <input type="file" data-factory-option-color-file accept="image/*" multiple style="display:none">
       </div>
     </div>
+    ${typeof renderOptionGroupShotPanel === 'function'
+      ? renderOptionGroupShotPanel(state.optionSorter, { context: 'factory', compact: true })
+      : ''}
   </div>`;
 }
 
@@ -7246,7 +7682,7 @@ function factorySavedProjectThumb(project = {}) {
 function factorySavedProjectTitle(project = {}) {
   const payload = project.payload || {};
   const product = factorySavedProjectProduct(project);
-  return product.productName || payload.productName || project.name || payload.name || '조립공장 작업';
+  return project.name || payload.name || product.productName || payload.productName || '조립공장 작업';
 }
 
 function factorySavedProjectMeta(project = {}) {
@@ -7314,7 +7750,7 @@ function renderFactorySavedProjectCard(project = {}) {
       <input type="checkbox" data-factory-batch-project="${escAttr(project.id)}" ${checked ? 'checked' : ''} ${state.factoryBatchRunning ? 'disabled' : ''}>
     </label>
     <div class="factory-saved-thumb">
-      ${thumb ? `<img src="${escAttr(thumb)}" alt="${escAttr(factorySavedProjectTitle(project))}" loading="lazy" decoding="async">` : '<span class="material-icons-outlined">inventory_2</span>'}
+      ${thumb ? renderFactoryLightImage(thumb, factorySavedProjectTitle(project)) : '<span class="material-icons-outlined">inventory_2</span>'}
     </div>
     <div>
       <div class="factory-saved-title">${escapeHtml(factorySavedProjectTitle(project))}</div>
@@ -7337,7 +7773,7 @@ function renderFactoryRecentWorkfileCard(project = {}) {
   const isCurrentWorkfileFallback = project.source === 'current-workfile';
   return `<article class="factory-recent-workfile-card ${current ? 'current' : ''}" data-factory-recent-workfile-card data-project-id="${escAttr(project.id || '')}">
     <div class="factory-recent-workfile-thumb">
-      ${thumb ? `<img src="${escAttr(thumb)}" alt="${escAttr(title)}" loading="lazy" decoding="async">` : '<span class="material-icons-outlined">inventory_2</span>'}
+      ${thumb ? renderFactoryLightImage(thumb, title) : '<span class="material-icons-outlined">inventory_2</span>'}
     </div>
     <div class="factory-recent-workfile-body">
       <div class="factory-recent-workfile-title">${escapeHtml(title)}</div>
@@ -7511,7 +7947,45 @@ function factoryLocalArchiveKindRank(label = '') {
   return 9;
 }
 
-function factoryLocalArchiveMatchesCurrentWork(item = {}, factory = factoryRuntimeReadFactory()) {
+function factoryLocalArchiveMatchesCurrentProductInput(item = {}, factory = factoryRuntimeReadFactory()) {
+  const currentName = factoryCurrentProductIdentityMeta().productName || factory.product?.productName || state.productName || '';
+  const currentKey = typeof factoryCurrentProductKey === 'function'
+    ? factoryCurrentProductKey(factory)
+    : factoryNormalizeIdentityText(currentName);
+  const rawCurrentFingerprint = typeof factoryCurrentInputImageFingerprint === 'function'
+    ? factoryCurrentInputImageFingerprint(factory)
+    : '';
+  const currentFingerprint = typeof factoryImageFingerprintLooksUsable === 'function'
+    ? (factoryImageFingerprintLooksUsable(rawCurrentFingerprint) ? rawCurrentFingerprint : '')
+    : rawCurrentFingerprint;
+  const itemKey = item.productKey || factoryNormalizeIdentityText(item.productName || '');
+  const rawItemFingerprint = String(item.inputImageFingerprint || '').trim();
+  const itemFingerprint = typeof factoryImageFingerprintLooksUsable === 'function'
+    ? (factoryImageFingerprintLooksUsable(rawItemFingerprint) ? rawItemFingerprint : '')
+    : rawItemFingerprint;
+  if (!currentFingerprint || !itemFingerprint) return false;
+  if (currentFingerprint === itemFingerprint) return true;
+  if (!currentKey || !itemKey) return false;
+  const normalizeKey = typeof factoryNormalizeIdentityText === 'function'
+    ? factoryNormalizeIdentityText
+    : (value => String(value || '').trim().replace(/\s+/g, '').toLowerCase());
+  return normalizeKey(currentKey) === normalizeKey(itemKey) && currentFingerprint === itemFingerprint;
+}
+
+function factoryLocalArchiveCanRecoverLegacyDraftInput(item = {}, factory = factoryRuntimeReadFactory()) {
+  const itemWorkspaceId = String(
+    item.workspaceId ||
+    item.currentProjectId ||
+    item.projectId ||
+    item.metadata?.workspaceId ||
+    item.sourceMap?.workspaceId ||
+    ''
+  ).trim();
+  if (!/^draft:lastwork_/i.test(itemWorkspaceId)) return false;
+  return factoryLocalArchiveMatchesCurrentProductInput(item, factory);
+}
+
+function factoryLocalArchiveMatchesCurrentInput(item = {}, factory = factoryRuntimeReadFactory()) {
   const currentWorkspaceId = String(
     (typeof factoryCurrentWorkspaceId === 'function' ? factoryCurrentWorkspaceId(factory) : '') ||
     state.currentProjectId ||
@@ -7527,11 +8001,19 @@ function factoryLocalArchiveMatchesCurrentWork(item = {}, factory = factoryRunti
     item.sourceMap?.workspaceId ||
     ''
   ).trim();
-  if (!currentWorkspaceId || !itemWorkspaceId || currentWorkspaceId !== itemWorkspaceId) return false;
-  const currentName = factoryCurrentProductIdentityMeta().productName || factory.product?.productName || state.productName || '';
-  const currentKey = typeof factoryCurrentProductKey === 'function'
-    ? factoryCurrentProductKey(factory)
-    : factoryNormalizeIdentityText(currentName);
+  if (currentWorkspaceId && itemWorkspaceId && currentWorkspaceId === itemWorkspaceId) {
+    return factoryLocalArchiveMatchesCurrentProductInput(item, factory);
+  }
+  const archiveId = String(item.archiveId || item.id || '').trim();
+  const linkedLegacyAssetIds = Array.isArray(factory?.archive?.linkedLegacyAssetIds)
+    ? factory.archive.linkedLegacyAssetIds
+    : [];
+  if (!archiveId || !linkedLegacyAssetIds.includes(archiveId)) return false;
+  return factoryLocalArchiveCanRecoverLegacyDraftInput(item, factory);
+}
+
+function factoryLocalArchiveMatchesCurrentWork(item = {}, factory = factoryRuntimeReadFactory()) {
+  if (!factoryLocalArchiveMatchesCurrentInput(item, factory)) return false;
   const rawStageId = String(
     item.stageId ||
     item.metadata?.stageId ||
@@ -7547,13 +8029,6 @@ function factoryLocalArchiveMatchesCurrentWork(item = {}, factory = factoryRunti
     (typeof factoryCurrentWorkflowRunId === 'function' ? factoryCurrentWorkflowRunId(factory) : '') ||
     ''
   ).trim();
-  const rawCurrentFingerprint = typeof factoryCurrentInputImageFingerprint === 'function'
-    ? factoryCurrentInputImageFingerprint(factory)
-    : '';
-  const currentFingerprint = typeof factoryImageFingerprintLooksUsable === 'function'
-    ? (factoryImageFingerprintLooksUsable(rawCurrentFingerprint) ? rawCurrentFingerprint : '')
-    : rawCurrentFingerprint;
-  const itemKey = item.productKey || factoryNormalizeIdentityText(item.productName || '');
   const itemRunId = String(
     item.currentRunId ||
     item.generationRunId ||
@@ -7561,17 +8036,7 @@ function factoryLocalArchiveMatchesCurrentWork(item = {}, factory = factoryRunti
     item.metadata?.generationRunId ||
     ''
   ).trim();
-  const rawItemFingerprint = String(item.inputImageFingerprint || '').trim();
-  const itemFingerprint = typeof factoryImageFingerprintLooksUsable === 'function'
-    ? (factoryImageFingerprintLooksUsable(rawItemFingerprint) ? rawItemFingerprint : '')
-    : rawItemFingerprint;
-  if (!currentKey || !currentFingerprint) return false;
-  if (!itemKey || !itemFingerprint) return false;
-  if (!currentRunId || !itemRunId || itemRunId !== currentRunId) return false;
-  const normalizeKey = typeof factoryNormalizeIdentityText === 'function'
-    ? factoryNormalizeIdentityText
-    : (value => String(value || '').trim().replace(/\s+/g, '').toLowerCase());
-  return normalizeKey(currentKey) === normalizeKey(itemKey) && currentFingerprint === itemFingerprint;
+  return !!currentRunId && !!itemRunId && itemRunId === currentRunId;
 }
 
 function renderFactoryLocalArchiveCard(item = {}) {
@@ -7597,12 +8062,23 @@ function renderFactoryLocalArchiveCard(item = {}) {
   const sourceText = item.sourceLabel || item.origin || item.reason || sourceFiles.imagePath || item.sourceArchiveId || '생성 원본 기록';
   const sourcePath = sourceFiles.imagePath || sourceFiles.originalPath || sourceFiles.filePath || item.sourceArchiveId || '';
   const copyPath = savedPath || item.folder || '';
+  const workspaceId = String(
+    item.workspaceId ||
+    item.currentProjectId ||
+    item.metadata?.workspaceId ||
+    item.sourceMap?.workspaceId ||
+    ''
+  ).trim();
+  const isCurrentInput = factoryLocalArchiveMatchesCurrentInput(item, factoryRuntimeReadFactory());
   return `<article class="factory-local-archive-card">
     <button class="factory-local-archive-thumb" type="button" data-factory-local-archive-preview="${escAttr(archiveId)}" title="크게 보기">
-      ${imageUrl ? renderFactoryLightImage(imageUrl, title, '', label) : '<span class="material-icons-outlined">insert_photo</span>'}
+      ${imageUrl ? renderFactoryLightImage(imageUrl, title, 'data-factory-light-priority="1"', label) : '<span class="material-icons-outlined">insert_photo</span>'}
     </button>
     <div class="factory-local-archive-body">
-      <div class="factory-local-archive-title">${escapeHtml(title)}</div>
+      <div class="factory-local-archive-title">
+        ${escapeHtml(title)}
+        <span class="factory-pill" style="margin-left:6px;color:var(--ok);border-color:color-mix(in srgb, var(--ok) 55%, transparent)">로컬</span>
+      </div>
       <div class="factory-local-archive-meta">
         <span>${escapeHtml(label)}</span>
         <span>${escapeHtml(sectionText)}</span>
@@ -7612,13 +8088,17 @@ function renderFactoryLocalArchiveCard(item = {}) {
       <div class="factory-local-archive-meta">
         <span title="${escAttr(stageText)}">stageId ${escapeHtml(factoryLocalArchiveShort(stageText, 16))}</span>
         <span title="${escAttr(productKeyText)}">productKey ${escapeHtml(factoryLocalArchiveShort(productKeyText, 18))}</span>
+        <span title="${escAttr(workspaceId)}">작업파일 ${escapeHtml(factoryLocalArchiveShort(workspaceId, 18) || 'ID 없음')}</span>
         <span title="${escAttr(item.currentRunId || '')}">runId ${escapeHtml(runText)}</span>
         <span title="${escAttr(item.inputImageFingerprint || '')}">원본 ${escapeHtml(fpText)}</span>
       </div>
       <div class="factory-local-archive-source" title="${escAttr(sourcePath || sourceText)}">원본 연결: ${escapeHtml(sourceText)}</div>
       <div class="factory-local-archive-actions">
         <button class="btn-sm" type="button" data-factory-local-archive-preview="${escAttr(archiveId)}">크게</button>
-        <button class="btn-sm primary" type="button" data-factory-local-archive-load="${escAttr(archiveId)}">가져오기</button>
+        <button class="btn-sm primary" type="button" data-factory-local-archive-load="${escAttr(archiveId)}" data-factory-local-archive-action="load" onclick="return window.factoryLocalArchiveActionButtonInline(this,event)" ${disabledAttr(!isCurrentInput, '다른 작업파일 또는 다른 입력 원본의 결과입니다. 해당 작업을 연 뒤 가져올 수 있습니다.')}>가져오기</button>
+        <button class="btn-sm" type="button" data-factory-open-local-archive-folder="asset" data-factory-local-archive-id="${escAttr(archiveId)}" ${disabledAttr(!archiveId, '열 로컬 보관 자산이 없습니다.')}>
+          <span class="material-icons-outlined" style="font-size:14px">folder_open</span>폴더 열기
+        </button>
         <button class="btn-sm" type="button" data-factory-copy-archive-path="${escAttr(copyPath)}" ${disabledAttr(!copyPath, '복사할 저장 경로가 없습니다.')}>경로 복사</button>
       </div>
     </div>
@@ -7626,11 +8106,22 @@ function renderFactoryLocalArchiveCard(item = {}) {
 }
 
 function renderFactoryLocalArchiveMiniPanel(factory = factoryRuntimeReadFactory()) {
+  if (typeof factoryScheduleLocalArchiveAutoRefresh === 'function') {
+    factoryScheduleLocalArchiveAutoRefresh(factory);
+  }
   const archive = factory.archive || {};
   const assets = Array.isArray(archive.localAssets) ? archive.localAssets : [];
   const showAll = !!archive.localShowAll;
   const currentAssets = assets.filter(item => factoryLocalArchiveMatchesCurrentWork(item, factory));
-  const scopedAssets = showAll ? assets : currentAssets;
+  const currentInputAssets = assets.filter(item => factoryLocalArchiveMatchesCurrentInput(item, factory));
+  const restoreTargets = typeof factoryLocalArchiveRestoreTargets === 'function'
+    ? factoryLocalArchiveRestoreTargets(factory)
+    : currentInputAssets;
+  const restoreReady = restoreTargets.length > 0 && !archive.localAssetsLoading;
+  const restoreDisabledReason = archive.localAssetsLoading
+    ? '로컬 보관 목록을 불러오는 중입니다.'
+    : '현재 작업에 연결할 새 로컬 보관 이미지가 없습니다. 이미 복원된 이미지는 그대로 유지됩니다.';
+  const scopedAssets = showAll ? assets : currentInputAssets;
   const groups = new Map();
   scopedAssets.forEach(item => {
     const label = factoryLocalArchiveCategoryLabel(item);
@@ -7657,7 +8148,7 @@ function renderFactoryLocalArchiveMiniPanel(factory = factoryRuntimeReadFactory(
       <div>
         <h4 style="margin:0">이미지 모음 / 로컬 보관함</h4>
         <div class="factory-small" style="margin-top:4px;color:var(--text-m)">
-          앞으로 생성되는 이미지는 대표컷·사이즈컷·이미지컷·섹션이미지로 분류되어 바로 저장됩니다. 기본은 현재 작업 기준만 보여줍니다.
+          앞으로 생성되는 이미지는 대표컷·사이즈컷·이미지컷·섹션이미지로 분류되어 바로 저장됩니다. 기본은 현재 작업 기준이며, 같은 상품의 다른 작업파일 결과도 분리해 볼 수 있습니다.
         </div>
         <div class="factory-small" style="margin-top:4px;color:var(--text-m)">
           위치: ${escapeHtml(archive.localRoot || 'output/local-archive')}
@@ -7668,11 +8159,15 @@ function renderFactoryLocalArchiveMiniPanel(factory = factoryRuntimeReadFactory(
       </div>
       <div class="factory-workspace-actions" style="justify-content:flex-end;margin:0">
         <span class="factory-pill">${archive.localAssetsLoading ? '불러오는 중' : `현재 ${currentAssets.length}개 / 전체 ${assets.length}개`}</span>
-        <label class="factory-pill"><input type="checkbox" id="factoryLocalArchiveShowAll" ${showAll ? 'checked' : ''}> 전체 보기</label>
-        <button class="btn-sm primary" id="factoryRestoreLocalArchiveToCurrentWork" type="button" ${disabledAttr(!currentAssets.length || archive.localAssetsLoading, currentAssets.length ? '로컬 보관 목록을 불러오는 중입니다.' : '현재 작업 기준으로 복원할 로컬 보관 이미지가 없습니다.')}>
-          <span class="material-icons-outlined" style="font-size:14px">settings_backup_restore</span>현재 작업 후보로 복원
+        <span class="factory-pill">현재 입력 원본 ${currentInputAssets.length}개</span>
+        <label class="factory-pill"><input type="checkbox" id="factoryLocalArchiveShowAll" ${showAll ? 'checked' : ''}> 같은 상품 전체 작업파일</label>
+        <button class="btn-sm" type="button" data-factory-open-local-archive-folder="work" data-factory-local-archive-scope="work">
+          <span class="material-icons-outlined" style="font-size:14px">folder_open</span>현재 작업 폴더
         </button>
-        <button class="btn-sm" id="factoryRefreshLocalArchiveAssets" type="button">
+        <button class="btn-sm primary" id="factoryRestoreLocalArchiveToCurrentWork" type="button" data-factory-local-archive-action="restore" onclick="return window.factoryLocalArchiveActionButtonInline(this,event)" ${disabledAttr(!restoreReady, restoreDisabledReason)}>
+          <span class="material-icons-outlined" style="font-size:14px">settings_backup_restore</span>${restoreTargets.length ? '현재 작업 후보로 복원' : '이미 복원됨'}
+        </button>
+        <button class="btn-sm" id="factoryRefreshLocalArchiveAssets" type="button" data-factory-local-archive-action="refresh" onclick="return window.factoryLocalArchiveActionButtonInline(this,event)">
           <span class="material-icons-outlined" style="font-size:14px">refresh</span>로컬 목록 새로고침
         </button>
       </div>
@@ -7681,6 +8176,7 @@ function renderFactoryLocalArchiveMiniPanel(factory = factoryRuntimeReadFactory(
     <div class="factory-local-archive-summary">
       <span>표시 ${displayCount}개</span>
       <span>현재 작업 ${currentAssets.length}개</span>
+      <span>현재 입력 원본 ${currentInputAssets.length}개</span>
       <span>전체 보관 ${assets.length}개</span>
       ${hiddenCount ? `<span>나머지 ${hiddenCount}개는 같은 기준으로 보관됨</span>` : ''}
     </div>
@@ -7967,7 +8463,7 @@ function compMarketCandidateMatchesCurrentWork(item = {}, current = null) {
 
   const currentWorkKey = String(scope?.scopeKey || '').trim();
   const workKey = String(item?.factoryWorkKey || item?.workScopeKey || item?.metadata?.factoryWorkKey || '').trim();
-  if (workKey && currentWorkKey && workKey !== currentWorkKey) return false;
+  if (workKey && currentWorkKey && !compMarketWorkKeysCompatible(currentWorkKey, workKey)) return false;
 
   const currentRunId = String(scope?.currentRunId || '').trim();
   const itemRunId = String(
@@ -8051,6 +8547,14 @@ function compMarketCandidateMatchesCurrentWork(item = {}, current = null) {
 function compMarketFilterCandidatesForCurrentWork(rows = [], current = null) {
   const scope = current || (typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null);
   return (Array.isArray(rows) ? rows : []).filter(item => compMarketCandidateMatchesCurrentWork(item, scope));
+}
+
+function compMarketCandidateVisibleForCurrentWork(item = {}, current = null, explicitSelectedIds = new Set(), index = 0) {
+  const selectedIds = explicitSelectedIds instanceof Set
+    ? explicitSelectedIds
+    : new Set((Array.isArray(explicitSelectedIds) ? explicitSelectedIds : []).map(value => String(value || '').trim()).filter(Boolean));
+  const candidateId = String(compMarketResultId(item, index) || '').trim();
+  return selectedIds.has(candidateId) || compMarketCandidateMatchesCurrentWork(item, current);
 }
 
 function compMarketRowWorkPayload(row = {}) {
@@ -8224,12 +8728,15 @@ function compMarketAllCandidateResults(market = {}) {
   const out = [];
   const seen = new Set();
   const currentScope = typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null;
+  const explicitSelectedIds = new Set(
+    (Array.isArray(market?.selectedIds) ? market.selectedIds : []).map(value => String(value || '').trim()).filter(Boolean),
+  );
   const add = (item, siteId = '', index = 0) => {
     if (!item || typeof item !== 'object') return;
     const normalized = siteId && !item.platform && !item.site && !item.mall
       ? { ...item, platform: siteId }
       : item;
-    if (!compMarketCandidateMatchesCurrentWork(normalized, currentScope)) return;
+    if (!compMarketCandidateVisibleForCurrentWork(normalized, currentScope, explicitSelectedIds, index)) return;
     const dedupeKey = compMarketCandidateDedupeKey(normalized, index || out.length);
     if (!dedupeKey || seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
@@ -8446,8 +8953,9 @@ function factoryAutomationVmSearchInfo(factory = factoryRuntimeReadFactory()) {
     || factory?.product?.naturalHint
     || '';
   const productName = typeof cleanDbSearchTerm === 'function' ? cleanDbSearchTerm(rawName) : String(rawName || '').trim();
+  const naturalHint = factory?.product?.naturalHint || '';
   const terms = productName
-    ? (typeof factoryVmCompetitorSearchTerms === 'function' ? factoryVmCompetitorSearchTerms(productName) : [productName])
+    ? (typeof factoryVmCompetitorSearchTerms === 'function' ? factoryVmCompetitorSearchTerms(productName, naturalHint) : [productName])
     : [];
   const market = state.compPage?.marketScrape || {};
   const siteCount = Array.isArray(market.selectedSites) && market.selectedSites.length
@@ -8463,9 +8971,11 @@ function factoryAutomationVmSearchInfo(factory = factoryRuntimeReadFactory()) {
   };
 }
 
-function renderFactoryAutomationVmSearchInfo(factory = factoryRuntimeReadFactory(), tone = 'info') {
+function renderFactoryAutomationVmSearchInfo(factory = factoryRuntimeReadFactory(), tone = 'info', marketOverride = null) {
   const info = factoryAutomationVmSearchInfo(factory);
-  const market = state.compPage?.marketScrape || {};
+  const market = marketOverride && typeof marketOverride === 'object'
+    ? marketOverride
+    : (state.compPage?.marketScrape || {});
   const border = tone === 'warn' ? 'rgba(245,158,11,.45)' : 'rgba(99,102,241,.34)';
   const bg = tone === 'warn' ? 'rgba(245,158,11,.075)' : 'rgba(99,102,241,.07)';
   const main = info.productName || '제품명 미입력';
@@ -8516,7 +9026,10 @@ function factoryVmSearchSiteRows(market = {}) {
   const reports = Array.isArray(market.collectionStatus?.marketReports) ? market.collectionStatus.marketReports : [];
   const reportBySite = Object.fromEntries(reports.map(report => [String(report?.marketId || ''), report]));
   const statusReason = /실패|network|HTTP|연결 실패/i.test(String(market.status || '')) ? String(market.status || '').trim() : '';
-  const globalReason = String(market.error || market.collectionStatus?.error || statusReason).trim();
+  const restoredFailureReason = !market.loading && String(market.collectionStatus?.eta || '').trim() === '실패'
+    ? '이전 VM 수집이 완료 전에 중단되었습니다.'
+    : '';
+  const globalReason = String(market.error || market.collectionStatus?.error || statusReason || restoredFailureReason).trim();
   return siteIds.map((siteId, index) => {
     const rawRows = Array.isArray(grouped[siteId]) ? grouped[siteId] : [];
     const rows = typeof compMarketFilterCandidatesForCurrentWork === 'function'
@@ -8524,12 +9037,16 @@ function factoryVmSearchSiteRows(market = {}) {
       : rawRows;
     const saved = statusBySite[siteId] || {};
     const report = reportBySite[siteId] || {};
+    const reportStatus = String(report.status || '').trim().toLowerCase();
+    const reportReason = String(report.shortfallReason || '').trim().toLowerCase();
     const reportedAccepted = Number.isFinite(Number(report.accepted)) ? Number(report.accepted) : null;
     const hasFinalReport = reportedAccepted !== null
       || Number.isFinite(Number(report.requested))
       || Number.isFinite(Number(report.shortfall))
-      || !!String(report.shortfallReason || '').trim();
-    const reportFailed = /failed|error|network|HTTP|연결 실패|오류|실패/i.test(String(report.shortfallReason || ''));
+      || !!reportStatus
+      || !!reportReason;
+    const authoritativeZeroResult = reportStatus === 'zero_result' || reportReason === 'zero_result';
+    const reportFailed = /failed|error|network|http|연결 실패|오류|실패/i.test(`${reportStatus} ${reportReason}`);
     let label = saved.label || (typeof compMarketSiteLabel === 'function' ? compMarketSiteLabel(siteId) : siteId);
     let state = saved.status || '';
     let tone = saved.tone || '';
@@ -8541,12 +9058,12 @@ function factoryVmSearchSiteRows(market = {}) {
     if (count) {
       state = `${count}건 확보`;
       tone = 'ok';
-    } else if (hasFinalReport) {
+    } else if (hasFinalReport && (!globalReason || authoritativeZeroResult)) {
       state = reportFailed ? '수집 실패' : '검색 완료 · 결과 없음';
       tone = reportFailed ? 'error' : 'warn';
     } else if (globalReason) {
-      state = '수집 실패';
-      tone = 'error';
+      state = '이번 실행 미확정';
+      tone = 'muted';
     } else if (!loading && hasAttempt && (!state || /대기|검색 중|수집 중|보조수집/.test(state))) {
       state = '검색 완료 · 결과 없음';
       tone = 'warn';
@@ -8596,7 +9113,7 @@ function factoryVmSearchSiteRows(market = {}) {
       requested,
       accepted,
       shortfall,
-      shortfallReason: String(report.shortfallReason || globalReason),
+      shortfallReason: String(report.shortfallReason || ''),
       sourceLabel: String(report.sourceLabel || ''),
     };
   });
@@ -8626,6 +9143,12 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
   const isLocalSearch = market.collectMode === 'local';
   const boardTitle = isLocalSearch ? '오픈마켓별 후보 검색 현황' : '오픈마켓별 VM 검색 현황';
   const busyLabel = isLocalSearch ? '본컴 검색 중' : 'VM 검색 중';
+  const statusReason = /실패|network|HTTP|연결 실패/i.test(String(market.status || '')) ? String(market.status || '').trim() : '';
+  const restoredFailureReason = !market.loading && String(market.collectionStatus?.eta || '').trim() === '실패'
+    ? '이전 VM 수집이 완료 전에 중단되었습니다.'
+    : '';
+  const globalReason = String(market.error || market.collectionStatus?.error || statusReason || restoredFailureReason).trim();
+  const authFailure = /(?:401|권한이 없음|unauthorized|인증)/i.test(globalReason);
   const toneStyle = tone => {
     if (tone === 'ok') return 'border-color:rgba(34,197,94,.34);background:rgba(34,197,94,.075);color:#bbf7d0';
     if (tone === 'busy') return 'border-color:rgba(99,102,241,.42);background:rgba(99,102,241,.10);color:#c7d2fe';
@@ -8642,6 +9165,11 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
       ${market.searchId || market.vmSearchId ? `<span class="factory-pill">search_id ${escapeHtml(String(market.searchId || market.vmSearchId).slice(0, 18))}</span>` : ''}
     </div>
     ${renderCompMarketCollectionMetrics(market, options.compact ? 'sticky-rail' : 'site-board')}
+    ${globalReason ? `<div data-vm-collection-global-error="1" style="border:1px solid rgba(245,158,11,.46);background:rgba(245,158,11,.08);border-radius:9px;padding:8px 9px;margin:0 0 8px;color:#fde68a;font-size:11px;line-height:1.5">
+      <b style="display:block;color:#fcd34d">${escapeHtml(authFailure ? 'VM 워커 공통 인증 오류' : 'VM 워커 공통 실행 오류')}</b>
+      <span>현재 실행은 장터별 수집 전에 중단되었습니다. 아래 초록 후보는 이전 성공 결과를 보존한 것이며 이번 실행 성공을 뜻하지 않습니다.</span>
+      <span style="display:block;margin-top:2px;color:#fecaca">${escapeHtml(globalReason)}</span>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(${gridMin},1fr));gap:7px">
       ${rows.map(row => `<div style="border:1px solid;border-radius:9px;padding:8px;min-width:0;${toneStyle(row.tone)}">
         <div style="font-size:11px;font-weight:950;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(row.label)}</div>
@@ -9003,12 +9531,15 @@ function factoryAutomationFieldReviewItems(factory, counts) {
 }
 
 function factoryAutomationReviewSummary(factory, counts) {
+  if (typeof factoryAutomationWizardDrafts === 'function') {
+    try { factoryAutomationWizardDrafts(factory); } catch (_) {}
+  }
   const drafts = factory.automation?.fieldDrafts && typeof factory.automation.fieldDrafts === 'object'
     ? factory.automation.fieldDrafts
     : {};
   const fields = factoryAutomationFieldReviewItems(factory, counts).map(item => {
     const draft = drafts[item.id];
-    if (!draft || typeof draft !== 'object') return item;
+    if (!draft || typeof draft !== 'object' || !String(draft.value ?? '').trim()) return item;
     return {
       ...item,
       draftValue: draft.value ?? '',
@@ -9271,6 +9802,7 @@ function factoryVisibleFactoryLogs(factory = {}) {
     return !!expected && recorded === expected;
   }));
   const maintenanceLogSeen = new Set();
+  const syncWarningSeen = new Set();
   return scopedLogs.filter(log => {
     const message = String(log?.message || '');
     if (typeof factoryProjectFileStartupRecoveryLog === 'function' &&
@@ -9279,6 +9811,11 @@ function factoryVisibleFactoryLogs(factory = {}) {
           typeof factoryHasActiveRecoveryFailure === 'function' && factoryHasActiveRecoveryFailure(factory))) return false;
     if (typeof factoryProjectFileTransientDiagnosticLog === 'function' &&
         factoryProjectFileTransientDiagnosticLog(log) && log?.activeDiagnostic !== true) return false;
+    if (message.includes('로컬 작업파일은 저장됐지만 신화사 자산관 동기화는 보류됐습니다')) {
+      const key = message;
+      if (syncWarningSeen.has(key)) return false;
+      syncWarningSeen.add(key);
+    }
     if (!/생성 중 표시|생성 종료 표시|완료된 생성 표시|오래 멈춘 생성 표시|실행 잠금/.test(message)) return true;
     const key = [
       message,
@@ -9364,10 +9901,105 @@ function factoryStageRailMeta(def, factory, buckets) {
         ? scopedImages.filter(image => String(image?.detailOperationId || '').trim() === operationId).length
         : 0)
       : (Array.isArray(scopedImages) ? scopedImages.length : 0);
+    const restoredCompleted = Math.max(0, Number(stage.completedItemCount || 0));
+    if (restoredCompleted > assetCount) assetCount = restoredCompleted;
   }
-  const target = Number(stage.targetCount || 0);
+  const rawTarget = Number(stage.targetCount || 0);
+  const target = def.id === 'detail' ? Math.max(rawTarget, assetCount) : rawTarget;
   const assetText = def.id === 'db' ? '' : `${assetCount}/${target || assetCount || 0}개 · `;
   return `${assetText}로그 ${(buckets[def.id] || []).length}건`;
+}
+
+const FACTORY_PARALLEL_PROGRESS_DEFS = [
+  { id: 'sinhwa', label: '신화사DB', stageId: 'db' },
+  { id: 'cafe24', label: 'Cafe24', stageId: 'db' },
+  { id: 'vm', label: '경쟁사 VM', stageId: 'db' },
+  { id: 'hero', label: '대표이미지', stageId: 'hero' },
+  { id: 'cuts', label: '이미지컷', stageId: 'cuts' },
+];
+
+const FACTORY_PARALLEL_PROGRESS_STATUS_LABELS = {
+  queued: '대기',
+  running: '진행 중',
+  done: '완료',
+  error: '확인 필요',
+  skipped: '건너뜀',
+};
+
+function factoryParallelTaskProgressView(task, factory = {}) {
+  const saved = factory?.automation?.parallelProgress?.[task.id] || {};
+  const stage = factory?.stages?.[task.stageId] || {};
+  const isAssetTask = task.id === 'hero' || task.id === 'cuts';
+  const usableAssetCount = isAssetTask && typeof factoryUsableAssetsForStage === 'function'
+    ? factoryUsableAssetsForStage(task.stageId, factory).length
+    : 0;
+  const completed = Math.max(usableAssetCount, Number(stage.completedItemCount || 0), Number(saved.completedItemCount || 0), 0);
+  const expected = Math.max(0, Number(isAssetTask
+    ? (saved.expectedItemCount || stage.expectedItemCount || stage.targetCount || 0)
+    : (saved.expectedItemCount || 0)));
+  const countedProgress = expected > 0 ? Math.min(100, Math.round((completed / expected) * 100)) : 0;
+  let progress = Math.max(0, Math.min(100, Number(saved.progress || 0), 100));
+  if (isAssetTask) progress = Math.max(progress, countedProgress);
+  let status = saved.status || 'queued';
+  if (expected > 0 && completed >= expected) {
+    status = 'done';
+    progress = 100;
+  }
+  if (status === 'done' || status === 'skipped') progress = 100;
+  const countText = expected > 0 ? `${Math.min(completed, expected)}/${expected}` : '';
+  const message = String(saved.message || (status === 'queued' ? '실행 대기' : '')).trim();
+  return {
+    ...task,
+    status,
+    progress: Math.round(progress),
+    statusLabel: FACTORY_PARALLEL_PROGRESS_STATUS_LABELS[status] || '대기',
+    detail: [countText, message].filter(Boolean).join(' · '),
+  };
+}
+
+function factoryStageProgressView(def, factory = {}) {
+  const stage = factory?.stages?.[def.id] || {};
+  const parallelTasks = FACTORY_PARALLEL_PROGRESS_DEFS
+    .filter(task => task.stageId === def.id)
+    .map(task => factoryParallelTaskProgressView(task, factory));
+  if (parallelTasks.length && parallelTasks.some(task => factory?.automation?.parallelProgress?.[task.id])) {
+    return Math.round(parallelTasks.reduce((sum, task) => sum + task.progress, 0) / parallelTasks.length);
+  }
+  if (def.id === 'detail') {
+    const completed = Math.max(0, Number(stage.completedItemCount || 0));
+    const expected = Math.max(0, Number(stage.targetCount || 0));
+    if (expected > 0 && completed > 0) {
+      return Math.min(100, Math.round((completed / expected) * 100));
+    }
+  }
+  if (stage.status === 'done') return 100;
+  if (['hero', 'size', 'options', 'cuts'].includes(def.id) && typeof factoryUsableAssetsForStage === 'function') {
+    const completed = factoryUsableAssetsForStage(def.id, factory).length;
+    const expected = Math.max(0, Number(stage.targetCount || 0));
+    if (expected > 0) return Math.min(100, Math.round((completed / expected) * 100));
+  }
+  return stage.status === 'running' ? 5 : 0;
+}
+
+function renderFactoryStageProgress(def, factory = {}) {
+  const progress = factoryStageProgressView(def, factory);
+  return `<span class="factory-stage-rail-progress-row" data-factory-stage-progress="${escAttr(def.id)}">
+    <span class="factory-stage-rail-progress-track" role="progressbar" aria-label="${escAttr(`${def.label} 진행률`)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><span class="factory-stage-rail-progress-fill" style="--factory-progress-ratio:${progress / 100}"></span></span>
+    <span class="factory-stage-rail-progress-value">${progress}%</span>
+  </span>`;
+}
+
+function renderFactoryParallelTaskGauges(stageId, factory = {}) {
+  const tasks = FACTORY_PARALLEL_PROGRESS_DEFS
+    .filter(task => task.stageId === stageId)
+    .map(task => factoryParallelTaskProgressView(task, factory));
+  if (!tasks.length) return '';
+  return `<span class="factory-stage-parallel-list">${tasks.map(task => `<span class="factory-stage-parallel-task ${escAttr(task.status)}" data-factory-parallel-task="${escAttr(task.id)}">
+    <span class="factory-stage-parallel-label">${escapeHtml(task.label)}</span>
+    <span class="factory-stage-rail-progress-track" role="progressbar" aria-label="${escAttr(`${task.label} 진행률`)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${task.progress}"><span class="factory-stage-rail-progress-fill" style="--factory-progress-ratio:${task.progress / 100}"></span></span>
+    <span class="factory-stage-parallel-value"><b>${task.progress}%</b><small>${escapeHtml(task.statusLabel)}</small></span>
+    ${task.detail ? `<span class="factory-stage-parallel-detail">${escapeHtml(task.detail)}</span>` : ''}
+  </span>`).join('')}</span>`;
 }
 
 function renderFactoryStageOverview(factory = {}) {
@@ -9385,6 +10017,8 @@ function renderFactoryStageOverview(factory = {}) {
           <span class="factory-stage-rail-number">${factoryStageDisplayNumber(def)}</span>
           <span class="factory-stage-rail-copy"><span class="factory-stage-rail-title">${escapeHtml(def.label)}</span><span class="factory-stage-rail-meta">${escapeHtml(factoryStageRailMeta(def, factory, buckets))}</span></span>
           <span class="factory-stage-rail-status">${escapeHtml(statusLabel)}</span>
+          ${renderFactoryStageProgress(def, factory)}
+          ${renderFactoryParallelTaskGauges(def.id, factory)}
         </button>`;
       }).join('')}
     </div>
@@ -9399,18 +10033,33 @@ function renderFactoryStageLogBoard(factory = {}) {
   const selectedDef = defs.find(def => def.id === filter);
   const filterLabel = selectedDef ? `${factoryStageDisplayNumber(selectedDef)} ${selectedDef.label}` : (filter === 'general' ? '공통' : '전체');
   const logs = filter === 'all' ? factoryVisibleFactoryLogs(factory) : (buckets[filter] || []);
+  const errorCount = logs.filter(log => log.type === 'error').length;
+  const latestLog = logs[0] || null;
+  const selectedStage = selectedDef ? factory.stages?.[selectedDef.id] : null;
+  const completedStageSummary = selectedStage && ['done', 'skipped'].includes(selectedStage.status)
+    ? `${factoryStageDisplayNumber(selectedDef)}번 · ${selectedStage.message || (selectedStage.status === 'skipped' ? '건너뜀' : '완료')}`
+    : '';
+  const latestText = completedStageSummary || (latestLog
+    ? `${factoryLogProcessLabel(latestLog)} · ${factoryVisibleRunLogText(latestLog.message || '')}`
+    : '기록 없음');
   const filterButtons = [
     `<button type="button" class="factory-stage-log-filter ${filter === 'all' ? 'active' : ''}" data-factory-stage-log-filter="all">전체</button>`,
     ...defs.map(def => `<button type="button" class="factory-stage-log-filter ${filter === def.id ? 'active' : ''}" data-factory-stage-log-filter="${escAttr(def.id)}">${factoryStageDisplayNumber(def)}</button>`),
     `<button type="button" class="factory-stage-log-filter ${filter === 'general' ? 'active' : ''}" data-factory-stage-log-filter="general">공통</button>`,
   ].join('');
-  return `<section class="factory-stage-rail-section" data-factory-stage-log-board>
-    <div class="factory-stage-rail-heading"><span>단계별 로그 모아보기</span><small>${escapeHtml(filterLabel)} · ${logs.length}건</small></div>
-    <div class="factory-stage-log-filters">${filterButtons}</div>
-    <div class="factory-stage-log-list">
-      ${logs.length ? logs.slice(0, 30).map(log => `<div class="factory-log-item ${log.type === 'error' ? 'err' : (log.type === 'ok' ? 'ok' : (log.type === 'warn' ? 'warn' : ''))}"><b>${escapeHtml(factoryLogProcessLabel(log))} · ${escapeHtml(log.time || '')}</b> ${escapeHtml(factoryVisibleRunLogText(log.message || ''))}</div>`).join('') : '<div class="factory-log-item">선택한 단계의 로그가 아직 없습니다.</div>'}
+  return `<details class="factory-log-disclosure factory-stage-log-disclosure" data-factory-stage-log-board ${filter !== 'all' ? 'open' : ''}>
+    <summary>
+      <span class="factory-log-disclosure-title">단계별 로그</span>
+      <span class="factory-log-disclosure-preview">${escapeHtml(latestText)}</span>
+      <span class="factory-log-disclosure-count ${errorCount ? 'has-error' : ''}">${escapeHtml(filterLabel)} · ${logs.length}건 · 오류 ${errorCount}건</span>
+    </summary>
+    <div class="factory-log-disclosure-body">
+      <div class="factory-stage-log-filters">${filterButtons}</div>
+      <div class="factory-stage-log-list">
+        ${logs.length ? logs.slice(0, 30).map(log => `<div class="factory-log-item ${log.type === 'error' ? 'err' : (log.type === 'ok' ? 'ok' : (log.type === 'warn' ? 'warn' : ''))}"><b>${escapeHtml(factoryLogProcessLabel(log))} · ${escapeHtml(log.time || '')}</b> ${escapeHtml(factoryVisibleRunLogText(log.message || ''))}</div>`).join('') : '<div class="factory-log-item">선택한 단계의 로그가 아직 없습니다.</div>'}
+      </div>
     </div>
-  </section>`;
+  </details>`;
 }
 
 function renderFactoryStageRailBody(factory = {}) {
@@ -9431,10 +10080,14 @@ function factoryStageRailRenderSignature(factory = {}) {
     const stage = factory?.stages?.[def.id] || {};
     const assetCount = ['hero', 'size', 'options', 'cuts'].includes(def.id) && typeof factoryUsableAssetsForStage === 'function'
       ? factoryUsableAssetsForStage(def.id, factory).length
-      : 0;
+      : (def.id === 'detail' ? Math.max(0, Number(stage.completedItemCount || 0)) : 0);
     return [def.id, stage.status || '', stage.message || '', stage.targetCount || 0, assetCount].join('~');
   }).join('|');
-  return [factory.activeStage || '', factory.stageLogFilter || 'all', stageState, logCounts, latestLogs].join('::');
+  const parallelProgress = FACTORY_PARALLEL_PROGRESS_DEFS.map(task => {
+    const item = factoryParallelTaskProgressView(task, factory);
+    return [item.id, item.status, item.progress, item.detail].join('~');
+  }).join('|');
+  return [factory.activeStage || '', factory.stageLogFilter || 'all', stageState, parallelProgress, logCounts, latestLogs].join('::');
 }
 
 function renderFactoryManualInterventionPrompt(factory = {}, context = {}) {
@@ -9447,21 +10100,26 @@ function renderFactoryManualInterventionPrompt(factory = {}, context = {}) {
   const intervention = market?.manualIntervention
     || compMarketLegacyManualInterventionFromText(sourceText, market, {});
   if (!intervention) return '';
-  const resumeAvailable = !!String(market?.detailJobId || intervention.jobId || '').trim();
+  const retryAvailable = compMarketManualRetryAvailable(market);
   return `<div data-factory-manual-intervention role="alert" style="margin-top:12px;border:2px solid rgba(248,113,113,.9);border-radius:12px;background:linear-gradient(135deg,rgba(127,29,29,.48),rgba(41,17,24,.94));padding:13px;box-shadow:0 8px 20px rgba(127,29,29,.2)">
     <div style="font-size:15px;font-weight:950;color:#fff;line-height:1.35">사용자 확인 필요 · VM 상세수집 일시정지</div>
     <div style="font-size:12px;font-weight:950;color:#fecaca;margin-top:4px">${escapeHtml(intervention.manualTitle || 'VM 화면 사용자 확인 필요')}</div>
     <div style="font-size:11px;color:#fee2e2;line-height:1.6;margin-top:6px">${escapeHtml(intervention.message || 'VM 화면에서 영수증·보안확인·로그인 화면을 확인해주세요.')}</div>
     <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px">
-      <button class="btn-sm" type="button" data-factory-guide-action="open-vm-capture" style="font-size:11px;color:#fff;background:rgba(0,0,0,.2);border-color:rgba(255,255,255,.35)"><span class="material-icons-outlined" style="font-size:14px">open_in_new</span>VM 화면 열기/확인</button>
-      <button class="btn-sm" type="button" data-factory-guide-action="resume-comp-market-detail" ${resumeAvailable ? '' : 'disabled title="이어갈 상세수집 작업 ID가 없습니다."'} style="font-size:11px;color:#fff;background:#ef4444;border-color:#fca5a5;font-weight:950"><span class="material-icons-outlined" style="font-size:14px">play_arrow</span>조치 후 같은 작업 재개</button>
+      <button class="btn-sm" id="compMarketManualOpenVmCompact" type="button" data-factory-guide-action="open-vm-capture" style="font-size:11px;color:#fff;background:rgba(0,0,0,.2);border-color:rgba(255,255,255,.35)"><span class="material-icons-outlined" style="font-size:14px">open_in_new</span>VM 화면 열기/확인</button>
+      <button class="btn-sm" id="compMarketManualResumeCompact" type="button" data-factory-guide-action="resume-comp-market-detail" ${retryAvailable ? '' : 'disabled title="다시 수집할 선택 후보가 없습니다."'} style="font-size:11px;color:#fff;background:#ef4444;border-color:#fca5a5;font-weight:950"><span class="material-icons-outlined" style="font-size:14px">replay</span>조치 후 멈춘 후보 다시 수집</button>
     </div>
   </div>`;
 }
 
 function renderFactoryAutomationRunStatus(factory, options = {}) {
+  const reconciledFactory = typeof factoryReconcilePersistedStageState === 'function'
+    ? factoryReconcilePersistedStageState(factory)
+    : factory;
+  factory = reconciledFactory;
   const goal = factory.goalRun || {};
   const logs = factoryVisibleFactoryLogs(factory).slice(0, 8);
+  const errorCount = logs.filter(log => log.type === 'error').length;
   const running = !!goal.running;
   const stage = goal.currentStage || (logs[0]?.message || '대기');
   const progress = factoryGoalRunDisplayProgress(goal, stage);
@@ -9470,6 +10128,9 @@ function renderFactoryAutomationRunStatus(factory, options = {}) {
   const market = typeof ensureCompMarketScrapeState === 'function' ? ensureCompMarketScrapeState() : {};
   const border = running ? 'rgba(99,102,241,.48)' : (failed ? 'rgba(239,68,68,.72)' : (needsAttention ? 'rgba(245,158,11,.62)' : 'rgba(255,255,255,.10)'));
   const bg = running ? 'rgba(99,102,241,.10)' : (failed ? 'rgba(127,29,29,.20)' : (needsAttention ? 'rgba(245,158,11,.10)' : 'rgba(255,255,255,.025)'));
+  const latestText = logs[0]
+    ? `${factoryLogProcessLabel(logs[0])} · ${factoryVisibleRunLogText(logs[0].message || '')}`
+    : '아직 실행 기록이 없습니다.';
   return `<div class="factory-card ${options.rail ? 'factory-run-status-card' : ''}" data-factory-goal-status="automation" style="border-color:${border};background:${bg};${options.rail ? 'margin:0' : 'margin-bottom:12px'}">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
       <div style="min-width:220px;flex:1">
@@ -9481,11 +10142,20 @@ function renderFactoryAutomationRunStatus(factory, options = {}) {
     </div>
     <div class="factory-progress ${failed ? 'failed' : ''}" style="margin-top:10px"><span data-factory-goal-progress-bar style="--p:${progress}%"></span></div>
     ${renderFactoryManualInterventionPrompt(factory, { market, goal, stage, logs })}
-    <div class="factory-log" data-factory-goal-log-list style="margin-top:10px">
-      ${logs.length ? logs.map(log => `<div class="factory-log-item ${log.type === 'error' ? 'err' : (log.type === 'ok' ? 'ok' : (log.type === 'warn' ? 'warn' : ''))}">
-        <b>${escapeHtml(factoryLogProcessLabel(log))} · ${escapeHtml(log.time || '')}</b> ${escapeHtml(factoryVisibleRunLogText(log.message || ''))}
-      </div>`).join('') : '<div class="factory-log-item">시작 버튼을 누르면 여기에서 진행상황을 바로 확인할 수 있습니다.</div>'}
-    </div>
+    <details class="factory-log-disclosure" data-factory-goal-log-panel>
+      <summary>
+        <span class="factory-log-disclosure-title">최근 진행 로그</span>
+        <span class="factory-log-disclosure-preview">${escapeHtml(latestText)}</span>
+        <span class="factory-log-disclosure-count ${errorCount ? 'has-error' : ''}">${logs.length}건 · 오류 ${errorCount}건</span>
+      </summary>
+      <div class="factory-log-disclosure-body">
+        <div class="factory-log" data-factory-goal-log-list>
+          ${logs.length ? logs.map(log => `<div class="factory-log-item ${log.type === 'error' ? 'err' : (log.type === 'ok' ? 'ok' : (log.type === 'warn' ? 'warn' : ''))}">
+            <b>${escapeHtml(factoryLogProcessLabel(log))} · ${escapeHtml(log.time || '')}</b> ${escapeHtml(factoryVisibleRunLogText(log.message || ''))}
+          </div>`).join('') : '<div class="factory-log-item">시작하면 이곳에 진행상황이 바로 표시됩니다.</div>'}
+        </div>
+      </div>
+    </details>
     ${renderFactoryStageRailBody(factory)}
   </div>`;
 }
@@ -9534,7 +10204,7 @@ function renderFactoryAutomationFieldCard(item) {
         <span style="color:${tone.color};font-weight:900">${escapeHtml(item.label)}${item.required ? ' · 필수' : ''}</span>
         <span style="font-size:11px;color:var(--ok);font-weight:950">✓ 확인됨</span>
       </div>
-      <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" value="${escAttr(inputValue)}" readonly aria-label="${escAttr(item.label)} 확정값" style="margin-top:7px;min-height:34px;opacity:.88">
+      <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" data-factory-wizard-previous-value="${escAttr(inputValue || item.value || '')}" value="${escAttr(inputValue)}" readonly aria-label="${escAttr(item.label)} 확정값" style="margin-top:7px;min-height:34px;opacity:.88">
       <div class="factory-automation-actions" style="margin-top:7px">
         <button class="btn-sm" type="button" data-factory-wizard-edit="${escAttr(item.id)}" data-factory-wizard-commit="${escAttr(item.id)}">값 수정</button>
       </div>
@@ -9543,7 +10213,7 @@ function renderFactoryAutomationFieldCard(item) {
   }
   return `<div class="factory-automation-status-card" style="display:block;border-color:${tone.border};background:${tone.bg}">
     <span style="color:${tone.color};font-weight:900">${escapeHtml(item.label)}${item.required ? ' · 필수' : ''}</span>
-    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" value="${escAttr(inputValue)}" placeholder="${escAttr(item.placeholder || '')}" style="margin-top:7px;min-height:34px">
+    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" data-factory-wizard-previous-value="${escAttr(inputValue || item.value || '')}" value="${escAttr(inputValue)}" placeholder="${escAttr(item.placeholder || '')}" style="margin-top:7px;min-height:34px">
     <div class="factory-automation-actions" style="margin-top:7px">
       <button class="btn-sm primary" type="button" data-factory-wizard-commit="${escAttr(item.id)}">${item.hasDraft ? '수정 적용' : '확인'}</button>
     </div>
@@ -9798,6 +10468,7 @@ function renderFactoryAutomationCompetitorPicker(factory, counts) {
         <button class="btn-sm" type="button" data-comp-market-quick-action="clear-selection" ${disabledAttr(market.loading || !selectedCount, market.loading ? loadingReason : '선택된 후보가 없습니다.')}>선택 해제</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="detail-vm" ${disabledAttr(!!disabledDetailReason, disabledDetailReason)} style="background:var(--primary);border-color:var(--primary);color:#fff"><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>선택 ${selectedCount}건 VM 상세수집</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="detail-local" ${disabledAttr(!!disabledDetailReason, disabledDetailReason)}><span class="material-icons-outlined" style="font-size:15px">computer</span>선택 ${selectedCount}건 본컴 상세수집</button>
+        <button class="btn-sm" type="button" data-comp-market-quick-action="detail-scrapling" ${disabledAttr(!!disabledDetailReason, disabledDetailReason)}><span class="material-icons-outlined" style="font-size:15px">language</span>B안 · Scrapling 상세수집</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="analyze-vm" ${disabledAttr(!!disabledDetailReason, disabledDetailReason)}>VM 수집 후 분석</button>
       </div>
     </div>
@@ -9851,11 +10522,15 @@ function renderFactoryAutomationScrapedImagePicker(market, options = {}) {
   const currentImages = detailImages.currentImages;
   const previousImages = detailImages.previousImages;
   const showPrevious = !!market.showPreviousDetailImages;
-  const displayedImages = showPrevious ? [...currentImages, ...previousImages] : currentImages;
+  const selectableImages = currentImages.length ? currentImages : previousImages;
+  const historicalImages = currentImages.length ? previousImages : [];
+  const displayedImages = showPrevious
+    ? [...selectableImages, ...historicalImages]
+    : selectableImages;
   const previewLimit = Math.max(1, Number(options.previewLimit) || 6);
   const previewRows = displayedImages.slice(0, previewLimit);
   const selected = new Set(Array.isArray(market.selectedImageIds) ? market.selectedImageIds.map(String) : []);
-  const selectedCount = currentImages.filter((img, index) => selected.has(compMarketScrapedImageId(img, index))).length;
+  const selectedCount = selectableImages.filter((img, index) => selected.has(compMarketScrapedImageId(img, index))).length;
   const visibleLimit = 24;
   const visibleImages = displayedImages.slice(0, visibleLimit);
   const previewImageId = String(market.previewImageId || '');
@@ -10080,9 +10755,13 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
   const activeFallbackAssets = baseAssets.filter(asset => typeof factoryAssetSupersededRunId === 'function'
     ? !factoryAssetSupersededRunId(asset)
     : true);
-  const assets = latestRunId && latestAssets.length
+  const scopedCurrentRunAssets = latestRunId && latestAssets.length
     ? latestAssets
     : (latestRunId && activeFallbackAssets.length ? activeFallbackAssets : baseAssets);
+  const preservedCompletedSizeAssets = stageId === 'size' && !scopedCurrentRunAssets.length && typeof factoryCompletedAssetsForCurrentStageRun === 'function'
+    ? factoryCompletedAssetsForCurrentStageRun(stageId, factory)
+    : [];
+  const assets = scopedCurrentRunAssets.length ? scopedCurrentRunAssets : preservedCompletedSizeAssets;
   const selectedAssets = assets.filter(asset => asset.used);
   const selected = selectedAssets.length;
   const usableAssetIds = new Set(assets.map(asset => asset.id));
@@ -10668,7 +11347,7 @@ function renderPreviewLayerEditor(section, content) {
 }
 
 function renderPreviewEditPanel(section, content) {
-  return `<div class="edit-panel" onclick="event.stopPropagation()">
+  return `<div class="edit-panel">
     ${renderSectionBasisChooser(section.id)}
     ${renderSectionBasisPromptCompare(section.id)}
     ${renderSectionModeChooser(section.id)}
@@ -10755,7 +11434,7 @@ function renderPreviewOutline() {
       ${orderedSections().map(s => {
     const img = displayableImageSrc(state.sectionImages?.[s.id]);
         const content = state.sectionContents?.[s.id];
-        return `<div class="preview-outline-item" data-outline-section-id="${s.id}" onclick="document.querySelector('[data-preview-section=&quot;${escAttr(s.id)}&quot;]')?.scrollIntoView({behavior:'smooth',block:'start'})">
+        return `<div class="preview-outline-item" data-outline-section-id="${s.id}" role="button" tabindex="0">
           <span class="drag-handle" title="드래그하여 순서 변경">⠿</span>
               <div class="preview-outline-thumb">${img ? renderFactoryLightImage(img, s.name) : `<span>${s.icon}</span>`}</div>
           <div style="min-width:0">
@@ -10782,6 +11461,9 @@ function getDetailImageBlocksAfter(sectionId, blocks = state.detailImageBlocks |
 function renderInsertedDetailImageBlock(block, mode = 'preview') {
   if (!block?.dataUrl) return '';
   const label = block.label || '추가 상세 이미지';
+  const imageHtml = mode === 'preview'
+    ? renderFactoryLightImage(block.dataUrl, label)
+    : `<img src="${escAttr(displayableImageSrc(block.dataUrl) || block.dataUrl)}" alt="${escAttr(label)}" loading="lazy" decoding="async" style="display:block;max-width:100%;height:auto">`;
   const controls = mode === 'preview'
     ? `<div class="inserted-image-ctrl">
         <button class="btn-sm" data-move-detail-image="${escAttr(block.id)}:up">
@@ -10799,7 +11481,7 @@ function renderInsertedDetailImageBlock(block, mode = 'preview') {
     <div class="inserted-image-inner">
       ${controls}
       <div class="inserted-image-card">
-                  ${renderFactoryLightImage(block.dataUrl, label)}
+        ${imageHtml}
       </div>
       ${mode === 'preview' ? `<div class="inserted-image-caption">${escapeHtml(label)}${block.source ? ` · ${escapeHtml(block.source)}` : ''}</div>` : ''}
     </div>
@@ -11072,9 +11754,6 @@ function renderSectionTemplate(section, rawContent, img, mode = 'preview') {
     : '';
   const imageTag = style => {
     if (!img) return '';
-    if (mode === 'export' && typeof renderFactoryLightImage === 'function') {
-      return renderFactoryLightImage(img, section.name, `style="${style}"`, section.name);
-    }
     return `<img${promptImageAttrs} src="${escAttr(img)}" alt="${escapeHtml(section.name)}" style="${style}">`;
   };
   const imageCoreHtml = img ? imageTag('width:100%;max-width:100%;border-radius:18px;display:block;box-shadow:0 18px 40px rgba(0,0,0,.08)') : '';
@@ -11170,7 +11849,7 @@ function analysisImageSrc(img) {
   if (!img) return '';
   if (typeof factoryResolveCurrentProductImageReference === 'function') {
     const ref = factoryResolveCurrentProductImageReference(img);
-    if (ref?.preview) return ref.preview;
+    if (ref?.preview && ref.preview !== '__stored_in_indexeddb__') return ref.preview;
     if (ref?.base64) return `data:${ref.mime || 'image/png'};base64,${ref.base64}`;
   }
   if (img.preview && img.preview !== '__stored_in_indexeddb__') return img.preview;
@@ -11779,7 +12458,13 @@ function renderProductContextCard() {
   const dbConfirmedName = getDbConfirmedProductName(db);
   const analysisThumbs = (state.analysisImages || [])
     .map((img, idx) => ({ img, idx, src: analysisImageSrc(img) }))
-    .filter(item => item.src);
+    .filter(item => {
+      if (!item.src) return false;
+      const displaySrc = typeof displayableImageSrc === 'function'
+        ? displayableImageSrc(item.src)
+        : item.src;
+      return !!displaySrc;
+    });
   return `<div class="analysis-box" style="margin-bottom:18px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px">
       <div>
@@ -12006,7 +12691,10 @@ function renderGptOAuthLlmPanel(options = {}) {
   const policy = typeof gptOAuthModelTierPolicy === 'function' ? gptOAuthModelTierPolicy(cfg.llmModel) : { allowFast: true, allowFlex: true, note: '' };
   const probe = typeof summarizeGptOAuthProbe === 'function' ? summarizeGptOAuthProbe(state.gptOAuthProbe) : { label: '실호출 미점검', color: 'var(--text-m)', detail: '' };
   const oauthOptions = typeof getGptOAuthUiOptions === 'function' ? getGptOAuthUiOptions() : { modelOptions: LLM_PROVIDERS.gpt_oauth.models, reasoningOptions: GPT_OAUTH_REASONING_EFFORTS, serviceTierOptions: GPT_OAUTH_SERVICE_TIERS, executionPresets: GPT_OAUTH_EXECUTION_PRESETS };
-  const oauthModels = oauthOptions.modelOptions || LLM_PROVIDERS.gpt_oauth.models;
+  const oauthModels = includeCurrentGptOAuthModelOption(
+    oauthOptions.modelOptions || LLM_PROVIDERS.gpt_oauth.models,
+    cfg.llmProvider === 'gpt_oauth' ? cfg.llmModel : '',
+  );
   const oauthReasoningOptions = oauthOptions.reasoningOptions || GPT_OAUTH_REASONING_EFFORTS;
   const oauthServiceTierOptions = oauthOptions.serviceTierOptions || GPT_OAUTH_SERVICE_TIERS;
   const oauthPresets = oauthOptions.executionPresets || GPT_OAUTH_EXECUTION_PRESETS;
@@ -12650,7 +13338,7 @@ function renderFixedDetailImageForExport(slotId) {
   if (!src) return '';
   const slot = getFixedDetailImageSlot(slotId);
   return `<div class="fixed-detail-page-image fixed-detail-page-image-${escAttr(slotId)}" data-fixed-detail-page-image="${escAttr(slotId)}" style="width:100%;background:#fff">
-          ${renderFactoryLightImage(src, slot?.label || '고정 이미지', 'style="display:block;width:100%;height:auto;margin:0 auto"')}
+    <img src="${escAttr(src)}" alt="${escAttr(slot?.label || '고정 이미지')}" loading="lazy" decoding="async" style="display:block;width:100%;height:auto;margin:0 auto">
   </div>`;
 }
 
@@ -12699,7 +13387,7 @@ function renderSectionBatchRunPanel() {
   const stopped = run.status === 'stopped';
   const stopRequested = running && !!run.stopRequested;
   const failed = run.status === 'done_with_errors' || Number(run.failed || 0) > 0;
-  const statusLabel = running ? (stopRequested ? '현재 섹션 마무리 중' : '진행 중') : stopped ? '현재 섹션까지 완료 후 중지' : failed ? '완료 · 확인 필요' : '완료';
+  const statusLabel = running ? (stopRequested ? '현재 생성 묶음 마무리 중' : '진행 중') : stopped ? '현재 생성 묶음까지 완료 후 중지' : failed ? '완료 · 확인 필요' : '완료';
   const statusColor = running ? (stopRequested ? 'var(--warn)' : 'var(--primary-h)') : stopped || failed ? 'var(--warn)' : 'var(--ok)';
   const statusIcon = running ? (stopRequested ? 'hourglass_top' : 'sync') : stopped ? 'stop_circle' : failed ? 'warning' : 'check_circle';
   const currentLine = run.currentSectionName
@@ -12712,6 +13400,7 @@ function renderSectionBatchRunPanel() {
           <span class="material-icons-outlined" style="font-size:16px;color:${statusColor}">${statusIcon}</span>
           <strong style="font-size:13px;color:var(--text)">섹션 일괄 생성 ${statusLabel}</strong>
           <span style="font-size:11px;font-weight:900;color:${statusColor};border:1px solid ${statusColor};border-radius:999px;padding:3px 8px">${progress}%</span>
+          <span style="font-size:11px;font-weight:800;color:var(--cyan);border:1px solid rgba(34,211,238,.35);border-radius:999px;padding:3px 8px">동시 생성 최대 ${Number(run.maxConcurrency || 2)}장</span>
         </div>
         <div style="font-size:12px;color:var(--text-d);line-height:1.5;margin-top:5px">${escapeHtml(run.message || '작업 상태를 준비 중입니다.')}</div>
         <div style="font-size:11px;color:var(--text-m);line-height:1.5;margin-top:2px">
@@ -12720,9 +13409,9 @@ function renderSectionBatchRunPanel() {
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:100%">
         <div style="font-size:11px;color:var(--text-m);white-space:nowrap">마지막 갱신 ${run.updatedAt ? escapeHtml(new Date(run.updatedAt).toLocaleTimeString('ko-KR')) : '-'}</div>
-        ${running ? `<button class="btn-sm" id="stopAfterCurrentSection" type="button" ${stopRequested ? 'disabled title="현재 섹션을 저장한 뒤 자동으로 중지합니다."' : 'title="현재 섹션의 텍스트와 이미지 저장을 마친 뒤 중지합니다."'} style="border-color:rgba(245,158,11,.52);color:var(--warn);font-weight:900">
+        ${running ? `<button class="btn-sm" id="stopAfterCurrentSection" type="button" ${stopRequested ? 'disabled title="현재 생성 묶음을 저장한 뒤 자동으로 중지합니다."' : 'title="현재 동시에 생성 중인 섹션의 텍스트와 이미지 저장을 마친 뒤 중지합니다."'} style="border-color:rgba(245,158,11,.52);color:var(--warn);font-weight:900">
           <span class="material-icons-outlined" style="font-size:15px">${stopRequested ? 'hourglass_top' : 'stop_circle'}</span>
-          ${stopRequested ? '현재 섹션 마무리 중' : '현재 섹션까지만 생성'}
+          ${stopRequested ? '현재 생성 묶음 마무리 중' : '현재 생성 묶음까지만 생성'}
         </button>` : ''}
       </div>
     </div>
@@ -13724,15 +14413,16 @@ function compMarketSourceGroupedResults(market = {}, source = 'vm') {
 }
 
 function compMarketCandidateDedupeKey(item = {}, index = 0) {
+  const platform = String(item?.platform || item?.site || item?.mall || item?.source || '').trim().toLowerCase();
   const productUrl = String(
     item?.product_url || item?.url || item?.link || item?.detail_url || item?.productUrl || item?.detailUrl || ''
   ).trim();
   if (productUrl) {
-    return `url:${productUrl.replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase()}`;
+    return `url:${productUrl.replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase()}`;
   }
-  const platform = String(item?.platform || item?.site || item?.mall || item?.source || '').trim().toLowerCase();
   const productId = String(
-    item?.product_id || item?.productId || item?.product_no || item?.productNo || item?.code || item?.no || ''
+    item?.product_id || item?.productId || item?.product_no || item?.productNo
+    || item?.code || item?.no || item?.id || ''
   ).trim();
   if (productId) return `product:${platform}:${productId.toLowerCase()}`;
   const title = String(item?.title || item?.name || item?.product_name || item?.productName || '').trim().toLowerCase();
@@ -13929,10 +14619,10 @@ function compMarketLegacyManualInterventionFromText(text = '', market = {}, raw 
     target: 'VM 상세수집 작업',
     manualTitle,
     message: hasHumanSignal
-      ? 'VM에서 영수증·보안 확인처럼 사람만 처리할 수 있는 화면이 감지됐습니다. 화면의 질문을 직접 해결한 뒤 같은 작업 재개를 누르세요.'
+      ? 'VM에서 영수증·보안 확인처럼 사람만 처리할 수 있는 화면이 감지됐습니다. 화면의 질문을 직접 해결한 뒤 멈춘 후보 다시 수집을 누르세요.'
       : (hasLoginSignal
-        ? 'VM 로그인 화면이 감지된 이전 작업입니다. 저장된 로그인 정보를 사용해 로그인 버튼을 누른 뒤 같은 작업 재개를 누르세요.'
-        : 'VM 상세수집이 사람 확인 또는 로그인 단계에서 멈췄습니다. VM 화면을 확인한 뒤 같은 작업 재개를 누르세요.'),
+        ? 'VM 로그인 화면이 감지된 이전 작업입니다. 저장된 로그인 정보를 사용해 로그인 버튼을 누른 뒤 멈춘 후보 다시 수집을 누르세요.'
+        : 'VM 상세수집이 사람 확인 또는 로그인 단계에서 멈췄습니다. VM 화면을 확인한 뒤 멈춘 후보 다시 수집을 누르세요.'),
     reason: String(market.status || market.error || '이전 VM 상세수집 작업에서 추가 확인이 필요합니다.').trim(),
     waitRemainingSec: 0,
     captureRuntime: 'vm',
@@ -13945,6 +14635,8 @@ const COMP_MARKET_CANDIDATE_SNAPSHOT_LIMIT = 24;
 const COMP_MARKET_CANDIDATE_SNAPSHOT_RESULT_LIMIT = 60;
 
 function compMarketCurrentWorkScope() {
+  const ownedScope = typeof compMarketOwnedWorkScope === 'function' ? compMarketOwnedWorkScope() : null;
+  if (ownedScope?.scopeKey) return { ...ownedScope };
   let meta = null;
   try {
     if (typeof sectionWorkScopeMeta === 'function') meta = sectionWorkScopeMeta();
@@ -13953,6 +14645,10 @@ function compMarketCurrentWorkScope() {
   }
   const factory = typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : (state.factory || {});
   const product = factory?.product || {};
+  const workInstanceId = String(
+    state.workIdentity?.instanceId || factory?.workIdentity?.instanceId ||
+    (typeof getCurrentLastWorkWorkspaceScope === 'function' ? getCurrentLastWorkWorkspaceScope() : '') || ''
+  ).trim();
   const directProductName = String(
     (typeof factoryLiveInputDraft === 'object' ? factoryLiveInputDraft?.productName : '') ||
     product.userProductName ||
@@ -13993,10 +14689,11 @@ function compMarketCurrentWorkScope() {
     try { currentRunId = factoryCurrentWorkflowRunId(factory); } catch(_) { currentRunId = ''; }
   }
   const directScopeKey = productKey || inputImageFingerprint
-    ? `${currentRunId || 'no_run'}::${productKey || 'no_product'}::${inputImageFingerprint || 'no_image'}`
+    ? `${workInstanceId || 'no_work'}::${currentRunId || 'no_run'}::${productKey || 'no_product'}::${inputImageFingerprint || 'no_image'}`
     : '';
   const scopeKey = directScopeKey || String(meta?.scopeKey || '').trim();
   return {
+    workInstanceId,
     scopeKey,
     currentRunId,
     productKey,
@@ -14018,7 +14715,7 @@ function compMarketCandidateSnapshotKey(current = compMarketCurrentWorkScope()) 
 
 function compMarketReadCandidateSnapshotStore() {
   try {
-    const raw = window.localStorage.getItem(COMP_MARKET_CANDIDATE_SNAPSHOT_STORAGE_KEY);
+    const raw = workspaceSessionGetItem(COMP_MARKET_CANDIDATE_SNAPSHOT_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== 'object') return { version: 1, snapshots: {} };
     const snapshots = parsed.snapshots && typeof parsed.snapshots === 'object' ? parsed.snapshots : {};
@@ -14040,7 +14737,7 @@ function compMarketWriteCandidateSnapshotStore(store = {}) {
       latestKey: store.latestKey || ordered[0]?.[0] || '',
       snapshots: Object.fromEntries(ordered),
     };
-    window.localStorage.setItem(COMP_MARKET_CANDIDATE_SNAPSHOT_STORAGE_KEY, JSON.stringify(next));
+    void workspaceSessionSetItem(COMP_MARKET_CANDIDATE_SNAPSHOT_STORAGE_KEY, JSON.stringify(next));
     return true;
   } catch(_) {
     return false;
@@ -14167,6 +14864,17 @@ function compMarketPersistCandidateSnapshot(market = {}, current = compMarketCur
   const savedAt = Date.now();
   const store = compMarketReadCandidateSnapshotStore();
   const groupedRows = compMarketSnapshotGroupedRows(market, rows, current);
+  const detailSnapshot = typeof sanitizeCompMarketScrapeForPersistence === 'function'
+    ? sanitizeCompMarketScrapeForPersistence({
+        detailJobId: market.detailJobId || '',
+        detailSelectionVersion: market.detailSelectionVersion || 0,
+        detailOperationSequence: market.detailOperationSequence || 0,
+        detailOperation: market.detailOperation || null,
+        scrapedImages: Array.isArray(market.scrapedImages) ? market.scrapedImages : [],
+        selectedImageIds: Array.isArray(market.selectedImageIds) ? market.selectedImageIds : [],
+        showPreviousDetailImages: !!market.showPreviousDetailImages,
+      })
+    : market;
   store.snapshots[key] = {
     key,
     savedAt,
@@ -14188,6 +14896,15 @@ function compMarketPersistCandidateSnapshot(market = {}, current = compMarketCur
     vmSearchAttempts: Array.isArray(market.vmSearchAttempts) ? market.vmSearchAttempts.slice(-8) : [],
     results: rows,
     groupedResults: groupedRows,
+    detailJobId: detailSnapshot?.detailJobId || '',
+    detailSelectionVersion: Number(detailSnapshot?.detailSelectionVersion || 0) || 0,
+    detailOperationSequence: Number(detailSnapshot?.detailOperationSequence || 0) || 0,
+    detailOperation: detailSnapshot?.detailOperation || null,
+    scrapedImages: Array.isArray(detailSnapshot?.scrapedImages) ? detailSnapshot.scrapedImages : [],
+    selectedImageIds: Array.isArray(detailSnapshot?.selectedImageIds) ? detailSnapshot.selectedImageIds : [],
+    showPreviousDetailImages: !!detailSnapshot?.showPreviousDetailImages,
+    detailPhase: String(market.phase || ''),
+    detailStatus: String(market.status || ''),
   };
   store.latestKey = key;
   const saved = compMarketWriteCandidateSnapshotStore(store);
@@ -14301,14 +15018,43 @@ function compMarketRestoreCandidateSnapshot(market = {}, current = compMarketCur
   market.sessionId = snapshot.sessionId || market.sessionId || snapshot.searchId || '';
   market.route = snapshot.route || market.route || '현재 작업 VM 후보 보관함';
   market.collectMode = snapshot.collectMode || market.collectMode || 'vm';
+  const restoredScrapedImages = Array.isArray(snapshot.scrapedImages)
+    ? snapshot.scrapedImages
+    : [];
+  const rebasedScrapedImages = typeof compMarketStampRowsWithCurrentWork === 'function'
+    ? compMarketStampRowsWithCurrentWork(restoredScrapedImages, current, { replaceScope: true })
+    : restoredScrapedImages;
+  const scopedScrapedImages = typeof compMarketFilterScrapedImagesForCurrentWork === 'function'
+    ? compMarketFilterScrapedImagesForCurrentWork(rebasedScrapedImages, current, market)
+    : rebasedScrapedImages;
+  market.scrapedImages = compMarketTrimImageRowsForState(
+    compMarketDedupeScrapedImages(scopedScrapedImages, market)
+  );
+  const visibleImageIds = new Set(
+    market.scrapedImages.map((image, index) => compMarketScrapedImageId(image, index))
+  );
+  market.selectedImageIds = Array.isArray(snapshot.selectedImageIds)
+    ? snapshot.selectedImageIds.map(String).filter(id => visibleImageIds.has(id))
+    : [];
+  market.detailJobId = snapshot.detailJobId || '';
+  market.detailSelectionVersion = Number(snapshot.detailSelectionVersion || 0) || 0;
+  market.detailOperationSequence = Number(snapshot.detailOperationSequence || 0) || 0;
+  market.detailOperation = snapshot.detailOperation && typeof snapshot.detailOperation === 'object'
+    ? snapshot.detailOperation
+    : null;
+  market.showPreviousDetailImages = !!snapshot.showPreviousDetailImages;
   market.loading = false;
   market.error = '';
-  market.phase = 'done';
+  market.phase = market.scrapedImages.length
+    ? (snapshot.detailPhase || 'detail-done')
+    : 'done';
   market.suppressFactoryCompetitorFallback = false;
   market.candidateSnapshotKey = snapshot.key || compMarketCandidateSnapshotKey(current);
   market.candidateSnapshotSavedAt = snapshot.savedAt || 0;
   market.candidateSnapshotSuppressed = false;
-  market.status = `현재 작업의 마지막 VM 후보 ${rows.length}건을 보관함에서 복구했습니다.`;
+  market.status = market.scrapedImages.length
+    ? (snapshot.detailStatus || `현재 작업의 마지막 상세페이지 이미지 ${market.scrapedImages.length}장을 보관함에서 복구했습니다.`)
+    : `현재 작업의 마지막 VM 후보 ${rows.length}건을 보관함에서 복구했습니다.`;
   market.lastUpdatedAt = Date.now();
   return rows;
 }
@@ -14325,10 +15071,21 @@ function compMarketHasWorkPayload(market = {}) {
   );
 }
 
+function compMarketWorkKeysCompatible(currentWorkKey = '', candidateWorkKey = '') {
+  const current = String(currentWorkKey || '').trim();
+  const candidate = String(candidateWorkKey || '').trim();
+  if (!current || !candidate || current === candidate) return true;
+  const currentSeparator = current.indexOf('::');
+  const candidateSeparator = candidate.indexOf('::');
+  if (currentSeparator >= 0 && current.slice(currentSeparator + 2) === candidate) return true;
+  if (candidateSeparator >= 0 && candidate.slice(candidateSeparator + 2) === current) return true;
+  return false;
+}
+
 function compMarketWorkScopeMatchesCurrent(market = {}, current = compMarketCurrentWorkScope()) {
   if (!current?.scopeKey) return true;
   const workKey = String(market.factoryWorkKey || market.workScopeKey || '').trim();
-  if (workKey) return workKey === current.scopeKey;
+  if (workKey) return compMarketWorkKeysCompatible(current.scopeKey, workKey);
   const currentRunId = String(current.currentRunId || '').trim();
   const marketRunId = String(market.currentRunId || market.generationRunId || '').trim();
   if (currentRunId && compMarketHasWorkPayload(market) && marketRunId !== currentRunId) return false;
@@ -14550,12 +15307,26 @@ function compMarketClearForeignWorkPayload(market = {}, current = compMarketCurr
   return market;
 }
 
+function compMarketCommitNormalizedState(cp, raw, next) {
+  const stable = raw && typeof raw === 'object' ? raw : next;
+  if (stable !== next) Object.assign(stable, next);
+  cp.marketScrape = stable;
+  return stable;
+}
+
 function ensureCompMarketScrapeState(options = {}) {
-  const cp = state.compPage || {};
+  const factory = options.factory && typeof options.factory === 'object' ? options.factory : null;
+  const cp = factory
+    ? (factory.compPage && typeof factory.compPage === 'object' ? factory.compPage : {})
+    : (state.compPage || {});
   const base = compMarketDefaultState();
   const raw = cp.marketScrape && typeof cp.marketScrape === 'object' ? cp.marketScrape : {};
   const next = { ...base, ...raw };
-  const currentScope = compMarketCurrentWorkScope();
+  const currentScope = options.currentScope && typeof options.currentScope === 'object'
+    ? options.currentScope
+    : (factory && typeof factoryCompetitorCandidateScopePayload === 'function'
+      ? factoryCompetitorCandidateScopePayload('competitors', factory)
+      : compMarketCurrentWorkScope());
   let hiddenCandidateCount = 0;
   const foreignWorkPayload = !compMarketWorkScopeMatchesCurrent(next, currentScope);
   if (foreignWorkPayload) {
@@ -14589,10 +15360,29 @@ function ensureCompMarketScrapeState(options = {}) {
   });
   const beforeCandidateCount = (Array.isArray(next.results) ? next.results.length : 0)
     + Object.values(next.groupedResults || {}).reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0);
-  next.results = compMarketFilterCandidatesForCurrentWork(next.results, currentScope);
+  const persistedSelectedIds = new Set(
+    (!foreignWorkPayload && Array.isArray(raw.selectedIds) ? raw.selectedIds : [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean),
+  );
+  next.results = next.results.filter((item, index) => (
+    compMarketCandidateVisibleForCurrentWork(
+      item,
+      currentScope,
+      foreignWorkPayload ? new Set() : persistedSelectedIds,
+      index,
+    )
+  ));
   Object.keys(next.groupedResults).forEach(siteId => {
     if (Array.isArray(next.groupedResults[siteId])) {
-      next.groupedResults[siteId] = compMarketFilterCandidatesForCurrentWork(next.groupedResults[siteId], currentScope);
+      next.groupedResults[siteId] = next.groupedResults[siteId].filter((item, index) => (
+        compMarketCandidateVisibleForCurrentWork(
+          item,
+          currentScope,
+          foreignWorkPayload ? new Set() : persistedSelectedIds,
+          index,
+        )
+      ));
       if (!next.groupedResults[siteId].length) delete next.groupedResults[siteId];
     }
   });
@@ -14610,8 +15400,10 @@ function ensureCompMarketScrapeState(options = {}) {
   if (!restoredRows.length) {
     restoredRows = compMarketRestoreResultsFromFactoryCompetitors(next, currentScope);
   }
-  const restoredSelectedIds = restoredRows.length && Array.isArray(next.selectedIds)
-    ? next.selectedIds.map(String)
+  const restoredSelectedIds = restoredRows.length
+    ? (persistedSelectedIds.size
+      ? Array.from(persistedSelectedIds)
+      : (Array.isArray(next.selectedIds) ? next.selectedIds.map(String) : []))
     : null;
   if (restoredRows.length) {
     next.logs = [
@@ -14749,8 +15541,10 @@ function ensureCompMarketScrapeState(options = {}) {
   const hasNonEmptyCandidateSource = (Array.isArray(raw.vmResults) && raw.vmResults.length > 0)
     || (Array.isArray(raw.localResults) && raw.localResults.length > 0);
   const hasStoredCandidateSources = hasNonEmptyCandidateSource
-    || !Array.isArray(raw.results)
-    || raw.results.length === 0;
+    || (!restoredRows.length && (
+      !Array.isArray(raw.results)
+      || raw.results.length === 0
+    ));
   if (!hasStoredCandidateSources) {
     compMarketSetCandidateSource(next, raw.collectMode === 'local' ? 'local' : 'vm', next.results, next.groupedResults);
   } else {
@@ -14764,9 +15558,10 @@ function ensureCompMarketScrapeState(options = {}) {
   }
   next.candidateView = compMarketCandidateSourceView(raw.candidateView || next.candidateView || raw.collectMode || 'vm');
   if (!next.loading && hasStoredCandidateSources) compMarketApplyCandidateSourceView(next, next.candidateView, { preserveSelection: true });
-  cp.marketScrape = next;
-  state.compPage = cp;
-  return next;
+  const stable = compMarketCommitNormalizedState(cp, raw, next);
+  if (factory) factory.compPage = cp;
+  else state.compPage = cp;
+  return stable;
 }
 
 function compMarketStableKey(value) {
@@ -14864,12 +15659,12 @@ function compMarketVisibleImagesSelectionKey(images = [], market = null) {
 }
 
 function compMarketPersistImageSelection(market = null) {
-  if (typeof window === 'undefined' || !window.localStorage) return;
+  if (typeof workspaceSessionSetItem !== 'function') return;
   const source = market || ensureCompMarketScrapeState();
   const images = compMarketDedupeScrapedImages(Array.isArray(source.scrapedImages) ? source.scrapedImages : [], source);
   const ids = Array.isArray(source.selectedImageIds) ? source.selectedImageIds.map(String).filter(Boolean) : [];
   try {
-    window.localStorage.setItem(COMP_MARKET_IMAGE_SELECTION_STORAGE_KEY, JSON.stringify({
+    void workspaceSessionSetItem(COMP_MARKET_IMAGE_SELECTION_STORAGE_KEY, JSON.stringify({
       key: compMarketVisibleImagesSelectionKey(images, source),
       selectedImageIds: ids,
       savedAt: Date.now(),
@@ -14878,12 +15673,12 @@ function compMarketPersistImageSelection(market = null) {
 }
 
 function compMarketReadPersistedImageSelection(market = null) {
-  if (typeof window === 'undefined' || !window.localStorage) return null;
+  if (typeof workspaceSessionGetItem !== 'function') return null;
   const source = market || ensureCompMarketScrapeState();
   const images = compMarketDedupeScrapedImages(Array.isArray(source.scrapedImages) ? source.scrapedImages : [], source);
   const visibleImageIds = new Set(images.map((img, index) => compMarketScrapedImageId(img, index)));
   try {
-    const saved = JSON.parse(window.localStorage.getItem(COMP_MARKET_IMAGE_SELECTION_STORAGE_KEY) || 'null');
+    const saved = JSON.parse(workspaceSessionGetItem(COMP_MARKET_IMAGE_SELECTION_STORAGE_KEY) || 'null');
     if (!saved || saved.key !== compMarketVisibleImagesSelectionKey(images, source)) return null;
     const selectedImageIds = Array.isArray(saved.selectedImageIds)
       ? saved.selectedImageIds.map(String).filter(id => visibleImageIds.has(id))
@@ -14975,12 +15770,24 @@ function compMarketSavedAnalysisMatchesSelectedImages(saved = null, market = nul
   return !!(signature && signature.key && signature.key === current.key);
 }
 
-function compMarketRequireCurrentImageAnalysis(actionLabel = '작업') {
+function compMarketRequireCurrentImageAnalysis(actionLabel = '작업', options = {}) {
   const market = ensureCompMarketScrapeState();
   const current = compMarketCurrentSelectedImageSignature(market, 'selected');
   if (!current.key) return true;
   if (compMarketAnalysisMatchesSelectedImages(market, state.compPage?.analysisResult || null)) return true;
   const cp = state.compPage || (state.compPage = {});
+  if (options.allowPreviousResult === true && cp.analysisResult) {
+    cp.previousAnalysisViewOnly = true;
+    cp.analyzeProgress = 100;
+    cp.analyzeStage = '이전 분석 결과 보기';
+    cp.analyzeMsg = '저장된 이전 경쟁사 분석 결과를 표시합니다.';
+    cp.analyzeDetail = '현재 선택 이미지와 분석 기준이 다릅니다. 섹션 플랜 생성·적용 전에는 다시 분석해주세요.';
+    if (typeof compMarketSetStatus === 'function') {
+      compMarketSetStatus(cp.analyzeDetail, 'saved-analysis-view-only', 'warn');
+    }
+    state.error = '';
+    return true;
+  }
   cp.analyzeProgress = 0;
   cp.analyzeStage = '선택 이미지 재분석 필요';
   cp.analyzeMsg = '현재 선택 이미지와 분석 결과가 다릅니다.';
@@ -15193,6 +16000,7 @@ function renderCompMarketManualInterventionPanel(market = {}) {
   const target = intervention.target ? ` · 대상: ${intervention.target.slice(0, 52)}` : '';
   const wait = intervention.waitRemainingSec ? `현재 대기 ${intervention.waitRemainingSec}초` : '사용자 조치 후 재개 가능';
   const runtime = intervention.captureRuntime === 'vm' ? 'VM 결과' : '상세수집 결과';
+  const retryAvailable = compMarketManualRetryAvailable(market);
   return `<div data-comp-market-manual-intervention role="alert" style="margin:0 0 14px;border:2px solid rgba(248,113,113,.9);border-radius:14px;background:linear-gradient(135deg,rgba(127,29,29,.48),rgba(41,17,24,.94));padding:16px;box-shadow:0 10px 28px rgba(127,29,29,.18)">
     <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
       <div style="width:42px;height:42px;border-radius:50%;background:#ef4444;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:950;flex-shrink:0;box-shadow:0 0 0 5px rgba(248,113,113,.18)"><span class="material-icons-outlined" style="font-size:23px">priority_high</span></div>
@@ -15203,12 +16011,12 @@ function renderCompMarketManualInterventionPanel(market = {}) {
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:9px">
           <span class="status-chip" style="color:#fecaca;border-color:rgba(248,113,113,.7);background:rgba(127,29,29,.5)">${escapeHtml(runtime)}</span>
           <span class="status-chip" style="color:#fde68a;border-color:rgba(245,158,11,.62);background:rgba(120,53,15,.35)">${escapeHtml(wait)}</span>
-          <span class="status-chip" style="color:#fff;border-color:rgba(255,255,255,.25);background:rgba(0,0,0,.18)">기존 작업 ID 유지</span>
+          <span class="status-chip" style="color:#fff;border-color:rgba(255,255,255,.25);background:rgba(0,0,0,.18)">멈춘 후보만 새 작업으로 재수집</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
-        <button class="btn-sm" id="compMarketManualOpenVm" type="button" style="font-size:13px;padding:10px 13px;border-color:rgba(255,255,255,.38);color:#fff;background:rgba(0,0,0,.2)"><span class="material-icons-outlined" style="font-size:16px">open_in_new</span>VM 화면 열기/확인</button>
-        <button class="btn-sm" id="compMarketManualResume" type="button" ${disabledAttr(!market.detailJobId || market.loading, market.loading ? '재개 확인 중입니다.' : '이어갈 상세수집 작업이 없습니다.')} style="font-size:13px;padding:10px 13px;background:#ef4444;color:#fff;border-color:#fca5a5;font-weight:950"><span class="material-icons-outlined" style="font-size:16px">play_arrow</span>사용자 조치 완료 · 같은 작업 재개</button>
+        <button class="btn-sm" id="compMarketManualOpenVm" data-factory-guide-action="open-vm-capture" type="button" style="font-size:13px;padding:10px 13px;border-color:rgba(255,255,255,.38);color:#fff;background:rgba(0,0,0,.2)"><span class="material-icons-outlined" style="font-size:16px">open_in_new</span>VM 화면 열기/확인</button>
+        <button class="btn-sm" id="compMarketManualResume" data-factory-guide-action="resume-comp-market-detail" type="button" ${disabledAttr(!retryAvailable || market.loading, market.loading ? '재수집을 시작하고 있습니다.' : '다시 수집할 선택 후보가 없습니다.')} style="font-size:13px;padding:10px 13px;background:#ef4444;color:#fff;border-color:#fca5a5;font-weight:950"><span class="material-icons-outlined" style="font-size:16px">replay</span>사용자 조치 완료 · 멈춘 후보 다시 수집</button>
       </div>
     </div>
   </div>`;
@@ -15258,8 +16066,10 @@ function renderCompMarketRunningPanel(market, totalResults = 0) {
   </div>`;
 }
 
-function renderCompMarketResultCard(item, index) {
-  const market = ensureCompMarketScrapeState();
+function renderCompMarketResultCard(item, index, marketOverride = null) {
+  const market = marketOverride && typeof marketOverride === 'object'
+    ? marketOverride
+    : ensureCompMarketScrapeState();
   const id = compMarketResultId(item, index);
   const selected = market.selectedIds.includes(id);
   const thumb = compMarketThumbSrc(item);
@@ -15334,22 +16144,26 @@ function renderCompMarketDetailActionPanel(market, totalResults = 0) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
       <button class="btn-sm" id="compMarketDetailSelectedMain" type="button" ${disabledAttr(disabled, disabledReason)} style="font-size:13px;padding:10px 14px;background:var(--primary);color:#fff;border-color:var(--primary);font-weight:950"><span class="material-icons-outlined" style="font-size:17px">desktop_windows</span>선택한 ${selectedCount || 0}건 VM 상세수집</button>
       <button class="btn-sm" id="compMarketVmAnalyzeMain" type="button" ${disabledAttr(disabled, disabledReason)} style="font-size:13px;padding:10px 14px"><span class="material-icons-outlined" style="font-size:17px">desktop_windows</span>수집 후 바로 분석</button>
-      <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')} style="font-size:13px;padding:10px 14px"><span class="material-icons-outlined" style="font-size:17px">login</span>VM 로그인 세션 준비</button>
+      <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" data-comp-market-quick-action="open-vm-login" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')} style="font-size:13px;padding:10px 14px"><span class="material-icons-outlined" style="font-size:17px">login</span>VM 로그인 세션 준비</button>
       <button class="btn-sm" id="compMarketOpenVisibleVm" type="button" ${disabledAttr(market.vmOpenLoading, 'VM 화면 연결을 확인하는 중입니다.')} style="font-size:13px;padding:10px 14px"><span class="material-icons-outlined" style="font-size:17px">open_in_new</span>VM 화면 열기/확인</button>
       <button class="btn-sm" id="compMarketDetailSelectedLocalMain" type="button" ${disabledAttr(disabled, disabledReason)} style="font-size:13px;padding:10px 14px"><span class="material-icons-outlined" style="font-size:17px">computer</span>본컴 상세수집</button>
     </div>
   </div>`;
 }
 
-function renderCompMarketScrapedImagesPanel() {
-  const market = ensureCompMarketScrapeState();
+function renderCompMarketScrapedImagesPanel(marketOverride = null, options = {}) {
+  const market = marketOverride && typeof marketOverride === 'object'
+    ? marketOverride
+    : ensureCompMarketScrapeState();
   const images = compMarketVisibleDetailImagesForSelection(market);
   const selected = new Set(Array.isArray(market.selectedImageIds) ? market.selectedImageIds.map(String) : []);
   const selectedCount = images.filter((img, index) => selected.has(compMarketScrapedImageId(img, index))).length;
   const visibleLimit = 24;
   const visibleImages = images.slice(0, visibleLimit);
   const previewImageId = String(market.previewImageId || '');
-  const previewImage = images.find((img, index) => compMarketScrapedImageId(img, index) === previewImageId) || null;
+  const previewImage = options.includePreviewModal === false
+    ? null
+    : images.find((img, index) => compMarketScrapedImageId(img, index) === previewImageId) || null;
   const previewTitle = previewImage ? (previewImage.title || previewImage.name || '경쟁사 상세페이지 이미지') : '';
   const previewOriginalUrl = previewImage ? compMarketScrapedImageOriginalUrl(previewImage, market) : '';
   const previewImageSrc = previewImage?.src || '';
@@ -15357,10 +16171,10 @@ function renderCompMarketScrapedImagesPanel() {
   if (!images.length && !market.detailResults) {
     return `<div style="margin-top:14px;border:1px dashed var(--border);border-radius:12px;background:rgba(255,255,255,.018);padding:14px;color:var(--text-m);font-size:12px;line-height:1.6">
       <div>선택 후보의 상세페이지를 수집하면 이곳에 경쟁사 이미지 목록이 나타납니다.</div>
-      <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">login</span>VM 로그인 세션 준비</button>
+      <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" data-comp-market-quick-action="open-vm-login" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">login</span>VM 로그인 세션 준비</button>
       <button class="btn-sm" id="compMarketOpenVisibleVm" type="button" ${disabledAttr(market.vmOpenLoading, 'VM 화면 연결을 확인하는 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">open_in_new</span>VM 화면 열기/확인</button>
       ${market.detailJobId ? `<button class="btn-sm" id="compMarketReloadDetailImages" type="button" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">refresh</span>상세이미지 다시 표시</button>` : ''}
-      <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
+      <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" data-comp-market-quick-action="recover-images" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="margin-top:10px"><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
     </div>`;
   }
   return `<div style="margin-top:14px;border:1px solid rgba(34,197,94,.28);border-radius:12px;background:rgba(16,185,129,.045);padding:12px">
@@ -15372,10 +16186,10 @@ function renderCompMarketScrapedImagesPanel() {
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn-sm" id="compMarketDetailSelectedVm" type="button" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : '상세수집할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>VM에서 수집하기</button>
         <button class="btn-sm" id="compMarketDetailSelectedAnalyzeVm" type="button" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : 'VM으로 수집하고 분석할 후보를 먼저 선택하세요.')} style="background:var(--primary);color:#fff;border-color:var(--primary)"><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>VM 수집 후 분석</button>
-        <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">login</span>VM 로그인 세션 준비</button>
+        <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" data-comp-market-quick-action="open-vm-login" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">login</span>VM 로그인 세션 준비</button>
         <button class="btn-sm" id="compMarketOpenVisibleVm" type="button" ${disabledAttr(market.vmOpenLoading, 'VM 화면 연결을 확인하는 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">open_in_new</span>VM 화면 열기/확인</button>
         <button class="btn-sm" id="compMarketReloadDetailImages" type="button" ${disabledAttr(market.loading || !market.detailJobId, market.loading ? '작업 진행 중입니다.' : '다시 불러올 상세수집 작업 ID가 없습니다.')}><span class="material-icons-outlined" style="font-size:15px">refresh</span>상세이미지 다시 표시</button>
-        <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" ${disabledAttr(market.loading, '작업 진행 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
+        <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" data-comp-market-quick-action="recover-images" ${disabledAttr(market.loading, '작업 진행 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
         <button class="btn-sm" id="compMarketSelectAllImages" type="button" ${disabledAttr(!images.length, '수집된 이미지가 없습니다.')}>전체 선택</button>
         <button class="btn-sm" id="compMarketClearImageSelection" type="button" ${disabledAttr(!selectedCount, '선택된 이미지가 없습니다.')}>선택 해제</button>
         <button class="btn-sm" id="compMarketAnalyzeSelectedImages" type="button" ${disabledAttr(!selectedCount, '분석할 이미지를 먼저 선택하세요.')} style="background:var(--primary);color:#fff;border-color:var(--primary)">선택 이미지 분석</button>
@@ -15427,20 +16241,23 @@ function renderCompMarketScrapedImagesPanel() {
       ${images.length > visibleImages.length ? `<div style="border:1px dashed var(--border);border-radius:10px;padding:12px;color:var(--text-m);font-size:12px;line-height:1.6;display:flex;align-items:center;justify-content:center;text-align:center;min-height:96px">추가 ${images.length - visibleImages.length}장은 메모리 보호를 위해 목록 렌더를 보류했습니다.<br>전체 분석 버튼은 전체 ${images.length}장 기준으로 작동합니다.</div>` : ''}
     </div>` : `<div style="border:1px dashed var(--border);border-radius:10px;padding:12px;color:var(--warn);font-size:12px;line-height:1.6">
       <div>상세수집 결과는 저장됐지만 이미지 URL/base64/로컬 스크린샷 경로를 아직 추출하지 못했습니다.</div>
-      <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="margin-top:9px"><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
+      <button class="btn-sm" id="compMarketRecoverDetailImages" type="button" data-comp-market-quick-action="recover-images" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="margin-top:9px"><span class="material-icons-outlined" style="font-size:15px">folder_open</span>최근 VM 상세이미지 불러오기</button>
     </div>`}
   </div>`;
 }
 
-function renderCompMarketScrapePanel() {
-  const market = ensureCompMarketScrapeState();
+function renderCompMarketScrapePanel(snapshot = null, marketOverride = null, options = {}) {
+  const market = marketOverride && typeof marketOverride === 'object'
+    ? marketOverride
+    : ensureCompMarketScrapeState();
   if (typeof seedCompMarketDefaultProductContext === 'function') seedCompMarketDefaultProductContext({ save: false, quiet: true });
-  const productName = market.productName || state.factory?.product?.productName || state.factory?.product?.name || state.productName || '';
+  const snapshotFactory = snapshot?.factory && typeof snapshot.factory === 'object' ? snapshot.factory : null;
+  const productName = market.productName || snapshotFactory?.product?.productName || snapshotFactory?.product?.name || state.factory?.product?.productName || state.factory?.product?.name || state.productName || '';
   const selected = new Set(market.selectedSites || []);
   const results = typeof compMarketAllCandidateResults === 'function'
     ? compMarketAllCandidateResults(market)
     : (Array.isArray(market.results) ? market.results : []);
-  if (!Array.isArray(market.results) || market.results.length !== results.length) {
+  if (!marketOverride && (!Array.isArray(market.results) || market.results.length !== results.length)) {
     market.results = results;
   }
   const grouped = market.groupedResults && Object.keys(market.groupedResults).length
@@ -15507,15 +16324,17 @@ function renderCompMarketScrapePanel() {
           <button class="btn-sm" id="compMarketUseCurrentImage" type="button"><span class="material-icons-outlined" style="font-size:15px">download_done</span>현재 제품 이미지 가져오기</button>
           <button class="btn-sm" id="compMarketStart" type="button" ${disabledAttr(market.loading, 'JepumScraper 작업이 진행 중입니다.')} style="background:var(--primary);color:#fff;border-color:var(--primary)"><span class="material-icons-outlined" style="font-size:15px">travel_explore</span>${market.loading && market.collectMode === 'vm' ? 'VM 후보 수집 중...' : 'VM 후보 수집'}</button>
           <button class="btn-sm" id="compMarketStartLocal" type="button" ${disabledAttr(market.loading, 'JepumScraper 작업이 진행 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">computer</span>${market.loading && market.collectMode === 'local' ? '본컴 수집 중...' : '본컴 후보 수집'}</button>
-          <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">login</span>${market.vmLoginLoading ? 'VM 로그인 준비 중...' : 'VM 로그인 세션 준비'}</button>
-          <button class="btn-sm" id="compMarketDetailSelected" type="button" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : '상세 스크래핑할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>선택 후보 VM 상세수집</button>
-          <button class="btn-sm" id="compMarketDetailSelectedLocal" type="button" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : '상세 스크래핑할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">computer</span>본컴 상세수집</button>
-          <button class="btn-sm" id="compMarketVmAnalyze" type="button" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : 'VM으로 수집하고 분석할 후보를 먼저 선택하세요.')} style="background:var(--primary);color:#fff;border-color:var(--primary)"><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>VM 수집 후 분석</button>
-          <button class="btn-sm" id="compMarketSelectAllCandidates" type="button" ${disabledAttr(!totalResults || market.loading, !totalResults ? '후보를 먼저 수집하세요.' : '작업 진행 중입니다.')}>후보 전체 선택</button>
-          <button class="btn-sm" id="compMarketClearCandidateSelection" type="button" ${disabledAttr(!market.selectedIds.length || market.loading, !market.selectedIds.length ? '선택된 후보가 없습니다.' : '작업 진행 중입니다.')}>후보 선택 해제</button>
-          <button class="btn-sm" id="compMarketReloadSearchResults" type="button" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="${!totalResults ? 'border-color:rgba(245,158,11,.55);color:var(--warn)' : ''}">${market.searchId ? '후보 다시 읽기' : '최근 VM 후보 불러오기'}</button>
+          <button class="btn-sm" id="compMarketOpenVmLoginSession" type="button" data-comp-market-quick-action="open-vm-login" ${disabledAttr(market.vmLoginLoading, 'VM 로그인 준비 창을 여는 중입니다.')}><span class="material-icons-outlined" style="font-size:15px">login</span>${market.vmLoginLoading ? 'VM 로그인 준비 중...' : 'VM 로그인 세션 준비'}</button>
+          <button class="btn-sm" id="compMarketDetailSelected" type="button" data-comp-market-quick-action="detail-vm" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : '상세 스크래핑할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>선택 후보 VM 상세수집</button>
+          <button class="btn-sm" id="compMarketDetailSelectedLocal" type="button" data-comp-market-quick-action="detail-local" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : '상세 스크래핑할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">computer</span>본컴 상세수집</button>
+          <button class="btn-sm" id="compMarketDetailSelectedScrapling" type="button" data-comp-market-quick-action="detail-scrapling" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : 'Scrapling으로 수집할 후보를 먼저 선택하세요.')}><span class="material-icons-outlined" style="font-size:15px">language</span>B안 · Scrapling 상세수집</button>
+          <button class="btn-sm" id="compMarketVmAnalyze" type="button" data-comp-market-quick-action="analyze-vm" ${disabledAttr(market.loading || !market.selectedIds.length, market.loading ? '작업 진행 중입니다.' : 'VM으로 수집하고 분석할 후보를 먼저 선택하세요.')} style="background:var(--primary);color:#fff;border-color:var(--primary)"><span class="material-icons-outlined" style="font-size:15px">desktop_windows</span>VM 수집 후 분석</button>
+          <button class="btn-sm" id="compMarketSelectAllCandidates" type="button" data-comp-market-quick-action="select-all" ${disabledAttr(!totalResults || market.loading, !totalResults ? '후보를 먼저 수집하세요.' : '작업 진행 중입니다.')}>후보 전체 선택</button>
+          <button class="btn-sm" id="compMarketClearCandidateSelection" type="button" data-comp-market-quick-action="clear-selection" ${disabledAttr(!market.selectedIds.length || market.loading, !market.selectedIds.length ? '선택된 후보가 없습니다.' : '작업 진행 중입니다.')}>후보 선택 해제</button>
+          <button class="btn-sm" id="compMarketReloadSearchResults" type="button" data-comp-market-quick-action="reload" ${disabledAttr(market.loading, '작업 진행 중입니다.')} style="${!totalResults ? 'border-color:rgba(245,158,11,.55);color:var(--warn)' : ''}">${market.searchId ? '후보 다시 읽기' : '최근 VM 후보 불러오기'}</button>
           <button class="btn-sm" id="compMarketClear" type="button"><span class="material-icons-outlined" style="font-size:15px">backspace</span>결과 지우기</button>
         </div>
+        <div class="factory-small" style="margin-top:8px">기본값은 기존 VM 상세수집입니다. B안은 선택한 후보 URL만 별도 Scrapling 브라우저로 수집하며 VM 설정을 바꾸지 않습니다.</div>
         <div style="border:1px dashed var(--border);border-radius:10px;padding:10px;font-size:11px;color:var(--text-m);line-height:1.55">
           마지막 갱신: ${escapeHtml(updated)}
           · ${escapeHtml(vmStatusLabel)}
@@ -15540,12 +16359,12 @@ function renderCompMarketScrapePanel() {
             return `<div style="font-size:13px;font-weight:900;color:var(--text);margin-bottom:8px">${escapeHtml(site.label)} 목표 ${escapeHtml(String(requested))} <span style="color:var(--text-m);font-weight:700">승인 ${escapeHtml(String(accepted))} · 미달 ${escapeHtml(String(shortfall))}</span>${shortfall ? `<div style="font-size:10px;color:var(--warn);margin-top:3px">미달 사유: ${escapeHtml(report.shortfallReason || 'API 사유 미제공')}</div>` : ''}</div>`;
           })()}
           <div style="display:flex;flex-direction:column;gap:8px">
-            ${rows.length ? rows.map((item, idx) => renderCompMarketResultCard(item, results.indexOf(item) >= 0 ? results.indexOf(item) : idx)).join('') : `<div style="font-size:12px;color:var(--text-m);padding:12px;border:1px dashed var(--border);border-radius:8px">아직 후보 없음</div>`}
+            ${rows.length ? rows.map((item, idx) => renderCompMarketResultCard(item, results.indexOf(item) >= 0 ? results.indexOf(item) : idx, market)).join('') : `<div style="font-size:12px;color:var(--text-m);padding:12px;border:1px dashed var(--border);border-radius:8px">아직 후보 없음</div>`}
           </div>
         </div>`;
       }).join('')}
     </div>` : ''}
-    ${renderCompMarketScrapedImagesPanel()}
+    ${renderCompMarketScrapedImagesPanel(market, options)}
   </section>`;
 }
 
@@ -15921,10 +16740,28 @@ function applyImageInsert(dataUrl, label = '추가 상세 이미지', source = '
   if (!dataUrl) return;
   if (insert.targetSectionId) {
     const sectionId = insert.targetSectionId;
+    const hadSectionContent = !!state.sectionContents[sectionId];
+    if (!hadSectionContent && typeof ensureSectionContentForPlacedImage === 'function') {
+      ensureSectionContentForPlacedImage(sectionId, {
+        image: dataUrl,
+        label: String(label || '미리보기 직접 추가').slice(0, 80),
+        source: source || '미리보기 직접 추가',
+      });
+    }
     if (!state.sectionContents[sectionId]) return;
-    captureCurrentSectionVariant(sectionId, 'baseline', '이미지 교체 전');
+    if (hadSectionContent) captureCurrentSectionVariant(sectionId, 'baseline', '이미지 교체 전');
     delete state.aiRepairUndoStack[sectionId];
     applySectionContent(sectionId, state.sectionContents[sectionId], dataUrl, 'manual', '이미지 교체');
+    if (state.sectionContents[sectionId]) {
+      state.sectionContents[sectionId].placed_asset_manual = true;
+      state.sectionContents[sectionId].placed_asset_source = source || '미리보기 직접 추가';
+      state.sectionContents[sectionId].placed_asset_label = String(label || '미리보기 직접 추가').slice(0, 80);
+      state.sectionContents[sectionId].placed_asset_key = '';
+    }
+    if (sectionId === 'size_color' && state.cuts?.placement) {
+      state.cuts.placement[sectionId] = '';
+      if (typeof savePlacement === 'function') savePlacement();
+    }
   } else {
     const detailSections = orderedSections();
     const afterSectionId = insert.afterSectionId || detailSections[detailSections.length - 1]?.id;
@@ -16218,12 +17055,12 @@ function factoryCompactLogMessage(message = '', limit = 700) {
   return `${text.slice(0, limit)}... (긴 로그 접힘)`;
 }
 
-function factoryLog(message, type = 'info', factory = null) {
+function factoryLog(message, type = 'info', factory = null, options = {}) {
   if (!factory) {
     const receipt = factoryRuntimeUpdateOwnedFactory(
       'factory/runtime:log',
       'factory',
-      draft => factoryLog(message, type, draft),
+      draft => factoryLog(message, type, draft, options),
     );
     return receipt.result;
   }
@@ -16251,7 +17088,7 @@ function factoryLog(message, type = 'info', factory = null) {
     scopeKey,
   }, ...(factory.logs || [])].slice(0, 80);
   factory.logStageId = '';
-  if (typeof factoryPatchGoalRunStatusInPlace === 'function') {
+  if (options.patchGoalRun !== false && typeof factoryPatchGoalRunStatusInPlace === 'function') {
     try { factoryPatchGoalRunStatusInPlace(factory, { fromLog: true }); } catch(e) {}
   }
   return factory.logs[0] || null;
@@ -16635,7 +17472,6 @@ function factoryUpdateFromInputs(factory = null) {
     );
     return receipt.result;
   }
-  const sync = factoryEnsureOpenMarketSync(factory);
   const nameEl = document.getElementById('factoryProductName');
   const hintEl = document.getElementById('factoryNaturalHint');
   const guideNameEl = document.getElementById('factoryGuideProductName');
@@ -16681,7 +17517,9 @@ function factoryUpdateFromInputs(factory = null) {
     }
   }
   if (finalHintEl) factory.product.naturalHint = finalHintEl.value;
-  if (marketPlusUrlEl) sync.marketPlusUrl = String(marketPlusUrlEl.value || '').trim();
+  if (marketPlusUrlEl) {
+    factoryEnsureOpenMarketSync(factory).marketPlusUrl = String(marketPlusUrlEl.value || '').trim();
+  }
   if (candidateAutoApply) factory.product.candidateAutoApply = !!candidateAutoApply.checked;
   Object.keys(factory.stages).forEach(stageId => {
     const target = document.querySelector(`[data-factory-stage-target="${stageId}"]`);
@@ -16700,83 +17538,26 @@ function factoryUpdateFromInputs(factory = null) {
   return true;
 }
 
-function factorySetProductImage(file, options = {}) {
-  if (!file?.type?.startsWith('image/')) return Promise.resolve(false);
-  if (!options.factory) {
-    const transaction = factoryRuntimeUpdateOwnedFactory(
-      'factory/start:setProductImage',
-      'factory',
-      draft => factorySetProductImage(file, { ...options, factory: draft }),
-    );
-    return Promise.resolve(transaction).then(receipt => {
-      saveLastWorkNow();
-      render();
-      return receipt.result;
-    });
-  }
-  const factory = options.factory;
+function factoryProductImageFileSupported(file) {
+  const mime = String(file?.type || '').trim().toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  return /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i.test(String(file?.name || '').trim());
+}
+
+function factoryReadProductImageFile(file) {
+  if (!factoryProductImageFileSupported(file)) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = e => {
+    reader.onload = event => {
       try {
-        if (options.operationToken && !factoryRuntimeIsOperationCurrent(options.operationToken)) {
-          throw factoryRuntimeStaleActionError('factory/start:setProductImage');
-        }
-        const preview = e.target.result;
+        const preview = event.target.result;
         const rawBase64 = String(preview || '').split(',')[1] || '';
         const base64 = typeof imageBase64Only === 'function' ? imageBase64Only(rawBase64) : rawBase64;
         const mime = typeof inferImageMimeFromBase64 === 'function'
           ? inferImageMimeFromBase64(base64, file.type || 'image/png')
           : (file.type || 'image/png');
-        const inputImageFingerprint = typeof factoryImagePayloadFingerprint === 'function'
-          ? factoryImagePayloadFingerprint(base64)
-          : '';
-        const uploadedAt = Date.now();
-        const name = file.name || '제품사진';
-        const identityMeta = typeof factoryCurrentProductIdentityMeta === 'function'
-          ? factoryCurrentProductIdentityMeta(factory, [factory.product?.productName, factory.product?.userProductName, state.productName])
-          : { productName: factory.product?.productName || state.productName || '', productIdentityKey: '' };
-        if (typeof factoryStampLockedInputImage === 'function') {
-          factoryStampLockedInputImage(factory, { base64, mime, preview, name, productName: identityMeta.productName, productKey: identityMeta.productIdentityKey }, { name, setAt: uploadedAt, productName: identityMeta.productName, productKey: identityMeta.productIdentityKey });
-        } else {
-          factory.product.imageBase64 = base64;
-          factory.product.imageMime = mime;
-          factory.product.imagePreview = preview;
-          factory.product.imageName = name;
-          factory.product.lockedInputImageFingerprint = inputImageFingerprint;
-          factory.product.lockedInputImageName = name;
-          factory.product.lockedInputImageMime = mime;
-          factory.product.lockedInputImageSetAt = uploadedAt;
-          factory.product.inputImages = [{
-            id: uid('factory_input'),
-            name,
-            base64,
-            mime,
-            preview,
-            inputImageFingerprint,
-            sourceImageKey: inputImageFingerprint,
-            productImageKey: inputImageFingerprint,
-            lockedInput: true,
-            uploadedAt,
-          }];
-        }
-        state.imageBase64 = base64;
-        state.imageMime = mime;
-        state.imagePreview = preview;
-        state.imageName = name;
-        if (typeof syncProductImageAcrossWorkspaces === 'function') {
-          syncProductImageAcrossWorkspaces({
-            prefer: 'factory',
-            lockInput: true,
-            archiveInput: false,
-            factory,
-          });
-        }
-        factoryLog('현재 업로드 사진을 조립공장 기본 원본으로 고정했습니다.', 'ok', factory);
-        resolve({
-          ok: true,
-          archivePayload: { base64, mime, preview, name, inputImageFingerprint, uploadedAt },
-        });
+        if (!base64) throw new Error('제품 이미지 파일에 읽을 수 있는 이미지 데이터가 없습니다.');
+        resolve({ base64, mime, preview, name: file.name || '제품사진' });
       } catch (error) {
         reject(error);
       }
@@ -16789,6 +17570,94 @@ function factorySetProductImage(file, options = {}) {
       reject(error);
     }
   });
+}
+
+function factoryApplyProductImagePayload(payload, options = {}) {
+  if (!payload?.base64) return false;
+  if (!options.factory) {
+    const transaction = factoryRuntimeUpdateOwnedFactory(
+      'factory/start:setProductImage',
+      'factory',
+      draft => factoryApplyProductImagePayload(payload, { ...options, factory: draft }),
+    );
+    return Promise.resolve(transaction).then(receipt => {
+      saveLastWorkNow();
+      render();
+      return receipt.result;
+    });
+  }
+  const factory = options.factory;
+  if (options.operationToken && !factoryRuntimeIsOperationCurrent(options.operationToken)) {
+    throw factoryRuntimeStaleActionError('factory/start:setProductImage');
+  }
+  const { base64, mime, preview, name } = payload;
+  const inputImageFingerprint = typeof factoryImagePayloadFingerprint === 'function'
+    ? factoryImagePayloadFingerprint(base64)
+    : '';
+  const previousInputImageFingerprint = typeof factoryCurrentInputImageFingerprint === 'function'
+    ? String(factoryCurrentInputImageFingerprint(factory) || '').trim()
+    : String(factory.product?.lockedInputImageFingerprint || factory.product?.inputImageFingerprint || '').trim();
+  if (
+    previousInputImageFingerprint
+    && inputImageFingerprint
+    && previousInputImageFingerprint !== inputImageFingerprint
+    && typeof factoryBeginExplicitWorkIdentityTransition === 'function'
+  ) {
+    factoryBeginExplicitWorkIdentityTransition(factory, 'explicit-base-image-replacement');
+  }
+  const uploadedAt = Date.now();
+  const identityMeta = typeof factoryCurrentProductIdentityMeta === 'function'
+    ? factoryCurrentProductIdentityMeta(factory, [factory.product?.productName, factory.product?.userProductName, state.productName])
+    : { productName: factory.product?.productName || state.productName || '', productIdentityKey: '' };
+  if (typeof factoryStampLockedInputImage === 'function') {
+    factoryStampLockedInputImage(factory, { base64, mime, preview, name, productName: identityMeta.productName, productKey: identityMeta.productIdentityKey }, { name, setAt: uploadedAt, productName: identityMeta.productName, productKey: identityMeta.productIdentityKey });
+  } else {
+    factory.product.imageBase64 = base64;
+    factory.product.imageMime = mime;
+    factory.product.imagePreview = preview;
+    factory.product.imageName = name;
+    factory.product.lockedInputImageFingerprint = inputImageFingerprint;
+    factory.product.lockedInputImageName = name;
+    factory.product.lockedInputImageMime = mime;
+    factory.product.lockedInputImageSetAt = uploadedAt;
+    factory.product.inputImages = [{
+      id: uid('factory_input'),
+      name,
+      base64,
+      mime,
+      preview,
+      inputImageFingerprint,
+      sourceImageKey: inputImageFingerprint,
+      productImageKey: inputImageFingerprint,
+      lockedInput: true,
+      uploadedAt,
+    }];
+  }
+  if (options.syncState !== false) {
+    state.imageBase64 = base64;
+    state.imageMime = mime;
+    state.imagePreview = preview;
+    state.imageName = name;
+  }
+  if (typeof syncProductImageAcrossWorkspaces === 'function') {
+    syncProductImageAcrossWorkspaces({
+      prefer: 'factory',
+      lockInput: true,
+      archiveInput: false,
+      syncState: options.syncState !== false,
+      factory,
+    });
+  }
+  factoryLog('현재 업로드 사진을 조립공장 기본 원본으로 고정했습니다.', 'ok', factory);
+  return {
+    ok: true,
+    archivePayload: { base64, mime, preview, name, inputImageFingerprint, uploadedAt },
+  };
+}
+
+function factorySetProductImage(file, options = {}) {
+  if (!factoryProductImageFileSupported(file)) return Promise.resolve(false);
+  return factoryReadProductImageFile(file).then(payload => factoryApplyProductImagePayload(payload, options));
 }
 
 async function factoryAddCompletedFiles(files, options = {}) {
@@ -17702,11 +18571,21 @@ function bindFactoryOpenMarketEvents() {
   });
 
   document.querySelectorAll('#factoryRunFinalRegistration').forEach(finalRun => {
+    if (finalRun.dataset.factoryGuideAction) return;
     finalRun.onclick = event => {
       event?.preventDefault?.();
       return factoryRunFinalRegistration({
       container: finalRun.closest('[data-factory-final-registration]'),
       });
+    };
+  });
+
+  document.querySelectorAll('[data-factory-resume-exact-cafe24-product]').forEach(resumeButton => {
+    if (resumeButton.dataset.factoryGuideAction) return;
+    resumeButton.onclick = async event => {
+      event?.preventDefault?.();
+      resumeButton.disabled = true;
+      await factoryResumeLatestExactCafe24Product();
     };
   });
 

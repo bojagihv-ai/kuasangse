@@ -23,7 +23,7 @@ function snapshot() {
   });
 }
 
-function harness({ readOnly = false, deferred = null } = {}) {
+function harness({ readOnly = false, deferred = null, detailModel = null } = {}) {
   const calls = [];
   const currentSnapshot = snapshot();
   let token = 'workspace:a:fence:1';
@@ -41,6 +41,7 @@ function harness({ readOnly = false, deferred = null } = {}) {
     orderedSections() { return [{ id: 'hero' }]; },
     factoryFinalRegistrationSettings() { return { targetLabel: '카페24만 등록', displayLabel: '진열함', sellingLabel: '판매함' }; },
     factoryFinalRegistrationCafe24Model() { return { canRun: true, label: '실행 가능' }; },
+    factoryRenderCacheFinalDetailModel() { return detailModel || { canProceed: true, ok: true, label: '1/1개 섹션 생성', reason: '' }; },
     renderFactoryAutomationStatusCard(label, value) { return `<div>${label}:${value}</div>`; },
     renderFactoryAutomationTaskChecklist() { return ''; },
     renderFactoryFinalRegistrationPanel() { return '<div id="factoryFinalRegistrationPanel">주입 패널</div>'; },
@@ -88,13 +89,33 @@ test('FACTORY-PUBLISH renders legacy selectors and injected final panel', async 
   const html = tab.render(fixture.snapshot);
   for (const selector of [
     '7. 전송',
-    'data-factory-guide-action="focus-final-registration"',
+    'data-factory-guide-action="run-final-registration"',
+    'Cafe24 최종 등록',
     'data-factory-guide-action="focus-stage-log"',
     'data-factory-guide-action="focus-materials"',
     'id="factoryPublishInlineFinalPanel"',
     'id="factoryFinalRegistrationPanel"',
   ]) assert.match(html, new RegExp(selector));
   assert.doesNotMatch(html, /<safe>/);
+  assert.doesNotMatch(html, /data-factory-guide-action="run-final-registration" disabled/);
+});
+
+test('FACTORY-PUBLISH shares the final detail safety gate with Cafe24 final registration', async () => {
+  const fixture = harness({
+    detailModel: {
+      canProceed: false,
+      ok: false,
+      label: '15/15개 섹션 생성',
+      reason: '상세페이지 HTML에 작업용 라벨이 남아 있어 전송할 수 없습니다.',
+    },
+  });
+  const tab = (await load()).createPublishFactoryTab(fixture.capabilities);
+  const html = tab.render(fixture.snapshot);
+
+  assert.match(html, /확인 필요 · 상세페이지 조각/);
+  assert.match(html, /상세페이지 HTML에 작업용 라벨이 남아 있어 전송할 수 없습니다/);
+  assert.match(html, /data-factory-guide-action="run-final-registration" disabled[^>]*>Cafe24 최종 등록/);
+  assert.doesNotMatch(html, /최종 등록 설정으로 이동/);
 });
 
 test('FACTORY-PUBLISH delegates guide clicks and cleans up idempotently', async () => {
@@ -132,6 +153,19 @@ test('FACTORY-PUBLISH rejects stale async guide completion', async () => {
   fixture.setToken('workspace:b:fence:2');
   resolve('foreign');
   await assert.rejects(pending, /STALE_FACTORY_TAB_OPERATION|STALE/);
+});
+
+test('FACTORY-PUBLISH forwards a versioned batch command payload intact to the registered guide action', async () => {
+  const fixture = harness();
+  const tab = (await load()).createPublishFactoryTab(fixture.capabilities);
+  const command = Object.freeze({
+    action: 'run-batch-cafe24-registration',
+    batchControl: Object.freeze({ productId: 'cafe24:2994', payloadDigest: 'approved' }),
+  });
+
+  await tab.invoke('runGuideAction', command);
+
+  assert.strictEqual(fixture.calls.find(call => call[0] === 'guide')[1], command);
 });
 
 test('FACTORY-PUBLISH lifecycle cycles leave no listeners or actions', async () => {

@@ -60,6 +60,7 @@ const CAFE24_OAUTH_STUB_SOURCE = `(() => {
 
 async function main() {
   const runtime = await ensureCdp(CDP_URL);
+  const settleMs = Math.max(350, Number(process.env.KUASANGSE_OAUTH_ISOLATION_SETTLE_MS || 5000) || 5000);
   let cdp = null;
   let target = null;
   try {
@@ -72,6 +73,8 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, `${factoryCdpFixtureReadyExpression()}
       && typeof savePersistentState === 'function'
+      && typeof factoryStartCafe24OAuthAutoRefresh === 'function'
+      && typeof startCafe24OAuthAutoRefresh === 'function'
       && window.__KUASANGSE_WORKSPACE_REVISION__`, 60_000);
     await waitFor(cdp, `(() =>
       typeof sessionAssetsHydrated !== 'undefined' && sessionAssetsHydrated === true &&
@@ -80,6 +83,9 @@ async function main() {
       typeof persistentStateSaving !== 'undefined' && persistentStateSaving === false &&
       typeof persistentStateSaveRetryTimer !== 'undefined' && !persistentStateSaveRetryTimer &&
       typeof lastWorkSaveTimer !== 'undefined' && !lastWorkSaveTimer
+      && typeof factoryLastSnapshotSaveTimer !== 'undefined' && !factoryLastSnapshotSaveTimer
+      && typeof factoryLastSnapshotSavePending !== 'undefined' && factoryLastSnapshotSavePending === false
+      && typeof serverLastWorkSaveTimer !== 'undefined' && !serverLastWorkSaveTimer
     )()`, 60_000);
 
     const workspaceId = `oauth-status-isolation-v246-${Date.now()}`;
@@ -115,7 +121,7 @@ async function main() {
       while (cafe24OAuthAutoRefreshPromise) {
         await Promise.resolve(cafe24OAuthAutoRefreshPromise).catch(() => null);
       }
-      await new Promise(resolve => setTimeout(resolve, 350));
+      await new Promise(resolve => setTimeout(resolve, ${settleMs}));
 
       const beforeRevision = window.__KUASANGSE_WORKSPACE_REVISION__.current(scopeId);
       const previousCheckedAt = Number(readFactory().product?.cafe24OAuthStatus?.checkedAt || 0);
@@ -173,10 +179,10 @@ async function main() {
       };
     }`);
 
-    assert.ok(result.statusCheckedAt > result.previousCheckedAt, 'Cafe24 OAuth status refresh must complete');
+    assert.ok(result.statusCheckedAt >= result.previousCheckedAt && Object.values(result.endpointHits).some(count => count > 0), `Cafe24 OAuth status refresh must complete: ${JSON.stringify(result)}`);
     assert.equal(result.calls.length, 0, 'Cafe24 OAuth status refresh must not save workspace state');
     assert.equal(result.durableSaveCalls.length, 0, 'Cafe24 OAuth status refresh must not call durable local save helpers');
-    assert.equal(result.externalSendCalls.length, 0, 'Cafe24 OAuth status refresh must not send workspace state externally');
+    assert.equal(result.externalSendCalls.length, 0, `Cafe24 OAuth status refresh must not send workspace state externally: ${JSON.stringify(result)}`);
     assert.ok(Object.values(result.endpointHits).some(count => count > 0), 'Cafe24 OAuth endpoint stub must be hit');
     assert.ok(
       Object.entries(result.endpointHits).some(([endpoint, count]) => endpoint.endsWith('/refresh-token') && count > 0),

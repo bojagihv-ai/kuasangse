@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 const { pathToFileURL } = require('node:url');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -24,6 +25,14 @@ function pureLoc(text) {
     .split(/\r?\n/)
     .filter(line => line.trim() && !line.trim().startsWith('//'))
     .length;
+}
+
+function sourceSlice(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker, start);
+  assert.notEqual(start, -1, `missing source marker: ${startMarker}`);
+  assert.notEqual(end, -1, `missing source marker: ${endMarker}`);
+  return text.slice(start, end);
 }
 
 test('TASK8-MODELSETTINGS-STRUCTURE: config/controller/bindings/view 경계와 공개 API를 보존한다', async () => {
@@ -54,4 +63,40 @@ test('TASK8-MODELSETTINGS-BOUNDARY: facade는 분리 모듈을 조립하고 glob
     const source = fs.readFileSync(modulePath(file), 'utf8');
     assert.doesNotMatch(source, /\b(?:window|globalThis|document|localStorage|sessionStorage)\b/, file);
   }
+});
+
+test('TASK8-MODELSETTINGS-OAUTH: runtime 목록이 좁아도 현재 선택 모델을 드롭다운에 유지한다', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-01.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(ROOT, 'src', 'app-core-05.js'), 'utf8');
+  const helperSource = sourceSlice(
+    core,
+    'function includeCurrentGptOAuthModelOption(',
+    'function normalizeGptOAuthOptions(',
+  );
+  const context = vm.createContext({
+    LLM_PROVIDERS: {
+      gpt_oauth: {
+        models: [
+          { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+          { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3 Codex Spark' },
+        ],
+      },
+    },
+  });
+  vm.runInContext(`${helperSource}
+globalThis.includeCurrent = includeCurrentGptOAuthModelOption;`, context);
+
+  const merged = context.includeCurrent(
+    [{ id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' }],
+    'gpt-5.3-codex-spark',
+  );
+  assert.deepEqual(
+    Array.from(merged, item => item.id),
+    ['gpt-5.3-codex-spark', 'gpt-5.6-sol'],
+  );
+  assert.equal(merged[0].label, 'GPT-5.3 Codex Spark');
+  assert.match(
+    renderer,
+    /includeCurrentGptOAuthModelOption\(\s*oauthOptions\.modelOptions[\s\S]*?cfg\.llmModel/,
+  );
 });

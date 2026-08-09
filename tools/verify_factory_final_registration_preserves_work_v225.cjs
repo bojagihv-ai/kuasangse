@@ -54,9 +54,12 @@ async function main() {
       && typeof normalizeFactoryState === 'function'
       && typeof factoryStampWorkspaceIdentity === 'function'
       && typeof factoryApplyFinalRegistrationBasicInfoInputs === 'function'
-      && typeof factoryRunFinalRegistration === 'function'`, 60000);
+      && typeof factoryRunFinalRegistration === 'function'
+      && typeof settleWorkspaceScopeTransitionPersistence === 'function'
+      && typeof ensureWorkspaceEditAuthority === 'function'`, 60000);
     proof = await evaluateFactoryCdpFixture(cdp, `async ({ setAppState, readAppState, readFactory, cloneFactory, replaceFactory }) => {
       const seed = ${JSON.stringify(seed)};
+      await settleWorkspaceScopeTransitionPersistence();
       setAppState({
         step: 'factory',
         currentProjectId: seed.workspaceId,
@@ -71,6 +74,10 @@ async function main() {
         createdAt: 1735689600000,
       });
       replaceFactory(initialFactory);
+      const authority = await ensureWorkspaceEditAuthority('project:' + seed.workspaceId, { force: true });
+      if (authority?.mode !== 'editing') {
+        throw new Error('SAVE-06 test workspace authority was not acquired');
+      }
       const snapshot = () => {
         const app = readAppState();
         const factory = readFactory();
@@ -102,6 +109,10 @@ async function main() {
         cafe24Model: globalThis.factoryFinalRegistrationCafe24Model,
         detailAsset: globalThis.factoryEnsureCurrentDetailHtmlAsset,
         saveCafe24: globalThis.factorySaveCafe24ProductFromFinalDb,
+        publishDetail: globalThis.factoryPublishCafe24ScopedDetailHtml,
+        postSyncPlan: globalThis.factoryCafe24CreatePostSyncPlan,
+        postSync: globalThis.factoryRunCafe24PostCreateSync,
+        fetchProduct: globalThis.fetchCafe24ProductFullByNo,
         history: globalThis.factoryRecordFinalRegistrationHistory,
         render: globalThis.renderPreservingMainScroll,
         save: globalThis.saveLastWorkNow,
@@ -125,14 +136,24 @@ async function main() {
           finalDbProductName: appliedFactory.product?.finalDb?.product_name || '',
           registrationPanelProductName: factoryFinalRegistrationBasicInfoModel(cloneFactory()).productName,
         };
+        const completeDetailHtml = Array.from(
+          { length: 15 },
+          (_, index) => '<img src="https://example.com/detail-' + (index + 1) + '.jpg" alt="상세 ' + (index + 1) + '">',
+        ).join('');
         globalThis.factoryFinalRegistrationSettings = () => ({ includeOpenMarket: false, targetLabel: 'Cafe24만', cafe24RegistrationLabel: '기존 상품 수정', displayLabel: '진열안함', sellingLabel: '판매안함' });
         globalThis.factoryFinalRegistrationDetailModel = () => ({ canProceed: true, ok: true, label: '15/15', generated: 15 });
         globalThis.factoryFinalRegistrationCafe24Model = () => ({ canRun: true, mode: 'update', label: '기존 상품 #999', productNo: '999' });
-        globalThis.factoryEnsureCurrentDetailHtmlAsset = () => ({ html: '<p>현재 상세페이지</p>', reused: true, sectionCount: 15 });
+        globalThis.factoryEnsureCurrentDetailHtmlAsset = () => ({ html: completeDetailHtml, reused: true, sectionCount: 15 });
         globalThis.factorySaveCafe24ProductFromFinalDb = async () => {
           externalCalls += 1;
           return externalResult;
         };
+        globalThis.factoryPublishCafe24ScopedDetailHtml = async () => true;
+        globalThis.factoryCafe24CreatePostSyncPlan = () => ({ imageSlotCount: 0, readyActions: [] });
+        globalThis.factoryRunCafe24PostCreateSync = async () => true;
+        globalThis.fetchCafe24ProductFullByNo = async () => ({
+          raw: { description: completeDetailHtml, detail_image: '/mock-detail.jpg' },
+        });
         globalThis.factoryRecordFinalRegistrationHistory = async () => true;
         globalThis.factoryUpdateFromInputs = () => {};
         globalThis.ensureCafe24Modules = async () => true;
@@ -145,6 +166,10 @@ async function main() {
         globalThis.factoryFinalRegistrationCafe24Model = original.cafe24Model;
         globalThis.factoryEnsureCurrentDetailHtmlAsset = original.detailAsset;
         globalThis.factorySaveCafe24ProductFromFinalDb = original.saveCafe24;
+        globalThis.factoryPublishCafe24ScopedDetailHtml = original.publishDetail;
+        globalThis.factoryCafe24CreatePostSyncPlan = original.postSyncPlan;
+        globalThis.factoryRunCafe24PostCreateSync = original.postSync;
+        globalThis.fetchCafe24ProductFullByNo = original.fetchProduct;
         globalThis.factoryRecordFinalRegistrationHistory = original.history;
         globalThis.renderPreservingMainScroll = original.render;
         globalThis.saveLastWorkNow = original.save;

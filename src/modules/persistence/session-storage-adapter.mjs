@@ -6,7 +6,15 @@ import { sanitizeWorkspaceSnapshot, workspaceContentDigest } from './serializati
 export const WORKSPACE_SESSION_KEYS = Object.freeze(new Set([
   'pdp_session', 'pdp_session_img', 'pdp_session_imgs', 'pdp_detail_image_blocks',
   'pdp_last_work_bootstrap_v1', 'pdp_last_work_draft_scope_v1',
+  'pdp_option_sorter_live_v1',
+  'pdp_last_input_checkpoint_v1',
   'factory_last_snapshot_v1',
+  'fixed_detail_images_v1', 'comp_analysis',
+  'kuasangse.projectFileLocationLabel.v1',
+  'cuts_size_results_cache_v1',
+  'factory_wizard_field_drafts_v1',
+  'kuasangse_comp_market_candidate_snapshot_v1',
+  'kuasangse_comp_market_image_selection_v1',
 ]));
 
 function parse(raw) {
@@ -16,6 +24,19 @@ function parse(raw) {
 
 const RECOVERY_RECORD_SCHEMA = 'kuasangse.recovery.v1';
 const LAST_WORK_BOOTSTRAP_KEY = 'pdp_last_work_bootstrap_v1';
+const OPTION_SORTER_LIVE_RECOVERY_KEY = 'pdp_option_sorter_live_v1';
+// Only ephemeral, tab-local UI recovery records may ignore a rotated lease on
+// reload. The canonical workspace envelope (`pdp_session`) must keep fencing
+// so a stale tab cannot overwrite a newer edit or mask a lease conflict.
+const PER_TAB_RECOVERY_KEYS = Object.freeze(new Set([
+  OPTION_SORTER_LIVE_RECOVERY_KEY,
+  'pdp_last_input_checkpoint_v1',
+  'factory_wizard_field_drafts_v1',
+  'fixed_detail_images_v1',
+  'cuts_size_results_cache_v1',
+  'kuasangse_comp_market_candidate_snapshot_v1',
+  'kuasangse_comp_market_image_selection_v1',
+]));
 
 function recoveryRecord(raw) {
   const value = parse(raw);
@@ -31,8 +52,23 @@ function recordScope(record) {
   try { return normalizeWorkspaceScope(value); } catch (_) { return ''; }
 }
 
-export function createSessionStorageAdapter({ storage, authority = null } = {}) {
+export function createSessionStorageAdapter({ storage, draftStorage = storage, authority = null } = {}) {
   const sessionStorage = storage || (typeof self === 'undefined' ? null : self.localStorage);
+  const perTabDraftStorage = draftStorage || sessionStorage;
+  // Active documents are deliberately tab-local. Shared localStorage is never a
+  // replica for work state: a sibling tab must be physically unable to read or
+  // overwrite this tab's product, image, factory snapshot, or bootstrap pointer.
+  const storagesForKey = () => [perTabDraftStorage].filter(Boolean);
+  const isPerTabStartupRecovery = (key, targetStorage) => (
+    (key === LAST_WORK_BOOTSTRAP_KEY || key === OPTION_SORTER_LIVE_RECOVERY_KEY)
+    && targetStorage === perTabDraftStorage
+    && perTabDraftStorage !== sessionStorage
+  );
+  const isPerTabWorkspaceRecovery = (key, targetStorage) => (
+    PER_TAB_RECOVERY_KEYS.has(key)
+    && targetStorage === perTabDraftStorage
+    && perTabDraftStorage !== sessionStorage
+  );
   function assertWorkspaceKey(key) {
     if (!WORKSPACE_SESSION_KEYS.has(key)) throw new Error(`unclassified workspace session key: ${key}`);
   }
@@ -41,68 +77,110 @@ export function createSessionStorageAdapter({ storage, authority = null } = {}) 
     name: 'session',
     getItem(key) {
       assertWorkspaceKey(key);
-      const raw = sessionStorage?.getItem(key) ?? null;
-      const record = recoveryRecord(raw);
-      if (!record) return raw;
-      if (key !== 'pdp_last_work_draft_scope_v1') {
-        const current = authority?.snapshot?.() || null;
-        const stored = persistenceFence(record);
-        if (stored.scopeId && current?.scopeId && stored.scopeId !== current.scopeId) return null;
-        if (stored.scopeId === current?.scopeId && stored.fencingToken < Number(current.fencingToken)) return null;
-        if (stored.scopeId === current?.scopeId
-          && stored.fencingToken === Number(current.fencingToken)
-          && stored.leaseId && current.leaseId && stored.leaseId !== current.leaseId) return null;
+      for (const targetStorage of storagesForKey(key)) {
+        const raw = targetStorage.getItem(key) ?? null;
+        if (raw === null) continue;
+        const record = recoveryRecord(raw);
+        if (!record) return raw;
+        if (key !== 'pdp_last_work_draft_scope_v1'
+          && !isPerTabStartupRecovery(key, targetStorage)
+          && !isPerTabWorkspaceRecovery(key, targetStorage)) {
+          const current = authority?.snapshot?.() || null;
+          const stored = persistenceFence(record);
+          if (stored.scopeId && current?.scopeId && stored.scopeId !== current.scopeId) continue;
+          if (stored.scopeId === current?.scopeId && stored.fencingToken < Number(current.fencingToken)) continue;
+          if (stored.scopeId === current?.scopeId
+            && stored.fencingToken === Number(current.fencingToken)
+            && stored.leaseId && current.leaseId && stored.leaseId !== current.leaseId) continue;
+        }
+        return record.value;
       }
-      return record.value;
+      return null;
     },
     removeItem(key, context = {}) {
       assertWorkspaceKey(key);
       context.assertAuthority?.();
-      const previous = sessionStorage?.getItem(key) ?? null;
-      const existing = recoveryRecord(previous);
-      if (existing) assertReplicaCanPublish(existing, { persistenceAuthority: context.persistenceAuthority });
-      sessionStorage?.removeItem(key);
+      const targets = storagesForKey(key).map(targetStorage => ({
+        targetStorage,
+        previous: targetStorage.getItem(key) ?? null,
+      }));
+      for (const { targetStorage, previous } of targets) {
+        const existing = recoveryRecord(previous);
+        if (existing
+          && key !== 'pdp_last_work_draft_scope_v1'
+          && !isPerTabStartupRecovery(key, targetStorage)
+          && !isPerTabWorkspaceRecovery(key, targetStorage)) {
+          assertReplicaCanPublish(existing, { persistenceAuthority: context.persistenceAuthority });
+        }
+      }
+      for (const { targetStorage } of targets) targetStorage.removeItem(key);
       try {
         context.assertCompletion?.();
       } catch (error) {
-        if (previous !== null && sessionStorage?.getItem(key) === null) sessionStorage?.setItem(key, previous);
+        for (const { targetStorage, previous } of targets) {
+          if (previous !== null && targetStorage.getItem(key) === null) targetStorage.setItem(key, previous);
+        }
         throw error;
       }
     },
     setItem(key, value, context = {}) {
       assertWorkspaceKey(key);
       context.assertAuthority?.();
-      const previous = sessionStorage?.getItem(key) ?? null;
       const candidate = {
         schema: RECOVERY_RECORD_SCHEMA,
         value: String(value),
         persistenceAuthority: context.persistenceAuthority || {},
       };
-      const existing = recoveryRecord(previous);
-      if (existing) assertReplicaCanPublish(existing, candidate);
+      const targets = storagesForKey(key).map(targetStorage => ({
+        targetStorage,
+        previous: targetStorage.getItem(key) ?? null,
+      }));
+      for (const { targetStorage, previous } of targets) {
+        const existing = recoveryRecord(previous);
+        if (existing
+          && key !== 'pdp_last_work_draft_scope_v1'
+          && !isPerTabStartupRecovery(key, targetStorage)
+          && !isPerTabWorkspaceRecovery(key, targetStorage)) {
+          assertReplicaCanPublish(existing, candidate);
+        }
+      }
       const serialized = JSON.stringify(candidate);
-      sessionStorage?.setItem(key, serialized);
       try {
+        for (const { targetStorage } of targets) targetStorage.setItem(key, serialized);
         context.assertCompletion?.();
       } catch (error) {
-        if (sessionStorage?.getItem(key) === serialized) {
-          if (previous === null) sessionStorage?.removeItem(key);
-          else sessionStorage?.setItem(key, previous);
+        for (const { targetStorage, previous } of targets) {
+          if (targetStorage.getItem(key) !== serialized) continue;
+          if (previous === null) targetStorage.removeItem(key);
+          else targetStorage.setItem(key, previous);
         }
         throw error;
       }
     },
     async read(scopeId) {
       const scope = normalizeWorkspaceScope(scopeId);
-      const session = parse(sessionStorage?.getItem('pdp_session'));
-      if (session?.persistenceEnvelope?.scopeId === scope) return structuredClone(session.persistenceEnvelope);
-      if (!session || recordScope(session) !== scope) return null;
-      return migrateLegacySession(session);
+      for (const targetStorage of storagesForKey('pdp_session')) {
+        const session = parse(targetStorage.getItem('pdp_session'));
+        if (session?.persistenceEnvelope?.scopeId === scope) return structuredClone(session.persistenceEnvelope);
+        if (session && recordScope(session) === scope) return migrateLegacySession(session);
+      }
+      return null;
     },
     async write(envelope, context = {}) {
       context.assertAuthority?.();
-      const previous = sessionStorage?.getItem('pdp_session') ?? null;
-      const existing = parse(previous)?.persistenceEnvelope || null;
+      const targets = storagesForKey('pdp_session').map(targetStorage => ({
+        targetStorage,
+        previous: targetStorage.getItem('pdp_session') ?? null,
+        previousBootstrap: targetStorage.getItem(LAST_WORK_BOOTSTRAP_KEY) ?? null,
+      }));
+      for (const { targetStorage, previous } of targets) {
+        const existing = parse(previous)?.persistenceEnvelope || null;
+        if (!isPerTabWorkspaceRecovery('pdp_session', targetStorage)) {
+          assertReplicaCanPublish(existing, envelope, {
+            allowSameRevisionMutation: context.allowSameRevisionMutation === true,
+          });
+        }
+      }
       const sessionSnapshot = context.recoverySnapshot
         ? sanitizeWorkspaceSnapshot(context.recoverySnapshot)
         : envelope.snapshot;
@@ -111,7 +189,6 @@ export function createSessionStorageAdapter({ storage, authority = null } = {}) 
         digest: workspaceContentDigest(sessionSnapshot),
         snapshot: sessionSnapshot,
       });
-      assertReplicaCanPublish(existing, sessionEnvelope);
       const serialized = JSON.stringify({
         ...sessionSnapshot,
         workspaceScope: { id: envelope.scopeId },
@@ -120,9 +197,6 @@ export function createSessionStorageAdapter({ storage, authority = null } = {}) 
         persistenceEnvelope: sessionEnvelope,
       });
       const writeBootstrap = context.writeBootstrap === true;
-      const previousBootstrap = writeBootstrap
-        ? sessionStorage?.getItem(LAST_WORK_BOOTSTRAP_KEY) ?? null
-        : null;
       const bootstrapAuthority = writeBootstrap ? {
         scopeId: envelope.scopeId,
         leaseId: String(context.leaseId || envelope.metadata.leaseId || ''),
@@ -146,22 +220,33 @@ export function createSessionStorageAdapter({ storage, authority = null } = {}) 
         persistenceAuthority: bootstrapAuthority,
       } : null;
       if (bootstrapCandidate) {
-        const existingBootstrap = recoveryRecord(previousBootstrap);
-        if (existingBootstrap) assertReplicaCanPublish(existingBootstrap, bootstrapCandidate);
+        for (const { targetStorage } of targets) {
+          const existingBootstrap = recoveryRecord(targetStorage.getItem(LAST_WORK_BOOTSTRAP_KEY));
+          if (existingBootstrap
+            && !isPerTabStartupRecovery(LAST_WORK_BOOTSTRAP_KEY, targetStorage)
+            && !isPerTabWorkspaceRecovery(LAST_WORK_BOOTSTRAP_KEY, targetStorage)) {
+            assertReplicaCanPublish(existingBootstrap, bootstrapCandidate, {
+              allowSameRevisionMutation: context.allowSameRevisionMutation === true,
+            });
+          }
+        }
       }
       const serializedBootstrap = bootstrapCandidate ? JSON.stringify(bootstrapCandidate) : '';
       try {
-        sessionStorage?.setItem('pdp_session', serialized);
-        if (serializedBootstrap) sessionStorage?.setItem(LAST_WORK_BOOTSTRAP_KEY, serializedBootstrap);
+        for (const { targetStorage } of targets) {
+          targetStorage.setItem('pdp_session', serialized);
+          if (serializedBootstrap) targetStorage.setItem(LAST_WORK_BOOTSTRAP_KEY, serializedBootstrap);
+        }
         context.assertCompletion?.();
       } catch (error) {
-        if (serializedBootstrap && sessionStorage?.getItem(LAST_WORK_BOOTSTRAP_KEY) === serializedBootstrap) {
-          if (previousBootstrap === null) sessionStorage?.removeItem(LAST_WORK_BOOTSTRAP_KEY);
-          else sessionStorage?.setItem(LAST_WORK_BOOTSTRAP_KEY, previousBootstrap);
-        }
-        if (sessionStorage?.getItem('pdp_session') === serialized) {
-          if (previous === null) sessionStorage?.removeItem('pdp_session');
-          else sessionStorage?.setItem('pdp_session', previous);
+        for (const { targetStorage, previous, previousBootstrap } of targets) {
+          if (serializedBootstrap && targetStorage.getItem(LAST_WORK_BOOTSTRAP_KEY) === serializedBootstrap) {
+            if (previousBootstrap === null) targetStorage.removeItem(LAST_WORK_BOOTSTRAP_KEY);
+            else targetStorage.setItem(LAST_WORK_BOOTSTRAP_KEY, previousBootstrap);
+          }
+          if (targetStorage.getItem('pdp_session') !== serialized) continue;
+          if (previous === null) targetStorage.removeItem('pdp_session');
+          else targetStorage.setItem('pdp_session', previous);
         }
         throw error;
       }

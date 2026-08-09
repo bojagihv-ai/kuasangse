@@ -616,13 +616,21 @@ const OPTIONSORTER_VIEW = Object.freeze({
 function createOptionSorterCapabilities(overrides = {}) {
   const calls = [];
   let token = 'workspace:options:1';
+  let slotNamePresets = [];
   const capabilities = {
     getSnapshot: () => OPTIONSORTER_VIEW,
     assertMutable: () => {},
     mutateOptions: value => { calls.push(['mutateOptions', value]); },
     persistOptions: value => { calls.push(['persistOptions', value]); },
+    getSlotNamePresets: () => slotNamePresets,
+    saveSlotNamePreset: value => {
+      slotNamePresets = [value, ...slotNamePresets.filter(item => item.id !== value.id)];
+      calls.push(['saveSlotNamePreset', value]);
+      return value;
+    },
     loadVisionColors: async value => ({ value, colors: [] }),
     applyVisionColors: value => { calls.push(['applyVisionColors', value]); },
+    restoreArchivedSourceImages: async () => ({ restored: 0 }),
     requestRender: () => { calls.push(['requestRender']); },
     getOperationToken: () => token,
     reportError: error => { calls.push(['reportError', String(error?.message || error)]); },
@@ -657,6 +665,66 @@ test('MENU-OPTIONS API/render: allowlisted ESM 계약과 옵션 분류기 핵심
   assert.match(html, /옵션 분류기/);
   assert.match(html, /id="optUploadZone"/);
   assert.match(html, /id="optAddSlotInput"/);
+  assert.match(html, /id="optSlotPresetName"/);
+  assert.match(html, /id="optSaveSlotPreset"/);
+  assert.match(html, /id="optLoadSlotPreset"/);
+});
+
+test('MENU-OPTIONS 슬롯명 프리셋: 저장 후 불러오면 배정 이미지를 지우지 않고 이름을 복원한다', async () => {
+  const { bindOptionSorterSlots } = await importFresh('src/menus/optionsorter-slot-bindings.mjs');
+  const os = {
+    slots: [
+      { id: 'slot-1', name: '빨강', imgIds: ['image-1'] },
+      { id: 'slot-2', name: '파랑', imgIds: [] },
+    ],
+    images: [{ id: 'image-1' }],
+    pool: [],
+  };
+  let presets = [];
+  const nodes = {
+    optSlotPresetName: { value: '기본 색상' },
+    optSlotPresetSelect: { value: '' },
+    optSaveSlotPreset: {},
+    optLoadSlotPreset: {},
+  };
+  const calls = [];
+  bindOptionSorterSlots({
+    byId: id => nodes[id] || null,
+    queryAll: () => [],
+    optionSorter: () => os,
+    requestRender: () => { calls.push('render'); },
+    createSortable: () => null,
+    currentStep: () => 'optionsorter',
+    sortable: null,
+    getSlotNamePresets: () => presets,
+    saveSlotNamePreset(value) {
+      presets = [value];
+      calls.push('save-preset');
+      return value;
+    },
+    optDeleteSlot: () => {},
+    optDownloadSlot: () => {},
+    optFocusSlotNameByIndex: () => {},
+    optScheduleSave: () => { calls.push('save-work'); },
+    optSwapOptionPairOrder: () => {},
+    saveLastWorkNow: () => {},
+    syncOptFromDOM: () => {},
+    syncOptSlotsFromDOM: () => {},
+    uid: prefix => `${prefix}-1`,
+    reportWarning: message => { throw new Error(message); },
+  });
+
+  nodes.optSaveSlotPreset.onclick();
+  assert.deepEqual(presets[0].slotNames, ['빨강', '파랑']);
+
+  os.slots[0].name = '변경됨';
+  os.slots[1].name = '변경됨';
+  nodes.optSlotPresetSelect.value = presets[0].id;
+  nodes.optLoadSlotPreset.onclick();
+
+  assert.deepEqual(os.slots.map(slot => slot.name), ['빨강', '파랑']);
+  assert.deepEqual(os.slots[0].imgIds, ['image-1']);
+  assert.deepEqual(calls, ['save-preset', 'render', 'save-work', 'render']);
 });
 
 test('MENU-OPTIONS commands/read-only: owner 명령만 옵션 상태와 저장을 변경한다', async () => {

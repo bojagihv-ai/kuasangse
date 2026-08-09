@@ -57,9 +57,9 @@ async function main() {
     const productName = '작업파일검증상품';
     const workspaceId = ${JSON.stringify(testProjectId)};
     const runId = 'run_project_file_v84';
-    const inputFingerprint = 'fingerprint_project_file_v84';
-    const productKey = window.factoryNormalizeIdentityText(productName);
     const base64 = img.includes(',') ? (img.split(',', 2)[1] || '') : img;
+    const inputFingerprint = window.factoryImagePayloadFingerprint(base64);
+    const productKey = window.factoryNormalizeIdentityText(productName);
 
     window.state.step = 'factory';
     window.state.currentProjectId = workspaceId;
@@ -244,6 +244,7 @@ async function main() {
       embeddedCutPromptImageLength: String(bundle.project?.payload?.assetPayload?.cuts?.prompts?.[0]?.result || '').length,
       sanitizeWithFileProduct: sanitizeProbeTarget(productName),
       sanitizeWithOtherProduct: sanitizeProbeTarget('다른작업'),
+      expectedInputFingerprint: inputFingerprint,
     };
 
     window.state.currentProjectId = 'project_other_v84';
@@ -303,6 +304,10 @@ async function main() {
     window.refreshWorkspaceLists = async () => { throw new Error('post-commit-refresh-failure-v84'); };
     const imported = await window.importFactoryProjectFileBundle(bundle, { fileName: '작업파일검증상품.kuasangse', skipLeaveConfirm: true });
     const authorityAfterImport = window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null;
+    const workspaceBranchAfterImport = window.currentWorkspaceBranch(
+      authorityAfterImport?.scopeId || '',
+      window.state.currentProjectId,
+    );
     window.refreshWorkspaceLists = originalRefreshWorkspaceLists;
     window.render();
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -344,15 +349,16 @@ async function main() {
       imagePreview: window.state.imagePreview,
       assetIds: (window.state.factory?.assets || []).map(item => item.id),
     };
-    const originalPersistProjectBundle = window.persistFactoryProjectBundleLocally;
-    window.persistFactoryProjectBundleLocally = async () => { throw new Error('forced-idb-transaction-failure-v84'); };
+    const originalFlushQueuedPersistentState = window.flushQueuedPersistentState;
+    window.flushQueuedPersistentState = async () => { throw new Error('forced-idb-transaction-failure-v84'); };
     let persistFailureError = '';
     try {
       await window.importFactoryProjectFileBundle(bundle, { skipLeaveConfirm: true });
     } catch (error) {
       persistFailureError = String(error?.message || error || '');
+    } finally {
+      window.flushQueuedPersistentState = originalFlushQueuedPersistentState;
     }
-    window.persistFactoryProjectBundleLocally = originalPersistProjectBundle;
     const afterPersistFailure = {
       projectId: window.state.currentProjectId,
       projectName: window.state.currentProjectName,
@@ -374,6 +380,7 @@ async function main() {
       fixtureImageState,
       authorityBeforeBuild,
       authorityAfterImport,
+      workspaceBranchAfterImport,
       applySessionFunctionHasForce: String(window.applySessionAssetsPayload || '').includes('forceProductRestore'),
       applyDebug: window.__projectFileApplyDebug || [],
       currentProjectId: window.state.currentProjectId,
@@ -410,6 +417,8 @@ async function main() {
       persistFailurePreservedState: JSON.stringify(beforePersistFailure) === JSON.stringify(afterPersistFailure),
       tamperPreservedState: JSON.stringify(stableBeforeTamper) === JSON.stringify(stableAfterTamper),
       restoreStatusText: document.getElementById('workfileSaveStatus')?.textContent?.trim() || '',
+      workfileRestoreState: window.state.workfileRestoreState || '',
+      workfileRestoreMessage: window.state.workfileRestoreMessage || '',
     };
     } catch (error) {
       return {
@@ -437,12 +446,12 @@ async function main() {
     { ok: proof.before.manifestIdentity?.workspaceId === testProjectId, message: 'manifest workspaceId가 현재 작업 ID가 아닙니다.' },
     { ok: proof.before.manifestIdentity?.currentRunId === 'run_project_file_v84', message: 'manifest currentRunId가 보존되지 않았습니다.' },
     { ok: !!proof.before.manifestIdentity?.productKey, message: 'manifest productKey가 비었습니다.' },
-    { ok: proof.before.manifestIdentity?.inputImageFingerprint === 'fingerprint_project_file_v84', message: 'manifest inputImageFingerprint가 보존되지 않았습니다.' },
+    { ok: proof.before.manifestIdentity?.inputImageFingerprint === proof.before.expectedInputFingerprint, message: 'manifest inputImageFingerprint가 실제 기본 이미지 지문과 일치하지 않습니다.' },
     { ok: proof.before.manifestImageTotal >= 3 && proof.before.manifestInlineTotal >= 3, message: 'manifest가 제품/후보/섹션 이미지 항목을 충분히 기록하지 않았습니다.' },
     { ok: !!proof.before.manifestAssetImage, message: 'manifest에 생성 후보 이미지 항목이 없습니다.' },
     { ok: proof.before.manifestAssetImage?.currentRunId === 'run_project_file_v84', message: 'manifest 후보 이미지 runId가 보존되지 않았습니다.' },
     { ok: !!proof.before.manifestIdentity?.productKey && proof.before.manifestAssetImage?.productKey === proof.before.manifestIdentity.productKey, message: 'manifest 후보 이미지 productKey가 보존되지 않았습니다.' },
-    { ok: proof.before.manifestAssetImage?.inputImageFingerprint === 'fingerprint_project_file_v84', message: 'manifest 후보 이미지 inputImageFingerprint가 보존되지 않았습니다.' },
+    { ok: proof.before.manifestAssetImage?.inputImageFingerprint === proof.before.expectedInputFingerprint, message: 'manifest 후보 이미지 inputImageFingerprint가 실제 기본 이미지 지문과 일치하지 않습니다.' },
     { ok: proof.before.manifestAssetImage?.stageId === 'hero', message: 'manifest 후보 이미지 stageId가 보존되지 않았습니다.' },
     { ok: !!proof.before.manifestProductImage, message: 'manifest에 기본 이미지 항목이 없습니다.' },
     { ok: !!proof.before.manifestSectionImage, message: 'manifest에 섹션 이미지 항목이 없습니다.' },
@@ -452,7 +461,8 @@ async function main() {
     { ok: proof.before.fixedDetailImageLength > 100, message: '고정 상세 이미지가 작업파일 안에 포함되지 않았습니다.' },
     { ok: proof.before.embeddedCutPromptImageLength > 100, message: '검증용 다른 범위 프롬프트 결과 이미지가 작업파일에 포함되지 않았습니다.' },
     { ok: proof.authorityBeforeBuild?.mode === 'editing' && proof.authorityBeforeBuild?.scopeId === `project:${testProjectId}`, message: '검증 작업 범위의 정상 편집권을 얻지 못했습니다.' },
-    { ok: proof.authorityAfterImport?.mode === 'editing' && proof.authorityAfterImport?.scopeId === `project:${testProjectId}`, message: '작업파일 import 중 검증 작업 편집권이 바뀌었습니다.' },
+    { ok: ['editing', 'offline-edit'].includes(proof.authorityAfterImport?.mode) && String(proof.authorityAfterImport?.scopeId || '').startsWith('draft:'), message: '작업파일 import 후 독립 편집 브랜치 권한을 얻지 못했습니다.' },
+    { ok: proof.workspaceBranchAfterImport?.scopeId === proof.authorityAfterImport?.scopeId && proof.workspaceBranchAfterImport?.documentScopeId === `project:${testProjectId}`, message: '작업파일 import 후 탭 브랜치가 원본 문서에 연결되지 않았습니다.' },
     { ok: proof.currentProjectId === testProjectId, message: '작업파일 import 후 currentProjectId가 복원되지 않았습니다.' },
     { ok: proof.currentProjectName === '작업파일검증상품', message: '작업파일 import 후 저장 이름이 복원되지 않았습니다.' },
     { ok: proof.productName === '작업파일검증상품', message: '작업파일 import 후 상품명이 복원되지 않았습니다.' },
@@ -473,7 +483,7 @@ async function main() {
     { ok: proof.duplicateError.includes('중복 이미지 경로'), message: `중복 manifest 경로가 거부되지 않았습니다: ${proof.duplicateError}` },
     { ok: proof.persistFailureError.includes('forced-idb-transaction-failure-v84') && proof.persistFailurePreservedState, message: `IndexedDB 실패 후 기존 화면이 보존되지 않았습니다: ${proof.persistFailureError}` },
     { ok: proof.tamperPreservedState, message: '변조 작업파일 거부 후 기존 화면 상태가 바뀌었습니다.' },
-    { ok: proof.restoreStatusText.includes('불러오기 실패') && proof.restoreStatusText.includes('기존 작업 유지'), message: `복원 실패 상태가 상단에 표시되지 않습니다: ${proof.restoreStatusText}` },
+    { ok: proof.workfileRestoreState === 'error' && proof.workfileRestoreMessage.includes('forced-idb-transaction-failure-v84'), message: `복원 실패 상태가 기록되지 않았습니다: ${proof.workfileRestoreState} / ${proof.workfileRestoreMessage}` },
   ]);
 
   console.log(JSON.stringify({ ok: true, proof, screenshot: SCREENSHOT_PATH }, null, 2));

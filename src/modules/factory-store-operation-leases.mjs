@@ -1,6 +1,6 @@
 import { cleanText } from './factory-store-data.mjs';
 
-export function createFactoryOperationLeases({ ensureActive, readOperationToken }) {
+export function createFactoryOperationLeases({ ensureActive, isOperationCurrent, readOperationToken }) {
   const active = new Map();
 
   function keyFor(value) {
@@ -29,7 +29,7 @@ export function createFactoryOperationLeases({ ensureActive, readOperationToken 
   function acquire(value, expectedToken = readOperationToken()) {
     ensureActive();
     const key = keyFor(value);
-    if (expectedToken !== readOperationToken()) throw staleError(key);
+    if (!isOperationCurrent(expectedToken)) throw staleError(key);
     const existing = active.get(key);
     if (existing) return Object.freeze({
       acquired: false, operationKey: key, operationToken: existing.operationToken,
@@ -54,7 +54,7 @@ export function createFactoryOperationLeases({ ensureActive, readOperationToken 
   function cancel(value, expectedToken = readOperationToken()) {
     ensureActive();
     const key = keyFor(value);
-    if (expectedToken !== readOperationToken()) throw staleError(key);
+    if (!isOperationCurrent(expectedToken)) throw staleError(key);
     const record = active.get(key);
     if (!record) return false;
     active.delete(key);

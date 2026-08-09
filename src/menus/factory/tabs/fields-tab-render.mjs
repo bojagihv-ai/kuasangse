@@ -77,13 +77,13 @@ function fieldCard(item, helpers) {
     : isConfirmed ? `확인됨 · ${item.source || '직접 확인'}` : (item?.source || '값을 입력한 뒤 확인을 누르면 확정됩니다.');
   if (isConfirmed) return `<div class="factory-automation-status-card done" style="display:block;border-color:${tone.border};background:${tone.bg}">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><span style="color:${tone.color};font-weight:900">${escapeHtml(item.label)}${item.required ? ' · 필수' : ''}</span><span style="font-size:11px;color:var(--ok);font-weight:950">✓ 확인됨</span></div>
-    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" value="${escAttr(inputValue)}" readonly aria-label="${escAttr(item.label)} 확정값" style="margin-top:7px;min-height:34px;opacity:.88">
+    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" data-factory-wizard-previous-value="${escAttr(inputValue || item.value || '')}" value="${escAttr(inputValue)}" readonly aria-label="${escAttr(item.label)} 확정값" style="margin-top:7px;min-height:34px;opacity:.88">
     <div class="factory-automation-actions" style="margin-top:7px"><button class="btn-sm" type="button" data-factory-wizard-edit="${escAttr(item.id)}" data-factory-wizard-commit="${escAttr(item.id)}">값 수정</button></div>
     <span>${escapeHtml(sourceText)}</span>
   </div>`;
   return `<div class="factory-automation-status-card" style="display:block;border-color:${tone.border};background:${tone.bg}">
     <span style="color:${tone.color};font-weight:900">${escapeHtml(item.label)}${item.required ? ' · 필수' : ''}</span>
-    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" value="${escAttr(inputValue)}" placeholder="${escAttr(item.placeholder || '')}" style="margin-top:7px;min-height:34px">
+    <input class="input" data-factory-wizard-field="${escAttr(item.id)}" data-factory-wizard-label="${escAttr(item.label)}" data-factory-wizard-previous-value="${escAttr(inputValue || item.value || '')}" value="${escAttr(inputValue)}" placeholder="${escAttr(item.placeholder || '')}" style="margin-top:7px;min-height:34px">
     <div class="factory-automation-actions" style="margin-top:7px"><button class="btn-sm primary" type="button" data-factory-wizard-commit="${escAttr(item.id)}">${item.hasDraft ? '수정 적용' : '확인'}</button></div>
     <span>${escapeHtml(sourceText)}</span>
   </div>`;

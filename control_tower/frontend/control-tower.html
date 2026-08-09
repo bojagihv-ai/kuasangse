@@ -37,7 +37,9 @@
       --color-accent-wash: rgb(99 102 241 / 0.14);
       --color-ok-border: rgb(52 211 153 / 0.34);
       --color-error-border: rgb(251 113 133 / 0.34);
+      --color-danger-wash: rgb(251 113 133 / 0.12);
       --space-1: 8px;
+      --space-half: 4px;
       --space-2: 16px;
       --space-3: 24px;
       --space-4: 32px;
@@ -45,6 +47,11 @@
       --page-gutter: 32px;
       --page-gutter-compact: 24px;
       --border-width-default: 1px;
+      --border-width-emphasis: 3px;
+      --focus-outline-width: 2px;
+      --focus-outline-offset: 2px;
+      --badge-padding-block: 2px;
+      --badge-padding-inline: 6px;
       --radius-card: 16px;
       --radius-compact: 8px;
       --radius-pill: 999px;
@@ -54,10 +61,15 @@
       --content-copy-narrow: 52ch;
       --status-dot-size: 8px;
       --status-mark-size: 36px;
+      --visually-hidden-size: 1px;
       --grid-min-detail: 240px;
       --grid-min-card: 304px;
       --card-min-block-size: 144px;
       --scope-row-min-block-size: 96px;
+      --virtual-queue-min-block-size: 240px;
+      --virtual-row-min-block-size: 112px;
+      --lazy-thumb-size: 32px;
+      --image-intake-thumb-size: 72px;
       --font-family-sans: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
       --font-family-mono: "SFMono-Regular", Consolas, monospace;
       --font-size-kicker: 11px;
@@ -75,6 +87,12 @@
       --tracking-label: 0.06em;
       --font-weight-strong: 700;
       --font-weight-emphasis: 800;
+      --font-weight-normal: 400;
+      --control-min-block-size: 44px;
+      --compact-control-min-block-size: 36px;
+      --progress-track-size: 8px;
+      --review-row-min-block-size: 112px;
+      --timeline-max-block-size: 240px;
     }
 
     * {
@@ -82,16 +100,16 @@
     }
 
     html {
-      min-height: 100%;
-      overflow-y: auto;
-      scrollbar-gutter: stable;
+      height: 100%;
+      overflow: hidden;
       background: var(--color-page-background);
       color: var(--color-text-primary);
     }
 
     body {
-      min-height: 100%;
+      height: 100%;
       margin: 0;
+      overflow: hidden;
       background:
         var(--color-primary-glow),
         var(--color-page-background);
@@ -101,8 +119,16 @@
     }
 
     .page {
+      height: 100dvh;
       min-height: 100dvh;
       padding: var(--space-3) 0 var(--space-page-bottom);
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+    }
+
+    main.page {
+      overflow-y: auto;
+      scrollbar-gutter: stable;
     }
 
     .shell {
@@ -120,6 +146,7 @@
     }
 
     .masthead {
+      order: -2;
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
@@ -316,6 +343,7 @@
     }
 
     .detail .label {
+      display: block;
       margin-bottom: var(--space-1);
       letter-spacing: var(--tracking-label);
     }
@@ -394,6 +422,1116 @@
       border-top: var(--border-width-default) solid var(--color-border-default);
     }
 
+    .control-grid,
+    .review-grid,
+    .timeline-grid {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-card), 100%), 1fr));
+    }
+
+    .control-card,
+    .review-card,
+    .timeline-card {
+      min-inline-size: 0;
+      padding: var(--space-2);
+    }
+
+    #intake-section {
+      order: -1;
+    }
+
+    #workfile-intake-section {
+      order: -1;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
+    }
+
+    .workfile-intake-card,
+    .workfile-classification {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .workfile-classification[hidden] {
+      display: none;
+    }
+
+    .workfile-summary-card,
+    .workfile-next-step {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-2);
+      min-inline-size: 0;
+      padding: var(--space-2);
+    }
+
+    .workfile-title {
+      min-inline-size: 0;
+    }
+
+    .workfile-title h3,
+    .workfile-title p,
+    .workfile-next-step p {
+      margin-bottom: 0;
+    }
+
+    .workfile-identity {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--space-1);
+    }
+
+    .workfile-pill {
+      padding: var(--space-half) var(--space-1);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+    }
+
+    .workfile-pill[data-tone="ok"],
+    .workfile-metric[data-tone="ok"] strong {
+      border-color: var(--color-ok-border);
+      color: var(--color-status-ok);
+    }
+
+    .workfile-pill[data-tone="error"],
+    .workfile-metric[data-tone="error"] strong {
+      border-color: var(--color-error-border);
+      color: var(--color-status-error);
+    }
+
+    .workfile-pill[data-tone="warning"],
+    .status-message[data-tone="warning"] {
+      color: var(--color-status-warn);
+    }
+
+    .workfile-jump-button {
+      flex: 0 0 auto;
+    }
+
+    #workfile-input {
+      position: absolute;
+      inline-size: var(--visually-hidden-size);
+      block-size: var(--visually-hidden-size);
+      padding: 0;
+      border: 0;
+      opacity: 0;
+      overflow: hidden;
+    }
+
+    .workfile-file-control {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      min-block-size: var(--control-min-block-size);
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .factory-drop:focus-within .workfile-file-control {
+      border-color: var(--color-accent-highlight);
+    }
+
+    .factory-drop .workfile-file-button {
+      flex: 0 0 auto;
+      color: var(--color-accent-highlight);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .factory-drop .workfile-file-name {
+      min-inline-size: 0;
+      color: var(--color-text-primary);
+      overflow-wrap: anywhere;
+    }
+
+    .workfile-metrics {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+    }
+
+    .workfile-metric {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .workfile-lanes {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .workfile-lane {
+      min-inline-size: 0;
+      padding: var(--space-2);
+    }
+
+    .workfile-subheading {
+      margin-top: var(--space-2);
+    }
+
+    .workfile-record-list,
+    .workfile-stage-list,
+    .workfile-asset-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .workfile-record-row,
+    .workfile-stage-card,
+    .workfile-asset-row {
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .workfile-record-row {
+      display: grid;
+      align-items: center;
+      gap: var(--space-1);
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .workfile-record-row[data-state="missing"] {
+      border-color: var(--color-error-border);
+    }
+
+    .workfile-record-copy {
+      display: flex;
+      min-inline-size: 0;
+      flex-direction: column;
+      gap: var(--space-half);
+    }
+
+    .workfile-record-copy .status-message {
+      margin: 0;
+    }
+
+    .workfile-source {
+      grid-column: 1 / -1;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .workfile-stage-card {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .workfile-stage-heading,
+    .workfile-asset-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .workfile-stage-heading strong,
+    .workfile-asset-row span:first-child {
+      min-inline-size: 0;
+      flex: 1 1 auto;
+      overflow-wrap: anywhere;
+    }
+
+    .workfile-next-step {
+      flex-direction: column;
+    }
+
+    .workfile-warning-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-half);
+      margin: 0;
+      padding-inline-start: var(--space-2);
+      color: var(--color-status-warn);
+      font-size: var(--font-size-compact);
+    }
+
+    .intake-card {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .intake-mode-switch {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .intake-mode-card {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: var(--space-1);
+      align-items: start;
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      cursor: pointer;
+    }
+
+    .intake-mode-card:has(input:checked) {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .intake-mode-card input {
+      min-block-size: auto;
+      margin: var(--space-half) 0 0;
+      padding: 0;
+    }
+
+    .intake-mode-card strong,
+    .intake-mode-card span {
+      display: block;
+    }
+
+    .intake-mode-card span {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .intake-panel {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      padding-top: var(--space-1);
+    }
+
+    .intake-panel[hidden] {
+      display: none;
+    }
+
+    .search-row {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .product-search-results {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .product-result {
+      display: grid;
+      gap: var(--space-half);
+      inline-size: 100%;
+      text-align: start;
+    }
+
+    .product-result span {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      font-weight: var(--font-weight-normal);
+    }
+
+    .selected-product-summary {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .selected-product-summary > div {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-half);
+      min-inline-size: 0;
+    }
+
+    .drop-grid,
+    .required-fields-grid {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+    }
+
+    .factory-drop {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-block-size: var(--review-row-min-block-size);
+      justify-content: center;
+      padding: var(--space-2);
+      border: var(--border-width-default) dashed var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+      cursor: pointer;
+    }
+
+    .factory-drop input {
+      inline-size: 100%;
+    }
+
+    .factory-drop span {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .image-intake-list {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .image-intake-card {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: var(--image-intake-thumb-size) minmax(0, 1fr) minmax(0, 1fr);
+      align-items: center;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .image-intake-card img {
+      inline-size: var(--image-intake-thumb-size);
+      block-size: var(--image-intake-thumb-size);
+      border-radius: var(--radius-compact);
+      object-fit: cover;
+    }
+
+    .image-intake-card .status-message {
+      grid-column: 2 / -1;
+    }
+
+    .intake-blocker {
+      margin: 0;
+      padding: var(--space-1) var(--space-2);
+      border-left: var(--border-width-emphasis) solid var(--color-status-error);
+      background: var(--color-input-background);
+    }
+
+    .publication-summary {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .field-stack {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-inline-size: 0;
+    }
+
+    .field-stack label {
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      font-weight: var(--font-weight-strong);
+    }
+
+    input,
+    select,
+    textarea,
+    button {
+      min-block-size: var(--control-min-block-size);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font: inherit;
+      padding: var(--space-1) var(--space-2);
+    }
+
+    textarea {
+      min-block-size: var(--review-row-min-block-size);
+      resize: vertical;
+    }
+
+    button {
+      background: var(--color-accent-wash);
+      color: var(--color-accent-highlight);
+      cursor: pointer;
+      font-weight: var(--font-weight-strong);
+    }
+
+    button:hover,
+    button:focus-visible {
+      border-color: var(--color-accent-highlight);
+      outline: none;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    .button-row,
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    .status-row {
+      justify-content: space-between;
+    }
+
+    .status-message {
+      min-inline-size: 0;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .status-message[data-tone="error"] {
+      color: var(--color-status-error);
+    }
+
+    .status-message[data-tone="ok"] {
+      color: var(--color-status-ok);
+    }
+
+    .review-card {
+      min-block-size: var(--review-row-min-block-size);
+    }
+
+    .review-card[data-state="waiting_manual"] {
+      border-color: var(--color-error-border);
+    }
+
+    .review-card[data-state="completed"] {
+      border-color: var(--color-ok-border);
+    }
+
+    .batch-overview {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+      margin-bottom: var(--space-2);
+    }
+
+    .io-summary {
+      display: grid;
+      gap: var(--space-1);
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      margin-bottom: var(--space-2);
+    }
+
+    .io-conveyor-overview {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: start;
+    }
+
+    .io-zone {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .io-zone-heading {
+      margin: 0;
+      padding: var(--space-1);
+      border-bottom: var(--border-width-default) solid var(--color-border-default);
+      color: var(--color-accent-highlight);
+    }
+
+    .io-stage-card {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .io-stage-card[data-state="blocked"],
+    .io-stage-card[data-state="error"],
+    .io-stage-card[data-state="empty"] {
+      border-color: var(--color-error-border);
+    }
+
+    .io-stage-card[data-state="synced"] {
+      border-color: var(--color-ok-border);
+    }
+
+    .io-stage-card h4 {
+      margin: 0;
+      font-size: var(--font-size-body);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .io-stage-metadata {
+      display: grid;
+      gap: var(--space-half);
+      margin: 0;
+    }
+
+    .io-stage-meta {
+      display: grid;
+      gap: var(--space-half);
+      grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .io-stage-meta dt,
+    .io-stage-storage .label {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .io-stage-meta dd {
+      min-inline-size: 0;
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .io-stage-storage {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      padding-top: var(--space-1);
+      border-top: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .io-stage-storage code {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .io-stage-actions {
+      margin-top: auto;
+    }
+
+    .artifact-review-actions {
+      align-items: stretch;
+    }
+
+    .planned-reason {
+      align-self: center;
+    }
+
+    .factory-sync-surface {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .factory-sync-bar,
+    .factory-product-row,
+    .factory-sync-pane,
+    .factory-registration-panel {
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .factory-sync-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .factory-sync-bar[data-connected="false"] {
+      border-color: var(--color-error-border);
+    }
+
+    .factory-sync-bar[data-connectivity-tone="error"] {
+      align-items: stretch;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--color-error-border) 20%, transparent), var(--color-card-background));
+      flex-direction: column;
+      box-shadow: inset 0 0 0 var(--border-width-default) color-mix(in srgb, var(--color-error-border) 55%, transparent);
+    }
+
+    .factory-sync-bar[data-connectivity-tone="error"] .factory-sync-fields {
+      flex: 0 1 auto;
+    }
+
+    .factory-connectivity-message {
+      align-self: stretch;
+      flex-basis: auto;
+      inline-size: 100%;
+      margin: 0;
+      padding: var(--space-1);
+      border-radius: var(--radius-compact);
+      background: color-mix(in srgb, var(--color-error-border) 20%, var(--color-input-background));
+      color: var(--color-text-primary);
+      font-weight: var(--font-weight-strong);
+      word-break: keep-all;
+    }
+
+    .factory-sync-fields,
+    .factory-inspector-fields {
+      display: grid;
+      flex: 1 1 36rem;
+      grid-template-columns: repeat(auto-fit, minmax(min(9rem, 100%), 1fr));
+      gap: var(--space-1);
+      min-inline-size: 0;
+      margin: 0;
+    }
+
+    .factory-sync-field {
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .factory-sync-field dt {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      font-weight: var(--font-weight-strong);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .factory-sync-field dd {
+      min-inline-size: 0;
+      margin: var(--space-half) 0 0;
+      color: var(--color-text-secondary);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .factory-product-row {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .factory-product-row[data-status="blocked"],
+    .factory-product-row[data-status="failed"] {
+      border-color: var(--color-error-border);
+    }
+
+    .factory-sync-workspace {
+      display: grid;
+      grid-template-columns: minmax(12rem, 0.72fr) minmax(18rem, 1.55fr) minmax(14rem, 1fr);
+      gap: var(--space-2);
+      align-items: start;
+      min-inline-size: 0;
+    }
+
+    .automation-policy-surface {
+      display: grid;
+      grid-column: 1 / -1;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding-top: var(--space-1);
+      border-top: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .automation-policy-header,
+    .automation-policy-row {
+      display: grid;
+      grid-template-columns: minmax(12rem, 1.5fr) repeat(3, minmax(7rem, 0.72fr)) minmax(8rem, 0.9fr);
+      gap: var(--space-1);
+      align-items: center;
+      min-inline-size: 0;
+    }
+
+    .automation-policy-header {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      font-weight: var(--font-weight-strong);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .automation-policy-row {
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .automation-policy-row label {
+      min-inline-size: 0;
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .automation-policy-row select {
+      inline-size: 100%;
+    }
+
+    .automation-effective {
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .automation-policy-summary {
+      margin: 0;
+    }
+
+    .factory-sync-pane {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .factory-progress-map {
+      align-content: start;
+    }
+
+    .io-progress-group {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .io-progress-item {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+      justify-content: space-between;
+      min-inline-size: 0;
+      inline-size: 100%;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      text-align: start;
+    }
+
+    button.io-progress-item {
+      min-block-size: var(--control-min-block-size);
+    }
+
+    .io-stage-button[data-selected="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .io-stage-button[data-resolved="true"] {
+      box-shadow: inset var(--border-width-emphasis) 0 0 var(--color-status-ok);
+    }
+
+    .compact-heading {
+      margin: 0;
+    }
+
+    .a-cut-contact-sheet {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(9rem, 100%), 1fr));
+      gap: var(--space-1);
+      min-inline-size: 0;
+    }
+
+    .work-bundle-role {
+      grid-column: 1 / -1;
+      margin: var(--space-1) 0 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+    }
+
+    .work-bundle-contact-sheet {
+      margin-top: var(--space-2);
+    }
+
+    .a-cut-candidate {
+      display: grid;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .a-cut-candidate[data-selected="true"] {
+      border-color: var(--color-status-ok);
+      box-shadow: inset 0 0 0 var(--border-width-default) var(--color-status-ok);
+    }
+
+    .a-cut-candidate[data-inspected="true"] {
+      background: var(--color-accent-wash);
+    }
+
+    .a-cut-thumb {
+      display: grid;
+      aspect-ratio: 4 / 3;
+      min-inline-size: 0;
+      place-items: center;
+      overflow: hidden;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+    }
+
+    .a-cut-thumb img {
+      inline-size: 100%;
+      block-size: 100%;
+      object-fit: cover;
+    }
+
+    .a-cut-candidate-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      align-items: center;
+      justify-content: space-between;
+      min-inline-size: 0;
+    }
+
+    .a-cut-candidate-meta strong {
+      min-inline-size: 0;
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .selected-badge {
+      color: var(--color-status-ok);
+    }
+
+    .artifact-inspector {
+      position: sticky;
+      top: var(--space-2);
+      align-content: start;
+    }
+
+    .factory-inspector-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .artifact-receipt {
+      max-inline-size: 100%;
+      margin: 0;
+      padding: var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .factory-empty-state {
+      margin: 0;
+      padding: var(--space-3);
+      border: var(--border-width-default) dashed var(--color-border-default);
+      border-radius: var(--radius-compact);
+      color: var(--color-text-muted);
+      text-align: center;
+    }
+
+    .factory-registration-panel {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .registration-blockers {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .registration-blockers li {
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+    }
+
+    .registration-blockers[data-blocker-count="0"] li {
+      border-color: var(--color-ok-border);
+      color: var(--color-status-ok);
+    }
+
+    .registration-confirm {
+      display: inline-flex;
+      align-items: center;
+      min-block-size: var(--control-min-block-size);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+    }
+
+    .button-secondary {
+      background: var(--color-input-background);
+    }
+
+    .button-danger {
+      border-color: var(--color-error-border);
+      background: var(--color-danger-wash);
+      color: var(--color-status-error);
+    }
+
+    .product-work-card {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .product-work-body {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .product-thumb {
+      display: grid;
+      inline-size: var(--scope-row-min-block-size);
+      block-size: var(--scope-row-min-block-size);
+      place-items: center;
+      overflow: hidden;
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .product-thumb img,
+    .review-candidate img {
+      inline-size: 100%;
+      block-size: 100%;
+      object-fit: cover;
+    }
+
+    .product-work-details,
+    .product-errors,
+    .candidate-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      min-inline-size: 0;
+    }
+
+    .product-errors {
+      padding: var(--space-1);
+      border-left: var(--border-width-emphasis) solid var(--color-border-default);
+      background: var(--color-input-background);
+    }
+
+    .product-errors p {
+      margin: 0;
+    }
+
+    .review-candidate {
+      display: grid;
+      grid-template-columns: var(--image-intake-thumb-size) auto minmax(0, 1fr) auto;
+      gap: var(--space-1);
+      align-items: center;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .review-candidate img {
+      inline-size: var(--image-intake-thumb-size);
+      block-size: var(--image-intake-thumb-size);
+      border-radius: var(--radius-compact);
+    }
+
+    .review-candidate[data-preview="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .virtual-queue {
+      display: block;
+      contain: content;
+      min-block-size: var(--virtual-queue-min-block-size);
+    }
+
+    .virtual-row {
+      min-block-size: var(--virtual-row-min-block-size);
+      margin-bottom: var(--space-1);
+    }
+
+    .virtual-spacer {
+      pointer-events: none;
+    }
+
+    .lazy-thumb {
+      display: inline-block;
+      inline-size: var(--lazy-thumb-size);
+      block-size: var(--lazy-thumb-size);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+      object-fit: cover;
+    }
+
+    .progress-track {
+      block-size: var(--progress-track-size);
+      overflow: hidden;
+      border-radius: var(--radius-pill);
+      background: var(--color-border-default);
+    }
+
+    .progress-value {
+      block-size: 100%;
+      inline-size: 0%;
+      background: var(--color-accent-highlight);
+    }
+
+    .progress-45 {
+      inline-size: 45%;
+    }
+
+    .progress-100 {
+      inline-size: 100%;
+    }
+
+    .span-all {
+      grid-column: 1 / -1;
+    }
+
+    .timeline-card {
+      max-block-size: none;
+      overflow: visible;
+    }
+
+    .timeline-card ul {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      margin: 0;
+      padding-inline-start: var(--space-2);
+    }
+
+    .timeline-card li {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
     /* CSS custom properties are not supported in media conditions; 720px is the sole raw threshold exception. */
     @media (max-width: 720px) {
       .page {
@@ -417,6 +1555,99 @@
       .panel {
         padding: var(--space-2);
       }
+
+      .intake-mode-switch,
+      .search-row,
+      .image-intake-card,
+      .workfile-lanes,
+      .product-work-body,
+      .io-conveyor-overview,
+      .io-summary,
+      .factory-sync-workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .automation-policy-header {
+        display: none;
+      }
+
+      .automation-policy-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      .automation-policy-row > strong,
+      .automation-policy-row > .automation-effective {
+        grid-column: 1 / -1;
+      }
+
+      .factory-sync-bar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .factory-sync-actions {
+        inline-size: 100%;
+      }
+
+      .factory-sync-actions > .factory-pill {
+        max-inline-size: 100%;
+        white-space: normal;
+      }
+
+      .workfile-summary-card {
+        flex-direction: column;
+      }
+
+      .workfile-identity {
+        justify-content: flex-start;
+      }
+
+      .workfile-file-control {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .artifact-inspector {
+        position: static;
+      }
+
+      .image-intake-card .status-message {
+        grid-column: auto;
+      }
+
+      .product-thumb {
+        inline-size: 100%;
+        block-size: auto;
+        min-block-size: var(--scope-row-min-block-size);
+      }
+
+      .page .menu-tablist {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .page .menu-tab {
+        min-inline-size: 0;
+      }
+
+      .page .menu-tab-badge {
+        min-inline-size: 0;
+        max-inline-size: 100%;
+        overflow-wrap: anywhere;
+      }
+
+      .page .menu-tab:last-child {
+        grid-column: span 2;
+      }
+
+      .stage-subnav {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .stage-subnav button {
+        inline-size: 100%;
+        text-align: start;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -427,6 +1658,169 @@
         transition-duration: 0.01ms !important;
       }
     }
+
+    .persistent-sync-bar {
+      display: block;
+      padding: var(--space-1) 0;
+      border-bottom: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .sync-disclosure-summary {
+      display: flex;
+      min-block-size: var(--control-min-block-size);
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-surface-sheen), var(--color-card-background);
+      color: var(--color-text-primary);
+      font-weight: var(--font-weight-strong);
+      cursor: pointer;
+    }
+
+    .sync-disclosure-summary:focus-visible {
+      outline: var(--border-width-emphasis) solid var(--color-accent-highlight);
+      outline-offset: var(--border-width-default);
+    }
+
+    .sync-disclosure-content {
+      gap: var(--space-1);
+      padding-top: var(--space-1);
+    }
+
+    .sync-disclosure:not([open]) > .sync-disclosure-content {
+      display: none;
+    }
+
+    .sync-disclosure[open] > .sync-disclosure-content {
+      display: grid;
+    }
+
+    .sync-disclosure-content > #factory-sync-bar,
+    .sync-disclosure-content > #factory-product-progress {
+      min-inline-size: 0;
+    }
+
+    .menu-shell {
+      position: relative;
+      z-index: 1;
+      padding: var(--space-1) 0;
+    }
+
+    .menu-tablist {
+      display: grid;
+      gap: var(--space-half);
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      border-bottom: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .menu-tab {
+      display: flex;
+      min-block-size: var(--control-min-block-size);
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-half);
+      padding: var(--space-1) var(--space-1);
+      border: 0;
+      border-bottom: var(--border-width-emphasis) solid transparent;
+      border-radius: var(--radius-compact) var(--radius-compact) 0 0;
+      background: transparent;
+      color: var(--color-text-muted);
+      font: inherit;
+      font-size: var(--font-size-compact);
+      font-weight: var(--font-weight-strong);
+      text-align: start;
+      cursor: pointer;
+    }
+
+    .menu-tab:hover,
+    .menu-tab:focus-visible,
+    .menu-tab[aria-selected="true"] {
+      color: var(--color-text-primary);
+      background: var(--color-accent-wash);
+    }
+
+    .menu-tab[aria-selected="true"] {
+      border-bottom-color: var(--color-accent-highlight);
+    }
+
+    .menu-tab:focus-visible,
+    .stage-subnav button:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .menu-tab-badge {
+      min-inline-size: 1.5rem;
+      padding: var(--badge-padding-block) var(--badge-padding-inline);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      color: var(--color-text-secondary);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      line-height: var(--line-height-page-title);
+      text-align: center;
+    }
+
+    .menu-panel[hidden] {
+      display: none !important;
+    }
+
+    .menu-panel {
+      min-inline-size: 0;
+    }
+
+    .menu-panel > .section:first-child {
+      padding-top: var(--space-1);
+    }
+
+    .stage-subnav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .stage-subnav button {
+      min-block-size: var(--compact-control-min-block-size);
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: transparent;
+      color: var(--color-text-secondary);
+      font: inherit;
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .stage-subnav button[data-selected="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .menu-summary-grid {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-card), 100%), 1fr));
+    }
+
+    .menu-summary-card {
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .menu-summary-card p:last-child {
+      margin-bottom: 0;
+    }
+
   </style>
 </head>
 <body>
@@ -436,10 +1830,38 @@
         <div>
           <p class="eyebrow">BATCH PRODUCTION CONTROL</p>
           <h1>생산관제</h1>
-          <p class="lede">기존 조립공장과 분리된 읽기 전용 셸입니다. 지금은 준비 상태와 로컬 연결 구조만 확인합니다.</p>
+          <p class="lede">신화사 PDP 원장을 기준으로 제품 투입, 정책, 검수, 작업자 진행과 Cafe24 비공개 등록 점검을 연결합니다.</p>
         </div>
         <span class="factory-pill health-chip" id="health-chip" role="status" aria-live="polite">상태 확인 중</span>
       </header>
+
+      <nav id="primary-menu" class="menu-shell" aria-label="생산관제 메뉴">
+        <div class="menu-tablist" role="tablist" aria-label="생산관제 작업 메뉴">
+          <button id="menu-tab-overview" class="menu-tab" type="button" role="tab" aria-selected="true" aria-controls="menu-panel-overview" data-menu-key="overview" tabindex="0">개요<span class="menu-tab-badge" data-menu-badge="overview">확인 중</span></button>
+          <button id="menu-tab-input-source" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-input-source" data-menu-key="input-source" tabindex="-1">입력·소스<span class="menu-tab-badge" data-menu-badge="input-source">확인 중</span></button>
+          <button id="menu-tab-competitors" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-competitors" data-menu-key="competitors" tabindex="-1">경쟁사<span class="menu-tab-badge" data-menu-badge="competitors">확인 중</span></button>
+          <button id="menu-tab-production-acut" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-production-acut" data-menu-key="production-acut" tabindex="-1">생산·A컷<span class="menu-tab-badge" data-menu-badge="production-acut">확인 중</span></button>
+          <button id="menu-tab-automation" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-automation" data-menu-key="automation" tabindex="-1">자동판단<span class="menu-tab-badge" data-menu-badge="automation">확인 중</span></button>
+          <button id="menu-tab-cafe24" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-cafe24" data-menu-key="cafe24" tabindex="-1">Cafe24<span class="menu-tab-badge" data-menu-badge="cafe24">확인 중</span></button>
+          <button id="menu-tab-audit-sync" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-audit-sync" data-menu-key="audit-sync" tabindex="-1">감사·동기화<span class="menu-tab-badge" data-menu-badge="audit-sync">확인 중</span></button>
+        </div>
+      </nav>
+
+      <details class="persistent-sync-bar sync-disclosure">
+        <summary class="sync-disclosure-summary">
+          <span id="sync-disclosure-summary-text" aria-live="polite">조립공장 연결과 현재 제품 진행 상태를 확인하고 있습니다.</span>
+        </summary>
+        <div class="sync-disclosure-content" aria-label="현재 제품과 조립공장 동기화 상세">
+          <div id="factory-sync-bar" class="factory-sync-bar" aria-live="polite">
+            <p class="status-message">조립공장 session과 capability를 확인하고 있습니다.</p>
+          </div>
+          <div id="factory-product-progress" class="factory-product-progress" aria-live="polite">
+            <p class="status-message">현재 제품 진행 event를 기다리고 있습니다.</p>
+          </div>
+        </div>
+      </details>
+
+      <section id="menu-panel-overview" class="menu-panel" data-menu-panel="overview" role="tabpanel" aria-labelledby="menu-tab-overview">
 
       <section class="section" aria-labelledby="health-heading">
         <div class="section-heading">
@@ -511,10 +1933,10 @@
       <section class="section" aria-labelledby="scope-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">TASK 1 BOUNDARY</p>
-            <h2 id="scope-heading">이번 런타임의 경계</h2>
+            <p class="eyebrow">CONTROL TOWER OPERATIONS</p>
+            <h2 id="scope-heading">운영 경계</h2>
           </div>
-          <p class="section-copy">상태를 꾸미지 않고, 아직 제공하지 않는 동작을 명시적으로 남깁니다.</p>
+          <p class="section-copy">신화사 원장은 업무 사실의 기준이며 생산관제는 인증된 BFF·정책·작업자·화면을 조정합니다.</p>
         </div>
         <div class="scope-grid">
           <article class="factory-card scope-row">
@@ -525,17 +1947,17 @@
             </div>
           </article>
           <article class="factory-card scope-row">
-            <span class="factory-pill scope-state">보류</span>
+            <span class="factory-pill scope-state">제공</span>
             <div>
-              <h3>작업 실행과 확보</h3>
-              <p>Task 1은 작업을 만들거나 작업자를 배정하지 않습니다.</p>
+              <h3>원장 투입과 스케줄링</h3>
+              <p>DB 제품 snapshot, 정책 우선순위와 worker lease를 조정합니다.</p>
             </div>
           </article>
           <article class="factory-card scope-row">
-            <span class="factory-pill scope-state">보류</span>
+            <span class="factory-pill scope-state">중계</span>
             <div>
-              <h3>생성 및 전송</h3>
-              <p>이미지 생성과 Cafe24 전송은 <span class="keep-together">이 런타임의 범위가 아닙니다.</span></p>
+              <h3>생성 및 Cafe24 실행</h3>
+              <p><span class="keep-together">등록된 versioned command bridge로</span> 기존 조립공장 엔진에만 명령을 전달합니다.</p>
             </div>
           </article>
           <article class="factory-card scope-row">
@@ -546,6 +1968,211 @@
             </div>
           </article>
         </div>
+      </section>
+
+      <div id="overview-stage-summary" class="menu-summary-grid" aria-live="polite">
+        <article class="menu-summary-card"><p class="status-message">현재 factory projection을 확인하는 중입니다.</p></article>
+      </div>
+
+      <section class="section" aria-labelledby="queue-heading">
+        <div class="section-heading"><div><p class="eyebrow">PRODUCT QUEUE</p><h2 id="queue-heading">제품 목록</h2></div><p class="section-copy">대량 fixture에서도 현재 window만 DOM에 유지하며 페이지 전체 오른쪽 스크롤로 다음 영역까지 이동합니다.</p></div>
+        <div id="product-list" class="review-grid">
+          <p class="status-message">현재 factory 제품 목록을 불러오는 중입니다.</p>
+        </div>
+      </section>
+
+      </section>
+
+      <section id="menu-panel-input-source" class="menu-panel" data-menu-panel="input-source" role="tabpanel" aria-labelledby="menu-tab-input-source" hidden>
+      <section class="section" aria-labelledby="work-bundle-input-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">SINHWA PDP ASSET CONTRACT</p>
+            <h2 id="work-bundle-input-heading">최신 work-bundle Input</h2>
+          </div>
+          <p class="section-copy">신화사 PDP API가 반환한 실제 Input 자산만 역할별로 표시합니다. 로컬 폴더나 브라우저 저장소는 검색하지 않습니다.</p>
+        </div>
+        <section id="work-bundle-input-assets" class="factory-sync-pane" aria-live="polite">
+          <p class="status-message">신화사 PDP work-bundle을 불러오는 중입니다.</p>
+        </section>
+      </section>
+
+      <section class="section" id="workfile-intake-section" aria-labelledby="workfile-intake-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">DETAIL PAGE WORKFILE</p>
+            <h2 id="workfile-intake-heading">상세페이지 작업파일 열기</h2>
+          </div>
+          <p class="section-copy"><code>.kuasangse</code> 파일은 원본을 바꾸지 않고 <span class="keep-together">읽기만 하며</span>, 필수값·입력 이미지와 생성 결과·A컷을 자동으로 나눠 보여줍니다.</p>
+        </div>
+        <div class="factory-card control-card workfile-intake-card">
+          <label class="factory-drop" for="workfile-input">
+            <strong>상세페이지 작업파일 선택</strong>
+            <span><span class="keep-together">예: 모시바둑파우치.kuasangse</span> · 대용량 파일도 <span class="keep-together">화면을 멈추지 않고</span> 별도 작업으로 분류</span>
+            <input id="workfile-input" type="file" accept=".kuasangse,application/json">
+            <span class="workfile-file-control" aria-hidden="true">
+              <span class="workfile-file-button">파일 선택</span>
+              <span id="workfile-file-name" class="workfile-file-name">선택한 파일 없음</span>
+            </span>
+          </label>
+          <p id="workfile-import-status" class="status-message" role="status" aria-live="polite">작업파일을 선택하면 Input과 Output 분류를 시작합니다.</p>
+          <div id="workfile-classification" class="workfile-classification" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      <section class="section" id="intake-section" aria-labelledby="intake-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">BATCH INTAKE</p>
+            <h2 id="intake-heading">대량 제품 투입</h2>
+          </div>
+          <p class="section-copy">신화사 DB 제품을 바로 선택하거나, 신규 제품의 이미지와 필수값을 작업 화면에서 입력합니다.</p>
+        </div>
+        <div class="factory-card control-card intake-card">
+          <form id="intake-form">
+            <div class="intake-mode-switch" role="radiogroup" aria-label="제품 투입 방식">
+              <label class="intake-mode-card" for="intake-mode-db">
+                <input type="radio" id="intake-mode-db" name="intake-mode" value="db" checked>
+                <span><strong>신화사 DB에서 선택</strong><span>상품명이나 jcode로 검색하고 저장된 값을 즉시 불러옵니다.</span></span>
+              </label>
+              <label class="intake-mode-card" for="intake-mode-manual">
+                <input type="radio" id="intake-mode-manual" name="intake-mode" value="manual">
+                <span><strong>신규·미등록 제품 입력</strong><span>기본 이미지, 색상 이미지 이름과 필수값을 직접 입력합니다.</span></span>
+              </label>
+            </div>
+
+            <div id="db-intake-panel" class="intake-panel">
+              <div class="field-stack">
+                <label for="product-search">신화사 DB 제품 검색</label>
+                <div class="search-row">
+                  <input id="product-search" autocomplete="off" placeholder="상품명 또는 jcode">
+                  <button type="button" id="product-search-button">원장 검색</button>
+                </div>
+              </div>
+              <div id="product-search-results" class="product-search-results" aria-live="polite">
+                <p class="status-message">검색 결과에서 한 제품을 선택하면 저장된 값과 준비 상태가 채워집니다.</p>
+              </div>
+              <div id="selected-product-summary" class="selected-product-summary">
+                <div class="span-all"><span class="label">선택 제품</span><span class="status-message">아직 선택하지 않았습니다.</span></div>
+              </div>
+              <input type="hidden" id="jcode">
+            </div>
+
+            <div id="manual-intake-panel" class="intake-panel" hidden>
+              <p class="status-message intake-blocker" data-tone="error" id="manual-ledger-blocker">현재 신화사 `/api/pdp-control/v1`에는 신규 상품 생성과 이미지·필수값 저장 계약이 없습니다. 입력 검증은 가능하지만 원장 저장과 작업 생성은 성공으로 처리하지 않습니다.</p>
+              <div class="required-fields-grid">
+                <div class="field-stack"><label for="manual-jcode">신규 원장 jcode</label><input id="manual-jcode" inputmode="numeric" placeholder="양의 숫자" required></div>
+                <div class="field-stack"><label for="required-product-name">상품명 *</label><input id="required-product-name" required></div>
+                <div class="field-stack"><label for="required-category">카테고리 *</label><input id="required-category" required></div>
+                <div class="field-stack"><label for="required-material">소재 *</label><input id="required-material" required></div>
+                <div class="field-stack"><label for="required-origin">원산지 *</label><input id="required-origin" required></div>
+                <div class="field-stack"><label for="required-size">규격/사이즈 *</label><input id="required-size" required></div>
+                <div class="field-stack"><label for="required-sale-price">판매가 *</label><input id="required-sale-price" inputmode="decimal" required></div>
+              </div>
+              <div class="drop-grid">
+                <label class="factory-drop" for="base-images"><strong>기본 이미지 *</strong><span>최소 1장 · JPG, PNG, WEBP</span><input id="base-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+                <label class="factory-drop" for="color-images"><strong>색상 옵션 이미지</strong><span>선택 사항 · 이미지마다 색상명 지정</span><input id="color-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+              </div>
+              <div id="image-intake-list" class="image-intake-list" aria-live="polite"></div>
+            </div>
+
+            <div class="control-grid">
+              <div class="field-stack"><label for="batch-id">배치 ID</label><input id="batch-id" value="batch-20260724" required></div>
+              <div class="field-stack"><label for="batch-policy">배치 정책</label><select id="batch-policy"><option>full_auto</option><option>representative_manual</option><option>representative_and_size_manual</option><option>all_images_manual</option><option>custom</option></select></div>
+              <div class="field-stack"><label for="product-policy">제품 전체 override</label><select id="product-policy"><option value="">개별 설정 유지</option><option>auto</option><option>manual</option></select></div>
+              <div class="field-stack"><label for="stage-policy">단계 전체 override</label><select id="stage-policy"><option value="">개별 설정 유지</option><option>auto</option><option>manual</option></select></div>
+            </div>
+            <div class="button-row"><button type="submit" id="intake-submit">선택 제품을 컨베이어에 투입</button><span id="intake-status" class="status-message" role="status" aria-live="polite">세션 준비 중</span></div>
+          </form>
+        </div>
+      </section>
+
+      </section>
+
+      <section id="menu-panel-competitors" class="menu-panel" data-menu-panel="competitors" role="tabpanel" aria-labelledby="menu-tab-competitors" hidden>
+        <section class="section" aria-labelledby="competitor-heading">
+          <div class="section-heading">
+            <div><p class="eyebrow">COMPETITOR SOURCES</p><h2 id="competitor-heading">경쟁사 수집과 후보</h2></div>
+            <p class="section-copy">현재 factory projection에 포함된 수집 요청과 후보만 표시합니다. 연결되지 않은 시장은 성공처럼 채우지 않습니다.</p>
+          </div>
+          <div id="competitor-source-summary" class="menu-summary-grid" aria-live="polite">
+            <article class="menu-summary-card"><h3>경쟁사 source</h3><p class="status-message">조립공장 Input snapshot을 확인하는 중입니다.</p></article>
+          </div>
+        </section>
+      </section>
+
+      <section id="menu-panel-automation" class="menu-panel" data-menu-panel="automation" role="tabpanel" aria-labelledby="menu-tab-automation" hidden>
+      <section class="section" aria-labelledby="model-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">GPT OAUTH JUDGMENT</p><h2 id="model-heading">판단 모델과 자동화</h2></div>
+          <p class="section-copy">모델·추론·service tier는 API Hub 응답만 표시하며 인증정보는 표시하지 않습니다.</p>
+        </div>
+        <div class="factory-card control-card control-grid">
+          <div class="field-stack"><label for="model-select">모델</label><select id="model-select"><option>latestModel</option></select></div>
+          <div class="field-stack"><label for="reasoning-select">reasoning</label><select id="reasoning-select"><option>medium</option><option>low</option><option>high</option><option>xhigh</option></select></div>
+          <div class="field-stack"><label for="tier-select">service tier</label><select id="tier-select"><option>standard</option></select></div>
+          <div class="field-stack"><label for="preset-select">판단 preset</label><select id="preset-select"><option value="fast_single">빠른 단일 판단</option><option value="dual_review">고정밀 이중 검토</option></select></div>
+          <div class="button-row span-all"><button type="button" id="refresh-model">API Hub 상태 새로고침</button><button type="button" id="login-model">Chrome / GPT 로그인</button><button type="button" id="force-login-model" class="button-secondary">강제 재로그인</button><span id="model-status" class="status-message" role="status" aria-live="polite">확인 중</span></div>
+          <section id="automation-policy-matrix" class="automation-policy-surface" aria-label="판단별 자동화 정책">
+            <p class="status-message">정책 registry를 불러오는 중입니다.</p>
+          </section>
+          <p id="automation-policy-summary" class="status-message automation-policy-summary span-all" role="status" aria-live="polite">실행 시 정책 snapshot을 잠급니다.</p>
+        </div>
+      </section>
+
+      </section>
+
+      <section id="menu-panel-production-acut" class="menu-panel" data-menu-panel="production-acut" role="tabpanel" aria-labelledby="menu-tab-production-acut" hidden>
+      <section class="section factory-sync-surface" aria-labelledby="io-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">LIVE FACTORY WORKBENCH</p><h2 id="io-heading">Input → 생산 진행 → Output A컷</h2></div>
+          <p class="section-copy">조립공장 public projection과 SSE event만 표시합니다. 보기는 선택하지 않으며 A컷 저장 후 receipt·revision으로 확정합니다.</p>
+        </div>
+        <nav id="stage-subnav" class="stage-subnav" aria-label="생산 단계 선택">
+          <button type="button" data-stage-key="db">제품·DB</button>
+          <button type="button" data-stage-key="representative">대표</button>
+          <button type="button" data-stage-key="size">사이즈</button>
+          <button type="button" data-stage-key="option_color">옵션·색상</button>
+          <button type="button" data-stage-key="general">일반컷</button>
+          <button type="button" data-stage-key="sections">섹션</button>
+          <button type="button" data-stage-key="final_detail">최종 상세</button>
+        </nav>
+        <section id="work-bundle-output-assets" class="factory-sync-pane" aria-live="polite">
+          <p class="status-message">신화사 PDP work-bundle Output을 불러오는 중입니다.</p>
+        </section>
+        <div class="factory-sync-workspace">
+          <nav id="io-progress-map" class="factory-sync-pane factory-progress-map" aria-label="제품 Input과 Output 진행 맵">
+            <p class="status-message">Input/Output projection을 불러오는 중입니다.</p>
+          </nav>
+          <section id="a-cut-contact-sheet" class="factory-sync-pane" aria-label="단계별 A컷 후보">
+            <p class="status-message">출력 단계를 선택하세요.</p>
+          </section>
+          <aside id="artifact-inspector" class="factory-sync-pane artifact-inspector" aria-label="선택 후보 근거와 명령">
+            <p class="status-message">확인할 후보를 선택하세요.</p>
+          </aside>
+        </div>
+      </section>
+
+      </section>
+
+      <section id="menu-panel-cafe24" class="menu-panel" data-menu-panel="cafe24" role="tabpanel" aria-labelledby="menu-tab-cafe24" hidden>
+      <section class="section" aria-labelledby="cafe24-heading">
+        <div class="section-heading"><div><p class="eyebrow">CAFE24 GATE</p><h2 id="cafe24-heading">Cafe24 사전점검과 등록</h2></div><p class="section-copy">기존 Task15 one-time approval과 versioned bridge 상태만 표시합니다. 외부 publish는 이 화면에서 자동 실행하지 않습니다.</p></div>
+        <article id="factory-registration-panel" class="factory-registration-panel" aria-label="Cafe24 등록 작업면">
+          <p class="status-message">Cafe24 사전점검 상태를 확인하고 있습니다.</p>
+        </article>
+      </section>
+      </section>
+
+      <section id="menu-panel-audit-sync" class="menu-panel" data-menu-panel="audit-sync" role="tabpanel" aria-labelledby="menu-tab-audit-sync" hidden>
+      <div id="audit-sync-summary" class="menu-summary-grid" aria-live="polite">
+        <article class="menu-summary-card"><p class="status-message">SSE cursor와 worker identity를 확인하는 중입니다.</p></article>
+      </div>
+
+      <section class="section" aria-labelledby="timeline-heading">
+        <div class="section-heading"><div><p class="eyebrow">AUDIT TIMELINE</p><h2 id="timeline-heading">작업 감사 타임라인</h2></div><p class="section-copy">이벤트 sequence·현재 단계·경과시간·차단 사유를 원장 영수증과 함께 표시합니다.</p></div>
+        <div class="timeline-grid"><article class="factory-card timeline-card"><ul id="audit-list"><li>세션 경계 확인 중</li><li>신화사 PDP capability 협상 대기</li><li>제품·배치·검수 상태 동기화 대기</li></ul></article><article class="factory-card timeline-card"><h3>최근 상태</h3><p class="card-copy" id="live-status">실제 원장 상태를 조회하고 있습니다.</p></article></div>
+      </section>
       </section>
 
       <footer class="footer">
@@ -569,6 +2196,10 @@
         apiHub: document.getElementById("api-hub")
       };
       const healthUrl = "http://127.0.0.1:5062/api/health";
+      const requestedApiBase = new URLSearchParams(window.location.search).get("apiBase");
+      const activeHealthUrl = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(requestedApiBase || "")
+        ? `${requestedApiBase}/api/health`
+        : healthUrl;
 
       const setText = (element, value) => {
         if (element) {
@@ -592,7 +2223,7 @@
         app.dataset.state = "ready";
         setText(chip, "준비됨");
         setText(statusTitle, `${health.displayName} 런타임 준비됨`);
-        setText(statusDetail, "health 응답이 정상이며 읽기 전용 상태 화면을 표시합니다.");
+        setText(statusDetail, "health 응답이 정상이며 제품 투입과 생산관제 작업 화면을 사용할 수 있습니다.");
         setText(statusValue, health.status || "확인 불가");
         setText(serviceValue, health.service || "확인 불가");
         setText(listenValue, `${health.listen?.host || "확인 불가"}:${health.listen?.port || "확인 불가"}`);
@@ -606,7 +2237,7 @@
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => controller.abort(), 5000);
         try {
-          const response = await fetch(healthUrl, { signal: controller.signal });
+          const response = await fetch(activeHealthUrl, { signal: controller.signal });
           const health = await response.json();
           if (!response.ok || health.status !== "ready") {
             renderFailure("health 응답이 준비 상태를 보고하지 않았습니다.");
@@ -626,5 +2257,158 @@
       loadHealth();
     })();
   </script>
+  <script>
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      const localOrigin = (name, fallback) => {
+        const value = params.get(name);
+        return /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(value || "") ? value : fallback;
+      };
+      const API_BASE = localOrigin("apiBase", "http://127.0.0.1:5062");
+      const API_HUB = localOrigin("apiHub", "http://127.0.0.1:4321");
+      const session = { id: "", csrf: "" };
+      const automation = {
+        registry: null,
+        batchOverride: {},
+        productOverride: {},
+        stageOverride: {},
+        snapshot: null,
+        modelOptions: null,
+      };
+      const setStatus = (id, message, tone = "") => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        element.textContent = message;
+        element.dataset.tone = tone;
+      };
+      const apiRequest = async (path, options = {}) => {
+        const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
+        if (session.id && options.method && options.method !== "GET") headers["X-Control-Tower-Session"] = session.id;
+        if (session.csrf && options.method && options.method !== "GET") headers["X-Control-Tower-CSRF"] = session.csrf;
+        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(String(body.error?.code || `HTTP_${response.status}`));
+          error.status = response.status;
+          error.code = String(body.error?.code || "");
+          throw error;
+        }
+        return body;
+      };
+      const loadSession = async () => {
+        try {
+          const response = await fetch(`${API_BASE}/api/session`);
+          const body = await response.json();
+          session.id = String(body.sessionId || "");
+          session.csrf = String(body.csrfToken || "");
+          setStatus("intake-status", session.id ? "변경 요청 session 준비됨" : "session을 만들지 못했습니다.", session.id ? "ok" : "error");
+        } catch (error) {
+          setStatus("intake-status", `session 차단: ${String(error.message || error)}`, "error");
+        }
+      };
+      const loadModelStatus = async () => {
+        try {
+          const [oauth, options] = await Promise.all([
+            fetch(`${API_HUB}/api/playbooks/gpt-oauth/status`).then(response => response.json()),
+            fetch(`${API_HUB}/api/llm/options`).then(response => response.json()),
+          ]);
+          const models = Array.isArray(options.modelOptions) ? options.modelOptions : [];
+          const select = document.getElementById("model-select");
+          select.replaceChildren();
+          models.forEach(model => {
+            const value = String(model.id || model.name || "").trim();
+            if (!value) return;
+            select.add(new Option(value, value));
+          });
+          if (!select.options.length) select.add(new Option("latestModel", "latestModel"));
+          select.value = String(options.latestModel || "latestModel");
+          const populate = (id, items, fallback) => {
+            const target = document.getElementById(id);
+            target.replaceChildren();
+            (Array.isArray(items) ? items : []).forEach(item => {
+              const value = String(item.id || "").trim();
+              if (value) target.add(new Option(String(item.label || value), value));
+            });
+            if (![...target.options].some(option => option.value === fallback)) target.add(new Option(fallback, fallback));
+            target.value = fallback;
+          };
+          populate("reasoning-select", options.reasoningOptions, "medium");
+          populate("tier-select", options.serviceTierOptions, "standard");
+          automation.modelOptions = options;
+          setStatus("model-status", oauth.chatGptLoginReady === true ? "GPT OAuth 연결됨" : "GPT OAuth 연결 필요", oauth.chatGptLoginReady === true ? "ok" : "error");
+        } catch (error) {
+          setStatus("model-status", `API Hub 차단: ${String(error.message || error)}`, "error");
+        }
+      };
+      const runRemoteAction = async ({ path, statusId, pending, success }) => {
+        setStatus(statusId, pending);
+        try {
+          const result = await apiRequest(path);
+          setStatus(statusId, `${success} ${result.items?.length ?? result.jobId ?? result.capabilityVersion ?? "확인"}`, "ok");
+        } catch (error) {
+          setStatus(statusId, `${pending} · ${String(error.message || error)}`, "error");
+        }
+      };
+      document.getElementById("refresh-model")?.addEventListener("click", loadModelStatus);
+      document.getElementById("login-model")?.addEventListener("click", () => {
+        window.open(API_HUB, "api-hub-login", "noopener,noreferrer");
+        setStatus("model-status", "API Hub 로그인 화면을 열었습니다. 완료 후 상태를 새로고침하세요.");
+      });
+      document.getElementById("force-login-model")?.addEventListener("click", () => {
+        if (!window.confirm("기존 ChatGPT 로그인 상태를 무시하고 재로그인 화면을 열까요?")) return;
+        window.open(`${API_HUB}/?force=1`, "api-hub-force-login", "noopener,noreferrer");
+        setStatus("model-status", "API Hub 강제 재로그인 화면을 열었습니다.");
+      });
+      document.querySelector('[data-action="preflight"]')?.addEventListener("click", () => {
+        void runRemoteAction({ path: "/api/pdp/capabilities", statusId: "cafe-status", pending: "원장 capability·등록 전 점검 조회 중", success: "원장 capability 확인" });
+      });
+      document.querySelector('[data-action="approve-cafe"]')?.addEventListener("click", () => {
+        setStatus("cafe-status", "제품 카드의 게시 명령에서 명시적으로 승인해 주세요.", "error");
+      });
+      const assetUrl = value => {
+        try {
+          return new URL(String(value || ""), API_BASE).href;
+        } catch {
+          return "";
+        }
+      };
+      globalThis.controlTowerRuntime = Object.freeze({ apiRequest, assetUrl, setStatus, automation });
+      void loadSession();
+      void loadModelStatus();
+    })();
+  </script>
+  <script type="module">
+    import { bindMenuShell } from "./src/menu-shell.mjs?menuReorg=1";
+    globalThis.controlTowerMenu = bindMenuShell({
+      onChange: key => document.getElementById("app")?.setAttribute("data-active-menu", key),
+    });
+  </script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=1&amp;workBundleCompleteness=6"></script>
+  <script type="module">
+    import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
+    import { mountProductIntake } from "./src/product-intake.mjs";
+    mountProductIntake(globalThis.controlTowerRuntime);
+    const fixtureParams = new URLSearchParams(window.location.search);
+    const fixtureCount = fixtureParams.get("fixtureCount");
+    const queueRoot = document.getElementById("product-list");
+    const scrollRoot = document.querySelector("main.page");
+    if (fixtureCount && queueRoot && scrollRoot) {
+      const items = createQueueModel(fixtureCount, { thumbnailBase: fixtureParams.get("apiBase") });
+      const render = () => {
+        const rootRect = scrollRoot.getBoundingClientRect();
+        const queueRect = queueRoot.getBoundingClientRect();
+        const queueOffsetTop = scrollRoot.scrollTop + queueRect.top - rootRect.top;
+        return renderVirtualQueue(queueRoot, items, {
+          scrollTop: getQueueScrollTop(scrollRoot.scrollTop, queueOffsetTop, items.length),
+          viewportHeight: scrollRoot.clientHeight,
+        });
+      };
+      render();
+      scrollRoot.addEventListener("scroll", render, { passive: true });
+      window.addEventListener("resize", render, { passive: true });
+      window.__CONTROL_TOWER_QUEUE_METRICS__ = () => ({ total: items.length, rendered: Number(queueRoot.dataset.virtualRendered || 0), scrollHeight: scrollRoot.scrollHeight });
+    }
+  </script>
+  <script type="module" src="./src/workfile-intake.mjs"></script>
 </body>
 </html>

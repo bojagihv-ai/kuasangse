@@ -30,6 +30,7 @@ function validProof(token, seed) {
   const mutations = [
     { method: 'POST', origin: backendOrigin, path: '/api/workspace-lock/acquire' },
     ...Array.from({ length: 4 }, () => ({ method: 'POST', origin: backendOrigin, path: '/api/last-work' })),
+    { method: 'POST', origin: backendOrigin, path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest` },
     { method: 'POST', origin: backendOrigin, path: '/api/cafe24-control/start' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/setup-status' },
@@ -49,8 +50,8 @@ function validProof(token, seed) {
     buttons: {
       dbDraft: { exists: true, disabled: false },
       cafeDraft: { exists: true, disabled: false },
-      dbForeign: { exists: true, disabled: true },
-      cafeForeign: { exists: true, disabled: true },
+      dbForeign: { exists: false, disabled: null },
+      cafeForeign: { exists: false, disabled: null },
     },
     cleanup: { seedScriptRemoved: true, storageRestored: true, cdpClosed: true, runtimeCleaned: true, errors: [], beforeStorage: storage, afterStorage: { ...storage } },
     backend: { beforeTarget: backend, afterTarget: { ...backend }, beforeGlobal: globalBackend, afterGlobal: { ...globalBackend } },
@@ -84,6 +85,13 @@ test('DB-05 startup checks reject token, authority, network, and cleanup drift b
     proof.networkProbe.unexpected.push({ method: 'POST', origin: 'http://evil.invalid', path: '/mutate' });
     assert.equal(buildStartupChecks(proof).networkBoundary.ok, false);
     proof.networkProbe.unexpected.length = 0;
+    const duplicateRecovery = structuredClone(proof);
+    duplicateRecovery.networkProbe.mutations.push({
+      method: 'POST',
+      origin: proof.expected.backendOrigin,
+      path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest`,
+    });
+    assert.equal(buildStartupChecks(duplicateRecovery).networkBoundary.ok, false);
     proof.cleanup.afterStorage = { ...proof.cleanup.afterStorage, sha256: 'changed' };
     assert.equal(buildStartupChecks(proof).storageCleanup.ok, false);
     proof.cleanup.afterStorage = { ...proof.cleanup.beforeStorage };
@@ -92,6 +100,22 @@ test('DB-05 startup checks reject token, authority, network, and cleanup drift b
   } finally {
     store.dispose();
   }
+});
+
+test('DB-05 startup network gate accepts idempotent OAuth refresh variations inside the allowlist', () => {
+  const seed = buildStartupSeed(22307);
+  const token = { version: 'factory-store:v1', workspaceId: seed.projectId, revision: 4, fence: 2 };
+  const proof = validProof(token, seed);
+  proof.networkProbe.mutations = [
+    { method: 'POST', origin: proof.expected.backendOrigin, path: '/api/workspace-lock/acquire' },
+    { method: 'POST', origin: proof.expected.backendOrigin, path: '/api/last-work' },
+    { method: 'POST', origin: proof.expected.backendOrigin, path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest` },
+    { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
+    { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
+    { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/setup-status' },
+  ];
+  proof.networkProbe.requests = [...proof.networkProbe.mutations];
+  assert.equal(buildStartupChecks(proof).networkBoundary.ok, true);
 });
 
 test('DB-05 canonical fixture reads the actual startup factory-store token', async () => {

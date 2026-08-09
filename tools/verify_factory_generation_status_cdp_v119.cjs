@@ -12,6 +12,9 @@ const {
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
+const TEST_BACKEND_URL = process.env.KUASANGSE_BACKEND_BASE
+  || process.env.KUASANGSE_BACKEND_URL
+  || 'http://127.0.0.1:5050';
 
 function svgData(label, color = '#6366f1') {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720">
@@ -29,31 +32,117 @@ async function screenshot(cdp, fileName) {
   return file;
 }
 
+async function releaseImageGenerationTransport(cdp, stageId) {
+  return evaluate(cdp, `(() => {
+    const transport = window.__factoryGenerationTransportV119;
+    if (!transport?.pending || typeof transport.release !== 'function') {
+      throw new Error('${stageId} image transport gate was not pending: ' + JSON.stringify({
+        pending: transport?.pending || null,
+        expectedStageId: transport?.expectedStageId || '',
+        requests: transport?.requests || [],
+        releaseCount: transport?.releaseCount || 0,
+      }));
+    }
+    const pending = { ...transport.pending };
+    transport.release();
+    return {
+      stageId: '${stageId}',
+      pending,
+      requestCount: transport.requests.length,
+      releaseCount: transport.releaseCount,
+    };
+  })()`);
+}
+
 async function clickStageAndCapture(cdp, stageId) {
-  await evaluate(cdp, `(() => {
+  const clickReceipt = await evaluate(cdp, `(async () => {
+    const stageSnapshot = value => {
+      const stage = value?.stages?.['${stageId}'] || {};
+      return {
+        status: stage.status || '',
+        message: stage.message || '',
+        stageKeys: Object.keys(value?.stages || {}),
+        stageFieldKeys: Object.keys(stage || {}),
+        workspaceId: value?.workspace?.id || '',
+      };
+    };
+    const runtimeSnapshot = () => {
+      const store = factoryRuntimeRequireStore();
+      const snapshot = store.getSnapshot();
+      const owned = typeof factoryRuntimeOwnedRenderDraft === 'undefined'
+        ? null
+        : factoryRuntimeOwnedRenderDraft;
+      const leases = typeof factoryRuntimeOwnedRenderLeases === 'undefined'
+        ? []
+        : factoryRuntimeOwnedRenderLeases;
+      return {
+        runtime: stageSnapshot(factoryRuntimeReadFactory()),
+        committed: stageSnapshot(snapshot?.factory || {}),
+        factoryAssets: stageSnapshot({ stages: snapshot?.factoryAssets?.stages || {} }),
+        legacy: stageSnapshot(window.state?.factory || {}),
+        owned: stageSnapshot(owned || {}),
+        ownedLeaseCount: Array.isArray(leases) ? leases.length : -1,
+        ownedLeases: Array.isArray(leases)
+          ? leases.map(item => stageSnapshot(item?.factory || {}))
+          : [],
+        revision: store.getOperationToken().revision,
+      };
+    };
+    const transport = window.__factoryGenerationTransportV119;
+    if (transport) transport.expectedStageId = '${stageId}';
+    const before = runtimeSnapshot();
     const panel = document.querySelector('#factoryAutomationAssetChooser_${stageId}');
     if (panel) panel.scrollIntoView({ block: 'center', inline: 'nearest' });
     const btn = panel?.querySelector('[data-factory-run-stage="${stageId}"]');
     if (!btn) throw new Error('${stageId} run button not found');
     btn.click();
-    return true;
+    const immediate = runtimeSnapshot();
+    await Promise.resolve();
+    const microtask = runtimeSnapshot();
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    const nextTask = runtimeSnapshot();
+    window.__factoryGenerationClickReceiptV119 = {
+      before,
+      immediate,
+      microtask,
+      nextTask,
+    };
+    return window.__factoryGenerationClickReceiptV119;
   })()`);
   const runningExpression = `(() => {
-      const factory = window.factoryState?.() || {};
+      const factory = factoryRuntimeRequireStore().getSnapshot()?.factory || {};
       const stage = factory.stages?.${stageId === 'size' ? 'size' : stageId} || {};
+      const committedStage = stage;
       const panel = document.querySelector('#factoryAutomationAssetChooser_${stageId}');
-      const panelText = panel?.innerText || '';
-      const prompts = ${stageId === 'size' ? 'window.state?.cuts?.sizePrompts || []' : 'window.state?.cuts?.prompts || []'};
+      const panelText = panel?.innerText || panel?.textContent || '';
+      const panelStyle = panel ? getComputedStyle(panel) : null;
+      const panelRect = panel?.getBoundingClientRect?.();
+      const panelVisible = !!panel
+        && panel?.isConnected === true
+        && panelStyle?.display !== 'none'
+        && panelStyle?.visibility !== 'hidden'
+        && Number(panelStyle?.opacity || 0) > 0
+        && Number(panelRect?.width || 0) > 0
+        && Number(panelRect?.height || 0) > 0;
+      const prompts = ${stageId === 'size' ? 'state?.cuts?.sizePrompts || []' : 'state?.cuts?.prompts || []'};
       const generatingPromptCount = prompts.filter(item => item?.generating).length;
-      if (!generatingPromptCount || !/생성 중|생성중|요청됨|준비/.test(panelText)) return false;
+      if (
+        committedStage.status !== 'running'
+        || !generatingPromptCount
+        || !panelVisible
+        || !/생성 중|생성중|요청됨|준비/.test(panelText)
+      ) return false;
       window.__factoryGenerationRunningSnapshotV119 = {
         stageId: '${stageId}',
         status: 'running',
         message: stage.message || '',
+        committedStatus: committedStage.status || '',
+        committedMessage: committedStage.message || '',
         panelText: panelText.slice(0, 900),
         panelId: panel?.id || '',
         panelConnected: panel?.isConnected === true,
         panelMatchesTarget: panel === document.getElementById('factoryAutomationAssetChooser_${stageId}'),
+        panelVisible,
         runningButtonText: panel?.querySelector('[data-factory-run-stage="${stageId}"]')?.innerText || '',
         generatingPromptCount,
         sizeConfirmed: /확인 완료|확인됨/.test(panelText),
@@ -64,13 +153,46 @@ async function clickStageAndCapture(cdp, stageId) {
     await waitFor(cdp, runningExpression, 10000);
   } catch (error) {
     const diagnostic = await evaluate(cdp, `(() => {
-      const factory = window.factoryState?.() || {};
+      const factory = factoryRuntimeRequireStore().getSnapshot()?.factory || {};
       const stage = factory.stages?.${stageId === 'size' ? 'size' : stageId} || {};
       const panel = document.querySelector('#factoryAutomationAssetChooser_${stageId}');
+      const button = panel?.querySelector('[data-factory-run-stage="${stageId}"]');
+      const visibility = node => {
+        if (!node) return { exists: false };
+        const ancestors = [];
+        let current = node;
+        while (current && ancestors.length < 9) {
+          const style = getComputedStyle(current);
+          const rect = current.getBoundingClientRect();
+          ancestors.push({
+            tag: current.tagName || '',
+            id: current.id || '',
+            className: typeof current.className === 'string' ? current.className : '',
+            hidden: current.hidden === true,
+            display: style.display || '',
+            visibility: style.visibility || '',
+            opacity: style.opacity || '',
+            rect: { width: Math.round(rect.width), height: Math.round(rect.height) },
+          });
+          current = current.parentElement;
+        }
+        return { exists: true, ancestors };
+      };
       return {
+        clickReceipt: window.__factoryGenerationClickReceiptV119 || null,
         stage,
+        activeTab: factory.automation?.activeTab || '',
+        activeTaskId: factory.automation?.activeTaskId || '',
+        wizardPresent: !!document.getElementById('factoryAutomationWizard'),
+        stateStep: window.state?.step || '',
+        route: typeof routeController !== 'undefined' && typeof routeController?.currentRoute === 'function'
+          ? routeController.currentRoute()
+          : '',
         panelText: String(panel?.innerText || '').slice(0, 1200),
-        buttonDisabled: panel?.querySelector('[data-factory-run-stage="${stageId}"]')?.disabled === true,
+        panelTextContent: String(panel?.textContent || '').slice(0, 1200),
+        panelVisibility: visibility(panel),
+        buttonDisabled: button?.disabled === true,
+        buttonMarkup: String(button?.outerHTML || '').slice(0, 1000),
         prompts: ${stageId === 'size' ? 'window.state?.cuts?.sizePrompts || []' : 'window.state?.cuts?.prompts || []'}.map(item => ({ label: item?.label || '', prompt: item?.prompt || '', generating: !!item?.generating, error: item?.error || '' })),
         goalRun: factory.goalRun || {},
         logs: (factory.logs || []).slice(-12).map(item => ({
@@ -91,6 +213,12 @@ async function clickStageAndCapture(cdp, stageId) {
   }
   const running = await evaluate(cdp, `window.__factoryGenerationRunningSnapshotV119`);
   const runningScreenshot = await screenshot(cdp, `factory-generation-${stageId}-running-v119.png`);
+  await waitFor(
+    cdp,
+    `(() => !!window.__factoryGenerationTransportV119?.pending)()`,
+    10000
+  );
+  const transport = await releaseImageGenerationTransport(cdp, stageId);
   await waitFor(
     cdp,
     `(() => {
@@ -116,6 +244,7 @@ async function clickStageAndCapture(cdp, stageId) {
     const usable = typeof window.factoryUsableAssetsForStage === 'function'
       ? window.factoryUsableAssetsForStage('${stageId}', factory)
       : assets;
+    const prompts = ${stageId === 'size' ? 'window.state?.cuts?.sizePrompts || []' : 'window.state?.cuts?.prompts || []'};
     const stage = factory.stages?.${stageId === 'size' ? 'size' : stageId} || {};
     return {
       stageId: '${stageId}',
@@ -135,10 +264,25 @@ async function clickStageAndCapture(cdp, stageId) {
         localArchiveId: asset.localArchiveId || asset.archiveId || asset.metadata?.localArchiveId || asset.sourceMap?.localArchiveId || '',
         imageUrl: asset.imageUrl || asset.metadata?.imageUrl || asset.sourceMap?.imageUrl || '',
       })),
+      goalRun: factory.goalRun || {},
+      stateError: window.state?.error || '',
+      logs: (factory.logs || []).slice(-16).map(item => ({
+        message: item?.message || item?.text || '',
+        tone: item?.tone || item?.type || '',
+      })),
+      prompts: prompts.map(item => ({
+        id: item?.id || '',
+        label: item?.label || '',
+        generating: !!item?.generating,
+        hasResult: !!item?.result,
+        error: item?.error || '',
+        currentRunId: item?.currentRunId || item?.generationRunId || item?.factoryGenerationRunId || '',
+      })),
+      storeEvents: window.__factoryGenerationStoreEventsV119 || [],
     };
   })()`);
   const finishedScreenshot = await screenshot(cdp, `factory-generation-${stageId}-finished-v119.png`);
-  return { running, runningScreenshot, finished, finishedScreenshot };
+  return { running, runningScreenshot, transport, finished, finishedScreenshot };
 }
 
 async function runDirectStageWithStaleGoalAndCapture(cdp, stageId) {
@@ -164,16 +308,24 @@ async function runDirectStageWithStaleGoalAndCapture(cdp, stageId) {
     if (!actions?.runFactoryStage) throw new Error('factory assets runtime action not available');
     const store = window.factoryRuntimeRequireStore();
     const operationToken = store.getOperationToken();
-    const runReceipt = await actions.runFactoryStage(
-      ${JSON.stringify(stageId)},
-      Object.freeze({ operationToken, isCurrent: () => store.isOperationCurrent(operationToken) }),
-    );
+    let runReceipt = null;
+    let runError = '';
+    try {
+      runReceipt = await actions.runFactoryStage(
+        ${JSON.stringify(stageId)},
+        Object.freeze({ operationToken, isCurrent: () => store.isOperationCurrent(operationToken) }),
+      );
+    } catch (error) {
+      runError = String(error?.stack || error);
+    }
     const runResult = runReceipt?.value ?? runReceipt;
     const done = window.factoryState?.() || {};
     const goal = done.goalRun || {};
     const stage = done.stages?.[${JSON.stringify(stageId)}] || {};
     const status = document.querySelector('[data-factory-goal-status]');
     return {
+      runError,
+      storeEvents: (window.__factoryGenerationStoreEventsV119 || []).slice(-30),
       runResult,
       stage: {
         status: stage.status || '',
@@ -195,12 +347,15 @@ async function runDirectStageWithStaleGoalAndCapture(cdp, stageId) {
 }
 
 async function clickStartAndCapture(cdp) {
-  const setup = await evaluate(cdp, `(async () => {
+  process.stdout.write('[GENERATE-01] start fixture state\n');
+  const fixture = await evaluate(cdp, `(() => {
     const calls = [];
     const originals = {
       analysis: factoryEnsureCurrentProductImageAnalysisForOneClick,
       db: factoryRunDbCandidatesForSelection,
       vm: factoryRunVmCompetitorCollectionForSelection,
+      preflight: factoryEnsureRequiredLocalServices,
+      promote: factoryPromoteStoredProductCandidateToInput,
     };
     const analysisStub = async () => {
       calls.push('analysis');
@@ -219,10 +374,30 @@ async function clickStartAndCapture(cdp) {
       calls.push('vm');
       return { ok: true, label: '경쟁사 후보 수집' };
     };
-    window.__factoryStartButtonV119 = { calls, originals };
+    const preflightStub = async () => {
+      calls.push('preflight');
+      return { ready: true, sourceMode: 'all' };
+    };
+    const promoteStub = async () => {
+      calls.push('promote');
+      return { ok: false, skipped: true };
+    };
+    window.__factoryStartButtonV119 = {
+      calls,
+      originals,
+      stubs: {
+        analysis: analysisStub,
+        db: dbStub,
+        vm: vmStub,
+        preflight: preflightStub,
+        promote: promoteStub,
+      },
+    };
     factoryEnsureCurrentProductImageAnalysisForOneClick = analysisStub;
     factoryRunDbCandidatesForSelection = dbStub;
     factoryRunVmCompetitorCollectionForSelection = vmStub;
+    factoryEnsureRequiredLocalServices = preflightStub;
+    factoryPromoteStoredProductCandidateToInput = promoteStub;
     const fixtureReceipt = window.factoryRuntimeUpdateOwnedFactory(
       'factory/start:runDb',
       'factory',
@@ -247,17 +422,31 @@ async function clickStartAndCapture(cdp) {
       },
     );
     if (!fixtureReceipt?.result) throw new Error('start fixture commit failed');
-    const renderDiagnostic = {
+    return {
+      activeTab: window.factoryState?.().automation?.activeTab || '',
+      fixtureCommitted: true,
+    };
+  })()`);
+  process.stdout.write('[GENERATE-01] start fixture render\n');
+  const renderDiagnostic = await evaluate(cdp, `(() => {
+    const diagnostic = {
       step: window.state?.step || '',
       activeElement: document.activeElement?.id || document.activeElement?.tagName || '',
       deferBefore: typeof window.shouldDeferFactoryWizardFullRender === 'function'
         ? window.shouldDeferFactoryWizardFullRender()
         : (typeof shouldDeferFactoryWizardFullRender === 'function' ? shouldDeferFactoryWizardFullRender() : null),
     };
-    renderDiagnostic.result = await window.render();
-    renderDiagnostic.deferAfter = typeof window.shouldDeferFactoryWizardFullRender === 'function'
+    const renderResult = window.render();
+    diagnostic.result = renderResult && typeof renderResult.then === 'function'
+      ? 'async-route-render'
+      : renderResult;
+    diagnostic.deferAfter = typeof window.shouldDeferFactoryWizardFullRender === 'function'
       ? window.shouldDeferFactoryWizardFullRender()
       : (typeof shouldDeferFactoryWizardFullRender === 'function' ? shouldDeferFactoryWizardFullRender() : null);
+    return diagnostic;
+  })()`);
+  process.stdout.write('[GENERATE-01] start controls\n');
+  const controls = await evaluate(cdp, `(() => {
     const button = document.querySelector('[data-factory-tab="start"] [data-factory-guide-action="run-db"]')
       || document.getElementById('factoryRunDb');
     if (!button) throw new Error('start button not found: ' + JSON.stringify({
@@ -268,32 +457,54 @@ async function clickStartAndCapture(cdp) {
       appText: String(document.getElementById('app')?.innerText || '').slice(0, 500),
       appHtml: String(document.getElementById('app')?.innerHTML || '').slice(0, 500),
       wizardPresent: !!document.getElementById('factoryAutomationWizard'),
-      renderDiagnostic,
+      renderDiagnostic: ${JSON.stringify(renderDiagnostic)},
       stateError: window.state?.error || '',
     }));
     if (button.disabled) throw new Error('start button unexpectedly disabled');
+    const stubs = window.__factoryStartButtonV119?.stubs || {};
     const aliases = {
-      analysis: factoryEnsureCurrentProductImageAnalysisForOneClick === analysisStub,
-      db: factoryRunDbCandidatesForSelection === dbStub,
-      vm: factoryRunVmCompetitorCollectionForSelection === vmStub,
+      analysis: factoryEnsureCurrentProductImageAnalysisForOneClick === stubs.analysis,
+      db: factoryRunDbCandidatesForSelection === stubs.db,
+      vm: factoryRunVmCompetitorCollectionForSelection === stubs.vm,
+      preflight: factoryEnsureRequiredLocalServices === stubs.preflight,
+      promote: factoryPromoteStoredProductCandidateToInput === stubs.promote,
     };
-    const invocation = factoryRuntimeStartTab.invoke('runDb', {
-      productName: window.factoryState?.().product?.productName || '',
-      naturalHint: '',
-    });
-    window.__factoryStartButtonV119.settled = null;
-    Promise.resolve(invocation).then(
-      receipt => { window.__factoryStartButtonV119.settled = { ok: true, receipt }; },
-      error => { window.__factoryStartButtonV119.settled = { ok: false, error: String(error?.stack || error) }; },
-    );
-    await new Promise(resolve => setTimeout(resolve, 50));
     return {
       aliases,
       buttonText: String(button.textContent || '').trim(),
-      calls: [...calls],
-      goal: factoryRuntimeReadFactory()?.goalRun || {},
     };
   })()`);
+  process.stdout.write('[GENERATE-01] start invocation schedule\n');
+  const scheduled = await evaluate(cdp, `(() => {
+    window.__factoryStartButtonV119.settled = null;
+    window.__factoryStartButtonV119.invokeScheduled = true;
+    setTimeout(() => {
+      try {
+        const invocation = factoryRuntimeStartTab.invoke('runDb', {
+          productName: window.factoryState?.().product?.productName || '',
+          naturalHint: '',
+        });
+        Promise.resolve(invocation).then(
+          receipt => { window.__factoryStartButtonV119.settled = { ok: true, receipt }; },
+          error => { window.__factoryStartButtonV119.settled = { ok: false, error: String(error?.stack || error) }; },
+        );
+      } catch (error) {
+        window.__factoryStartButtonV119.settled = { ok: false, error: String(error?.stack || error) };
+      }
+    }, 0);
+    const goal = factoryRuntimeReadFactory()?.goalRun || {};
+    return {
+      scheduled: true,
+      calls: [...(window.__factoryStartButtonV119?.calls || [])],
+      goal: {
+        running: !!goal.running,
+        progress: Number(goal.progress || 0),
+        currentStage: goal.currentStage || '',
+        failureReason: goal.failureReason || '',
+      },
+    };
+  })()`);
+  const setup = { ...fixture, renderDiagnostic, ...controls, ...scheduled };
   try {
     await waitFor(cdp, `(() => {
       const status = document.querySelector('[data-factory-goal-status]');
@@ -384,6 +595,8 @@ async function clickStartAndCapture(cdp) {
     factoryEnsureCurrentProductImageAnalysisForOneClick = originals.analysis;
     factoryRunDbCandidatesForSelection = originals.db;
     factoryRunVmCompetitorCollectionForSelection = originals.vm;
+    factoryEnsureRequiredLocalServices = originals.preflight;
+    factoryPromoteStoredProductCandidateToInput = originals.promote;
     return true;
   })()`);
   const finishedScreenshot = await screenshot(cdp, 'factory-generation-start-finished-v119.png');
@@ -444,18 +657,64 @@ async function main() {
     const resultImage = ${JSON.stringify(resultImage)};
     const productName = 'GenerationStatusV119';
     const workspaceId = ${JSON.stringify(workspaceId)};
+    const imageBackendBaseUrl = ${JSON.stringify(TEST_BACKEND_URL)};
     const runId = 'generation_status_run_v119';
     const base64 = inputImage.replace(/^data:image\\/[^;,]+;base64,/i, '');
     const productKey = window.factoryNormalizeIdentityText ? window.factoryNormalizeIdentityText(productName) : productName;
     const fp = window.factoryImagePayloadFingerprint ? window.factoryImagePayloadFingerprint(base64) : 'generation_fp_v119';
 
     window.hasImageConnection = () => true;
+    window.state.backendBaseUrl = imageBackendBaseUrl;
+    window.state.modelConfig = {
+      ...(window.state.modelConfig || {}),
+      imageModel: 'gemini-3.1-flash-image',
+    };
     window.__factoryArchiveRequestsV119 = [];
+    window.__factoryGenerationTransportV119 = {
+      expectedStageId: '',
+      gatedRequestCount: 3,
+      pending: null,
+      release: null,
+      releaseCount: 0,
+      requests: [],
+    };
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
-      const response = await nativeFetch(input, init);
       const url = String(input?.url || input || '');
-      if (/\\/api\\/local-archive\\/assets(?:\\?|$)/.test(url) && String(init?.method || 'GET').toUpperCase() === 'POST') {
+      const method = String(init?.method || input?.method || 'GET').toUpperCase();
+      const transport = window.__factoryGenerationTransportV119;
+      if (method === 'POST' && url === imageBackendBaseUrl + '/api/gemini/generate-content') {
+        const request = {
+          index: transport.requests.length + 1,
+          stageId: transport.expectedStageId || '',
+          url,
+          method,
+        };
+        transport.requests.push(request);
+        if (request.index <= transport.gatedRequestCount) {
+          await new Promise(resolve => {
+            transport.pending = request;
+            transport.release = () => {
+              if (transport.pending?.index !== request.index) return;
+              transport.pending = null;
+              transport.release = null;
+              transport.releaseCount += 1;
+              resolve();
+            };
+          });
+        }
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{
+            inlineData: {
+              mimeType: 'image/svg+xml',
+              data: resultImage.slice(resultImage.indexOf(',') + 1),
+            },
+          }] } }],
+          usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      const response = await nativeFetch(input, init);
+      if (/\\/api\\/local-archive\\/assets(?:\\?|$)/.test(url) && method === 'POST') {
         window.__factoryArchiveRequestsV119.push({
           url,
           request: JSON.parse(String(init.body || '{}')),
@@ -465,13 +724,6 @@ async function main() {
       }
       return response;
     };
-    window.generateWithSelectedImageModel = async (prompt) => {
-      // Full 회귀 중 브라우저 부하가 있어도 running 상태를 관찰할 시간을 확보한다.
-      await new Promise(resolve => setTimeout(resolve, 2500));
-      const encoded = resultImage.replace('generated-v119', String(prompt || 'generated-v119').slice(0, 32));
-      return encoded;
-    };
-    window.__factoryGenerationFunctionAliasV119 = window.generateWithSelectedImageModel === generateWithSelectedImageModel;
 
     window.state.step = 'factory';
     window.state.currentProjectId = workspaceId;
@@ -663,6 +915,11 @@ async function main() {
   console.log(JSON.stringify({ ...results, jsonEvidence }, null, 2));
   const checks = [];
   for (const item of [hero, size, cuts]) {
+    checks.push({
+      ok: item.transport?.pending?.stageId === item.running.stageId &&
+        item.transport?.requestCount >= 1 && item.transport?.releaseCount >= 1,
+      message: `${item.running.stageId} 생성 전송 게이트가 실제 요청을 보류하지 못했습니다: ${JSON.stringify(item.transport)}`,
+    });
     checks.push({
       ok: item.running.status === 'running' &&
         item.running.panelId === `factoryAutomationAssetChooser_${item.running.stageId}` &&

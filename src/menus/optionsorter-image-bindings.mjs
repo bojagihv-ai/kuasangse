@@ -36,13 +36,17 @@ export function bindOptionSorterImages(context) {
   const optClearImages = byId('optClearImages');
   if (optClearImages) optClearImages.onclick = () => {
     const os = optionSorter();
+    os.optionSourceClearedAt = Date.now();
+    os.optionSourceDeletedArchiveIds = [];
     os.images = []; os.pool = [];
     os.previewImageId = null;
     optAppendLogs(os, '현재 옵션 이미지만 비웠습니다. 기존 생성 결과는 아래에서 기존색상쓰기/샘플로 계속 사용할 수 있습니다.');
+    os.optionSourceArchiveStatus = '현재 옵션 원본 목록을 비웠습니다. 로컬 보관 파일 자체는 삭제하지 않았습니다.';
     os.optionGenProgress = 0;
     os.optionVisionColorBusy = false;
     os.slots = defaultOptionSorterState().slots;
     optScheduleSave();
+    saveLastWorkNow({ force: true, deep: true });
     requestRender();
   };
   queryAll('[data-opt-remove-img]').forEach(btn => {
@@ -50,12 +54,21 @@ export function bindOptionSorterImages(context) {
       e.stopPropagation();
       const id = btn.dataset.optRemoveImg;
       const os = optionSorter();
+      const removed = os.images.find(i => i.id === id);
+      const archiveId = String(removed?.archiveId || removed?.localArchive?.archiveId || '').trim();
+      if (archiveId) {
+        os.optionSourceDeletedArchiveIds = Array.from(new Set([
+          ...(Array.isArray(os.optionSourceDeletedArchiveIds) ? os.optionSourceDeletedArchiveIds : []),
+          archiveId,
+        ]));
+      }
       os.images = os.images.filter(i => i.id !== id);
       os.pool = os.pool.filter(i => i !== id);
       if (os.previewImageId === id) os.previewImageId = null;
       os.slots.forEach(s => { s.imgIds = s.imgIds.filter(i => i !== id); });
       optSyncSlotCountToImages(os);
       optScheduleSave();
+      saveLastWorkNow({ force: true, deep: true });
       requestRender();
     };
   });
@@ -77,13 +90,16 @@ export function bindOptionSorterImages(context) {
     };
   });
   const optImagePreviewOverlay = byId('optImagePreviewOverlay');
-  if (optImagePreviewOverlay) optImagePreviewOverlay.onclick = () => {
+  if (optImagePreviewOverlay) optImagePreviewOverlay.onclick = event => {
+    if (event.target !== optImagePreviewOverlay) return;
+    document.getElementById('optImagePreviewOverlay')?.remove();
     optionSorter().previewImageId = null;
     optionSorter().previewResultId = null;
     requestRender();
   };
   const closeOptImagePreview = byId('closeOptImagePreview');
   if (closeOptImagePreview) closeOptImagePreview.onclick = () => {
+    document.getElementById('optImagePreviewOverlay')?.remove();
     optionSorter().previewImageId = null;
     optionSorter().previewResultId = null;
     requestRender();

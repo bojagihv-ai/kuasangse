@@ -68,7 +68,21 @@ export function createCompetitorFactoryTab(capabilities = {}) {
       return renderCompetitorFactoryTab(snapshot, renderHelpers);
     },
     bind(root) {
-      return bindCompetitorTabEvents(root, (name, value) => contract.invoke(name, value));
+      return bindCompetitorTabEvents(root, (name, value) => {
+        try {
+          const result = contract.invoke(name, value);
+          if (result && typeof result.catch === 'function') {
+            return result.catch(error => {
+              runtime.reportError(error);
+              return undefined;
+            });
+          }
+          return result;
+        } catch (error) {
+          runtime.reportError(error);
+          return undefined;
+        }
+      });
     },
     onEnter() {},
     onLeave() {},

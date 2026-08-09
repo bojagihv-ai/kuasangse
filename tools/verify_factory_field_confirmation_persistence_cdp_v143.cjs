@@ -83,7 +83,7 @@ async function main() {
         automation: { sizeFieldDrafts: { width_mm: { value: '99cm' } } },
       },
     };
-    localStorage.setItem('pdp_last_input_checkpoint_v1', JSON.stringify(checkpoint));
+    sessionStorage.setItem('pdp_last_input_checkpoint_v1', JSON.stringify(checkpoint));
     factory.automation.sizeFieldDrafts = {};
     delete factory.product.dbFieldSettings.width_mm;
     factory.product.dbSizeManualByScope = {};

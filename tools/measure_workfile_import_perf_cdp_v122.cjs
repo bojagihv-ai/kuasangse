@@ -801,7 +801,18 @@ async function runAttempt(attemptNumber) {
       { ok: proof.imageLoadFailedAssets.length === 0, message: `성공한 작업파일 불러오기 뒤 재시도되지 않은 이미지 표시 실패가 ${proof.imageLoadFailedAssets.length}개 남았습니다.` },
       { ok: proof.projectBusy === false, message: '불러오기 완료 후 projectBusy가 해제되지 않았습니다.' },
       { ok: proof.bodyCursor === 'auto', message: `불러오기 완료 후 마우스 커서가 ${proof.bodyCursor} 상태로 남았습니다.` },
-      { ok: proof.releaseBeforeReload.beforeMode === 'editing' && proof.releaseBeforeReload.afterMode === 'released', message: `새로고침 전 편집권 반납에 실패했습니다: ${JSON.stringify(proof.releaseBeforeReload)}` },
+      {
+        ok: (
+          proof.releaseBeforeReload.beforeMode === 'editing'
+          && proof.releaseBeforeReload.afterMode === 'released'
+        ) || (
+          proof.releaseBeforeReload.beforeMode === 'offline-edit'
+          && proof.releaseBeforeReload.afterMode === 'offline-edit'
+          && !!proof.releaseBeforeReload.beforeScopeId
+          && proof.releaseBeforeReload.afterScopeId === proof.releaseBeforeReload.beforeScopeId
+        ),
+        message: `새로고침 전 작업 브랜치 정리에 실패했습니다: ${JSON.stringify(proof.releaseBeforeReload)}`,
+      },
       { ok: reloadProof.currentProjectId === proof.currentProjectId && reloadProof.currentProjectName === proof.currentProjectName, message: `새로고침 후 작업파일 식별자가 달라졌습니다: ${reloadProof.currentProjectId}/${reloadProof.currentProjectName}` },
       { ok: reloadProof.restoreTimedOut === false, message: `새로고침 복원이 제한 시간 안에 완료되지 않았습니다: ${JSON.stringify(proof.preReloadRecovery)}` },
       { ok: reloadProof.factoryAssets === proof.factoryAssets && reloadProof.previousFactoryAssets === proof.previousFactoryAssets && reloadProof.sections === proof.sections, message: `새로고침 후 현재/이전 후보 또는 섹션 수가 달라졌습니다: ${JSON.stringify(reloadProof)}` },

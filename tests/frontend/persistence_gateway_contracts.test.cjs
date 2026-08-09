@@ -210,7 +210,7 @@ test('Given an unknown replica When committing Then validation precedes authorit
   assert.equal(adapters.indexeddb.writes.length, 0);
 });
 
-test('Given content changes during save When all writes succeed Then the document remains dirty', async () => {
+test('Given a document fence is stale before commit When saving Then no replica is written', async () => {
   const { createWorkspacePersistence } = await loadGateway();
   const adapters = Object.fromEntries(['session', 'indexeddb', 'server', 'workfile', 'archive']
     .map(name => [name, memoryAdapter(name)]));
@@ -224,6 +224,8 @@ test('Given content changes during save When all writes succeed Then the documen
   assert.equal(result.accepted, true);
   assert.equal(result.partial, false);
   assert.equal(result.clean, false);
+  assert.equal(adapters.indexeddb.writes.length, 0, 'stale command must not overwrite the authoritative snapshot');
+  assert.equal(adapters.workfile.writes.length, 0, 'stale command must not write any requested replica');
 });
 
 test('Given restore candidates When restoring Then explicit workfile and deterministic precedence win', async () => {

@@ -17,8 +17,11 @@ export function createOptionSorterMenu(capabilities = {}) {
   const assertMutable = requiredFunction(capabilities, 'assertMutable');
   const mutateOptions = requiredFunction(capabilities, 'mutateOptions');
   const persistOptions = requiredFunction(capabilities, 'persistOptions');
+  const getSlotNamePresets = requiredFunction(capabilities, 'getSlotNamePresets');
+  const saveSlotNamePreset = requiredFunction(capabilities, 'saveSlotNamePreset');
   const loadVisionColors = requiredFunction(capabilities, 'loadVisionColors');
   const applyVisionColors = requiredFunction(capabilities, 'applyVisionColors');
+  const restoreArchivedSourceImages = requiredFunction(capabilities, 'restoreArchivedSourceImages');
   const requestRender = requiredFunction(capabilities, 'requestRender');
   const getOperationToken = requiredFunction(capabilities, 'getOperationToken');
   const reportError = requiredFunction(capabilities, 'reportError');
@@ -32,7 +35,8 @@ export function createOptionSorterMenu(capabilities = {}) {
   function bind(root) {
     activeBinding?.dispose();
     const disposeCurrent = bindOptionSorter(root, {
-      getSnapshot, assertMutable, requestRender, reportError, bindHelpers,
+      getSnapshot, assertMutable, requestRender, reportError,
+      bindHelpers: { ...bindHelpers, getSlotNamePresets, saveSlotNamePreset },
       claimArchiveStatusLoad: lifecycle.claimArchiveStatusLoad,
     });
     let live = true;
@@ -50,16 +54,26 @@ export function createOptionSorterMenu(capabilities = {}) {
     assertMutable, mutateOptions, persistOptions, loadVisionColors, applyVisionColors,
     requestRender, operationStamp: lifecycle.operationStamp, isCurrent: lifecycle.isCurrent,
   });
+  const onEnter = () => {
+    lifecycle.onEnter();
+    restoreArchivedSourceImages().catch(reportError);
+  };
   return createOptionSorterContract({
     getSnapshot,
     commands,
-    render: view => renderOptionSorterView(view, renderHelpers),
+    render: view => renderOptionSorterView({
+      ...view,
+      slotNamePresets: getSlotNamePresets(),
+    }, renderHelpers),
     bind,
     refresh(root) {
-      if (!activeBinding) return;
+      if (!activeBinding) {
+        if (root) bind(root);
+        return;
+      }
       bind(root || activeBinding.root);
     },
-    onEnter: lifecycle.onEnter,
+    onEnter,
     onLeave: lifecycle.onLeave,
   });
 }

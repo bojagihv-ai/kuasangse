@@ -5,8 +5,11 @@
   const CLASSIC_RUNTIME_RESPONSE_EVENT = 'kuasangse:classic-runtime-response';
   const CLASSIC_RUNTIME_RESPONSE_TIMEOUT_MS = 5000;
   const CLASSIC_RUNTIME_HYDRATION_TIMEOUT_MS = 120000;
+  const CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS = 900000;
+  const RUNTIME_BUILD_CHECK_INTERVAL_MS = 15000;
   const loadErrors = [];
   let classicRuntimeRequestSequence = 0;
+  let runtimeBuildGuardDisposer = null;
 
   function freezeOperationalValue(value) {
     if (typeof value === 'function') throw new TypeError('operational metadata cannot contain functions');
@@ -85,10 +88,35 @@
       </div>`;
   }
 
+  const RUNTIME_BOOT_CACHE_TOKEN = `boot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
   function resourceUrl(file, buildId) {
     const url = new URL(file, document.baseURI);
     url.searchParams.set('v', buildId);
+    url.searchParams.set('boot', RUNTIME_BOOT_CACHE_TOKEN);
     return url.href;
+  }
+
+  function installRuntimeImportMap(files, buildId) {
+    const imports = Object.fromEntries([...new Set(files.filter(Boolean))].map(file => [
+      new URL(file, document.baseURI).href,
+      resourceUrl(file, buildId),
+    ]));
+    const importMap = document.createElement('script');
+    importMap.type = 'importmap';
+    importMap.dataset.kuasangseRuntimeImportMap = buildId;
+    importMap.textContent = JSON.stringify({ imports });
+    document.head.appendChild(importMap);
+    return importMap;
+  }
+
+  function preloadRuntimeBundle(file, buildId) {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'script';
+    link.href = resourceUrl(file, buildId);
+    document.head.appendChild(link);
+    return link;
   }
 
   function workspaceAuthorityServerBases() {
@@ -136,9 +164,11 @@
 
   function requestClassicRuntime(command, payload = null) {
     const requestId = `loader-${Date.now()}-${classicRuntimeRequestSequence += 1}`;
-    const timeoutMs = command === 'hydrate' || command === 'workspace-reload'
-      ? CLASSIC_RUNTIME_HYDRATION_TIMEOUT_MS
-      : CLASSIC_RUNTIME_RESPONSE_TIMEOUT_MS;
+    const timeoutMs = command === 'factory-cafe24-command'
+      ? CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS
+      : command === 'hydrate' || command === 'workspace-reload'
+        ? CLASSIC_RUNTIME_HYDRATION_TIMEOUT_MS
+        : CLASSIC_RUNTIME_RESPONSE_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (callback, value) => {
@@ -167,10 +197,101 @@
     });
   }
 
+  function runtimeBuildId(manifest) {
+    return String(manifest?.buildId || '').trim();
+  }
+
+  function showRuntimeStaleGate(currentBuildId, nextBuildId) {
+    if (document.getElementById('kuasangseRuntimeStaleGate')) return;
+    document.documentElement.dataset.kuasangseRuntimeStale = '1';
+    const gate = document.createElement('div');
+    gate.id = 'kuasangseRuntimeStaleGate';
+    gate.setAttribute('role', 'dialog');
+    gate.setAttribute('aria-modal', 'true');
+    gate.setAttribute('aria-labelledby', 'kuasangseRuntimeStaleTitle');
+    gate.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto;background:rgba(4,6,14,.88);backdrop-filter:blur(5px);font-family:system-ui,\'Malgun Gothic\',sans-serif';
+    gate.innerHTML = `<div style="width:min(560px,100%);box-sizing:border-box;padding:22px;border:1px solid rgba(99,102,241,.65);border-radius:14px;background:#11131f;color:#e5e7eb;box-shadow:0 24px 80px rgba(0,0,0,.52)">
+      <div id="kuasangseRuntimeStaleTitle" style="font-size:19px;font-weight:900">새 빌드가 적용되었습니다</div>
+      <p style="margin:9px 0 0;color:#c7d2fe;line-height:1.6">이 탭은 이전 코드(${escapeHtml(currentBuildId)})로 열려 있어 잘못된 클릭 처리를 막았습니다. 현재 작업을 저장한 뒤 새 코드(${escapeHtml(nextBuildId)})로 다시 엽니다.</p>
+      <button id="kuasangseApplyNewBuild" type="button" style="width:100%;margin-top:16px;border:0;border-radius:9px;padding:11px 14px;background:#6366f1;color:white;font-size:14px;font-weight:900;cursor:pointer">새 빌드 적용</button>
+    </div>`;
+    const applyButton = gate.querySelector('#kuasangseApplyNewBuild');
+    applyButton?.addEventListener('click', async () => {
+      applyButton.disabled = true;
+      applyButton.textContent = '현재 작업 저장 후 새로고침 중...';
+      try {
+        if (typeof window.flushLastWorkBeforeRuntimeReload !== 'function') {
+          throw new Error('현재 작업 저장 경로를 사용할 수 없습니다.');
+        }
+        const saved = await window.flushLastWorkBeforeRuntimeReload();
+        if (saved !== true) throw new Error('현재 작업 저장 결과를 확인하지 못했습니다.');
+      } catch (_) {
+        applyButton.disabled = false;
+        applyButton.textContent = '현재 작업 저장 실패 · 새로고침 안 함';
+        applyButton.setAttribute('aria-label', '현재 작업 저장에 실패해 새로고침을 중단했습니다.');
+        return;
+      }
+      window.location.reload();
+    });
+    document.body.appendChild(gate);
+    applyButton?.focus();
+  }
+
+  function installRuntimeBuildFreshnessGuard(currentBuildId, options = {}) {
+    const windowObject = options.windowObject || window;
+    const documentObject = options.documentObject || document;
+    const read = options.readManifest || readManifest;
+    const onStale = options.onStale || showRuntimeStaleGate;
+    const intervalMs = Math.max(1000, Number(options.intervalMs || RUNTIME_BUILD_CHECK_INTERVAL_MS));
+    let disposed = false;
+    let checking = false;
+    let stale = false;
+    const checkNow = async () => {
+      if (disposed || stale || checking) return stale;
+      checking = true;
+      try {
+        const nextBuildId = runtimeBuildId(await read());
+        if (!nextBuildId || nextBuildId === currentBuildId) return false;
+        stale = true;
+        onStale(currentBuildId, nextBuildId);
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        checking = false;
+      }
+    };
+    const onFocus = () => { void checkNow(); };
+    const onVisibilityChange = () => {
+      if (documentObject.visibilityState === 'visible') void checkNow();
+    };
+    windowObject.addEventListener('focus', onFocus);
+    documentObject.addEventListener('visibilitychange', onVisibilityChange);
+    const intervalId = windowObject.setInterval(() => {
+      if (documentObject.visibilityState === 'hidden') return;
+      void checkNow();
+    }, intervalMs);
+    return Object.freeze({
+      checkNow,
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        windowObject.clearInterval(intervalId);
+        windowObject.removeEventListener('focus', onFocus);
+        documentObject.removeEventListener('visibilitychange', onVisibilityChange);
+      },
+    });
+  }
+
   async function loadApp() {
     try {
       const manifest = freezeRuntimeManifest(validateManifest(await readManifest()));
       const buildId = String(manifest.buildId).trim();
+      preloadRuntimeBundle(manifest.bundle, buildId);
+      installRuntimeImportMap(
+        [BOOTSTRAP_MODULE, manifest.authorityModule, ...manifest.modules],
+        buildId,
+      );
       publishOperationalMetadata('__KUASANGSE_RUNTIME_MANIFEST__', manifest);
       publishOperationalMetadata('__KUASANGSE_APP_BUILD_ID__', buildId);
       showLoadStatus('모듈과 앱 스크립트를 불러오는 중입니다…');
@@ -180,6 +301,7 @@
       if (typeof createBootstrapCoordinator !== 'function') {
         throw new Error('createBootstrapCoordinator export가 없습니다.');
       }
+      const isBatchWorker = new URL(location.href).searchParams.get('batchWorker') === '1';
       let loadedModules = null;
       const hydrationEnvelope = Object.freeze({
         schema: 'kuasangse.app-state',
@@ -215,12 +337,85 @@
         },
         installMenuModules: () => requestClassicRuntime('menu-install', loadedModules),
         hydrate: envelope => requestClassicRuntime('hydrate', envelope),
-        render: () => requestClassicRuntime('render'),
+        render: () => requestClassicRuntime('render', isBatchWorker ? { mode: 'batch-worker' } : null),
         hydrationEnvelope,
       });
       const bootStatus = await coordinator.boot();
       if (bootStatus.phase !== 'ready' || bootStatus.ready !== true) {
         throw new Error('bootstrap coordinator가 ready 상태를 반환하지 않았습니다.');
+      }
+
+      if (!isBatchWorker) {
+        if (runtimeBuildGuardDisposer) runtimeBuildGuardDisposer();
+        const runtimeBuildGuard = installRuntimeBuildFreshnessGuard(buildId);
+        runtimeBuildGuardDisposer = runtimeBuildGuard.dispose;
+        void runtimeBuildGuard.checkNow();
+      }
+
+      if (isBatchWorker) {
+        const workerRoot = document.getElementById('app');
+        if (workerRoot) {
+          workerRoot.innerHTML = `
+            <main class="batch-worker-shell" aria-live="polite">
+              <strong>생산관제 워커 실행 중</strong>
+              <span>백그라운드 명령·상태 동기화만 수행합니다.</span>
+            </main>
+          `;
+        }
+        const workerSearchParams = new URL(location.href).searchParams;
+        const workerApiUrl = new URL(
+          workerSearchParams.get('controlTowerBase') || 'http://127.0.0.1:5062',
+          location.origin,
+        );
+        if (
+          workerApiUrl.protocol !== 'http:'
+          || !['127.0.0.1', 'localhost'].includes(workerApiUrl.hostname)
+        ) {
+          throw new Error('batch worker controlTowerBase는 loopback HTTP 주소만 허용합니다.');
+        }
+        const workerNamespace = loadedModules?.['src/modules/batch-control-worker.mjs'];
+        const cafe24BridgeNamespace = loadedModules?.['src/modules/factory-cafe24-command-bridge.mjs'];
+        const factoryControlBridgeNamespace = loadedModules?.['src/modules/factory-control-command-bridge.mjs'];
+        if (typeof workerNamespace?.installBatchControlWorker !== 'function') {
+          throw new Error('batch-control-worker capability가 매니페스트에서 발견되지 않았습니다.');
+        }
+        if (typeof cafe24BridgeNamespace?.installFactoryCafe24CommandBridge !== 'function') {
+          throw new Error('factory-cafe24 command bridge capability가 매니페스트에서 발견되지 않았습니다.');
+        }
+        if (typeof factoryControlBridgeNamespace?.installFactoryControlCommandBridge !== 'function') {
+          throw new Error('factory-control command bridge capability가 매니페스트에서 발견되지 않았습니다.');
+        }
+        cafe24BridgeNamespace.installFactoryCafe24CommandBridge(window, {
+          requestClassicRuntime: payload => requestClassicRuntime('factory-cafe24-command', payload),
+        });
+        factoryControlBridgeNamespace.installFactoryControlCommandBridge(window, {
+          requestClassicRuntime: payload => requestClassicRuntime('factory-control-command', payload),
+        });
+        const cafe24CommandBridge = window.__KUASANGSE_BATCH_CONTROL_COMMAND_BRIDGE__;
+        const factoryControlCommandBridge = window.__KUASANGSE_FACTORY_CONTROL_COMMAND_BRIDGE__;
+        const commandBridge = Object.freeze({
+          inspect: (...args) => cafe24CommandBridge.inspect(...args),
+          verify: (...args) => cafe24CommandBridge.verify(...args),
+          run: (kind, ...args) => (
+            kind === 'factory-control'
+              ? factoryControlCommandBridge.run(kind, ...args)
+              : cafe24CommandBridge.run(kind, ...args)
+          ),
+        });
+        const workerReceipt = workerNamespace.installBatchControlWorker(window, {
+          apiBase: workerApiUrl.origin,
+          workerId: `factory-worker-${buildId}`,
+          runtimeBuildId: buildId,
+          commandBridge,
+          projectionBridge: factoryControlCommandBridge,
+          fetchImpl: window.fetch.bind(window),
+          setIntervalImpl: window.setInterval.bind(window),
+          clearIntervalImpl: window.clearInterval.bind(window),
+        });
+        workerReceipt.worker.startHeartbeat();
+        workerReceipt.worker.startSessionHeartbeat();
+        workerReceipt.worker.startPolling();
+        workerReceipt.worker.startProjectionPolling();
       }
 
       const loadedAt = new Date().toISOString();
@@ -243,7 +438,8 @@
 
       setTimeout(() => {
         const root = document.getElementById('app');
-        if (!root?.querySelector('.app')) {
+        const expectedRootSelector = isBatchWorker ? '.batch-worker-shell' : '.app';
+        if (!root?.querySelector(expectedRootSelector)) {
           showLoadError(new Error('스크립트는 로드됐지만 화면 렌더가 완료되지 않았습니다.'));
         }
       }, 12000);

@@ -76,7 +76,7 @@ export function createPublishFactoryTab(capabilities = {}) {
     const result = direct
       ? direct(value)
       : generic
-        ? generic(actionName)
+        ? generic(value)
         : undefined;
     if (!result || typeof result.then !== 'function') {
       const committedToken = result?.schema === 'factory-runtime-command-receipt:v1'

@@ -168,6 +168,34 @@ async function main() {
   try {
     await preparePage(pageA, 1280, 480);
     await preparePage(pageB, 390, 600);
+    await evaluate(pageB, `(() => {
+      window.__AUTH_SCOPE_TRACE__ = [];
+      const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
+      window.__AUTH_SCOPE_TRACE_UNSUB__?.();
+      window.__AUTH_SCOPE_TRACE_UNSUB__ = lock.subscribe(snapshot => {
+        window.__AUTH_SCOPE_TRACE__.push({
+          type: 'snapshot',
+          at: Date.now(),
+          mode: snapshot.mode,
+          scopeId: snapshot.scopeId,
+          reasonCode: snapshot.reasonCode,
+        });
+      });
+      const original = window.ensureWorkspaceEditAuthority;
+      window.ensureWorkspaceEditAuthority = async function tracedEnsureWorkspaceEditAuthority(...args) {
+        const before = lock.snapshot();
+        const stack = String(new Error().stack || '').split('\\n').slice(1, 7);
+        try {
+          return await original.apply(this, args);
+        } finally {
+          const after = lock.snapshot();
+          window.__AUTH_SCOPE_TRACE__.push({
+            type: 'ensure', at: Date.now(), args, before, after, stack,
+          });
+        }
+      };
+      return true;
+    })()`);
     const authorityA = await setWorkspace(pageA, projectId, '창 A의 매우 긴 작업파일 이름 - 슬라브 나비 수저집 색상 옵션 전체 수정본');
     const authorityB = await setWorkspace(pageB, projectId, '창 B의 매우 긴 작업파일 이름 - VM 상세 수정과 사이즈 확인 완료 최종본');
     const refreshBefore = await workspaceIdentity(pageB);
@@ -201,6 +229,29 @@ async function main() {
         revision: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().revision,
       };
     }`);
+    const preTakeoverDebug = await evaluate(pageB, `(async () => {
+      const scopeId = ${JSON.stringify(scopeId)};
+      const restored = await window.workspacePersistenceApi().restore({
+        scopeId,
+        sources: ['server'],
+      });
+      const snapshot = restored?.snapshot || null;
+      return {
+        currentScope: getCurrentLastWorkWorkspaceScope(),
+        authority: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot(),
+        serverLastWorkHydrated,
+        serverLastWorkHydrating,
+        hasHydrationPromise: !!serverLastWorkHydrationPromise,
+        restored: {
+          source: restored?.source || '',
+          revision: restored?.revision || null,
+          hasSnapshot: !!snapshot,
+          matchesScope: !!snapshot && lastWorkSnapshotMatchesWorkspaceScope(snapshot, scopeId),
+          snapshotRevision: snapshot ? workspaceSnapshotRevision(snapshot) : null,
+          snapshotProjectId: snapshot?.assets?.currentProjectId || snapshot?.lightweight?.currentProjectId || snapshot?.currentProjectId || '',
+        },
+      };
+    })()`);
     await evaluate(pageB, `(() => {
       window.confirm = () => true;
       document.querySelector('[data-workspace-authority-action="takeover"]').click();
@@ -213,7 +264,7 @@ async function main() {
       buttonDisabled: document.querySelector('[data-workspace-authority-action="takeover"]')?.disabled,
       banner: document.querySelector('.workspace-authority-banner')?.textContent || '',
     })`);
-    console.log(JSON.stringify({ authorityA, authorityB, savedA, takeoverDebug }, null, 2));
+    console.log(JSON.stringify({ authorityA, authorityB, savedA, preTakeoverDebug, takeoverDebug }, null, 2));
     await waitFor(pageB, `window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().mode === 'editing'
       && window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().revision >= ${Number(savedA.revision)}`, 30_000);
     await waitFor(pageA, `window.__KUASANGSE_WORKSPACE_LOCK__.snapshot().mode === 'readonly'`, 15_000);
@@ -256,6 +307,7 @@ async function main() {
       || '';
 
     const readonlyBefore = await workspaceIdentity(pageB);
+    const scopeTrace = await evaluate(pageB, 'window.__AUTH_SCOPE_TRACE__ || []');
     await evaluate(pageB, `(() => {
       document.querySelector('[data-workspace-authority-action="readonly"]')?.click();
       return true;
@@ -315,7 +367,7 @@ async function main() {
     const offlineAfter = await workspaceIdentity(pageC);
     const offlineConfirmCount = await evaluate(pageC, 'window.__TASK4_CONFIRM_COUNT__ || 0');
     const offlineAction = { before: offlineBefore, after: offlineAfter, confirmCount: offlineConfirmCount };
-    console.log(JSON.stringify({ refreshAction, readonlyAction, saveCopyAction, offlineAction }, null, 2));
+    console.log(JSON.stringify({ refreshAction, readonlyAction, saveCopyAction, offlineAction, scopeTrace }, null, 2));
     const requiredActions = ['상태 새로고침', '읽기 전용으로 열기', '새 작업으로 저장', '편집권 가져오기'];
     const checks = [
       { ok: authorityA.mode === 'editing', message: '창 A가 최초 편집권을 얻지 못했습니다.' },
@@ -323,7 +375,7 @@ async function main() {
       { ok: savedA.accepted && savedA.clean && savedA.revision >= 1, message: '창 A 기준본 저장이 실패했습니다.' },
       { ok: postTakeoverA.mode === 'readonly', message: '인계 후 창 A가 읽기 전용으로 전환되지 않았습니다.' },
       { ok: !postTakeoverA.accepted, message: '인계 후 stale 창 A 저장이 허용되었습니다.' },
-      { ok: postTakeoverA.inert && postTakeoverA.saveDisabled, message: '읽기 전용 UI가 명령을 비활성화하지 않았습니다.' },
+      { ok: !postTakeoverA.inert && postTakeoverA.saveDisabled, message: '원본 문서 편집권 상실이 독립 탭 브랜치까지 잠그거나 stale 덮어쓰기를 허용했습니다.' },
       { ok: postTakeoverB.authority.mode === 'editing' && postTakeoverB.authority.revision >= savedA.revision, message: '창 B 인계 또는 최신 revision 복원이 실패했습니다.' },
       { ok: postTakeoverB.productName === acceptedName, message: '인계 후 창 B가 최신 accepted snapshot을 복원하지 않았습니다.' },
       { ok: server.revision >= savedA.revision && serverProductName === acceptedName, message: 'stale 창 A가 서버 기준본을 오염시켰습니다.' },

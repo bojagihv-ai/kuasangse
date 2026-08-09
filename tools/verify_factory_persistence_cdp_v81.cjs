@@ -27,9 +27,11 @@ function svgData(label, color = '#ef4444', bytes = 180000) {
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const cdpRuntime = await ensureCdp(CDP_URL);
+  let cdp = null;
+  try {
   const target = (cdpRuntime.targets || []).find(item => item.type === 'page') || cdpRuntime.targets?.[0];
   if (!target?.webSocketDebuggerUrl) throw new Error('CDP page target not found');
-  const cdp = connectCdp(target.webSocketDebuggerUrl);
+  cdp = connectCdp(target.webSocketDebuggerUrl);
   await cdp.opened;
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
@@ -43,7 +45,17 @@ async function main() {
   });
 
   await cdp.send('Page.navigate', { url: APP_URL });
-  await waitFor(cdp, '!!(window.state && window.render && window.factoryState)', 60000);
+  await waitFor(
+    cdp,
+    `!!(window.state
+      && window.render
+      && window.factoryState
+      && window.__KUASANGSE_APP_LOADER__?.ready === true
+      && (typeof sessionAssetsHydrated === 'undefined' || sessionAssetsHydrated === true)
+      && (typeof serverLastWorkHydrating === 'undefined' || serverLastWorkHydrating === false)
+      && (typeof classicRuntimeHydrationActive === 'undefined' || classicRuntimeHydrationActive === false))`,
+    60000,
+  );
 
   const seed = String(Date.now());
   const images = {
@@ -147,6 +159,15 @@ async function main() {
       });
     }
     if (authority.mode !== 'editing') throw new Error('generated image authority acquisition failed');
+    const revisionEvents = [];
+    const unsubscribeRevisionEvents = typeof factoryRuntimeStore?.subscribe === 'function'
+      ? factoryRuntimeStore.subscribe((_snapshot, change) => revisionEvents.push({
+        commandName: change?.commandName || '',
+        owner: change?.owner || '',
+        previousRevision: change?.previousRevision,
+        revision: change?.revision,
+      }))
+      : () => {};
 
     const stageImages = [
       ['hero', images.hero, '보존 대표이미지'],
@@ -169,7 +190,12 @@ async function main() {
       });
       if (!asset) throw new Error(stageId + ' 후보 등록 실패');
       if (factory.stages[stageId]) factory.stages[stageId].selectedAssetIds = window.uniqueApiKeys([...(factory.stages[stageId].selectedAssetIds || []), asset.id]);
-      const ok = await window.factoryQueueLocalArchiveAsset(asset, 'persistence-v81');
+      let ok;
+      try {
+        ok = await window.factoryQueueLocalArchiveAsset(asset, 'persistence-v81');
+      } catch (error) {
+        throw new Error(String(error?.message || error) + '; revisionEvents=' + JSON.stringify(revisionEvents));
+      }
       savedAssets.push({ stageId, assetId: asset.id, ok });
     }
 
@@ -187,17 +213,28 @@ async function main() {
       metadata: { productName, productKey, currentRunId: runId, generationRunId: runId, inputImageFingerprint: inputFp, stageId: sectionStageId, sectionId: section.id },
       sourceMap: { productName, productKey, currentRunId: runId, generationRunId: runId, inputImageFingerprint: inputFp, stageId: sectionStageId, sectionId: section.id, source: 'persistence-v81' },
     };
-    const sectionOk = await window.factoryQueueLocalArchiveAsset(sectionAsset, 'persistence-v81-section');
+    let sectionOk;
+    try {
+      sectionOk = await window.factoryQueueLocalArchiveAsset(sectionAsset, 'persistence-v81-section');
+    } catch (error) {
+      throw new Error(String(error?.message || error) + '; revisionEvents=' + JSON.stringify(revisionEvents));
+    }
     savedAssets.push({ stageId: sectionStageId, assetId: sectionAsset.id, ok: sectionOk });
 
-    const inputOk = await window.factoryArchiveCurrentInputImage({
-      base64: inputBase64,
-      mime: 'image/svg+xml',
-      preview: images.input,
-      name: 'persistence-input.svg',
-      inputImageFingerprint: inputFp,
-      uploadedAt: Date.now(),
-    }, { reason: 'persistence-v81-input' });
+    let inputOk;
+    try {
+      inputOk = await window.factoryArchiveCurrentInputImage({
+        base64: inputBase64,
+        mime: 'image/svg+xml',
+        preview: images.input,
+        name: 'persistence-input.svg',
+        inputImageFingerprint: inputFp,
+        uploadedAt: Date.now(),
+      }, { reason: 'persistence-v81-input' });
+    } catch (error) {
+      throw new Error(String(error?.message || error) + '; revisionEvents=' + JSON.stringify(revisionEvents));
+    }
+    unsubscribeRevisionEvents();
 
     if (typeof window.factoryRefreshLocalArchiveAssets === 'function') {
       await window.factoryRefreshLocalArchiveAssets({ force: true, silent: true, limit: 180 });
@@ -363,8 +400,6 @@ async function main() {
   const shot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   const screenshot = path.join(OUT_DIR, 'factory-persistence-cdp-v81.png');
   fs.writeFileSync(screenshot, Buffer.from(shot.data, 'base64'));
-  await cdp.close();
-  await cdpRuntime.cleanup();
 
   const savedArchiveCount = [
     saved.inputArchiveId,
@@ -393,6 +428,10 @@ async function main() {
   ]);
 
   console.log(JSON.stringify({ url: APP_URL, saved, restored, screenshot, resultPath }, null, 2));
+  } finally {
+    try { await cdp?.close(); } catch (_) {}
+    try { await cdpRuntime.cleanup?.(); } catch (_) {}
+  }
 }
 
 main().catch(error => {

@@ -11,7 +11,6 @@ const {
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
-const BACKEND_BASE = process.env.KUASANGSE_BACKEND_BASE || process.env.KUASANGSE_BACKEND_URL || 'http://127.0.0.1:5050';
 
 async function newPage() {
   const target = await fetchJson(`${CDP_URL}/json/new?${encodeURIComponent('about:blank')}`, { method: 'PUT' });
@@ -34,7 +33,7 @@ async function newPage() {
   return { cdp, target };
 }
 
-async function saveRevision(cdp, workspaceId) {
+async function saveRevision(cdp, workspaceId, marker) {
   return evaluateFactoryCdpFixture(cdp, `async ({
     setAppState,
     readAppState,
@@ -45,15 +44,20 @@ async function saveRevision(cdp, workspaceId) {
       currentProjectId: ${JSON.stringify(workspaceId)},
       currentProjectName: 'Three session revision gate',
     });
-    const scopeId = 'project:' + ${JSON.stringify(workspaceId)};
+    const scopeId = getCurrentLastWorkWorkspaceScope();
     const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
-    const ownerId = 'revision gate · ' + lock.snapshot().sessionId.slice(-6);
-    const authority = await lock.acquire({ scopeId, ownerId, confirmedTakeover: true });
-    if (authority.mode !== 'editing') throw new Error('revision gate authority acquisition failed');
+    const authority = lock.snapshot();
+    if (!scopeId.startsWith('draft:')) throw new Error('tab-local draft scope required');
+    if (!['editing', 'offline-edit'].includes(authority.mode) || authority.scopeId !== scopeId) {
+      throw new Error('tab-local draft authority required');
+    }
     const factory = cloneFactory();
     factory.workspace = { ...(factory.workspace || {}), id: ${JSON.stringify(workspaceId)} };
     factory.currentProjectId = ${JSON.stringify(workspaceId)};
+    factory.product = { ...(factory.product || {}), productName: ${JSON.stringify(marker)} };
     replaceFactory(factory);
+    setAppState({ productName: ${JSON.stringify(marker)} });
+    await settleWorkspaceScopeTransitionPersistence();
     const beforeCurrent = window.__KUASANGSE_WORKSPACE_REVISION__.current(scopeId);
     let persistenceCompletion = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -71,8 +75,11 @@ async function saveRevision(cdp, workspaceId) {
       beforeCurrent,
       revision: window.__KUASANGSE_WORKSPACE_REVISION__.current(scopeId),
       stateRevision: readAppState().workspaceRevision || null,
-      storedRevision: JSON.parse(localStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
+      storedRevision: JSON.parse(sessionStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
+      sharedActiveSnapshot: localStorage.getItem('pdp_session'),
       authority: lock.snapshot(),
+      branch: currentWorkspaceBranch(scopeId, ${JSON.stringify(workspaceId)}),
+      productName: readAppState().productName,
       completionWasPublished,
       completionClearedAfterAwait: persistentStateSavePromise === null,
       persistenceCommitted: persisted === true,
@@ -81,97 +88,76 @@ async function saveRevision(cdp, workspaceId) {
   }`);
 }
 
-async function waitForRevisionConvergence(cdp, scopeId, expectedRevision, timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs;
-  let last = null;
-  while (Date.now() < deadline) {
-    const [browser, authority, lastWork] = await Promise.all([
-      evaluate(cdp, `(() => ({
-        current: window.__KUASANGSE_WORKSPACE_REVISION__.current(${JSON.stringify(scopeId)}),
-        stored: JSON.parse(localStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
-        authority: window.__KUASANGSE_WORKSPACE_LOCK__.snapshot(),
-        persistenceSaving: persistentStateSaving,
-        persistencePromisePending: !!persistentStateSavePromise,
-      }))()`),
-      fetchJson(`${BACKEND_BASE}/api/workspace-lock/status?workspaceId=${encodeURIComponent(scopeId)}`),
-      fetchJson(`${BACKEND_BASE}/api/last-work?workspaceId=${encodeURIComponent(scopeId)}`),
-    ]);
-    last = { browser, authority, lastWork };
-    const lastWorkRevision = lastWork?.snapshot?.persistenceEnvelope?.metadata?.revision
-      || lastWork?.snapshot?.workspaceRevision
-      || null;
-    if (
-      browser.current?.counter === expectedRevision.counter
-      && browser.current?.writerId === expectedRevision.writerId
-      && Number(authority?.revision) === expectedRevision.counter
-      && Number(lastWork?.revision) === expectedRevision.counter
-      && Number(lastWorkRevision?.counter) === expectedRevision.counter
-      && !browser.persistenceSaving
-      && !browser.persistencePromisePending
-    ) return {
-      browser,
-      authority: {
-        state: authority.state,
-        revision: authority.revision,
-        fencingToken: authority.fencingToken,
-      },
-      lastWork: {
-        revision: lastWork.revision,
-        snapshotRevision: lastWorkRevision,
-      },
-    };
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  throw new Error(`revision convergence timeout: ${JSON.stringify(last)}`);
-}
-
 async function main() {
   const runtime = await ensureCdp(CDP_URL);
   const pages = [];
   try {
     pages.push(await newPage(), await newPage(), await newPage());
     const workspaceId = `regression-three-session-v230-${Date.now()}`;
-    const scopeId = `project:${workspaceId}`;
     const saves = [
-      await saveRevision(pages[0].cdp, workspaceId),
-      await saveRevision(pages[1].cdp, workspaceId),
-      await saveRevision(pages[2].cdp, workspaceId),
+      await saveRevision(pages[0].cdp, workspaceId, 'branch-a'),
+      await saveRevision(pages[1].cdp, workspaceId, 'branch-b'),
+      await saveRevision(pages[2].cdp, workspaceId, 'branch-c'),
     ];
     const [a, b, c] = saves.map(save => save.revision);
+    const scopeIds = saves.map(save => save.authority.scopeId);
+    const documentScope = `project:${workspaceId}`;
 
-    assert.equal(a.scopeId, scopeId);
-    assert.equal(b.counter, a.counter + 1);
-    assert.equal(c.counter, b.counter + 1);
+    assert.equal(new Set(scopeIds).size, 3);
+    scopeIds.forEach(scopeId => assert.match(scopeId, /^draft:/));
+    assert.deepEqual(saves.map(save => save.productName), ['branch-a', 'branch-b', 'branch-c']);
+    saves.forEach(save => {
+      assert.equal(save.revision.scopeId, save.authority.scopeId);
+      assert.equal(save.storedRevision.scopeId, save.authority.scopeId);
+      assert.equal(save.branch.scopeId, save.authority.scopeId);
+      assert.equal(save.branch.documentScopeId, documentScope);
+      assert.equal(save.branch.documentId, workspaceId);
+    });
     assert.equal(new Set([a.writerId, b.writerId, c.writerId]).size, 3);
     saves.forEach((save, index) => {
       assert.equal(save.completionWasPublished, true, `save ${index + 1} completion was not published`);
       assert.equal(save.completionClearedAfterAwait, true, `save ${index + 1} completion did not clear`);
       assert.equal(save.persistenceCommitted, true, `save ${index + 1} was not committed`);
+      assert.equal(save.sharedActiveSnapshot, null, `save ${index + 1} leaked active work into shared localStorage`);
     });
 
-    const convergence = await waitForRevisionConvergence(pages[0].cdp, scopeId, c);
+    const dResult = await saveRevision(pages[0].cdp, workspaceId, 'branch-a-second-save');
+    const d = dResult.revision;
+    assert.deepEqual(dResult.beforeCurrent, a);
+    assert.equal(d.counter, a.counter + 1);
+    assert.equal(d.writerId, a.writerId);
+    assert.equal(d.scopeId, a.scopeId);
+
+    const branchState = await Promise.all(pages.map((page, index) => evaluate(page.cdp, `(() => ({
+      current: window.__KUASANGSE_WORKSPACE_REVISION__.current(${JSON.stringify(scopeIds[index])}),
+      stored: JSON.parse(sessionStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
+      productName: state.productName,
+      sharedActiveSnapshot: localStorage.getItem('pdp_session'),
+    }))()`)));
+    assert.deepEqual(branchState[0].current, d);
+    assert.deepEqual(branchState[1].current, b);
+    assert.deepEqual(branchState[2].current, c);
+    assert.deepEqual(branchState.map(item => item.productName), ['branch-a-second-save', 'branch-b', 'branch-c']);
+    branchState.forEach(item => assert.equal(item.sharedActiveSnapshot, null));
 
     const staleCheck = await evaluate(pages[0].cdp, `(() => {
       const api = window.__KUASANGSE_WORKSPACE_REVISION__;
       return {
-        current: api.current(${JSON.stringify(scopeId)}),
-        acceptsA: api.shouldApply(${JSON.stringify(a)}, ${JSON.stringify(scopeId)}, { allowEqual: true }),
-        acceptsB: api.shouldApply(${JSON.stringify(b)}, ${JSON.stringify(scopeId)}, { allowEqual: true }),
-        acceptsC: api.shouldApply(${JSON.stringify(c)}, ${JSON.stringify(scopeId)}, { allowEqual: true }),
-        stored: JSON.parse(localStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
+        current: api.current(${JSON.stringify(scopeIds[0])}),
+        acceptsA: api.shouldApply(${JSON.stringify(a)}, ${JSON.stringify(scopeIds[0])}, { allowEqual: true }),
+        acceptsD: api.shouldApply(${JSON.stringify(d)}, ${JSON.stringify(scopeIds[0])}, { allowEqual: true }),
+        acceptsForeignB: api.shouldApply(${JSON.stringify(b)}, ${JSON.stringify(scopeIds[0])}, { allowEqual: true }),
+        stored: JSON.parse(sessionStorage.getItem('pdp_session') || 'null')?.workspaceRevision || null,
+        sharedActiveSnapshot: localStorage.getItem('pdp_session'),
       };
     })()`);
-    assert.deepEqual(staleCheck.current, c);
+    assert.deepEqual(staleCheck.current, d);
     assert.equal(staleCheck.acceptsA, false);
-    assert.equal(staleCheck.acceptsB, false);
-    assert.equal(staleCheck.acceptsC, true);
-    assert.deepEqual(staleCheck.stored, c);
-
-    const dResult = await saveRevision(pages[0].cdp, workspaceId);
-    const d = dResult.revision;
-    assert.equal(d.counter, c.counter + 1);
-    assert.equal(d.writerId, a.writerId);
-    console.log(JSON.stringify({ ok: true, scopeId, revisions: { a, b, c, d }, saves, convergence, dResult, staleCheck }, null, 2));
+    assert.equal(staleCheck.acceptsD, true);
+    assert.equal(staleCheck.acceptsForeignB, false);
+    assert.deepEqual(staleCheck.stored, d);
+    assert.equal(staleCheck.sharedActiveSnapshot, null);
+    console.log(JSON.stringify({ ok: true, documentScope, scopeIds, revisions: { a, b, c, d }, saves, dResult, branchState, staleCheck }, null, 2));
   } finally {
     for (const page of pages) {
       try { await fetch(`${CDP_URL}/json/close/${page.target.id}`); } catch (_) {}

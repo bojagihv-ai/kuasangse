@@ -10,6 +10,7 @@ export function renderCompetitorPlanView(view, helpers) {
     sectionBasisOptionLabel,
     renderPlanInstructionReadable,
     renderPlanImprovementBridge,
+    getSectionPromptResolutionInfo,
     productAnalysisGenerationBlockReason,
     disabledAttr,
     escAttr,
@@ -39,7 +40,7 @@ export function renderCompetitorPlanView(view, helpers) {
       </div>`:''}
 
       <div class="comp-section-list">
-        ${orderedSections().map(s => {
+        ${orderedSections({ includeHidden: true, includeAutoExcluded: true }).map(s => {
           const rec = recs.find(r=>r.section_id===s.id) || {};
           const ed = edits[s.id] || {};
           const enabled = ed.enabled !== undefined ? ed.enabled : (rec.enabled !== false);
@@ -48,6 +49,35 @@ export function renderCompetitorPlanView(view, helpers) {
           const doneContent = view.sectionContents[s.id];
           const modeInfo = getSectionGenerationModeInfo(s.id);
           const basisInfo = typeof sectionBasisDisplayInfo === 'function' ? sectionBasisDisplayInfo(s.id) : getSectionBasisModeInfo(s.id);
+          const promptInfo = typeof getSectionPromptResolutionInfo === 'function'
+            ? getSectionPromptResolutionInfo(s.id)
+            : {
+                version: 'section-prompt-v2',
+                providerVersion: 'section-content-provider-v1',
+                providerLabel: '생성 API',
+                basisId: basisInfo.id,
+                basisLabel: basisInfo.label,
+                modeId: modeInfo.id,
+                modeLabel: modeInfo.label,
+                requestInputs: instructions,
+                resolvedPrompt: instructions,
+                competitorStatus: '프롬프트 조립 상태를 확인할 수 없습니다.',
+                sources: [],
+              };
+          const generationBlockReason = !enabled
+            ? '이 섹션을 활성화해야 개별 생성할 수 있습니다.'
+            : (!hasAnalysis
+                ? (typeof productAnalysisGenerationBlockReason === 'function'
+                    ? productAnalysisGenerationBlockReason(s.id)
+                    : '현재 제품 분석이 필요합니다.')
+                : '');
+          const generationButtonAttrs = `${generationBlockReason ? `data-block-reason="${escAttr(generationBlockReason)}" ` : ''}${disabledAttr(!!generationBlockReason, generationBlockReason)}`;
+          const generationButton = st === 'error'
+            ? `<button class="btn-sm comp-section-retry" data-comp-gen-section="${s.id}" ${generationButtonAttrs}>재시도</button>`
+            : doneContent
+              ? `<span class="status-chip ok"><span class="material-icons-outlined" style="font-size:14px">check_circle</span> 완료</span>
+                 <button class="btn-sm" data-comp-gen-section="${s.id}" ${generationButtonAttrs}><span class="material-icons-outlined" style="font-size:14px">play_arrow</span>다시 생성</button>`
+              : `<button class="btn-sm" data-comp-gen-section="${s.id}" ${generationButtonAttrs}><span class="material-icons-outlined" style="font-size:14px">play_arrow</span>생성</button>`;
           return `<div class="comp-section-card ${enabled?'':'comp-section-disabled'}">
             <div class="comp-plan-head">
               <label class="comp-toggle-wrap">
@@ -57,16 +87,9 @@ export function renderCompetitorPlanView(view, helpers) {
               <span style="font-size:18px">${s.icon||'📄'}</span>
               <div class="comp-plan-title">${s.n}. ${s.name}</div>
               <div class="comp-plan-actions">
-                ${!hasAnalysis ? '' :
-                  st === 'loading'
-                    ? `<span class="status-chip busy"><span class="spinner" style="width:13px;height:13px;border-width:2px"></span> 생성 중</span>`
-                    : st === 'error'
-                      ? `<button class="btn-sm" data-comp-gen-section="${s.id}" style="background:rgba(229,62,62,.15);color:#e53e3e;border-color:#e53e3e">재시도</button>`
-                      : doneContent
-                        ? `<span class="status-chip ok"><span class="material-icons-outlined" style="font-size:14px">check_circle</span> 완료</span>
-                           <button class="btn-sm" data-comp-gen-section="${s.id}"><span class="material-icons-outlined" style="font-size:14px">play_arrow</span>다시 생성</button>`
-                        : `<button class="btn-sm" data-comp-gen-section="${s.id}"><span class="material-icons-outlined" style="font-size:14px">play_arrow</span>생성</button>`
-                }
+                ${st === 'loading'
+                  ? `<span class="status-chip busy"><span class="spinner" style="width:13px;height:13px;border-width:2px"></span> 생성 중</span>`
+                  : generationButton}
                 <span class="section-mode-label" title="이 섹션을 만들 때 어떤 지시를 우선 볼지 선택합니다."><span class="material-icons-outlined" style="font-size:14px">rule</span>기준</span>
                 <select class="section-basis-select" data-section-basis="${s.id}" title="${escAttr(getSectionBasisDetail(s.id))}" >
                   ${SECTION_BASIS_MODES.map(m => `<option value="${m.id}" ${basisInfo.id === m.id ? 'selected' : ''}>${escapeHtml(typeof sectionBasisOptionLabel === 'function' ? sectionBasisOptionLabel(m, s.id) : m.label)}</option>`).join('')}
@@ -87,10 +110,42 @@ export function renderCompetitorPlanView(view, helpers) {
             </div>
             ${renderPlanInstructionReadable(instructions, enabled)}
             ${renderPlanImprovementBridge(s.id, rec, instructions, enabled)}
+            <div class="comp-prompt-contract" data-prompt-pipeline-version="${escAttr(promptInfo.version)}" data-provider-prompt-version="${escAttr(promptInfo.providerVersion)}" data-prompt-basis="${escAttr(promptInfo.basisId)}">
+              <div class="comp-prompt-contract-head">
+                <div>
+                  <span class="material-icons-outlined">account_tree</span>
+                  <strong>최종 provider prompt 조립</strong>
+                </div>
+                <div class="comp-prompt-contract-badges">
+                  <span>${escapeHtml(promptInfo.version)}</span>
+                  <span>${escapeHtml(promptInfo.providerVersion)}</span>
+                  <span>${escapeHtml(promptInfo.providerLabel)}</span>
+                  <span>${escapeHtml(promptInfo.basisLabel)}</span>
+                  <span>${escapeHtml(promptInfo.modeLabel)}</span>
+                </div>
+              </div>
+              <div class="comp-prompt-source-flow" aria-label="생성 요청 입력 조립 소스">
+                ${(promptInfo.sources || []).map(source => `<span class="comp-prompt-source ${source.active ? 'active' : 'inactive'}" data-prompt-source="${escAttr(source.id)}" data-active="${source.active ? 'true' : 'false'}">${escapeHtml(source.label)}</span>`).join('<span class="comp-prompt-plus" aria-hidden="true">+</span>')}
+                <span class="comp-prompt-arrow" aria-hidden="true">→</span>
+                <strong>${escapeHtml(promptInfo.providerLabel)}</strong>
+              </div>
+              <div class="comp-prompt-competitor-status">
+                <span class="material-icons-outlined">manage_search</span>
+                ${escapeHtml(promptInfo.competitorStatus)}
+              </div>
+              <details class="comp-prompt-resolved">
+                <summary>가변 요청 입력 보기</summary>
+                <pre>${escapeHtml(promptInfo.requestInputs || '현재 생성에 전달할 가변 요청 입력이 없습니다.')}</pre>
+              </details>
+              <details class="comp-prompt-resolved">
+                <summary>실제 provider 최종 prompt 보기</summary>
+                <pre>${escapeHtml(promptInfo.resolvedPrompt || '현재 생성에 전달할 요청 입력이 없습니다.')}</pre>
+              </details>
+            </div>
             <details class="comp-plan-edit" open>
-              <summary><span class="material-icons-outlined" style="font-size:14px">edit_note</span> 위 내용을 반영한 최종 프롬프트 (편집 가능)</summary>
+              <summary><span class="material-icons-outlined" style="font-size:14px">edit_note</span> 경쟁사 섹션 플랜 원문 (편집 가능)</summary>
               <textarea class="comp-plan-input" data-sid="${s.id}" rows="4"
-                placeholder="경쟁사 분석, 개선사항, 우리 제품 반영 내용을 합친 최종 생성 프롬프트를 입력하세요..."
+                placeholder="경쟁사 분석에서 이 섹션에 반영할 구조·개선 지시를 입력하세요. 실제 최종 프롬프트는 위 조립 패널에서 확인합니다."
                 style="${!enabled?'opacity:0.4;':''}">${escapeHtml(instructions)}</textarea>
             </details>
           </div>`;

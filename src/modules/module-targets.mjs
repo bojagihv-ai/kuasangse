@@ -10,6 +10,7 @@ export const SIDEBAR_TARGETS = Object.freeze([
   ['factory', 'src/menus/factory/factory-menu.mjs', 'factory', 'menu:v1 + factory composition', 'MENU-FACTORY'],
   ['automation', 'src/menus/automation-menu.mjs', 'automation', 'menu:v1 + automation commands', 'MENU-AUTO'],
   ['modelsettings', 'src/menus/modelsettings-menu.mjs', 'app-preferences', 'menu:v1 + settings commands', 'MENU-SETTINGS'],
+  ['reports', 'src/menus/reports-menu.mjs', 'composition', 'menu:v1 + report commands', 'MENU-REPORTS'],
   ['manual', 'src/menus/manual-menu.mjs', 'manual-ui', 'menu:v1', 'MENU-MANUAL'],
 ]);
 

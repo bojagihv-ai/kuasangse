@@ -160,7 +160,7 @@ test('menu:v1 registry는 factory가 검증한 완전한 contract만 허용한�
   );
 });
 
-test('module registry는 12 sidebar와 7 factory-tab target descriptor를 완전하고 유일한 순서로 선언한다', async () => {
+test('module registry는 13 sidebar와 7 factory-tab target descriptor를 완전하고 유일한 순서로 선언한다', async () => {
   const {
     FACTORY_TAB_MODULE_DESCRIPTORS,
     SIDEBAR_MODULE_DESCRIPTORS,
@@ -168,12 +168,12 @@ test('module registry는 12 sidebar와 7 factory-tab target descriptor를 완전
     createModuleRegistry,
   } = await import(moduleUrl('src/modules/module-registry.mjs'));
 
-  assert.equal(SIDEBAR_MODULE_DESCRIPTORS.length, 12);
+  assert.equal(SIDEBAR_MODULE_DESCRIPTORS.length, 13);
   assert.equal(FACTORY_TAB_MODULE_DESCRIPTORS.length, 7);
-  assert.equal(TARGET_MODULE_DESCRIPTORS.length, 19);
+  assert.equal(TARGET_MODULE_DESCRIPTORS.length, 20);
   assert.deepEqual(SIDEBAR_MODULE_DESCRIPTORS.map(item => item.id), [
     'upload', 'analyzing', 'competitor', 'sections', 'generating', 'preview',
-    'imagecuts', 'optionsorter', 'factory', 'automation', 'modelsettings', 'manual',
+    'imagecuts', 'optionsorter', 'factory', 'automation', 'modelsettings', 'reports', 'manual',
   ]);
   assert.deepEqual(FACTORY_TAB_MODULE_DESCRIPTORS.map(item => item.id), [
     'factory/start', 'factory/db', 'factory/fields', 'factory/competitor',
@@ -181,7 +181,7 @@ test('module registry는 12 sidebar와 7 factory-tab target descriptor를 완전
   ]);
 
   const registry = createModuleRegistry(TARGET_MODULE_DESCRIPTORS);
-  assert.equal(registry.size, 19);
+  assert.equal(registry.size, 20);
   assert.equal(registry.get('factory/publish').owner, 'cafe24');
   assert.equal(Object.isFrozen(registry.list()), true);
 

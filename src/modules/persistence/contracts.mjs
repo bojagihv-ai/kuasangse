@@ -7,13 +7,22 @@ export const PERSISTENCE_ADAPTER_NAMES = Object.freeze([
 export const RESTORE_SOURCE_PRECEDENCE = Object.freeze([
   'indexeddb', 'server', 'session', 'archive',
 ]);
+export {
+  WORK_BRANCH_SCHEMA,
+  WORK_IDENTITY_SCHEMA,
+  createWorkspaceWorkBranch,
+  createWorkspaceWorkIdentity,
+  validateWorkspaceSnapshotIdentity,
+  workspaceWorkBranchesMatch,
+  workspaceWorkIdentitiesMatch,
+} from './work-identity.mjs';
 
 export const PREFERENCE_STORAGE_KEYS = Object.freeze(new Set([
   'model_config', 'api_status_collapsed', 'section_instructions', 'image_directives',
   'brand_presets_v1', 'active_brand_preset_id', 'layout_template_v1',
   'section_generation_modes_v1', 'section_basis_modes_v1', 'section_assembly_v1',
   'competitor_tip_bank_v1', 'option_style_samples_v1', 'factory_cafe24_field_view_v1',
-  'fixed_detail_images_v1', 'cuts_prompts', 'cuts_prompts_live_backup',
+  'cuts_prompts', 'cuts_prompts_live_backup',
   'cuts_prompts_slot_backup', 'cuts_prompts_history', 'cuts_prompt_slot_count',
   'cuts_prompts_updated_at', 'cuts_size_prompts', 'cuts_size_prompt_slot_count',
   'cuts_size_prompts_updated_at', 'cuts_placement', 'factory_db_field_presets',

@@ -33,6 +33,7 @@ export function createModelSettingsController(config) {
   function updateModelConfig(patch) {
     const modelConfig = normalizeConfig({ ...currentConfig(), ...(patch || {}) });
     updatePreferences({ modelConfig });
+    savePreferences({ modelConfig: withoutEmbeddedCredentials(modelConfig) });
     requestRender();
     return modelConfig;
   }

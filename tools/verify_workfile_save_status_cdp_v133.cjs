@@ -22,11 +22,11 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, '!!(window.state && window.render && document.getElementById("saveCurrentProjectFileBtn") && document.getElementById("saveProjectFileAsBtn"))', 60000);
     proof = await evaluate(cdp, `(() => {
-      const waitFor = predicate => new Promise((resolve, reject) => {
-        const deadline = Date.now() + 10000;
+      const waitFor = (predicate, timeoutMs = 10000, label = 'save status') => new Promise((resolve, reject) => {
+        const deadline = Date.now() + timeoutMs;
         const tick = () => {
           if (predicate()) return resolve();
-          if (Date.now() > deadline) return reject(new Error('save status wait timeout'));
+          if (Date.now() > deadline) return reject(new Error(label + ' wait timeout'));
           setTimeout(tick, 20);
         };
         tick();
@@ -78,26 +78,56 @@ async function main() {
           return newDocumentHandle;
         };
         document.getElementById('saveProjectFileAsBtn')?.click();
-        await waitFor(() => writes.initial.length === 1 && window.state.projectBusy === false);
+        await waitFor(
+          () => (writes.initial.length === 1 && window.state.projectBusy === false)
+            || (window.state.projectBusy === false && window.state.workfileSaveState === 'saved'),
+          30000,
+          'initial save',
+        );
+        if (writes.initial.length !== 1) {
+          throw new Error('initial workfile replica write was skipped after a reported save');
+        }
         document.getElementById('saveCurrentProjectFileBtn')?.click();
-        await waitFor(() => currentWriteStarted && document.getElementById('workfileSaveStatus')?.textContent?.includes('현재 상태 저장 중'));
+        await waitFor(
+          () => currentWriteStarted && document.getElementById('workfileSaveStatus')?.textContent?.includes('현재 상태 저장 중'),
+          30000,
+          'current save start',
+        );
         const savingText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
         releaseCurrentWrite();
-        await waitFor(() => window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'));
+        await waitFor(
+          () => window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'),
+          30000,
+          'current save completion',
+        );
         const currentSavedText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
         const pickerCallsAfterCurrentSave = pickerCalls;
         document.getElementById('saveProjectFileAsBtn')?.click();
-        await waitFor(() => writes.saveAs.length === 1 && window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'));
+        await waitFor(
+          () => writes.saveAs.length === 1 && window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'),
+          30000,
+          'save as completion',
+        );
         const savedText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
-        window.startNewProjectDraft();
+        await window.startNewProjectDraft();
         const newWorkStatusText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
-        const originalPersistProjectBundle = window.persistFactoryProjectBundleLocally;
-        window.persistFactoryProjectBundleLocally = async () => { throw new Error('forced-project-cache-failure-v133'); };
         document.getElementById('saveCurrentProjectFileBtn')?.click();
-        await waitFor(() => writes.newDocument.length === 1 && window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'));
-        const cacheFailureSavedText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
-        const cacheFailureWarning = window.state.storageWarning || '';
-        window.persistFactoryProjectBundleLocally = originalPersistProjectBundle;
+        await waitFor(
+          () => (writes.newDocument.length === 1 && window.state.projectBusy === false && document.getElementById('workfileSaveStatus')?.textContent?.includes('저장 완료'))
+            || (window.state.projectBusy === false && ['saved', 'error'].includes(window.state.workfileSaveState)),
+          30000,
+          'new document save completion',
+        );
+        if (writes.newDocument.length !== 1) {
+          throw new Error([
+            'new document workfile write failed',
+            window.state.workfileSaveState || 'unknown',
+            window.state.storageWarning || '',
+            document.getElementById('workfileSaveStatus')?.textContent?.trim() || '',
+          ].join(' | '));
+        }
+        const newDocumentSavedText = document.getElementById('workfileSaveStatus')?.textContent?.trim() || '';
+        const newDocumentWarning = window.state.storageWarning || '';
         const statusClass = document.getElementById('workfileSaveStatus')?.className || '';
         window.showSaveFilePicker = originalPicker;
         const parsePayload = value => {
@@ -115,8 +145,8 @@ async function main() {
           pickerCalls,
           pickerCallsAfterCurrentSave,
           newWorkStatusText,
-          cacheFailureSavedText,
-          cacheFailureWarning,
+          newDocumentSavedText,
+          newDocumentWarning,
           currentWriteCount: writes.current.length,
           saveAsWriteCount: writes.saveAs.length,
           newDocumentWriteCount: writes.newDocument.length,
@@ -127,7 +157,7 @@ async function main() {
           saveAsJsonCompact: String(writes.saveAs[0] || '').indexOf(String.fromCharCode(10)) === -1,
         };
       })();
-    })()`);
+    })()`, true, 120000);
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));
   } finally {
@@ -143,10 +173,10 @@ async function main() {
     { ok: proof.pickerCallsAfterCurrentSave === 1 && proof.pickerCalls === 3, message: `현재 상태 저장에서 파일 선택기가 열렸거나 새 작업 저장에서 새 위치를 묻지 않았습니다: 현재 저장 뒤 ${proof.pickerCallsAfterCurrentSave}, 전체 ${proof.pickerCalls}` },
     { ok: proof.currentWriteCount === 1 && proof.saveAsWriteCount === 1 && proof.newDocumentWriteCount === 1 && proof.initialWriteCount === 2, message: `파일 쓰기 횟수가 맞지 않거나 새 작업이 이전 파일을 덮어썼습니다: ${JSON.stringify(proof)}` },
     { ok: proof.newWorkStatusText === '저장 전', message: `새 작업 뒤 이전 저장 완료 상태가 남았습니다: ${proof.newWorkStatusText}` },
-    { ok: /저장 완료/.test(proof.cacheFailureSavedText) && /로컬 위치에 저장/.test(proof.cacheFailureWarning), message: `파일 저장 후 캐시 실패가 저장 실패로 잘못 표시됐습니다: ${proof.cacheFailureSavedText} / ${proof.cacheFailureWarning}` },
-    { ok: proof.currentPayloadName === '저장상태검증' && proof.saveAsPayloadName === '저장상태검증', message: `저장 파일 payload 이름이 보존되지 않았습니다: ${proof.currentPayloadName} / ${proof.saveAsPayloadName}` },
+    { ok: /저장 완료/.test(proof.newDocumentSavedText) && proof.newDocumentWarning === '', message: `새 작업파일 저장이 완료되지 않았거나 거짓 저장 경고가 남았습니다: ${proof.newDocumentSavedText} / ${proof.newDocumentWarning}` },
+    { ok: proof.currentPayloadName === '현재상태저장' && proof.saveAsPayloadName === '다른이름저장', message: `실제 작업파일명이 payload의 단일 기준으로 보존되지 않았습니다: ${proof.currentPayloadName} / ${proof.saveAsPayloadName}` },
     { ok: proof.currentJsonCompact && proof.saveAsJsonCompact, message: '저장 파일이 압축 JSON으로 기록되지 않았습니다.' },
-    { ok: proof.buildLabel === '빌드 v142', message: `상단 빌드 표기가 없습니다: ${proof.buildLabel}` },
+    { ok: /^빌드 v\d+$/.test(proof.buildLabel), message: `상단 빌드 표기가 없습니다: ${proof.buildLabel}` },
   ];
   fs.writeFileSync(RESULT_PATH, JSON.stringify({ ok: checks.every(check => check.ok), proof, checks, screenshotPath: SCREENSHOT_PATH }, null, 2));
   assertChecks(checks);

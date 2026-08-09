@@ -15,6 +15,7 @@ const RENDER_LIFECYCLE = path.join(ROOT, 'src', 'shell', 'render-lifecycle.mjs')
 const FACTORY_MENU = path.join(ROOT, 'src', 'menus', 'factory', 'factory-menu.mjs');
 const FACTORY_MENU_SHELL = path.join(ROOT, 'src', 'menus', 'factory', 'factory-menu-shell.mjs');
 const FACTORY_DB_TAB = path.join(ROOT, 'src', 'menus', 'factory', 'tabs', 'db-tab.mjs');
+const COMPETITOR_REPORT_VIEW = path.join(ROOT, 'src', 'menus', 'competitor-menu-report-view.mjs');
 
 const SIDEBAR = [
   { icon: 'upload_file', label: '이미지 업로드', step: 'upload', always: true },
@@ -28,6 +29,7 @@ const SIDEBAR = [
   { icon: 'precision_manufacturing', label: '조립공장', step: 'factory', always: true },
   { icon: 'cloud_sync', label: '자동화', step: 'automation', always: true },
   { icon: 'tune', label: '모델 설정', step: 'modelsettings', always: true },
+  { icon: 'summarize', label: '작업 리포트', step: 'reports', always: true },
   { icon: 'menu_book', label: '상세페이지 자동화 설명서', step: 'manual', always: true, bottom: true },
 ];
 
@@ -88,11 +90,11 @@ function extractArray(fileSource, declaration) {
   throw new Error(`${declaration} 배열 경계를 찾지 못했습니다.`);
 }
 
-test('사이드바는 현재 12개 항목의 순서·라벨·아이콘·선언 gate를 그대로 유지한다', () => {
+test('사이드바는 현재 13개 항목의 순서·라벨·아이콘·선언 gate를 그대로 유지한다', () => {
   const sidebarSource = extractFunction(source(CORE_03), 'renderSidebar');
   const actual = extractArray(sidebarSource, 'const items =');
 
-  assert.equal(actual.length, 12);
+  assert.equal(actual.length, 13);
   assert.deepEqual(actual, SIDEBAR);
   assert.deepEqual(actual.map(item => item.step), SIDEBAR.map(item => item.step));
   assert.deepEqual(actual.map(item => item.label), SIDEBAR.map(item => item.label));
@@ -141,14 +143,72 @@ test('현재 sidebar gate는 analyzing 안내와 generating 리다이렉트만 �
   });
 });
 
-test('render는 registry의 12개 ESM route를 단일 lifecycle과 shell frame으로 연결한다', async () => {
+test('ESM shell navigation applies the sidebar gate redirect instead of the raw target', () => {
+  const bindingSource = extractFunction(source(CORE_03), 'bindShellAfterRender');
+  assert.match(
+    bindingSource,
+    /routeController\.navigate\(\s*gate\.redirect\s*\|\|\s*target,/,
+  );
+});
+
+test('경쟁사 플랜 적용 후 handoff는 legacy step 변경이 아니라 shell route를 사용한다', () => {
+  const core03 = source(CORE_03);
+  const core06 = source(CORE_06);
+  const applyPlanSource = extractFunction(core06, 'applyCompetitorPlan');
+  const competitorRuntimeStart = core03.indexOf("runtimeMenuModules.set('competitor'");
+  const competitorRuntimeEnd = core03.indexOf('renderHelpers:', competitorRuntimeStart);
+  const competitorRuntimeSource = core03.slice(competitorRuntimeStart, competitorRuntimeEnd);
+
+  assert.match(applyPlanSource, /return false;/);
+  assert.match(applyPlanSource, /return true;/);
+  assert.match(competitorRuntimeSource, /if \(!applyCompetitorPlan\(\)\) return;/);
+  assert.match(
+    competitorRuntimeSource,
+    /routeController\.navigate\(\s*value,\s*runtimeShellNavigationSnapshot\(\)/,
+  );
+  assert.doesNotMatch(competitorRuntimeSource, /state\.step\s*=\s*['"]sections['"]/);
+});
+
+test('경쟁사 이전 분석은 범위가 달라도 보기 전용으로 열리며 플랜 생성·적용은 계속 차단된다', () => {
+  const persistenceSource = source(CORE_02);
+  const runtimeSource = source(CORE_03);
+  const generationSource = source(CORE_06);
+  const reportViewSource = source(COMPETITOR_REPORT_VIEW);
+  const applySnapshotSource = extractFunction(persistenceSource, 'applyCompAnalysisSnapshot');
+  const reportActionStart = runtimeSource.indexOf('        loadSavedReport() {');
+  const reportActionEnd = runtimeSource.indexOf('        loadSavedPlan() {', reportActionStart);
+  const planActionEnd = runtimeSource.indexOf('        updatePlanEnabled(value) {', reportActionEnd);
+  assert.notEqual(reportActionStart, -1);
+  assert.notEqual(reportActionEnd, -1);
+  assert.notEqual(planActionEnd, -1);
+  const reportActionSource = runtimeSource.slice(reportActionStart, reportActionEnd);
+  const planActionSource = runtimeSource.slice(reportActionEnd, planActionEnd);
+  const competitorActionsStart = runtimeSource.indexOf("runtimeMenuModules.set('competitor'");
+  const competitorActionsEnd = runtimeSource.indexOf('        applyStylePreset(value)', competitorActionsStart);
+  const competitorNavigationActions = runtimeSource.slice(competitorActionsStart, competitorActionsEnd);
+
+  assert.match(applySnapshotSource, /options\s*=\s*\{\}/);
+  assert.match(applySnapshotSource, /options\.allowScopeMismatch\s*!==\s*true/);
+  assert.match(reportActionSource, /scopeStale/);
+  assert.match(reportActionSource, /analysisProductScope/);
+  assert.match(reportActionSource, /applyCompAnalysisSnapshot\(saved,\s*'report',\s*\{\s*allowScopeMismatch:\s*true\s*\}\)/);
+  assert.doesNotMatch(planActionSource, /allowScopeMismatch/);
+  assert.match(competitorNavigationActions, /value\s*===\s*'plan'\s*&&\s*state\.compPage\.previousAnalysisViewOnly/);
+  assert.match(competitorNavigationActions, /generatePlan\(\)\s*\{[\s\S]*?previousAnalysisViewOnly/);
+  assert.match(generationSource, /analysisResult\.analysisProductScope\s*=\s*cloneData\(sectionWorkScopeMeta\(\)\)/);
+  assert.match(reportViewSource, /analysisProductScope/);
+  assert.match(reportViewSource, /id="compViewPlan"[^>]*\$\{previousViewOnly\s*\?\s*disabledAttr/);
+  assert.match(reportViewSource, /id="compGenPlan"[^>]*\$\{previousViewOnly\s*\?\s*disabledAttr/g);
+});
+
+test('render는 registry의 13개 ESM route를 단일 lifecycle과 shell frame으로 연결한다', async () => {
   const renderSource = extractFunction(source(CORE_03), 'render');
   const frameSource = extractFunction(source(CORE_03), 'renderShellFrame');
   const shellInstall = extractFunction(source(CORE_03), 'installShellRuntimeComposition');
   const { moduleRegistry } = await import(moduleUrl(MODULE_REGISTRY));
   const descriptors = moduleRegistry.list('sidebar');
 
-  assert.equal(descriptors.length, 12);
+  assert.equal(descriptors.length, 13);
   assert.deepEqual(descriptors.map(item => item.id), SIDEBAR.map(item => item.step));
   for (const descriptor of descriptors) {
     assert.match(descriptor.implementation, /^src\/menus\/.+\.mjs$/);
@@ -160,12 +220,13 @@ test('render는 registry의 12개 ESM route를 단일 lifecycle과 shell frame�
   assert.doesNotMatch(renderSource, /state\.step\s*===\s*['"]/);
   assert.doesNotMatch(renderSource, /\brenderFactory\s*\(/);
   assert.match(shellInstall, /descriptorRegistry\.list\('sidebar'\)/);
-  assert.match(shellInstall, /sidebarDescriptors\.length !== 12/);
+  assert.match(shellInstall, /sidebarDescriptors\.length !== 13/);
 
   const patchIndex = frameSource.indexOf('patchAppHtml(root, renderShellMarkup');
+  const refreshIndex = frameSource.indexOf('menu?.refresh?.(root)');
   const bindIndex = frameSource.indexOf('bindShellAfterRender(root)');
   const hydrateIndex = frameSource.indexOf('scheduleFactoryHydrateLightImages');
-  assert.ok(patchIndex > 0 && bindIndex > patchIndex && hydrateIndex > bindIndex);
+  assert.ok(patchIndex > 0 && refreshIndex > patchIndex && bindIndex > refreshIndex && hydrateIndex > bindIndex);
   assert.equal((frameSource.match(/\bbindShellAfterRender\(root\)/g) || []).length, 1);
 });
 
@@ -228,7 +289,7 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
     ['importProjectFileBtn', '작업파일 불러오기'],
   ];
 
-  assert.match(stripSource, /class="db-workfile-strip" aria-label="DB 동기화와 작업파일"/);
+  assert.match(stripSource, /class="db-workfile-strip" aria-label="(?:DB 동기화와 작업파일|제품정보 DB·자산관 사진과 작업파일)"/);
   assert.match(stripSource, /현재 작업파일/);
   assert.match(stripSource, /\.kuasangse/);
   assert.match(stripSource, /renderWorkfileSaveStatus\(\)/);
@@ -238,6 +299,24 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
   }
   assert.ok(shellMarkupSource.indexOf('<div class="top-command-row">') < shellMarkupSource.indexOf('<div class="container'));
   assert.ok(shellMarkupSource.indexOf('renderGlobalDbSyncStatusStrip') < shellMarkupSource.indexOf('renderApiStatusStrip'));
+});
+
+test('새 작업 뒤 현재 작업파일 제목과 보관함 기준은 canonical factory runtime을 읽는다', () => {
+  const stripSource = extractFunction(source(CORE_02), 'renderGlobalDbSyncStatusStrip');
+  const identitySource = extractFunction(source(CORE_03), 'factoryCurrentProductIdentityMeta');
+
+  // 새 작업은 canonical runtime snapshot을 비우고 legacy state.factory 미러는 잠시 남길 수 있다.
+  // 현재 제목/보관함 기준이 legacy 미러를 fallback으로 읽으면 이전 상품명이 화면에 되살아난다.
+  assert.match(identitySource, /factoryRuntimeReadFactory/);
+  assert.match(stripSource, /factoryRuntimeReadFactory/);
+  assert.doesNotMatch(stripSource, /state\.factory\?\.product\?\.productName/);
+});
+
+test('고정 작업파일 카드는 대형 기본이미지를 raw data URL로 DOM에 노출하지 않는다', () => {
+  const cardSource = extractFunction(source(CORE_06), 'renderActiveWorkIdentityCard');
+
+  assert.match(cardSource, /renderFactoryLightImage\(preview,/);
+  assert.doesNotMatch(cardSource, /<img src=\\"\$\{escAttr\(preview\)\}/);
 });
 
 test('작은 창 기준선은 앱 전체 우측 단일 세로 스크롤과 반응형 workfile stack을 유지한다', () => {
@@ -288,4 +367,51 @@ test('필수값 전송판은 390px 내부 폭보다 큰 고정 최소열을 만�
   assert.match(transferSource, /class="factory-field-transfer-target-grid"/);
   assert.match(html, /\.factory-field-transfer-grid\{[^}]*minmax\(min\(210px,100%\),1fr\)/);
   assert.match(html, /\.factory-field-transfer-target-grid\{[^}]*minmax\(min\(260px,100%\),1fr\)/);
+});
+test('recent workfile cards identify the saved filename before the product name', () => {
+  const recentTitleSource = extractFunction(source(CORE_05), 'factorySavedProjectTitle');
+  const factoryProductSource = extractFunction(source(CORE_05), 'factorySavedProjectProduct');
+  const getTitle = Function(
+    'factorySavedProjectProduct',
+    `"use strict"; ${factoryProductSource}; ${recentTitleSource}; return factorySavedProjectTitle;`,
+  )(project => project.factorySummary?.product || project.payload?.factory?.product || {});
+
+  assert.equal(
+    getTitle({
+      name: 'gpt가한방울수저집',
+      payload: { factory: { product: { productName: '방울수저집' } } },
+    }),
+    'gpt가한방울수저집',
+  );
+});
+
+test('recent workfile cards keep large thumbnails out of raw DOM attributes', () => {
+  const core05 = source(CORE_05);
+  const recentCardSource = extractFunction(core05, 'renderFactoryRecentWorkfileCard');
+  const savedCardSource = extractFunction(core05, 'renderFactorySavedProjectCard');
+
+  assert.match(recentCardSource, /renderFactoryLightImage\(thumb,/);
+  assert.match(savedCardSource, /renderFactoryLightImage\(thumb,/);
+  assert.doesNotMatch(recentCardSource, /<img src=\"\$\{escAttr\(thumb\)\}/);
+  assert.doesNotMatch(savedCardSource, /<img src=\"\$\{escAttr\(thumb\)\}/);
+});
+
+test('native workfile pickers are preferred on local HTTP and fallback only when the API is absent', () => {
+  const core03 = source(CORE_03);
+  const openPickerSource = extractFunction(core03, 'openFactoryProjectFilePicker');
+  const saveHandleSource = extractFunction(core03, 'selectFactoryProjectFileSaveHandle');
+
+  assert.doesNotMatch(openPickerSource, /!isLocalHttpWorkfileRuntime\(\)/);
+  assert.doesNotMatch(saveHandleSource, /isLocalHttpWorkfileRuntime\(\)/);
+  assert.match(openPickerSource, /typeof window\.showOpenFilePicker === 'function'/);
+  assert.match(saveHandleSource, /typeof window\.showSaveFilePicker !== 'function'/);
+});
+test('starting a blank draft releases the old scope without erasing the last workfile folder hint', () => {
+  const clearSource = extractFunction(source(CORE_03), 'clearFactoryProjectFileLocationForBlankWork');
+
+  assert.match(clearSource, /workspaceSessionRemoveItem/);
+  assert.doesNotMatch(clearSource, /localStorage\.removeItem/);
+  assert.doesNotMatch(clearSource, /kuasangseProjectFileLastHandle\s*=\s*null/);
+  assert.match(clearSource, /kuasangseProjectFileActiveHandle\s*=\s*null/);
+  assert.match(clearSource, /kuasangseProjectFileActiveHandleScope\s*=\s*''/);
 });

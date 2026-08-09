@@ -36,11 +36,24 @@ export function createFactoryStore(options = {}) {
   let revision = nonNegativeInteger(options.revision ?? 0, 'revision');
   let fence = 1;
   let disposed = false;
+  let issuedOperationTokens = new WeakSet();
   let operationToken = makeOperationToken();
   const listeners = new Set();
 
   function makeOperationToken() {
-    return Object.freeze({ version: FACTORY_STORE_VERSION, workspaceId, revision, fence });
+    const token = Object.freeze({ version: FACTORY_STORE_VERSION, workspaceId, revision, fence });
+    issuedOperationTokens.add(token);
+    return token;
+  }
+
+  function isOperationCurrent(candidate) {
+    if (disposed || !operationToken || !candidate || (typeof candidate !== 'object' && typeof candidate !== 'function')) {
+      return false;
+    }
+    if (!issuedOperationTokens.has(candidate)) return false;
+    return candidate.version === operationToken.version
+      && candidate.workspaceId === operationToken.workspaceId
+      && candidate.fence === operationToken.fence;
   }
 
   function ensureActive() {
@@ -49,6 +62,7 @@ export function createFactoryStore(options = {}) {
 
   const operationLeases = createFactoryOperationLeases({
     ensureActive,
+    isOperationCurrent,
     readOperationToken: () => operationToken,
   });
 
@@ -96,7 +110,6 @@ export function createFactoryStore(options = {}) {
     const previousRevision = revision;
     snapshot = immutableCopy(nextSnapshot);
     revision = previousRevision + 1;
-    fence += 1;
     operationToken = makeOperationToken();
     const change = Object.freeze({
       kind, owner, commandName, workspaceId, previousRevision, revision, operationToken,
@@ -125,6 +138,7 @@ export function createFactoryStore(options = {}) {
     commandPolicies,
     commit,
     ensureActive,
+    hasActiveOperationLease: operationLeases.has,
     getOperationToken: () => operationToken,
     getRevision: () => revision,
     getSnapshot: () => snapshot,
@@ -157,8 +171,10 @@ export function createFactoryStore(options = {}) {
     if (!normalized) throw new TypeError('workspaceId is required');
     const nextSnapshot = immutableCopy(value.snapshot ?? snapshot);
     validateSnapshotRoots(nextSnapshot);
-    operationLeases.cancelAll();
     const previousWorkspaceId = workspaceId;
+    // AbortSignal listeners run synchronously, so revoke the old issuance set first.
+    issuedOperationTokens = new WeakSet();
+    operationLeases.cancelAll();
     workspaceId = normalized;
     revision = nonNegativeInteger(value.revision ?? 0, 'revision');
     snapshot = nextSnapshot;
@@ -189,8 +205,10 @@ export function createFactoryStore(options = {}) {
 
   function dispose() {
     if (disposed) return;
-    operationLeases.cancelAll();
+    // Disposal must be visible to synchronous abort listeners before cancellation dispatch.
+    issuedOperationTokens = new WeakSet();
     disposed = true;
+    operationLeases.cancelAll();
     listeners.clear();
     operationToken = null;
   }
@@ -203,10 +221,11 @@ export function createFactoryStore(options = {}) {
     updateDraft,
     assertMutable,
     getOperationToken,
-    isOperationCurrent: candidate => !disposed && candidate === operationToken,
+    isOperationCurrent,
     acquireOperationLease: operationLeases.acquire,
     cancelOperationLease: operationLeases.cancel,
     hasActiveOperationLease: operationLeases.has,
+    getActiveOperationLeaseKeys: operationLeases.keys,
     switchWorkspace,
     subscribe,
     reportError,

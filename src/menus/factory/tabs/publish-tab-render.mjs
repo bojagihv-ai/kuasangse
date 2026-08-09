@@ -84,10 +84,10 @@ function checklist(helpers, tasks, tab) {
   return call(helpers, 'renderFactoryAutomationTaskChecklist', '', tasks, tab);
 }
 
-function finalPanel(helpers, factory, baseDraft, renderCache, cafe24Model) {
+function finalPanel(helpers, factory, baseDraft, renderCache, cafe24Model, detailModel) {
   const render = helper(helpers, 'renderFactoryFinalRegistrationPanel');
   if (!render) return '<div class="factory-small" style="color:var(--warn)">최종 등록 패널을 렌더할 수 없습니다.</div>';
-  return render(factory, baseDraft, { renderCache, cafe24Model });
+  return render(factory, baseDraft, { renderCache, cafe24Model, detailModel });
 }
 
 export function renderPublishFactoryTab(view, helpers = {}) {
@@ -129,14 +129,43 @@ export function renderPublishFactoryTab(view, helpers = {}) {
     : counts.detailAssets
       ? `${counts.detailAssets}개 자산`
       : `${counts.detailPlacementCount || 0}개 배치`;
+  const fallbackDetailModel = {
+    canProceed: !!detailReadyCount,
+    ok: !!detailReadyCount && !partialSections,
+    label: detailStatusText,
+    reason: detailReadyCount
+      ? (partialSections ? '남은 섹션이 있어 최종 실행 시 확인창이 뜹니다.' : '')
+      : '상세페이지 결과 또는 섹션 배치가 있어야 합니다.',
+  };
+  const detailModel = call(
+    helpers,
+    'factoryRenderCacheFinalDetailModel',
+    call(helpers, 'factoryFinalRegistrationDetailModel', fallbackDetailModel, factory, { renderCache }),
+    factory,
+    renderCache,
+  ) || fallbackDetailModel;
+  const detailCanProceed = !!detailModel.canProceed;
+  const detailOk = !!detailModel.ok;
+  const detailLabel = detailModel.label || detailStatusText;
+  const detailReason = detailModel.reason || '';
+  const detailHelp = detailReason || detailModel.warning || (detailCanProceed
+    ? '현재 상품과 입력 이미지 기준을 확인했습니다.'
+    : '상세페이지 결과 또는 섹션 배치가 있어야 합니다.');
   const openMarketReady = finalSettings.includeOpenMarket ? selectedChannels > 0 : true;
-  const ready = detailReadyCount && openMarketReady && (counts.cafe24Selected || counts.confirmedDb) && cafe24Model.canRun;
-  const readyLabel = ready ? (partialSections ? '경고 확인 후 가능' : '실행 가능') : '확인 필요';
-  const readyHelp = partialSections
-    ? '남은 섹션이 있어 실행 시 확인창에서 계속 진행할지 묻습니다.'
-    : (cafe24Model.reason || '아래 최종 등록 실행 버튼으로 진행합니다.');
+  const ready = detailCanProceed && openMarketReady && (counts.cafe24Selected || counts.confirmedDb) && cafe24Model.canRun;
+  const readyLabel = ready ? (detailOk ? '실행 가능' : '경고 확인 후 가능') : '확인 필요';
+  const readyHelp = !ready
+    ? (detailReason || cafe24Model.reason || '최종 등록 조건을 확인해주세요.')
+    : (detailModel.warning || 'Cafe24 최종 등록을 누르면 확인 후 실행합니다.');
+  const finalDisabledReason = !detailCanProceed
+    ? detailReason
+    : (!(counts.cafe24Selected || counts.confirmedDb)
+      ? 'Cafe24/DB 기준을 먼저 확인해주세요.'
+      : (!openMarketReady
+        ? '오픈마켓까지 진행하려면 보낼 마켓을 1개 이상 선택해주세요.'
+        : (cafe24Model.reason || '최종 등록 조건을 확인해주세요.')));
   const pieces = [
-    { label: '상세페이지 조각', ok: !!detailReadyCount && !partialSections, text: partialSections ? `${detailStatusText} · 남은 섹션 있음` : detailStatusText },
+    { label: '상세페이지 조각', ok: detailCanProceed && detailOk, text: detailCanProceed ? detailLabel : detailReason || detailLabel },
     { label: 'Cafe24/DB 기준', ok: !!(counts.cafe24Selected || counts.confirmedDb), text: counts.cafe24Selected ? 'Cafe24 선택됨' : counts.confirmedDb ? 'DB 확정됨' : '대기' },
     { label: '등록 범위', ok: true, text: finalSettings.targetLabel },
     { label: 'Cafe24 상태', ok: true, text: `진열 ${finalSettings.displayLabel} · 판매 ${finalSettings.sellingLabel}` },
@@ -150,13 +179,13 @@ export function renderPublishFactoryTab(view, helpers = {}) {
       <h4>7. 전송</h4>
       <p>최종 조각을 확인하고, Cafe24 등록 범위와 진열/판매 상태를 정한 뒤 마지막 버튼만 직접 누릅니다.</p>
       <div class="factory-automation-status-grid">
-        ${statusCard(helpers, '상세페이지 조각', detailStatusText, partialSections ? '남은 섹션이 있어 최종 실행 시 확인창이 뜹니다.' : counts.generatedSections ? '현재 미리보기 섹션 생성 결과 기준입니다.' : '상세페이지 결과 또는 섹션 배치가 있어야 합니다.', detailReadyCount && !partialSections)}
+        ${statusCard(helpers, '상세페이지 조각', detailCanProceed ? detailLabel : '확인 필요', detailHelp, detailCanProceed && detailOk)}
         ${statusCard(helpers, 'Cafe24 상품/DB', counts.cafe24Selected ? 'Cafe24 선택됨' : counts.confirmedDb ? 'DB 확정됨' : '대기', '상품 등록/수정 기준입니다.', counts.cafe24Selected || counts.confirmedDb)}
         ${statusCard(helpers, '마켓 채널', finalSettings.includeOpenMarket ? `${selectedChannels}개` : '진행 안 함', '카페24만 등록을 고르면 마켓 채널은 필수가 아닙니다.', openMarketReady)}
         ${statusCard(helpers, '최종 등록 준비', readyLabel, readyHelp, ready)}
       </div>
       <div class="factory-automation-actions">
-        <button class="btn-primary" data-factory-guide-action="focus-final-registration" ${disable(!detailReadyCount || !(counts.cafe24Selected || counts.confirmedDb), '상세페이지 조각과 Cafe24/DB 기준을 먼저 확인해주세요.')}>최종 등록 설정으로 이동</button>
+        <button class="btn-primary" data-factory-guide-action="run-final-registration" ${disable(!ready, finalDisabledReason)}>Cafe24 최종 등록</button>
         <button class="btn-sm" data-factory-guide-action="focus-stage-log">실행 상태 보기</button>
       </div>
       ${checklist(helpers, tasks, 'publish')}
@@ -171,14 +200,14 @@ export function renderPublishFactoryTab(view, helpers = {}) {
         </div>`).join('')}
       </div>
       <div class="factory-stage-actions" style="margin-top:12px">
-        <button class="btn-primary" data-factory-guide-action="focus-final-registration" ${disable(!ready, cafe24Model.reason || '최종 등록 조건을 확인해주세요.')}>최종 등록 설정으로 이동</button>
+        <button class="btn-primary" data-factory-guide-action="run-final-registration" ${disable(!ready, finalDisabledReason)}>Cafe24 최종 등록</button>
         <button class="btn-sm" data-factory-guide-action="focus-materials">DB 입력판 확인</button>
       </div>
     </div>
     <div class="factory-automation-panel" style="grid-column:1 / -1" id="factoryPublishInlineFinalPanel">
-      <h4>최종 등록 실행</h4>
+      <h4>Cafe24 최종 등록</h4>
       <p>여기서 등록 범위와 Cafe24 진열/판매 상태를 정한 뒤 최종 등록을 실행합니다.</p>
-      ${finalPanel(helpers, factory, baseDraft, renderCache, cafe24Model)}
+      ${finalPanel(helpers, factory, baseDraft, renderCache, cafe24Model, detailModel)}
     </div>
   </div>`;
 }

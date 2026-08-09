@@ -176,7 +176,7 @@ test('factory tab contract fences async write commands and rethrows reported fai
   assert.match(reported[0].message, /STALE/i);
 });
 
-test('factory store freezes nested snapshots and owner updates create a new revision identity', async () => {
+test('factory store freezes nested snapshots and owner updates advance revision without rotating operation identity', async () => {
   // Given: an editable workspace at revision 3 with nested factory state.
   const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'update');
   const store = createFactoryStore({
@@ -193,7 +193,7 @@ test('factory store freezes nested snapshots and owner updates create a new revi
     { owner: 'factory', expectedRevision: 3 },
   );
 
-  // Then: no mutation escape remains and both snapshot and operation identity advance.
+  // Then: no mutation escape remains, storage revision advances, and the workspace operation remains current.
   assert.equal(Object.isFrozen(store), true);
   assert.equal(Object.isFrozen(after), true);
   assert.equal(Object.isFrozen(after.factory.nested), true);
@@ -201,7 +201,7 @@ test('factory store freezes nested snapshots and owner updates create a new revi
   assert.equal(after.factory.nested.count, 2);
   assert.equal(before.factory.nested.count, 1);
   assert.throws(() => { after.factory.nested.count = 99; }, TypeError);
-  assert.equal(store.isOperationCurrent(beforeToken), false);
+  assert.equal(store.isOperationCurrent(beforeToken), true);
   assert.equal(store.getOperationToken().revision, 4);
   assert.equal('actions' in store, false);
   assert.equal('renderHelpers' in store, false);
@@ -325,4 +325,206 @@ test('factory store reports errors only through the injected reporter and preser
   assert.deepEqual(reported, [failure]);
   assert.strictEqual(globalThis.__task7FactoryError, sentinel);
   delete globalThis.__task7FactoryError;
+});
+
+test('factory store keeps ordinary commits in the same async operation fence while revision CAS still advances', async () => {
+  // Given: an active workspace operation token and a revision-scoped lease.
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-identity');
+  const store = createFactoryStore({
+    initialSnapshot: frozenSnapshot(),
+    workspaceId: 'workspace-operation-identity',
+    revision: 3,
+  });
+  const initialToken = store.getOperationToken();
+  const initialRevision = initialToken.revision;
+  const lease = store.acquireOperationLease('factory/operation-identity', initialToken);
+
+  // When: an ordinary owned commit advances the store revision, then the old operation cancels its lease.
+  store.update(
+    slice => ({ ...slice, nested: { count: slice.nested.count + 1 } }),
+    { owner: 'factory', expectedRevision: initialRevision },
+  );
+  const afterCommitToken = store.getOperationToken();
+  const cancelled = store.cancelOperationLease('factory/operation-identity', initialToken);
+
+  // Then: the workspace/fence operation remains current, the revision advances, and old CAS writes stay rejected.
+  assert.equal(store.isOperationCurrent(initialToken), true);
+  assert.equal(store.isOperationCurrent(afterCommitToken), true);
+  assert.equal(afterCommitToken.revision, initialRevision + 1);
+  assert.equal(cancelled, true);
+  assert.equal(lease.signal.aborted, true);
+  assert.throws(
+    () => store.update(slice => slice, { owner: 'factory', expectedRevision: initialRevision }),
+    /STALE_FACTORY_STORE_REVISION/,
+  );
+});
+
+test('factory store rejects forged token clones from operation authority and lease controls', async () => {
+  // Given: one genuine token and plain spread clones with identical visible fields.
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-token-forgery');
+  const store = createFactoryStore({
+    initialSnapshot: frozenSnapshot(),
+    workspaceId: 'workspace-operation-token-forgery',
+  });
+  const genuineToken = store.getOperationToken();
+  const forgedToken = { ...genuineToken };
+  const frozenForgedToken = Object.freeze({ ...genuineToken });
+
+  // When/Then: only an issued object is current; clone-shaped tokens cannot acquire or cancel a lease.
+  assert.equal(store.isOperationCurrent(genuineToken), true);
+  assert.equal(store.isOperationCurrent(forgedToken), false);
+  assert.equal(store.isOperationCurrent(frozenForgedToken), false);
+  assert.equal(store.isOperationCurrent(null), false);
+  assert.equal(store.isOperationCurrent('not-a-token'), false);
+  assert.throws(
+    () => store.acquireOperationLease('factory/forged', forgedToken),
+    /STALE_FACTORY_STORE_OPERATION/,
+  );
+  const lease = store.acquireOperationLease('factory/forged', genuineToken);
+  assert.throws(
+    () => store.cancelOperationLease('factory/forged', forgedToken),
+    /STALE_FACTORY_STORE_OPERATION/,
+  );
+  assert.equal(store.cancelOperationLease('factory/forged', genuineToken), true);
+  assert.equal(lease.signal.aborted, true);
+});
+
+test('factory store issuance authority is isolated across stores sharing workspace and fence fields', async () => {
+  // Given: two stores that intentionally expose the same workspace, revision, and fence values.
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-token-store-isolation');
+  const options = {
+    initialSnapshot: frozenSnapshot(),
+    workspaceId: 'workspace-operation-token-shared-fields',
+    revision: 4,
+  };
+  const firstStore = createFactoryStore(options);
+  const secondStore = createFactoryStore(options);
+  const firstToken = firstStore.getOperationToken();
+  const secondToken = secondStore.getOperationToken();
+
+  // When/Then: a token issued by the other store cannot authorize this store's leases.
+  assert.equal(firstToken.workspaceId, secondToken.workspaceId);
+  assert.equal(firstToken.revision, secondToken.revision);
+  assert.equal(firstToken.fence, secondToken.fence);
+  assert.equal(secondStore.isOperationCurrent(firstToken), false);
+  assert.throws(
+    () => secondStore.acquireOperationLease('factory/foreign-store', firstToken),
+    /STALE_FACTORY_STORE_OPERATION/,
+  );
+  assert.throws(
+    () => secondStore.cancelOperationLease('factory/foreign-store', firstToken),
+    /STALE_FACTORY_STORE_OPERATION/,
+  );
+  const ownLease = secondStore.acquireOperationLease('factory/foreign-store', secondToken);
+  assert.equal(secondStore.cancelOperationLease('factory/foreign-store', secondToken), true);
+  assert.equal(ownLease.signal.aborted, true);
+});
+
+test('factory store disposal aborts leases and revokes every issued operation token', async () => {
+  // Given: a live token and lease owned by one store.
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-token-disposal');
+  const store = createFactoryStore({
+    initialSnapshot: frozenSnapshot(),
+    workspaceId: 'workspace-operation-token-disposal',
+  });
+  const token = store.getOperationToken();
+  const lease = store.acquireOperationLease('factory/disposal', token);
+  let abortCount = 0;
+  let abortObservation;
+  lease.signal.addEventListener('abort', () => {
+    abortCount += 1;
+    let acquireError;
+    let commitError;
+    try {
+      store.acquireOperationLease('factory/disposal-from-abort', token);
+    } catch (error) {
+      acquireError = error;
+    }
+    try {
+      if (!store.isOperationCurrent(token)) throw new Error('STALE_FACTORY_STORE_OPERATION');
+      store.update(slice => slice, { owner: 'factory', expectedRevision: token.revision });
+    } catch (error) {
+      commitError = error;
+    }
+    abortObservation = {
+      current: store.isOperationCurrent(token),
+      acquireCode: acquireError?.code || acquireError?.message,
+      commitMessage: commitError?.message,
+    };
+  });
+
+  // When: the store is disposed.
+  store.dispose();
+  store.dispose();
+
+  // Then: all async work is aborted and the old token is no longer recognized by any authority check.
+  assert.equal(lease.signal.aborted, true);
+  assert.equal(abortCount, 1);
+  assert.deepEqual(abortObservation, {
+    current: false,
+    acquireCode: 'factory store is disposed',
+    commitMessage: 'STALE_FACTORY_STORE_OPERATION',
+  });
+  assert.equal(store.isOperationCurrent(token), false);
+  assert.throws(() => store.acquireOperationLease('factory/disposal', token), /disposed/i);
+  assert.throws(() => store.cancelOperationLease('factory/disposal', token), /disposed/i);
+});
+
+test('factory store leases coexist by key and workspace cancellation aborts every old context', async () => {
+  // Given: two different operation keys and one duplicate key in the same workspace.
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-cancellation');
+  const store = createFactoryStore({
+    initialSnapshot: frozenSnapshot(),
+    workspaceId: 'workspace-operation-cancellation-a',
+  });
+  const token = store.getOperationToken();
+  const first = store.acquireOperationLease('factory/operation-a', token);
+  const duplicate = store.acquireOperationLease('factory/operation-a', token);
+  const second = store.acquireOperationLease('factory/operation-b', token);
+  let abortObservation;
+  first.signal.addEventListener('abort', () => {
+    let acquireError;
+    let commitError;
+    try {
+      store.acquireOperationLease('factory/operation-from-abort', token);
+    } catch (error) {
+      acquireError = error;
+    }
+    try {
+      if (!store.isOperationCurrent(token)) throw new Error('STALE_FACTORY_STORE_OPERATION');
+      store.update(slice => slice, { owner: 'factory', expectedRevision: token.revision });
+    } catch (error) {
+      commitError = error;
+    }
+    abortObservation = {
+      current: store.isOperationCurrent(token),
+      acquireCode: acquireError?.code || acquireError?.message,
+      commitMessage: commitError?.message,
+    };
+  });
+
+  // When: the workspace changes while both independent contexts are active.
+  store.switchWorkspace('workspace-operation-cancellation-b', {
+    snapshot: frozenSnapshot(2),
+    revision: 4,
+  });
+
+  // Then: same-key acquisition is single-flight, different keys coexist, and all old signals/token are stale.
+  assert.equal(first.acquired, true);
+  assert.equal(duplicate.acquired, false);
+  assert.equal(second.acquired, true);
+  assert.equal(first.signal.aborted, true);
+  assert.equal(second.signal.aborted, true);
+  assert.deepEqual(abortObservation, {
+    current: false,
+    acquireCode: 'STALE_FACTORY_STORE_OPERATION',
+    commitMessage: 'STALE_FACTORY_STORE_OPERATION',
+  });
+  assert.equal(store.isOperationCurrent(store.getOperationToken()), true);
+  assert.equal(store.isOperationCurrent(token), false);
+  assert.equal(store.hasActiveOperationLease(), false);
+  assert.throws(
+    () => store.acquireOperationLease('factory/operation-a', token),
+    /STALE_FACTORY_STORE_OPERATION/,
+  );
 });

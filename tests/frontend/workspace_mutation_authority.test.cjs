@@ -150,7 +150,7 @@ test('Given a global preference clear is queued during a scope transition Then d
       archive: { async writeHandle() {} },
     },
   });
-  const staleRecovery = mutations.writeRecoveryValue('pdp_last_work_draft_scope_v1', 'draft:next');
+  const staleRecovery = mutations.writeRecoveryValue('pdp_last_work_bootstrap_v1', 'draft:next');
   await started.promise;
   const pendingClear = mutations.clearPreference('lastProductImageBackup');
 
@@ -164,6 +164,34 @@ test('Given a global preference clear is queued during a scope transition Then d
   await assert.rejects(staleRecovery, error => error?.code === 'STALE_SCOPE');
   await pendingClear;
   assert.equal(preferences.has('lastProductImageBackup'), false);
+});
+
+test('Given idle startup authority When draft scope is created Then the per-tab pointer writes as app-global', async () => {
+  // Given: startup has not acquired a workspace yet, so there is no active scope to fence against.
+  const { createGuardedWorkspaceMutations } = await loadGateway();
+  const writes = [];
+  const authority = editableAuthority({ scopeId: '', leaseId: '', fencingToken: 0, revision: 0, mode: 'idle' });
+  const mutations = createGuardedWorkspaceMutations({
+    authority,
+    adapters: {
+      session: {
+        async setItem(key, value, context) {
+          writes.push({ key, value, scopeId: context.scopeId });
+        },
+        async removeItem() {},
+      },
+      indexeddb: { async put() {}, async delete() {}, async putSessionAssets() {} },
+      archive: { async writeHandle() {} },
+    },
+  });
+
+  // When: the first blank draft scope is persisted before workspace acquisition.
+  await mutations.writeRecoveryValue('pdp_last_work_draft_scope_v1', 'draft:new-tab');
+
+  // Then: persistence does not require a nonexistent active workspace authority.
+  assert.deepEqual(writes, [{
+    key: 'pdp_last_work_draft_scope_v1', value: 'draft:new-tab', scopeId: 'app-global',
+  }]);
 });
 
 for (const destination of ['recovery', 'projects', 'snapshots', 'sessionAssets']) {

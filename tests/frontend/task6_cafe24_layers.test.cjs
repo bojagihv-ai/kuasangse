@@ -97,6 +97,24 @@ test('Cafe24 preflight는 활성 태그·이벤트 속성·위험 URL을 상세 
   assert.equal(preflightCafe24DetailHtml(sanitized.product.description).ok, true);
 });
 
+test('Cafe24 preflight는 안전한 상세페이지 style을 보존하고 위험 CSS URL은 차단한다', async () => {
+  const { preflightCafe24DetailHtml, sanitizeCafe24ProductPayload } = await load('payload.mjs');
+  const safe = '<meta charset="UTF-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="https://fonts.googleapis.com/css2"><style>.detail{color:#333;background:#fff}</style><section class="detail">방울수저집</section>';
+  const safePreflight = preflightCafe24DetailHtml(safe);
+  assert.equal(safePreflight.ok, true);
+  assert.equal(safePreflight.hasActiveTags, false);
+  assert.equal(sanitizeCafe24ProductPayload({ description: safe }).product.description, safe);
+
+  const unsafe = '<style>.detail{background-image:url(javascript:alert(1))}</style><section>설명</section>';
+  const unsafePreflight = preflightCafe24DetailHtml(unsafe);
+  assert.equal(unsafePreflight.ok, false);
+  assert.equal(unsafePreflight.hasUnsafeUrls, true);
+
+  const refresh = preflightCafe24DetailHtml('<meta http-equiv="refresh" content="0;url=https://example.com">');
+  assert.equal(refresh.ok, false);
+  assert.equal(refresh.hasActiveTags, true);
+});
+
 test('Cafe24 sync 계층은 작업공간이 바뀐 뒤 늦게 도착한 응답을 승인하지 않는다', async () => {
   const { createCafe24ApiClient } = await load('api.mjs');
   const { createCafe24SyncService } = await load('sync.mjs');

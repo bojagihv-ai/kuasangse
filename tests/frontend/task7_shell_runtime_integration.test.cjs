@@ -23,6 +23,7 @@ const SIDEBAR_ROUTES = Object.freeze([
   'factory',
   'automation',
   'modelsettings',
+  'reports',
   'manual',
 ]);
 
@@ -33,7 +34,9 @@ function source(file) {
 function extractFunction(fileSource, functionName) {
   const start = fileSource.indexOf(`function ${functionName}(`);
   assert.notEqual(start, -1, `${functionName} definition is required`);
-  const braceStart = fileSource.indexOf('{', start);
+  const signatureEnd = fileSource.slice(start).match(/\)\s*\{/);
+  assert.ok(signatureEnd, `${functionName} body is required`);
+  const braceStart = start + signatureEnd.index + signatureEnd[0].lastIndexOf('{');
   let depth = 0;
   for (let index = braceStart; index < fileSource.length; index += 1) {
     if (fileSource[index] === '{') depth += 1;
@@ -43,8 +46,8 @@ function extractFunction(fileSource, functionName) {
   throw new Error(`${functionName} boundary is incomplete`);
 }
 
-test('Task 7 shell registry adapter resolves all twelve runtime routes without exposing descriptor registry', () => {
-  // Given: the classic shell owns twelve installed menu instances.
+test('Task 7 shell registry adapter resolves all thirteen runtime routes without exposing descriptor registry', () => {
+  // Given: the classic shell owns thirteen installed menu instances.
   const functionSource = extractFunction(source(CORE_03), 'createRuntimeMenuRegistryAdapter');
   const createAdapter = new Function(
     `${functionSource}; return createRuntimeMenuRegistryAdapter;`,
@@ -81,7 +84,7 @@ test('Task 7 shell composition adapts lifecycle render input and diagnostic snap
 });
 
 test('Task 7 shell composition smoke instantiates real lifecycle, router, and diagnostic modules', async () => {
-  // Given: the real shell constructors and twelve installed menu instances are available.
+  // Given: the real shell constructors and thirteen installed menu instances are available.
   const moduleUrl = relativePath => `${pathToFileURL(path.join(ROOT, relativePath)).href}?smoke=${Date.now()}-${Math.random()}`;
   const [lifecycleModule, routeModule, diagnosticModule, registryModule] = await Promise.all([
     import(moduleUrl('src/shell/render-lifecycle.mjs')),
@@ -190,6 +193,17 @@ test('Task 7 loader delegates the exact boot sequence to the canonical coordinat
   assert.doesNotMatch(core, /__KUASANGSE_INSTALL_RUNTIME_MENUS__/);
   assert.doesNotMatch(loader, /__kuasangseState/);
   assert.doesNotMatch(loader, /typeof\s+window\.render/);
+});
+
+test('Task 7 loader preloads the large classic bundle while ESM modules initialize', () => {
+  const loader = source(APP_LOADER);
+  const preloadCall = loader.indexOf('preloadRuntimeBundle(manifest.bundle, buildId)');
+  const bootstrapImport = loader.indexOf('await import(resourceUrl(BOOTSTRAP_MODULE, buildId))');
+
+  assert.ok(preloadCall >= 0);
+  assert.ok(bootstrapImport > preloadCall);
+  assert.match(loader, /link\.rel\s*=\s*['"]preload['"]/);
+  assert.match(loader, /link\.as\s*=\s*['"]script['"]/);
 });
 
 test('Task 7 authority stage explicitly installs workspace lock before its production consumer runs', async () => {
@@ -385,6 +399,16 @@ test('Task 7 loader event bridge fails closed when the classic endpoint is absen
   );
 });
 
+test('Task 15 Cafe24 classic command uses the long-running bridge timeout', () => {
+  const loader = source(APP_LOADER);
+
+  assert.match(loader, /CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS\s*=\s*900000/);
+  assert.match(
+    extractFunction(loader, 'requestClassicRuntime'),
+    /command\s*===\s*['"]factory-cafe24-command['"][\s\S]*CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS/,
+  );
+});
+
 test('Task 7 canonical bootstrap is ordered and idempotent under concurrent boot calls', async () => {
   // Given: every real bootstrap stage records its invocation and the first stage is held open.
   const bootstrapUrl = `${pathToFileURL(path.join(ROOT, 'src', 'shell', 'bootstrap.mjs')).href}?order=${Date.now()}-${Math.random()}`;
@@ -469,11 +493,22 @@ test('Task 7 classic hydration is coordinator-owned and the initial render is a 
   assert.match(asyncCore, /function\s+bindClassicRuntimeListeners\s*\(/);
   assert.doesNotMatch(asyncCore, /const\s+initialWorkspaceAuthority[\s\S]{0,500}?\nrender\(\);/);
   const hydration = extractFunction(asyncCore, 'runClassicRuntimeHydration');
+  const backgroundHydration = extractFunction(asyncCore, 'continueClassicRuntimeHydrationInBackground');
   assert.match(
     hydration,
-    /initialWorkspaceAuthority[\s\S]*ensureWorkspaceEditAuthority\(initialHydrationIdentity\.scopeId\)[\s\S]*hydratePersistentSessionAssets[\s\S]*initialAuthority[\s\S]*hydrationIdentityIsCurrent[\s\S]*ensureWorkspaceEditAuthority\(activeHydrationIdentity\.scopeId\)[\s\S]*hydrateServerLastWorkSnapshot[\s\S]*factoryRestoreCurrentWorkfileLocalArchive[\s\S]*hydrateLastProductImageBackup/,
+    /initialWorkspaceAuthority[\s\S]*ensureWorkspaceEditAuthority\(initialHydrationIdentity\.scopeId\)[\s\S]*initialAuthority[\s\S]*continueClassicRuntimeHydrationInBackground/,
   );
-  assert.equal((hydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 2);
+  assert.match(
+    backgroundHydration,
+    /hydratePersistentSessionAssets[\s\S]*hydrationIdentityIsCurrent[\s\S]*ensureWorkspaceEditAuthority\(activeHydrationIdentity\.scopeId\)[\s\S]*hydrateServerLastWorkSnapshot[\s\S]*factoryRestoreCurrentWorkfileLocalArchive[\s\S]*hydrateLastProductImageBackup[\s\S]*optRestoreSourceImagesFromLocalArchive/,
+  );
+  assert.match(asyncCore, /let\s+classicRuntimeDeferredHydrationPromise\s*=\s*null/);
+  assert.match(
+    hydration,
+    /classicRuntimeDeferredHydrationPromise\s*=\s*deferredHydration[\s\S]*classicRuntimeDeferredHydrationPromise\s*===\s*deferredHydration[\s\S]*classicRuntimeDeferredHydrationPromise\s*=\s*null/,
+  );
+  assert.equal((hydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 1);
+  assert.equal((backgroundHydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 1);
   assert.doesNotMatch(hydration, /\brender\s*\(/);
   assert.doesNotMatch(asyncCore, /__KUASANGSE_STARTUP_RESTORE_PROMISE__/);
 
@@ -557,12 +592,12 @@ test('Task 7 classic hydration shares one promise and receives a detached frozen
   );
 });
 
-test('Task 7 classic listener binder is idempotent across fifty bootstrap attempts', () => {
+test('Task 7 classic non-tab listener binder is idempotent across fifty bootstrap attempts', () => {
   // Given: each production listener group is observable independently.
   const asyncCore = source(CORE_06);
   const counts = {
     archive: 0,
-    candidate: 0,
+    archiveFolder: 0,
     preview: 0,
     document: 0,
     authority: 0,
@@ -570,7 +605,7 @@ test('Task 7 classic listener binder is idempotent across fifty bootstrap attemp
   };
   const bindClassicRuntimeListeners = new Function(
     'bindFactoryLocalArchivePreviewDelegation',
-    'bindFactoryCandidateReviewDelegation',
+    'bindFactoryLocalArchiveFolderOpenDelegation',
     'bindOptionSorterPreviewDelegation',
     'bindClassicRuntimeDocumentEvents',
     'bindWorkspaceAuthorityUi',
@@ -581,7 +616,7 @@ test('Task 7 classic listener binder is idempotent across fifty bootstrap attemp
     `,
   )(
     () => { counts.archive += 1; return () => { counts.disposed += 1; }; },
-    () => { counts.candidate += 1; return () => { counts.disposed += 1; }; },
+    () => { counts.archiveFolder += 1; return () => { counts.disposed += 1; }; },
     () => { counts.preview += 1; return () => { counts.disposed += 1; }; },
     () => { counts.document += 1; return () => { counts.disposed += 1; }; },
     () => { counts.authority += 1; return () => { counts.disposed += 1; }; },
@@ -594,7 +629,7 @@ test('Task 7 classic listener binder is idempotent across fifty bootstrap attemp
   // Then: every listener group is installed exactly once.
   assert.deepEqual(counts, {
     archive: 1,
-    candidate: 1,
+    archiveFolder: 1,
     preview: 1,
     document: 1,
     authority: 1,

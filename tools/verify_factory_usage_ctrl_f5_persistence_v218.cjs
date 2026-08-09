@@ -94,7 +94,7 @@ async function main() {
       const usage = summary.fields.find(field => field.id === 'usage') || {};
       const saveResults = await saveLastWorkNow({ force: true, deep: true });
       const scopeId = getCurrentLastWorkWorkspaceScope();
-      const localSession = JSON.parse(localStorage.getItem('pdp_session') || '{}');
+      const localSession = JSON.parse(sessionStorage.getItem('pdp_session') || '{}');
       const indexedEnvelope = await workspaceGet('sessionAssets', 'workspace-envelope:' + scopeId);
       const serverRecord = await fetch('http://127.0.0.1:5050/api/last-work?workspaceId=' + encodeURIComponent(scopeId), { cache: 'no-store' }).then(response => response.json());
       return {
@@ -114,6 +114,7 @@ async function main() {
           serverLightweight: serverRecord.snapshot?.lightweight?.factory?.product?.dbFieldSettings?.usage?.manualValue || '',
           serverAssets: serverRecord.snapshot?.assets?.factory?.product?.dbFieldSettings?.usage?.manualValue || '',
           revision: serverRecord.revision || 0,
+          sharedActiveSnapshot: localStorage.getItem('pdp_session'),
         },
       };
     }`);
@@ -171,6 +172,7 @@ async function main() {
     assertChecks([
       { ok: proofBeforeReload.saveResults?.[0]?.value === true, message: `최신 세션 저장이 durable commit되지 않았습니다: ${JSON.stringify(proofBeforeReload.saveResults)}` },
       { ok: proofBeforeReload.storedUsage?.local === '선물 포장, 답례품', message: `Ctrl+F5 직전 로컬 저장값이 비었습니다: ${JSON.stringify(proofBeforeReload.storedUsage)}` },
+      { ok: proofBeforeReload.storedUsage?.sharedActiveSnapshot === null, message: '활성 작업이 공유 localStorage로 누출됐습니다.' },
       { ok: proofAfterReload.projectId === proofBeforeReload.projectId, message: `Ctrl+F5 뒤 다른 작업파일이 복원됐습니다: ${proofAfterReload.projectId}` },
       { ok: proofAfterReload.usageStatus === 'done', message: `Ctrl+F5 뒤 사용용도 완료 상태가 사라졌습니다: ${proofAfterReload.usageStatus}` },
       { ok: proofAfterReload.usageValue === '선물 포장, 답례품', message: `Ctrl+F5 뒤 사용용도 값이 사라졌습니다: ${proofAfterReload.usageValue}` },

@@ -3,6 +3,8 @@ import { normalizeWorkspaceScope } from './contracts.mjs';
 
 const PROTECTED_SERVER_NOOP_REASONS = new Set([
   'incoming snapshot has no competitor analysis result',
+  'incoming snapshot changed work identity or dropped protected work data',
+  'incoming snapshot dropped protected required fields',
 ]);
 
 function protectedServerNoop(result, envelope, context = {}) {
@@ -25,6 +27,16 @@ function protectedServerNoop(result, envelope, context = {}) {
 function defaultBases(root) {
   const origin = String(root.location?.origin || '').replace(/\/$/, '');
   return [...new Set([origin, 'http://127.0.0.1:5050'].filter(Boolean))];
+}
+
+function compactServerPersistenceEnvelope(envelope, serverSnapshot) {
+  let snapshotRef = '';
+  if (serverSnapshot === envelope.snapshot) snapshotRef = '$';
+  else if (serverSnapshot?.lightweight === envelope.snapshot) snapshotRef = '$.lightweight';
+  else if (serverSnapshot?.assets === envelope.snapshot) snapshotRef = '$.assets';
+  if (!snapshotRef) return structuredClone(envelope);
+  const { snapshot: _duplicatedSnapshot, ...header } = structuredClone(envelope);
+  return { ...header, snapshotRef };
 }
 
 export class ServerPersistenceError extends Error {
@@ -62,10 +74,23 @@ export function createServerLastWorkAdapter({
         }
         return response.json();
       } catch (error) {
+        if (error instanceof ServerPersistenceError && (error.status === 409 || error.status === 428)) {
+          throw error;
+        }
         lastError = error;
       }
     }
-    throw lastError || new Error('server last-work unavailable');
+    if (lastError) {
+      const method = String(options.method || 'GET').toUpperCase();
+      const bodyChars = typeof options.body === 'string' ? options.body.length : 0;
+      const error = new Error(
+        `server last-work ${method} failed (${candidates.length} targets, ${bodyChars} chars): ${lastError.message || lastError}`,
+        { cause: lastError },
+      );
+      error.code = lastError.code || 'SERVER_LAST_WORK_UNAVAILABLE';
+      throw error;
+    }
+    throw new Error('server last-work unavailable');
   }
 
   return Object.freeze({
@@ -93,6 +118,7 @@ export function createServerLastWorkAdapter({
     async write(envelope, context = {}) {
       context.assertAuthority?.();
       const serverSnapshot = context.serverSnapshot || envelope.snapshot;
+      const persistenceEnvelope = compactServerPersistenceEnvelope(envelope, serverSnapshot);
       const result = await request('/api/last-work', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -100,7 +126,7 @@ export function createServerLastWorkAdapter({
           workspaceId: envelope.scopeId,
           snapshot: {
             ...structuredClone(serverSnapshot),
-            persistenceEnvelope: structuredClone(envelope),
+            persistenceEnvelope,
           },
           metadata: envelope.metadata,
           leaseId: context.leaseId || envelope.metadata.leaseId,

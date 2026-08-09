@@ -304,9 +304,196 @@ def test_richer_competitor_snapshot_keep_is_exact_protected_noop(authority_clien
     assert status.get_json()["revision"] == 1
 
 
+def test_richer_factory_snapshot_keep_is_exact_protected_noop(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {
+                        "product": product,
+                        "assets": [{"id": "asset-one"}, {"id": "asset-two"}],
+                    },
+                },
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    kept = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {
+                        "product": product,
+                        "assets": [{"id": "asset-one"}],
+                    },
+                },
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    status = client.get("/api/workspace-lock/status?workspaceId=project:alpha")
+    restored = client.get("/api/last-work?workspaceId=project:alpha")
+
+    assert accepted.status_code == 200
+    assert kept.status_code == 200
+    assert kept.get_json()["accepted"] is False
+    assert kept.get_json()["keptExisting"] is True
+    assert kept.get_json()["protectedNoOp"] is True
+    assert kept.get_json()["scopeId"] == "project:alpha"
+    assert kept.get_json()["revision"] == 1
+    assert status.get_json()["revision"] == 1
+    assert len(restored.get_json()["snapshot"]["assets"]["factory"]["assets"]) == 2
+
+
+def test_option_none_may_remove_only_the_color_option_section(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    base_assets = {
+        "sectionContents": {"intro": {"html": "intro"}, "size_color": {"html": "color"}},
+        "sectionImages": {"intro": "intro-image", "size_color": "color-image"},
+        "factory": {
+            "product": product,
+            "automation": {"optionMode": "pending"},
+            "stages": {"options": {"status": "idle"}},
+            "assets": [{"id": "asset-one"}],
+        },
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": base_assets,
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    option_none = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    **base_assets,
+                    "sectionContents": {"intro": {"html": "intro"}},
+                    "sectionImages": {"intro": "intro-image"},
+                    "factory": {
+                        **base_assets["factory"],
+                        "automation": {"optionMode": "none"},
+                        "stages": {"options": {"status": "done"}},
+                    },
+                },
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert option_none.status_code == 200
+    assert option_none.get_json()["accepted"] is True
+    assert option_none.get_json()["revision"] == 2
+    assert restored["assets"]["factory"]["automation"]["optionMode"] == "none"
+    assert "size_color" not in restored["assets"]["sectionContents"]
+    assert "size_color" not in restored["assets"]["sectionImages"]
+
+
+def test_completed_option_decision_cannot_regress_to_pending_after_restart(
+    authority_client,
+) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    completed_factory = {
+        "product": product,
+        "automation": {"optionMode": "none"},
+        "stages": {"options": {"status": "done"}},
+        "assets": [{"id": "asset-one"}],
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {"factory": completed_factory},
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    regressed = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {
+                        **completed_factory,
+                        "automation": {"optionMode": "pending"},
+                        "stages": {"options": {"status": "idle"}},
+                    },
+                },
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    status = client.get("/api/workspace-lock/status?workspaceId=project:alpha").get_json()
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert regressed.status_code == 200
+    assert regressed.get_json()["accepted"] is False
+    assert regressed.get_json()["protectedNoOp"] is True
+    assert status["revision"] == 1
+    assert restored["assets"]["factory"]["automation"]["optionMode"] == "none"
+    assert restored["assets"]["factory"]["stages"]["options"]["status"] == "done"
+
+
 def test_local_archive_replica_requires_current_fence_without_advancing_revision(
     authority_client,
 ) -> None:
+    from routes import api_archive
+
     client, service = authority_client
     lease_a = _acquire(client, "project:alpha")
     asset = {
@@ -354,7 +541,94 @@ def test_local_archive_replica_requires_current_fence_without_advancing_revision
 
     assert missing.status_code == 428
     assert accepted.status_code == 200
+    stored = api_archive._local_archive_load_index()["assets"]
+    assert stored[0]["workspaceId"] == "alpha"
     assert stale.status_code == 409
     assert stale.get_json()["code"] == "STALE_FENCE"
     assert service.status("project:alpha").revision == 0
     assert lease_b["fencingToken"] > lease_a["fencingToken"]
+
+
+def test_local_archive_accepts_current_offline_branch_without_project_lease(
+    authority_client,
+) -> None:
+    from routes import api_archive
+
+    client, _service = authority_client
+    asset = {
+        "id": "offline-branch-asset",
+        "workspaceId": "offline-product-a",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+        "stageId": "hero",
+        "content": {"value": 1},
+    }
+
+    response = client.post(
+        "/api/local-archive/assets",
+        json={
+            "asset": asset,
+            "authorityWorkspaceId": "draft:tab-branch-a",
+            "expectedRevision": 3,
+            "revision": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    stored = api_archive._local_archive_load_index()["assets"]
+    assert stored[0]["assetId"] == "offline-branch-asset"
+    assert stored[0]["workspaceId"] == "offline-product-a"
+
+
+def test_required_fields_cannot_be_erased_by_same_work_blank_snapshot(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    required = {
+        "size": {"manualValue": "가로21cm*세로14cm", "manualTouched": True},
+        "width_mm": {"manualValue": "21cm", "manualTouched": True},
+        "depth_mm": {"manualValue": "14cm", "manualTouched": True},
+        "material": {"manualValue": "모시", "manualTouched": True},
+        "usage": {"manualValue": "화장품용파우치,작은소품보관용", "manualTouched": True},
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {"factory": {"product": {**product, "dbFieldSettings": required}}},
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    blank = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {"factory": {"product": {**product, "dbFieldSettings": {}}}},
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert blank.status_code == 200
+    assert blank.get_json()["accepted"] is False
+    assert blank.get_json()["keptExisting"] is True
+    assert blank.get_json()["protectedNoOp"] is True
+    assert blank.get_json()["reason"] == "incoming snapshot dropped protected required fields"
+    assert restored["assets"]["factory"]["product"]["dbFieldSettings"] == required

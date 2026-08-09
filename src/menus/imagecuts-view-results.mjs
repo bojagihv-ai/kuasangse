@@ -52,6 +52,16 @@ export function renderImageCutsResultsView(state, helpers) {
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn-sm" type="button" data-factory-open-local-archive-folder="cuts" data-factory-local-archive-scope="category">
+          <span class="material-icons-outlined" style="font-size:16px">folder_open</span>
+          이미지컷 보관 폴더 열기
+        </button>
+        <span class="factory-small" data-factory-local-archive-folder-status="cuts" aria-live="polite"></span>
+        <button class="btn-sm" type="button" data-factory-open-local-archive-folder="size" data-factory-local-archive-scope="category">
+          <span class="material-icons-outlined" style="font-size:16px">folder_open</span>
+          사이즈컷 보관 폴더 열기
+        </button>
+        <span class="factory-small" data-factory-local-archive-folder-status="size" aria-live="polite"></span>
         <button class="btn-sm" id="chooseCutsArchiveFolderBtn">
           <span class="material-icons-outlined" style="font-size:16px">folder_open</span>
           로컬 저장 폴더 선택
@@ -84,7 +94,16 @@ export function renderImageCutsResultsView(state, helpers) {
       ${c.prompts.map((p, i) => `
         <div class="cut-card ${factoryCutPromptPreviewSrc(p, 'cuts') ? 'has-result' : ''}">
           <div style="display:flex;align-items:center;justify-content:space-between">
-            <span class="cut-label">${p.label}</span>
+            <span class="cut-label">
+              ${p.label}
+              ${(p.archiveId
+                || p.localArchiveId
+                || p.localArchive?.archiveId
+                || p.metadata?.localArchiveId
+                || factoryCutPromptPreviewSrc(p, 'cuts').includes('/api/local-archive/'))
+                ? '<span class="factory-pill" style="margin-left:6px;color:var(--ok);border-color:color-mix(in srgb, var(--ok) 55%, transparent)">로컬</span>'
+                : ''}
+            </span>
             <div style="display:flex;gap:6px">
               <button class="btn-sm" data-rename-cut="${i}">✏️ 이름변경</button>
               ${factoryCutPromptPreviewSrc(p, 'cuts') ? `<a class="btn-sm" href="${escAttr(factoryCutPromptPreviewSrc(p, 'cuts'))}" download="cut${i+1}.png">⬇️ 저장</a>` : ''}

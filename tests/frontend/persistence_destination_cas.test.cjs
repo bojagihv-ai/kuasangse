@@ -24,6 +24,154 @@ async function load(name) {
   return import(`${url}?cas=${Date.now()}-${Math.random()}`);
 }
 
+test('Given an option assignment patch When stored Then the classified recovery key remains readable in the same work scope', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  };
+  const authority = {
+    snapshot: () => ({
+      scopeId: 'project:alpha',
+      leaseId: 'lease-alpha',
+      fencingToken: 7,
+      revision: 41,
+    }),
+  };
+  const adapter = createSessionStorageAdapter({ storage, authority });
+  const value = JSON.stringify({
+    workspaceScope: 'project:alpha',
+    savedAt: 42,
+    optionSorter: { pool: [], slots: [{ id: 'slot-1', imgIds: ['red'] }] },
+  });
+
+  adapter.setItem('pdp_option_sorter_live_v1', value, {
+    persistenceAuthority: authority.snapshot(),
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+
+  assert.equal(adapter.getItem('pdp_option_sorter_live_v1'), value);
+});
+
+test('Given F5 rotates the edit lease When the same tab has an option assignment patch Then the patch remains readable', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const draftValues = new Map();
+  const sharedValues = new Map();
+  const storageOf = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  let authorityValue = {
+    scopeId: 'project:alpha',
+    leaseId: 'lease-before-f5',
+    fencingToken: 7,
+    revision: 41,
+  };
+  const authority = { snapshot: () => ({ ...authorityValue }) };
+  const adapter = createSessionStorageAdapter({
+    storage: storageOf(sharedValues),
+    draftStorage: storageOf(draftValues),
+    authority,
+  });
+  const value = JSON.stringify({
+    workspaceScope: 'project:alpha',
+    savedAt: 42,
+    optionSorter: { pool: [], slots: [{ id: 'slot-1', imgIds: ['red'] }] },
+  });
+  adapter.setItem('pdp_option_sorter_live_v1', value, {
+    persistenceAuthority: authority.snapshot(),
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+
+  authorityValue = { ...authorityValue, leaseId: 'lease-after-f5', revision: 42 };
+
+  assert.equal(adapter.getItem('pdp_option_sorter_live_v1'), value);
+});
+
+test('Given F5 rotates the edit fence When the same tab has required-field drafts Then size draft remains readable', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const draftValues = new Map();
+  const sharedValues = new Map();
+  const storageOf = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  let authorityValue = {
+    scopeId: 'project:alpha',
+    leaseId: 'lease-before-f5',
+    fencingToken: 7,
+    revision: 41,
+  };
+  const authority = { snapshot: () => ({ ...authorityValue }) };
+  const adapter = createSessionStorageAdapter({
+    storage: storageOf(sharedValues),
+    draftStorage: storageOf(draftValues),
+    authority,
+  });
+  const value = JSON.stringify({
+    workKey: 'project:alpha|run-1|모시꽃수파우치|image-1',
+    drafts: { size: { value: '가로21cm*세로14cm', label: '사이즈/규격' } },
+  });
+
+  adapter.setItem('factory_wizard_field_drafts_v1', value, {
+    persistenceAuthority: authority.snapshot(),
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+
+  authorityValue = { ...authorityValue, leaseId: 'lease-after-f5', revision: 42 };
+
+  assert.equal(adapter.getItem('factory_wizard_field_drafts_v1'), value);
+  assert.equal(sharedValues.size, 0, '필수값 초안도 공유 localStorage로 새지 않아야 한다');
+});
+
+test('Given an old same-tab required-field draft When F5 rotates the fence and the draft is rewritten Then the new draft replaces the old one', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const draftValues = new Map();
+  const storageOf = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  let authorityValue = {
+    scopeId: 'project:alpha',
+    leaseId: 'lease-before-f5',
+    fencingToken: 7,
+    revision: 41,
+  };
+  const authority = { snapshot: () => ({ ...authorityValue }) };
+  const adapter = createSessionStorageAdapter({
+    storage: storageOf(new Map()),
+    draftStorage: storageOf(draftValues),
+    authority,
+  });
+  const context = () => ({
+    persistenceAuthority: authority.snapshot(),
+    assertAuthority() {},
+    assertCompletion() {},
+  });
+  adapter.setItem('factory_wizard_field_drafts_v1', JSON.stringify({
+    workKey: 'project:alpha|run-1|모시꽃수파우치|image-1',
+    drafts: { size: { value: '가로21cm*세로14cm' } },
+  }), context());
+
+  authorityValue = { ...authorityValue, leaseId: 'lease-after-f5', revision: 42 };
+  const replacement = JSON.stringify({
+    workKey: 'project:alpha|run-1|모시꽃수파우치|image-1',
+    drafts: { size: { value: '가로22cm*세로15cm' } },
+  });
+
+  adapter.setItem('factory_wizard_field_drafts_v1', replacement, context());
+
+  assert.equal(JSON.parse(adapter.getItem('factory_wizard_field_drafts_v1')).drafts.size.value, '가로22cm*세로15cm');
+});
+
 test('Given import session replica When published Then session and bootstrap share the accepted scope and revision', async () => {
   // Given: an accepted import envelope whose snapshot names the current workfile.
   const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
@@ -64,6 +212,76 @@ test('Given import session replica When published Then session and bootstrap sha
   assert.equal(bootstrap.workspaceRevision.counter, 41);
   assert.equal(bootstrap.currentProjectId, 'alpha');
   assert.equal(bootstrap.currentProjectName, '수저집');
+});
+
+test('Given an F5 starts with draft authority When this tab has a project bootstrap Then the project identity is still readable', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const bootstrap = JSON.stringify({
+    workspaceScope: { id: 'project:alpha' },
+    currentProjectId: 'alpha',
+    currentProjectName: '모시바둑파우치',
+    step: 'factory',
+  });
+  const recovery = JSON.stringify({
+    schema: 'kuasangse.recovery.v1',
+    value: bootstrap,
+    persistenceAuthority: {
+      scopeId: 'project:alpha',
+      leaseId: 'project-lease',
+      fencingToken: 9,
+      revision: 41,
+    },
+  });
+  const values = new Map([['pdp_last_work_bootstrap_v1', recovery]]);
+  const draftStorage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  };
+  const sharedStorage = {
+    getItem: () => null,
+    setItem() {},
+    removeItem() {},
+  };
+  const authority = {
+    snapshot: () => ({
+      scopeId: 'draft:f5-startup',
+      leaseId: 'draft-lease',
+      fencingToken: 1,
+      revision: 0,
+    }),
+  };
+  const adapter = createSessionStorageAdapter({
+    storage: sharedStorage,
+    draftStorage,
+    authority,
+  });
+
+  assert.equal(
+    adapter.getItem('pdp_last_work_bootstrap_v1'),
+    bootstrap,
+    'F5 discarded this tab project bootstrap because startup still held temporary draft authority',
+  );
+
+  const sharedValues = new Map([['pdp_last_work_bootstrap_v1', recovery]]);
+  const sharedOnlyAdapter = createSessionStorageAdapter({
+    storage: {
+      getItem: key => sharedValues.get(key) ?? null,
+      setItem: (key, value) => sharedValues.set(key, String(value)),
+      removeItem: key => sharedValues.delete(key),
+    },
+    draftStorage: {
+      getItem: () => null,
+      setItem() {},
+      removeItem() {},
+    },
+    authority,
+  });
+  assert.equal(
+    sharedOnlyAdapter.getItem('pdp_last_work_bootstrap_v1'),
+    null,
+    'another tab shared bootstrap bypassed the draft authority guard',
+  );
 });
 
 test('Given bootstrap key publish fails When import session replica writes Then both local keys roll back', async () => {
@@ -150,6 +368,250 @@ test('Given authority advanced to B When local recovery is still A Then stale re
 
   // Then: A's stale payload is never accepted as B's current workspace state.
   assert.equal(restored, null);
+});
+
+test('Given multiple browser tabs When draft pointers are stored Then each tab has an independent scope', async () => {
+  // Given: durable recovery is shared, while each browser tab has its own session storage.
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const sharedValues = new Map();
+  const tabValues = new Map();
+  const makeStorage = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  const adapter = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabValues),
+  });
+  const context = {
+    persistenceAuthority: { scopeId: 'app-global', leaseId: '', fencingToken: 0, revision: 0 },
+    assertAuthority() {},
+    assertCompletion() {},
+  };
+
+  // When: this tab records its current blank draft pointer.
+  adapter.setItem('pdp_last_work_draft_scope_v1', 'draft:tab-a', context);
+
+  // Then: the pointer is isolated in sessionStorage and can survive a reload of this tab only.
+  assert.equal(sharedValues.has('pdp_last_work_draft_scope_v1'), false);
+  assert.equal(adapter.getItem('pdp_last_work_draft_scope_v1'), 'draft:tab-a');
+  assert.equal(tabValues.has('pdp_last_work_draft_scope_v1'), true);
+});
+
+test('Given two tabs edit different blank drafts When each tab reloads Then neither tab restores the other draft', async () => {
+  // Given: both tabs share durable fallback storage but own independent sessionStorage.
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const sharedValues = new Map();
+  const tabAValues = new Map();
+  const tabBValues = new Map();
+  const makeStorage = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  const authorityFor = scopeId => ({
+    snapshot: () => ({
+      scopeId, leaseId: '', fencingToken: 0, revision: 0, mode: 'offline-edit',
+    }),
+  });
+  const draftEnvelope = (scopeId, value, revision) => ({
+    schema: 'kuasangse.workspace',
+    version: 2,
+    scopeId,
+    savedAt: revision,
+    digest: `digest-${scopeId}-${value}`,
+    metadata: {
+      operationId: `operation-${scopeId}-${revision}`,
+      leaseId: '',
+      fencingToken: '0',
+      revision: { scopeId, counter: revision, updatedAt: revision, writerId: value },
+    },
+    snapshot: {
+      currentProjectId: '',
+      currentProjectName: value,
+      productName: value,
+      step: 'factory',
+    },
+  });
+  const adapterA = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabAValues),
+    authority: authorityFor('draft:tab-a'),
+  });
+  const adapterB = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabBValues),
+    authority: authorityFor('draft:tab-b'),
+  });
+  const context = {
+    writeBootstrap: true,
+    assertAuthority() {},
+    assertCompletion() {},
+  };
+
+  // When: A saves first and B later replaces the shared last-work fallback.
+  await adapterA.write(draftEnvelope('draft:tab-a', '새상품A', 1), context);
+  await adapterB.write(draftEnvelope('draft:tab-b', '방울수저집', 1), context);
+
+  // Then: reloading A must recover A from its tab, while B still recovers B.
+  const restoredA = await adapterA.read('draft:tab-a');
+  const restoredB = await adapterB.read('draft:tab-b');
+  assert.equal(restoredA?.snapshot?.productName, '새상품A');
+  assert.equal(restoredB?.snapshot?.productName, '방울수저집');
+  assert.equal(
+    JSON.parse(adapterA.getItem('pdp_last_work_bootstrap_v1')).currentProjectName,
+    '새상품A',
+  );
+  assert.equal(
+    JSON.parse(adapterB.getItem('pdp_last_work_bootstrap_v1')).currentProjectName,
+    '방울수저집',
+  );
+});
+
+test('Given two tabs open the same saved document When each tab autosaves Then F5 restores only that tab branch', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  const sharedValues = new Map();
+  const tabAValues = new Map();
+  const tabBValues = new Map();
+  const makeStorage = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  const authorityFor = scopeId => ({
+    snapshot: () => ({
+      scopeId, leaseId: '', fencingToken: 0, revision: 0, mode: 'offline-edit',
+    }),
+  });
+  const documentBranchEnvelope = (scopeId, branchId, productName, revision) => ({
+    schema: 'kuasangse.workspace',
+    version: 2,
+    scopeId,
+    savedAt: revision,
+    digest: `digest-${scopeId}-${productName}`,
+    metadata: {
+      operationId: `operation-${branchId}-${revision}`,
+      leaseId: '',
+      fencingToken: '0',
+      revision: { scopeId, counter: revision, updatedAt: revision, writerId: branchId },
+    },
+    snapshot: {
+      currentProjectId: 'shared-document',
+      currentProjectName: '같은문서',
+      productName,
+      workspaceScope: { id: scopeId },
+      workspaceBranch: {
+        schema: 'kuasangse.work-branch.v1',
+        branchId,
+        scopeId,
+        documentId: 'shared-document',
+        documentScopeId: 'project:shared-document',
+        createdAt: 1,
+      },
+    },
+  });
+  const adapterA = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabAValues),
+    authority: authorityFor('draft:tab-a'),
+  });
+  const adapterB = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabBValues),
+    authority: authorityFor('draft:tab-b'),
+  });
+  const context = { writeBootstrap: true, assertAuthority() {}, assertCompletion() {} };
+
+  await adapterA.write(documentBranchEnvelope('draft:tab-a', 'tab-a', '같은문서-A편집', 1), context);
+  await adapterB.write(documentBranchEnvelope('draft:tab-b', 'tab-b', '같은문서-B편집', 1), context);
+
+  assert.equal((await adapterA.read('draft:tab-a'))?.snapshot?.productName, '같은문서-A편집');
+  assert.equal((await adapterB.read('draft:tab-b'))?.snapshot?.productName, '같은문서-B편집');
+  assert.equal(JSON.parse(adapterA.getItem('pdp_last_work_bootstrap_v1')).workspaceScope.id, 'draft:tab-a');
+  assert.equal(JSON.parse(adapterB.getItem('pdp_last_work_bootstrap_v1')).workspaceScope.id, 'draft:tab-b');
+  assert.equal(sharedValues.size, 0);
+});
+
+test('Given a browser tab owns an active work When recovery keys are written Then shared localStorage remains physically empty', async () => {
+  const { createSessionStorageAdapter, WORKSPACE_SESSION_KEYS } = await load('session-storage-adapter.mjs');
+  const sharedValues = new Map();
+  const tabValues = new Map();
+  const makeStorage = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  const authority = {
+    snapshot: () => ({
+      scopeId: 'project:alpha', leaseId: 'lease-tab-alpha', fencingToken: 7, revision: 41, mode: 'editing',
+    }),
+  };
+  const adapter = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabValues),
+    authority,
+  });
+  const context = {
+    persistenceAuthority: authority.snapshot(),
+    assertAuthority() {},
+    assertCompletion() {},
+  };
+
+  for (const key of WORKSPACE_SESSION_KEYS) {
+    adapter.setItem(key, JSON.stringify({ key, owner: 'tab-alpha' }), context);
+  }
+  await adapter.write(envelope('TAB-ALPHA', 7, 41), {
+    ...context,
+    writeBootstrap: true,
+    recoverySnapshot: {
+      currentProjectId: 'alpha',
+      currentProjectName: '양단호박바늘쌈',
+      productName: '양단호박바늘쌈',
+      step: 'factory',
+    },
+  });
+
+  assert.deepEqual(
+    [...sharedValues.keys()],
+    [],
+    'active work recovery leaked into cross-tab localStorage',
+  );
+  assert.ok(tabValues.has('pdp_session'));
+  assert.ok(tabValues.has('pdp_last_work_bootstrap_v1'));
+  for (const key of WORKSPACE_SESSION_KEYS) assert.ok(tabValues.has(key), `${key} was not stored in this tab`);
+});
+
+test('Given another tab has no active work When a sibling tab saved recovery Then no active key is readable', async () => {
+  const { createSessionStorageAdapter, WORKSPACE_SESSION_KEYS } = await load('session-storage-adapter.mjs');
+  const sharedValues = new Map();
+  const tabAValues = new Map();
+  const tabBValues = new Map();
+  const makeStorage = values => ({
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  });
+  const adapterA = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabAValues),
+  });
+  const adapterB = createSessionStorageAdapter({
+    storage: makeStorage(sharedValues),
+    draftStorage: makeStorage(tabBValues),
+  });
+  const context = {
+    persistenceAuthority: {},
+    assertAuthority() {},
+    assertCompletion() {},
+  };
+
+  for (const key of WORKSPACE_SESSION_KEYS) adapterA.setItem(key, `tab-a:${key}`, context);
+
+  for (const key of WORKSPACE_SESSION_KEYS) {
+    assert.equal(adapterB.getItem(key), null, `${key} crossed the physical tab boundary`);
+  }
+  assert.equal(sharedValues.size, 0);
 });
 
 test('Given IndexedDB already contains B When stale A transaction runs Then atomic compare-and-put preserves B', async () => {
@@ -331,4 +793,32 @@ test('Given server response is delayed When local authority changes Then complet
 
   // Then: the adapter does not convert the delayed response into A success.
   await assert.rejects(pending, error => error?.code === 'STALE_FENCE');
+});
+
+test('Given a server lease conflict When a fallback base exists Then the write stops after the authoritative rejection', async () => {
+  // Given: the first authority endpoint rejects the stale lease and a fallback endpoint is configured.
+  const { createServerLastWorkAdapter, ServerPersistenceError } = await load('server-last-work-adapter.mjs');
+  const requests = [];
+  const adapter = createServerLastWorkAdapter({
+    root: { location: { origin: 'http://test' } },
+    bases: () => ['http://authority', 'http://fallback'],
+    fetchImpl: async url => {
+      requests.push(url);
+      return {
+        ok: false,
+        status: 409,
+        async json() { return { code: 'WORKSPACE_REVISION_CONFLICT', error: 'stale revision' }; },
+      };
+    },
+  });
+
+  // When/Then: a deterministic authority rejection is not replayed against another base.
+  await assert.rejects(
+    adapter.write(envelope('A', 1, 1), {
+      assertAuthority() {}, leaseId: 'lease-a', fencingToken: 1, expectedRevision: 0,
+    }),
+    error => error instanceof ServerPersistenceError && error.status === 409,
+  );
+  assert.equal(requests.length, 1);
+  assert.match(requests[0], /^http:\/\/authority\/api\/last-work/);
 });

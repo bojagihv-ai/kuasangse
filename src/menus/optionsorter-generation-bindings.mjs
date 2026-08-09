@@ -4,7 +4,9 @@ export function bindOptionSorterGeneration(context) {
     detectOptionTonePresetId, ensureDefaultSectionPlacements,
     factorySendOptionSorterResultsToFactory, getOptionGenerationPipeline,
     getOptionToneDisplayName, getOptionTonePreset, optAppendLogs, optClearStyleSample,
-    optDeleteStyleSampleFromLibrary, optGenerateOptionImages, optRefreshVisionColorHints,
+    optClearGroupShotImages, optDeleteStyleSampleFromLibrary, optGenerateOptionGroupShot,
+    optGenerateOptionImages, optRefreshVisionColorHints, optSelectAllGroupShotImages,
+    optSetGroupShotImageSelected, optOpenImagePreview,
     optScheduleSave, optSetStyleSample, optSetStyleSampleFromLibrary,
     optSetStyleSampleFromResult, readImageFileAsDataUrl, saveLastWorkNow, uid,
   } = context;
@@ -63,6 +65,46 @@ export function bindOptionSorterGeneration(context) {
     };
     optOptionExtraPrompt.onblur = () => { saveLastWorkNow(); requestRender(); };
   }
+  queryAll('[data-opt-group-shot-image]').forEach(btn => {
+    btn.onclick = event => {
+      event.stopPropagation();
+      const selected = btn.dataset.optGroupShotSelected !== 'true';
+      optSetGroupShotImageSelected(btn.dataset.optGroupShotImage, selected, optionSorter());
+      optScheduleSave();
+      saveLastWorkNow();
+      requestRender();
+    };
+  });
+  queryAll('[data-opt-group-shot-select-all]').forEach(btn => {
+    btn.onclick = event => {
+      event.stopPropagation();
+      optSelectAllGroupShotImages(optionSorter());
+      optScheduleSave();
+      saveLastWorkNow();
+      requestRender();
+    };
+  });
+  queryAll('[data-opt-group-shot-clear]').forEach(btn => {
+    btn.onclick = event => {
+      event.stopPropagation();
+      optClearGroupShotImages(optionSorter());
+      optScheduleSave();
+      saveLastWorkNow();
+      requestRender();
+    };
+  });
+  const optGroupShotPrompt = byId('optGroupShotPrompt');
+  if (optGroupShotPrompt) {
+    optGroupShotPrompt.oninput = () => {
+      optionSorter().optionGroupShotPrompt = optGroupShotPrompt.value;
+      optScheduleSave();
+    };
+    optGroupShotPrompt.onblur = () => saveLastWorkNow();
+  }
+  const optGenerateGroupShot = byId('optGenerateGroupShot');
+  if (optGenerateGroupShot) {
+    optGenerateGroupShot.onclick = () => optGenerateOptionGroupShot({ source: 'optionsorter' });
+  }
   const optGenerateOptions = byId('optGenerateOptions');
   if (optGenerateOptions) optGenerateOptions.onclick = () => optGenerateOptionImages();
   queryAll('[data-opt-send-factory-result]').forEach(btn => {
@@ -86,10 +128,26 @@ export function bindOptionSorterGeneration(context) {
     optScheduleSave();
     requestRender();
   });
+  const optAutoNameColors = byId('optAutoNameColors');
+  if (optAutoNameColors) optAutoNameColors.onclick = () => optRefreshVisionColorHints({
+    applySlotNames: true,
+    requireGptOAuth: true,
+  }).catch(e => {
+    optionSorter().optionAutoColorNameStatus = `색상명 자동 생성 실패: ${e.message || e}`;
+    optAppendLogs(optionSorter(), optionSorter().optionAutoColorNameStatus);
+    optionSorter().optionVisionColorBusy = false;
+    optScheduleSave();
+    requestRender();
+  });
   queryAll('[data-opt-preview-result]').forEach(el => {
     el.onclick = e => {
       e.stopPropagation();
-      optionSorter().previewResultId = el.dataset.optPreviewResult;
+      const resultId = el.dataset.optPreviewResult || '';
+      if (typeof optOpenImagePreview === 'function') {
+        optOpenImagePreview(null, resultId);
+        return;
+      }
+      optionSorter().previewResultId = resultId;
       optionSorter().previewImageId = null;
       requestRender();
     };

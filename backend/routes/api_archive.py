@@ -1,8 +1,14 @@
 """API domain routes: archive. Auto-split from api.py — behavior unchanged."""
 import hashlib
+import ipaddress
 import json
 import re
+import socket
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+import httpx2
+
 import routes.api_shared as _api_shared
 from routes.api_shared import api  # noqa: F401
 globals().update({k: v for k, v in vars(_api_shared).items() if not k.startswith("__")})
@@ -15,6 +21,13 @@ from routes.api_workspace_lock import (
 )
 from services.workspace_lock_service import WorkspaceConflict
 from services.workspace_mutation import FileDelete, FileWrite, StagedFilesystemMutation
+from services import vm_candidate_bridge
+from services.local_asset_library import (
+    LibraryBuildRequest,
+    LibraryIdentity,
+    build_workfile_library,
+    workfile_library_root,
+)
 
 @api.route("/recovery/crystal-preview/<path:filename>", methods=["GET"])
 def serve_crystal_recovery_image(filename):
@@ -100,17 +113,78 @@ def _last_work_has_destructive_identity_drift(existing, incoming):
         return True
     existing_payload = existing.get("assets") or {}
     incoming_payload = incoming.get("assets") or {}
+    existing_automation = existing_factory.get("automation") or {}
+    incoming_automation = incoming_factory.get("automation") or {}
+    existing_options_stage = (existing_factory.get("stages") or {}).get("options") or {}
+    incoming_options_stage = (incoming_factory.get("stages") or {}).get("options") or {}
+    existing_option_mode = str(existing_automation.get("optionMode") or "").strip()
+    incoming_option_mode = str(incoming_automation.get("optionMode") or "").strip()
+    existing_option_status = str(existing_options_stage.get("status") or "").strip()
+    incoming_option_status = str(incoming_options_stage.get("status") or "").strip()
+    if (
+        existing_option_mode not in ("", "pending")
+        and existing_option_status == "done"
+        and (
+            incoming_option_mode in ("", "pending")
+            or incoming_option_status in ("", "idle", "pending")
+        )
+    ):
+        return True
+    allowed_removed_sections = (
+        {"size_color"}
+        if incoming_automation.get("optionMode") == "none"
+        and incoming_options_stage.get("status") == "done"
+        else set()
+    )
     for key in ("sectionImages", "sectionContents"):
         existing_sections = existing_payload.get(key) or {}
         incoming_sections = incoming_payload.get(key) or {}
         if isinstance(existing_sections, dict) and isinstance(incoming_sections, dict):
-            if len(existing_sections) > len(incoming_sections):
+            removed_sections = set(existing_sections) - set(incoming_sections)
+            if removed_sections - allowed_removed_sections:
                 return True
     if not existing_assets or len(existing_assets) != len(incoming_assets):
         return len(existing_assets) > len(incoming_assets)
     existing_active = sum(1 for asset in existing_assets if not asset.get("rejected"))
     incoming_active = sum(1 for asset in incoming_assets if not asset.get("rejected"))
     return existing_active > incoming_active
+
+
+_LAST_WORK_REQUIRED_FIELD_ALIASES = {
+    "size": ("size", "sizeSpec", "size_spec"),
+    "width_mm": ("width_mm", "widthMm", "width"),
+    "depth_mm": ("depth_mm", "depthMm", "depth", "length"),
+    "material": ("material",),
+    "usage": ("usage", "usagePurpose", "use"),
+}
+
+
+def _last_work_required_field_value(snapshot, field_id):
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), dict) else snapshot
+    factory = assets.get("factory") if isinstance(assets.get("factory"), dict) else {}
+    product = factory.get("product") if isinstance(factory.get("product"), dict) else {}
+    settings = product.get("dbFieldSettings") if isinstance(product.get("dbFieldSettings"), dict) else {}
+    manual_values = assets.get("productInfoManualValues") if isinstance(assets.get("productInfoManualValues"), dict) else {}
+    aliases = _LAST_WORK_REQUIRED_FIELD_ALIASES.get(field_id, (field_id,))
+    sources = (settings, manual_values, product)
+    for source in sources:
+        for alias in aliases:
+            candidate = source.get(alias)
+            if isinstance(candidate, dict):
+                candidate = candidate.get("manualValue") or candidate.get("value") or candidate.get("text")
+            value = str(candidate or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _last_work_has_required_field_drop(existing, incoming):
+    return any(
+        _last_work_required_field_value(existing, field_id)
+        and not _last_work_required_field_value(incoming, field_id)
+        for field_id in _LAST_WORK_REQUIRED_FIELD_ALIASES
+    )
 
 @api.route("/last-work", methods=["GET"])
 def get_last_work():
@@ -190,6 +264,20 @@ def save_last_work():
             "savedAt": existing.get("savedAt"),
         })
 
+    if existing and _last_work_has_required_field_drop(existing, incoming):
+        return jsonify({
+            "ok": True,
+            "accepted": False,
+            "keptExisting": True,
+            "protectedNoOp": True,
+            "reason": "incoming snapshot dropped protected required fields",
+            "scopeId": authority_snapshot.scope_id,
+            "revision": authority_snapshot.revision,
+            "score": existing_score,
+            "incomingScore": incoming_score,
+            "savedAt": existing.get("savedAt"),
+        })
+
     if existing and not force and _snapshot_has_comp_analysis(existing) and not _snapshot_has_comp_analysis(incoming):
         return jsonify({
             "ok": True,
@@ -224,7 +312,10 @@ def save_last_work():
             "ok": True,
             "accepted": False,
             "keptExisting": True,
+            "protectedNoOp": True,
             "reason": "incoming snapshot changed work identity or dropped protected work data",
+            "scopeId": authority_snapshot.scope_id,
+            "revision": authority_snapshot.revision,
             "score": existing_score,
             "incomingScore": incoming_score,
             "savedAt": existing.get("savedAt"),
@@ -283,6 +374,9 @@ def save_last_work():
             "count": archive_result.get("count", 0),
             "skipped": archive_result.get("skipped", 0),
             "error": archive_result.get("error", ""),
+            "libraryRoot": archive_result.get("libraryRoot", ""),
+            "libraryFileCount": archive_result.get("libraryFileCount", 0),
+            "libraryPendingRemoteCount": archive_result.get("libraryPendingRemoteCount", 0),
         },
     })
 
@@ -484,7 +578,7 @@ def _local_archive_latest_stage_records(workspace_id, product_key, input_image_f
     preferred_stage_runs = preferred_stage_runs if isinstance(preferred_stage_runs, dict) else {}
     grouped = {}
     for record in _local_archive_load_index().get("assets", []):
-        if not isinstance(record, dict) or not _local_archive_record_has_payload(record):
+        if not isinstance(record, dict):
             continue
         identity = _local_archive_record_identity(record)
         if not _local_archive_scope_is_complete(identity):
@@ -494,6 +588,8 @@ def _local_archive_latest_stage_records(workspace_id, product_key, input_image_f
             or identity["productKey"] != product_key
             or identity["inputImageFingerprint"] != input_image_fingerprint
         ):
+            continue
+        if not _local_archive_record_has_payload(record):
             continue
         key = (identity["stageId"], identity["currentRunId"])
         grouped.setdefault(key, []).append(record)
@@ -627,15 +723,238 @@ def _last_work_archive_identity(snapshot):
             or ""
         ).strip(),
         "productName": str(product_name or "상품명_미지정").strip(),
-        "productKey": str(scope.get("productKey") or product_name or "").strip(),
-        "currentRunId": str(scope.get("currentRunId") or assets.get("currentRunId") or "").strip(),
+        "productKey": str(
+            scope.get("productKey") or product.get("productKey") or product_name or ""
+        ).strip(),
+        "currentRunId": str(
+            scope.get("currentRunId")
+            or product.get("currentRunId")
+            or assets.get("currentRunId")
+            or ""
+        ).strip(),
         "inputImageFingerprint": str(
             scope.get("inputImageFingerprint")
             or scope.get("inputImageKey")
             or scope.get("sourceImageKey")
+            or product.get("inputImageFingerprint")
+            or product.get("lockedInputImageFingerprint")
             or ""
         ).strip(),
     }
+
+
+_LOCAL_ASSET_HTTP_LIMITS = httpx2.Limits(
+    max_connections=200,
+    max_keepalive_connections=40,
+    keepalive_expiry=30.0,
+)
+_LOCAL_ASSET_HTTP_TIMEOUT = httpx2.Timeout(
+    connect=5.0,
+    read=30.0,
+    write=10.0,
+    pool=10.0,
+)
+_LOCAL_ASSET_SOCKET_OPTIONS = [(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)]
+_LOCAL_ASSET_MAX_REMOTE_BYTES = 20 * 1024 * 1024
+
+
+def _local_asset_http_client():
+    transport = httpx2.HTTPTransport(
+        http2=True,
+        retries=3,
+        limits=_LOCAL_ASSET_HTTP_LIMITS,
+        socket_options=_LOCAL_ASSET_SOCKET_OPTIONS,
+    )
+    return httpx2.Client(
+        transport=transport,
+        timeout=_LOCAL_ASSET_HTTP_TIMEOUT,
+        follow_redirects=True,
+    )
+
+
+def _local_asset_remote_url_is_public(url):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return False
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return False
+    return bool(addresses)
+
+
+def _local_asset_fetch_remote_image(client, url):
+    if not _local_asset_remote_url_is_public(url):
+        return None
+    try:
+        with client.stream("GET", url) as response:
+            response.raise_for_status()
+            mime = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if not mime.startswith("image/"):
+                return None
+            chunks = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > _LOCAL_ASSET_MAX_REMOTE_BYTES:
+                    return None
+                chunks.append(chunk)
+            return mime, b"".join(chunks)
+    except httpx2.HTTPError:
+        return None
+
+
+def _local_asset_read_image_file(path_value):
+    path = Path(str(path_value or "")).expanduser()
+    if not path.is_file():
+        return None
+    mime = str(mimetypes.guess_type(path.name)[0] or "").lower()
+    if not mime.startswith("image/"):
+        return None
+    try:
+        return mime, path.read_bytes()
+    except OSError:
+        return None
+
+
+def _local_asset_fetch_local_reference(url, records):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    if parsed.path == "/api/local_image":
+        paths = parse_qs(parsed.query).get("path") or []
+        return _local_asset_read_image_file(paths[0] if paths else "")
+    archive_match = re.fullmatch(
+        r"/api/local-archive/assets/([^/]+)/image",
+        parsed.path,
+    )
+    if archive_match:
+        archive_id = unquote(archive_match.group(1))
+        record = next(
+            (
+                item
+                for item in records
+                if str(item.get("archiveId") or "") == archive_id
+            ),
+            {},
+        )
+        files = record.get("files") if isinstance(record.get("files"), dict) else {}
+        return _local_asset_read_image_file(files.get("imagePath"))
+    artifact_match = re.fullmatch(
+        r"/api/vm-detail-capture/([^/]+)/artifacts/(\d+)",
+        parsed.path,
+    )
+    if not artifact_match:
+        return None
+    artifact = vm_candidate_bridge.read_artifact(
+        artifact_match.group(1),
+        int(artifact_match.group(2)),
+    )
+    return _local_asset_read_image_file(artifact)
+
+
+def _local_asset_fetch_sync_reference(url, records):
+    parsed = urlparse(str(url or "").strip())
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return None
+    if parsed.path != "/api/local_image":
+        return _local_asset_fetch_local_reference(url, records)
+    paths = parse_qs(parsed.query).get("path") or []
+    if not paths:
+        return None
+    try:
+        candidate = Path(paths[0]).expanduser().resolve()
+        managed_root = Path(_JEPUM_ROOT).expanduser().resolve()
+    except OSError:
+        return None
+    if not candidate.is_relative_to(managed_root):
+        return None
+    return _local_asset_read_image_file(candidate)
+
+
+def _local_asset_library_identity(snapshot, fallback=None):
+    fallback = fallback if isinstance(fallback, dict) else {}
+    identity = _last_work_archive_identity(snapshot)
+    return LibraryIdentity(
+        workspace_id=str(identity.get("workspaceId") or fallback.get("workspaceId") or "").strip(),
+        product_name=str(
+            identity.get("productName")
+            or fallback.get("productName")
+            or fallback.get("productKey")
+            or "상품명_미지정"
+        ).strip(),
+        product_key=str(
+            identity.get("productKey")
+            or fallback.get("productKey")
+            or fallback.get("productName")
+            or ""
+        ).strip(),
+        input_image_fingerprint=str(
+            identity.get("inputImageFingerprint")
+            or fallback.get("inputImageFingerprint")
+            or ""
+        ).strip(),
+    )
+
+
+def _local_asset_library_snapshot_for_workspace(workspace_id):
+    normalized = str(workspace_id or "").strip()
+    if not normalized:
+        return {}
+    candidates = [normalized]
+    if not normalized.startswith("project:"):
+        candidates.insert(0, f"project:{normalized}")
+    for candidate in candidates:
+        snapshot_path, _ = _last_work_paths(candidate)
+        snapshot = _load_json_file(snapshot_path)
+        if isinstance(snapshot, dict):
+            return snapshot
+    return {}
+
+
+def _organize_local_asset_library(snapshot, fallback=None, download_remote=False):
+    identity = _local_asset_library_identity(snapshot, fallback)
+    if not identity.workspace_id:
+        return None
+    records = tuple(
+        record
+        for record in _local_archive_load_index().get("assets", [])
+        if isinstance(record, dict)
+    )
+    if not download_remote:
+        return build_workfile_library(LibraryBuildRequest(
+            archive_root=Path(Config.LOCAL_ARCHIVE_FOLDER),
+            identity=identity,
+            snapshot=snapshot if isinstance(snapshot, dict) else {},
+            archive_records=records,
+            fetch_image=lambda url: _local_asset_fetch_local_reference(url, records),
+        ))
+    with _local_asset_http_client() as client:
+        return build_workfile_library(LibraryBuildRequest(
+            archive_root=Path(Config.LOCAL_ARCHIVE_FOLDER),
+            identity=identity,
+            snapshot=snapshot if isinstance(snapshot, dict) else {},
+            archive_records=records,
+            fetch_image=lambda url: (
+                _local_asset_fetch_local_reference(url, records)
+                or _local_asset_fetch_remote_image(client, url)
+            ),
+        ))
 
 
 def _last_work_archive_image_candidates(snapshot):
@@ -929,7 +1248,34 @@ def _archive_last_work_images(snapshot):
             index["assets"] = [*saved_records, *index.get("assets", [])][:5000]
             _local_archive_write_index(index)
 
-    return {"count": len(saved_records), "skipped": skipped, "records": saved_records[:20]}
+    library = _organize_local_asset_library(snapshot)
+    return {
+        "count": len(saved_records),
+        "skipped": skipped,
+        "records": saved_records[:20],
+        "libraryRoot": str(library.root) if library else "",
+        "libraryFileCount": library.file_count if library else 0,
+        "libraryPendingRemoteCount": library.pending_remote_count if library else 0,
+    }
+
+
+def _local_archive_normalize_path_text(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("\\\\"):
+        prefix = "\\\\"
+        rest = text[2:]
+    elif re.match(r"^[A-Za-z]:[\\/]", text):
+        prefix = text[:2]
+        rest = text[2:]
+    else:
+        prefix = ""
+        rest = text
+    rest = re.sub(r"[\\/]+", lambda _match: os.sep, rest)
+    if prefix:
+        return prefix + os.sep + rest.lstrip("\\/")
+    return rest
 
 
 def _local_archive_static_generated_path(value):
@@ -949,11 +1295,11 @@ def _local_archive_static_generated_path(value):
 
 
 def _local_archive_safe_existing_file(path_value):
-    raw = str(path_value or "").strip()
+    raw = _local_archive_normalize_path_text(path_value)
     if not raw:
         return None
     try:
-        root = Path(Config.LOCAL_ARCHIVE_FOLDER).resolve()
+        root = Path(_local_archive_normalize_path_text(Config.LOCAL_ARCHIVE_FOLDER)).resolve()
         path = Path(raw).resolve()
         if os.path.commonpath([str(root), str(path)]) != str(root):
             return None
@@ -962,6 +1308,94 @@ def _local_archive_safe_existing_file(path_value):
         return path
     except Exception:
         return None
+
+
+def _local_archive_safe_existing_folder(path_value):
+    raw = _local_archive_normalize_path_text(path_value)
+    if not raw:
+        return None
+    try:
+        root = Path(_local_archive_normalize_path_text(Config.LOCAL_ARCHIVE_FOLDER)).resolve()
+        folder = Path(raw).resolve()
+        if os.path.commonpath([str(root), str(folder)]) != str(root):
+            return None
+        if not folder.is_dir():
+            return None
+        return folder
+    except Exception:
+        return None
+
+
+def _local_archive_record_folder(record):
+    if not isinstance(record, dict):
+        return None
+    folder = _local_archive_safe_existing_folder(record.get("folder"))
+    if folder:
+        return folder
+    files = record.get("files") if isinstance(record.get("files"), dict) else {}
+    for field in ("imagePath", "htmlPath", "contentPath", "assetPath", "metadataPath"):
+        path = _local_archive_safe_existing_file(files.get(field))
+        if path:
+            return path.parent
+    return None
+
+
+def _local_asset_library_category_for_stage(stage_id):
+    stage = str(stage_id or "").strip().lower()
+    if stage == "hero":
+        return "09_OUTPUT_대표이미지"
+    if stage == "size":
+        return "11_OUTPUT_사이즈컷"
+    if stage == "options":
+        return "12_OUTPUT_색상옵션컷"
+    if stage == "cuts" or stage.startswith("cuts_"):
+        return "10_OUTPUT_이미지컷"
+    if stage.startswith("section_") or stage.startswith("detail"):
+        return "13_OUTPUT_섹션이미지"
+    if stage in {"competitors", "competition"}:
+        return "03_OUTPUT_경쟁사후보"
+    if stage in {"cafe24", "cafe24_candidates"}:
+        return "05_OUTPUT_Cafe24후보"
+    if stage in {"db", "sinhwa", "sinhwa_db"}:
+        return "07_OUTPUT_신화사DB후보"
+    if stage in {"input", "start"}:
+        return "01_INPUT_기본이미지"
+    return ""
+
+
+def _local_archive_folder_for_scope(identity, stage_id, scope):
+    root = Path(Config.LOCAL_ARCHIVE_FOLDER).resolve()
+    requested_scope = str(scope or "").strip().lower()
+    if requested_scope not in {"work", "category", "stage"}:
+        requested_scope = "work"
+    if not _local_archive_scope_is_complete(identity):
+        root.mkdir(parents=True, exist_ok=True)
+        return root, "root"
+    library_identity = LibraryIdentity(
+        workspace_id=identity["workspaceId"],
+        product_name=str(
+            identity.get("productName")
+            or identity.get("productKey")
+            or "상품명_미지정"
+        ).strip(),
+        product_key=identity["productKey"],
+        input_image_fingerprint=identity["inputImageFingerprint"],
+    )
+    assets_dir = workfile_library_root(root, library_identity)
+    if requested_scope == "work":
+        folder = assets_dir
+    else:
+        category = _local_asset_library_category_for_stage(stage_id)
+        folder = assets_dir / category if category else assets_dir
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder, requested_scope
+
+
+def _local_archive_open_folder(folder):
+    opener = getattr(os, "startfile", None)
+    if not callable(opener):
+        raise RuntimeError("이 환경에서는 로컬 폴더 열기를 지원하지 않습니다.")
+    opener(str(folder))
 
 
 def _local_archive_image_to_data_url(path_value, mime_value=""):
@@ -982,6 +1416,24 @@ def _local_archive_record_for_response(record):
     image_path = _local_archive_safe_existing_file(files.get("imagePath"))
     if archive_id and image_path:
         out["imageUrl"] = f"/api/local-archive/assets/{quote(archive_id)}/image"
+    if str(out.get("stageId") or "").strip() == "options":
+        source_map = out.get("sourceMap") if isinstance(out.get("sourceMap"), dict) else {}
+        option_result_id = str(source_map.get("optionResultId") or "").strip()
+        prompt = ""
+        prompt_path = _local_archive_safe_existing_file(files.get("promptPath"))
+        if prompt_path:
+            prompt = prompt_path.read_text(encoding="utf-8", errors="replace")
+        if not option_result_id:
+            asset_path = _local_archive_safe_existing_file(files.get("assetPath"))
+            asset_manifest = _load_json_file(asset_path) if asset_path else {}
+            manifest_source_map = asset_manifest.get("sourceMap") if isinstance(asset_manifest, dict) and isinstance(asset_manifest.get("sourceMap"), dict) else {}
+            option_result_id = str(manifest_source_map.get("optionResultId") or "").strip()
+            if not prompt and isinstance(asset_manifest, dict):
+                prompt = str(asset_manifest.get("prompt") or "")
+        if option_result_id:
+            out["optionResultId"] = option_result_id
+        if prompt:
+            out["prompt"] = prompt
     if "assetKind" not in out or "categoryLabel" not in out:
         kind = _local_archive_kind_for_stage(
             out.get("stageId") or "",
@@ -1231,7 +1683,9 @@ def recover_local_archive_workfile_latest(workspace_id):
         paths = _local_archive_workfile_paths(workspace_id)
         return recovered, scopes, paths
 
-    authority_scope = _local_archive_authority_scope(workspace_id)
+    authority_scope = _local_archive_authority_scope(
+        body.get("authorityWorkspaceId") or workspace_id
+    )
     try:
         if authority_scope:
             _, recovery = commit_workspace_replica(
@@ -1328,6 +1782,23 @@ def get_local_archive_asset_image(archive_id):
     return send_file(str(image_path), mimetype=mime, conditional=True, max_age=3600)
 
 
+@api.route("/local-archive/source-image", methods=["GET"])
+def get_local_archive_source_image():
+    source = str(request.args.get("source") or "").strip()
+    if not source:
+        return jsonify({"ok": False, "error": "source가 필요합니다."}), 422
+    index = _local_archive_load_index()
+    records = index.get("assets") if isinstance(index.get("assets"), list) else []
+    content = _local_asset_fetch_sync_reference(source, records)
+    if content is None:
+        return jsonify({"ok": False, "error": "허용된 로컬 이미지를 찾지 못했습니다."}), 404
+    mime, raw = content
+    response = Response(raw, mimetype=mime)
+    response.headers["Cache-Control"] = "private, max-age=60"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @api.route("/local-archive/assets/<archive_id>", methods=["GET"])
 def get_local_archive_asset(archive_id):
     archive_id = str(archive_id or "").strip()
@@ -1363,17 +1834,65 @@ def get_local_archive_asset(archive_id):
     })
 
 
+@api.route("/local-archive/folders/open", methods=["POST"])
+def open_local_archive_folder():
+    body = request.get_json(silent=True) or {}
+    archive_id = str(body.get("archiveId") or "").strip()
+    root = Path(Config.LOCAL_ARCHIVE_FOLDER).resolve()
+    if archive_id:
+        index = _local_archive_load_index()
+        record = next((item for item in index.get("assets", []) if str(item.get("archiveId") or "") == archive_id), None)
+        if not record:
+            return jsonify({"ok": False, "error": "로컬 보관 자산을 찾지 못했습니다."}), 404
+        folder = _local_archive_record_folder(record)
+        if not folder:
+            return jsonify({"ok": False, "error": "로컬 보관 자산 폴더를 찾지 못했습니다."}), 404
+        resolved_scope = "asset"
+    else:
+        identity = _local_archive_asset_identity({}, body)
+        stage_id = str(body.get("stageId") or identity.get("stageId") or "").strip()
+        snapshot = _local_asset_library_snapshot_for_workspace(identity.get("workspaceId"))
+        try:
+            _organize_local_asset_library(snapshot, identity, download_remote=True)
+        except OSError as error:
+            return jsonify({
+                "ok": False,
+                "error": f"작업파일 이미지 자료함을 정리하지 못했습니다: {error}",
+            }), 500
+        folder, resolved_scope = _local_archive_folder_for_scope(
+            identity,
+            stage_id,
+            body.get("scope"),
+        )
+    try:
+        _local_archive_open_folder(folder)
+    except Exception as error:
+        return jsonify({"ok": False, "error": f"로컬 저장 폴더를 열지 못했습니다: {error}"}), 503
+    try:
+        relative_path = folder.resolve().relative_to(root).as_posix() or "."
+    except ValueError:
+        return jsonify({"ok": False, "error": "로컬 보관 폴더 범위를 확인하지 못했습니다."}), 500
+    return jsonify({
+        "ok": True,
+        "archiveId": archive_id,
+        "scope": resolved_scope,
+        "relativePath": relative_path,
+    })
+
+
 @api.route("/local-archive/assets", methods=["POST"])
 def save_local_archive_asset():
     body = request.get_json(silent=True) or {}
     asset = body.get("asset") if isinstance(body.get("asset"), dict) else body
     workspace_id = str(
-        body.get("authorityWorkspaceId")
+        body.get("workspaceId")
         or asset.get("workspaceId")
         or asset.get("currentProjectId")
         or ""
     ).strip()
-    authority_scope = _local_archive_authority_scope(workspace_id)
+    authority_scope = _local_archive_authority_scope(
+        body.get("authorityWorkspaceId") or workspace_id
+    )
 
     def mutate_archive():
         with _LOCAL_ARCHIVE_LOCK:

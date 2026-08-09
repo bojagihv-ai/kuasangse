@@ -150,7 +150,7 @@ def test_frontend_keeps_short_korean_meaning_units_together() -> None:
     # When/Then: 공통 helper와 각 의미 단위가 명시적으로 연결되어야 한다.
     assert ".keep-together" in frontend_source
     assert "white-space: nowrap;" in frontend_source
-    assert '<span class="keep-together">이 런타임의 범위가 아닙니다.</span>' in frontend_source
+    assert '<span class="keep-together">등록된 versioned command bridge로</span>' in frontend_source
     assert '<span class="keep-together">시작하거나 종료하지 않습니다.</span>' in frontend_source
     assert '<span class="keep-together">표시 기준: 백엔드 health 응답.</span>' in frontend_source
     assert '<span class="keep-together">연결 대상 카드의 URL은 설정값이며</span>' in frontend_source

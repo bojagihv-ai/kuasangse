@@ -39,6 +39,60 @@ async function importFresh(relativePath, label) {
   return import(url.href);
 }
 
+test('작업파일 동기화는 이미 동일한 작업 정체성을 다시 커밋하지 않는다', () => {
+  const core = source('src/app-core-03.js');
+  const ensureIdentitySource = sourceSlice(
+    core,
+    'function factoryEnsureCurrentProjectIdentityForFile(',
+    'async function saveWorkspaceProductImageBackup(',
+  );
+  let writes = 0;
+  const operationToken = Object.freeze({ workspaceId: 'project-1', revision: 9 });
+  const currentFactory = {
+    workspace: {
+      id: 'project-1',
+      name: '동일 작업',
+      createdAt: 1234,
+    },
+    currentProjectId: 'project-1',
+    currentProjectName: '동일 작업',
+  };
+  const context = vm.createContext({
+    state: {
+      currentProjectId: 'project-1',
+      currentProjectName: '동일 작업',
+      currentProjectCreatedAt: 1234,
+    },
+    factoryRuntimeRequireStore: () => ({
+      getOperationToken: () => operationToken,
+      isOperationCurrent: () => true,
+    }),
+    factoryRuntimeReadFactory: () => currentFactory,
+    factoryWorkspaceIdentityFromSource: () => ({
+      id: 'project-1',
+      name: '동일 작업',
+      createdAt: 1234,
+    }),
+    factoryCurrentWorkspaceId: () => 'project-1',
+    deriveProjectName: () => '동일 작업',
+    uid: () => 'unexpected-project',
+    factoryRuntimeUpdateOwnedFactory: () => {
+      writes += 1;
+      throw new Error('동일 정체성은 Store write를 만들면 안 됩니다.');
+    },
+  });
+  vm.runInContext(
+    `${ensureIdentitySource}\nthis.ensureIdentity = factoryEnsureCurrentProjectIdentityForFile;`,
+    context,
+  );
+
+  const result = context.ensureIdentity('동일 작업');
+
+  assert.equal(writes, 0);
+  assert.equal(result.id, 'project-1');
+  assert.equal(result.operationToken, operationToken);
+});
+
 function initialSnapshot(count = 1) {
   return {
     factory: { nested: { count }, automation: { activeTab: 'start' } },
@@ -112,6 +166,12 @@ async function createB2AutomationRuntimeHarness(label) {
   const staleError = action => Object.assign(new Error(`STALE_FACTORY_RUNTIME_ACTION: ${action}`), {
     code: 'STALE_FACTORY_RUNTIME_ACTION',
   });
+  const normalizeVmResult = result => {
+    if (result && typeof result.then === 'function') {
+      return Promise.resolve(result).then(normalizeVmResult);
+    }
+    return result === undefined ? undefined : JSON.parse(JSON.stringify(result));
+  };
   const context = vm.createContext({
     state: { analysis: null, sectionBatchRun: null },
     factoryRuntimeRequireStore: () => store,
@@ -121,7 +181,7 @@ async function createB2AutomationRuntimeHarness(label) {
       controls.currentCommand = command;
       events.push(`command-open:${owner}:${command}`);
       const transaction = store.updateDraft(
-        mutator,
+        (draft, snapshot, mutationContext) => normalizeVmResult(mutator(draft, snapshot, mutationContext)),
         { owner, expectedRevision: token.revision },
         command,
       );
@@ -171,6 +231,7 @@ async function createB2AutomationRuntimeHarness(label) {
       sideEffects.render += 1;
       return undefined;
     },
+    factoryRuntimeDetachedValue: value => JSON.parse(JSON.stringify(value || {})),
     factoryEnsureSizeImageReviewConfirmedForRun: () => ({ ok: true, autoConfirmed: false }),
     factoryScheduleRunStageFeedbackSave: () => { sideEffects.save += 1; },
     factoryYieldToPaint: async () => true,
@@ -184,7 +245,7 @@ async function createB2AutomationRuntimeHarness(label) {
   );
   const stageButtonSource = sourceSlice(
     factoryCore,
-    'async function factoryHandleRunStageButton(',
+    'function factoryPrepareRunStageButton(',
     '// ── bindEvents 확장 (조립공장) ──',
   );
   vm.runInContext(`${automationSource}\n${stageButtonSource}\nthis.b2Workers = Object.freeze({
@@ -225,6 +286,150 @@ test('field commands allow their factory-owned wizard activity timestamp', () =>
     .flatMap(part => part.paths);
 
   assert.equal(factoryPaths.includes('automation.lastWizardActionAt'), true);
+});
+
+test('option sorter navigation persists its owned factory draft without writing lastSavedAt through the assets command', () => {
+  const factoryCore = source('src/app-core-06.js');
+  const openOptionSorter = sourceSlice(
+    factoryCore,
+    'function factoryOpenOptionSorterEditor(',
+    'function factoryFindOptionSorterResultAsset(',
+  );
+
+  assert.match(openOptionSorter, /saveLastWorkNow\(\{\s*factory\s*\}\)/);
+  assert.doesNotMatch(openOptionSorter, /saveLastWorkNow\(\s*\)/);
+});
+
+test('start product-name command allows the DB search query written by product identity sync', () => {
+  const core = source('src/app-core-03.js');
+  const createRuntimePolicies = new Function(
+    `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+  const policy = createRuntimePolicies()['factory/start:setProductName'];
+  const productDbPaths = policy.parts
+    .filter(part => part.owner === 'product-db')
+    .flatMap(part => part.paths);
+
+  assert.equal(productDbPaths.includes('automation.dbSearchQuery'), true);
+});
+
+test('DB candidate rerun commands allow the DB navigation state written by search query sync', () => {
+  const core = source('src/app-core-03.js');
+  const createRuntimePolicies = new Function(
+    `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+
+  for (const command of [
+    'factory/db:rerunDbQuery',
+    'factory/db:rerunCafe24Query',
+    'factory/db:appendCafe24Query',
+  ]) {
+    const factoryPaths = createRuntimePolicies()[command].parts
+      .filter(part => part.owner === 'factory')
+      .flatMap(part => part.paths);
+    assert.equal(factoryPaths.includes('automation.activeTab'), true, command);
+    assert.equal(factoryPaths.includes('automation.activeTaskId'), true, command);
+    assert.equal(factoryPaths.includes('automation.lastWizardActionAt'), true, command);
+  }
+});
+
+test('Cafe24 candidate collection commands own their live progress state', () => {
+  const core = source('src/app-core-03.js');
+  const createRuntimePolicies = new Function(
+    `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+
+  for (const command of [
+    'factory/cafe24:collect-product-candidates',
+    'factory/cafe24:collect-cafe24-candidates',
+    'factory/cafe24:collect-additional-cafe24-candidates',
+    'factory/cafe24:run-candidate-additional-search',
+    'factory/cafe24:run-candidate-search-only',
+  ]) {
+    const factoryPaths = createRuntimePolicies()[command].parts
+      .filter(part => part.owner === 'factory')
+      .flatMap(part => part.paths);
+    assert.equal(factoryPaths.includes('automation.parallelProgress'), true, command);
+    assert.equal(factoryPaths.includes('automation.candidateSearchProgress'), true, command);
+  }
+});
+
+test('start product-image command allows the new run identity written during image replacement', () => {
+  const core = source('src/app-core-03.js');
+  const createRuntimePolicies = new Function(
+    `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
+  )();
+  const policy = createRuntimePolicies()['factory/start:setProductImage'];
+  const factoryPaths = policy.parts
+    .filter(part => part.owner === 'factory')
+    .flatMap(part => part.paths);
+
+  assert.equal(factoryPaths.includes('automation.currentRunId'), true);
+  assert.equal(factoryPaths.includes('automation.currentRunStartedAt'), true);
+  assert.equal(factoryPaths.includes('goalRun.currentRunId'), true);
+});
+
+test('start product-image commits through one current-token command transaction after async file read', () => {
+  const core = source('src/app-core-03.js');
+  const startActions = sourceSlice(core, 'function factoryRuntimeStartActions()', 'function factoryRuntimeDbActions()');
+
+  assert.match(
+    startActions,
+    /factoryRuntimeWithOperationLease\('factory\/setProductImage'[\s\S]*factoryReadProductImageFile\(file\)[\s\S]*const currentToken = store\.getOperationToken\(\)[\s\S]*factoryRuntimeBridgeAction\([\s\S]*'factory\/start:setProductImage'[\s\S]*operationToken: currentToken/,
+  );
+  assert.doesNotMatch(startActions, /const runTransaction =/);
+  assert.match(startActions, /staleBackgroundArchive[\s\S]*if \(!staleBackgroundArchive\) factoryRuntimeReportError\(error\)/);
+});
+
+test('Cafe24 후보 재검색 명령은 소유 draft를 닫은 뒤 현재 operation token으로 수집한다', () => {
+  const core = source('src/app-core-03.js');
+  const dbActions = sourceSlice(core, 'function factoryRuntimeDbActions()', 'function factoryRuntimeFieldsActions()');
+
+  assert.match(dbActions, /rerunCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateSearchOnly\(\{ operationToken: receipt\.operationToken \}\)/);
+  assert.match(dbActions, /appendCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateAdditionalSearch\(\{ operationToken: receipt\.operationToken \}\)/);
+});
+
+test('visual validation completion does not retain a revoked factory draft asset proxy', async () => {
+  const core = source('src/app-core-03.js');
+  const scheduleSource = sourceSlice(
+    core,
+    'function factoryScheduleAssetVisualValidation(',
+    'function factoryHasDeclaredProductImage(',
+  );
+  const liveFactory = {
+    assets: [{ id: 'size-1', stageId: 'size', metadata: {}, currentProductHidden: true }],
+    stages: { size: { status: 'running' } },
+  };
+  const context = vm.createContext({
+    FACTORY_VISUAL_VALIDATION_VERSION: 1,
+    Promise,
+    Date,
+    Map,
+    cloneData: value => structuredClone(value),
+    factoryVisualValidationActiveOperationToken: '',
+    factoryVisualValidationPromises: new Map(),
+    factoryVisualValidationJobs: new Map(),
+    factoryVisualValidationJobActive: () => false,
+    factoryCachedImageColorSignature: async image => ({ dominantBucket: image }),
+    factoryRuntimeUpdateOwnedFactory: (_command, _owner, mutator) => ({ result: mutator(liveFactory) }),
+    factoryColorSignaturesCompatible: () => ({ ok: true, reason: 'match' }),
+    factoryRefreshStageAfterVisualValidation: () => {},
+    factoryScheduleVisualValidationRender: () => {},
+  });
+  vm.runInContext(`${scheduleSource}\nthis.scheduleVisualValidation = factoryScheduleAssetVisualValidation;`, context);
+  const { proxy, revoke } = Proxy.revocable({ id: 'size-1', stageId: 'size', metadata: {} }, {});
+
+  const completion = context.scheduleVisualValidation(proxy, liveFactory, {
+    sourceImage: 'source',
+    sourceKey: 'source-key',
+    assetImage: 'asset',
+    assetKey: 'asset-key',
+  });
+  revoke();
+
+  await assert.doesNotReject(completion);
+  assert.equal(liveFactory.assets[0].metadata.visualValidation.status, 'ok');
+  assert.equal(liveFactory.stages.size.status, 'done');
 });
 
 test('B3 production action bridge commits through the owned store draft transaction', async () => {
@@ -378,7 +583,16 @@ test('B3 production action bridge commits through the owned store draft transact
     'function factoryRuntimeDbHelpers(',
   );
   assert.match(dbCandidateWriter, /factoryRuntimeUpdateOwnedFactory\([\s\S]*factory\/db:runCandidatesForSelection/);
-  assert.match(dbCandidateWriter, /await factoryRunDbStage\(\{ factory, operationToken \}\)[\s\S]*store\.isOperationCurrent\(operationToken\)/);
+  assert.match(
+    dbCandidateWriter,
+    /await factoryRunDbCandidatesForSelection\(\{[\s\S]*factoryCandidateCollectionScopeMatches\(collectionScope, store\.getSnapshot\(\)\.factory\)/,
+    '후보 네트워크 완료 후 revision 숫자가 아니라 작업·제품·입력 이미지 범위를 다시 확인해야 합니다.',
+  );
+  assert.doesNotMatch(
+    dbCandidateWriter,
+    /await factoryRunDbStage\(\{ factory, operationToken, cafe24Only \}\)[\s\S]*store\.isOperationCurrent\(operationToken\)/,
+    '후보 수집 중 발생한 같은 작업파일의 정상 revision 증가로 결과를 버리면 안 됩니다.',
+  );
   assert.doesNotMatch(dbCandidateWriter, /options\.factory\s*\|\|\s*factoryRuntimeReadFactory\(\)/);
   assert.match(candidateProgramWriter, /await startProgram\(\)[\s\S]*store\.isOperationCurrent\(operationToken\)/);
   assert.match(candidateProgramWriter, /factoryCommitCandidateProgramState\([\s\S]*operationToken = store\.getOperationToken\(\)/);
@@ -392,7 +606,7 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(runtimeDbActions, /factoryBeginCandidateProgramStart\('cafe24', draft\)[\s\S]*factoryStartCafe24ControlAndRerunCandidates\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryBeginCafe24OAuthStatusCheck\(draft\)[\s\S]*factoryRefreshCafe24OAuthStatus\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryOpenCafe24OAuthLogin\(\{[\s\S]*factory: draft,[\s\S]*operationToken/);
-  assert.equal((runtimeDbActions.match(/factoryRuntimeRequireCurrentFollowupReceipt\(/g) || []).length, 4);
+  assert.equal((runtimeDbActions.match(/factoryRuntimeRequireCurrentFollowupReceipt\(/g) || []).length, 6);
   assert.doesNotMatch(runtimeDbActions, /draft => factory(?:StartSinhwaDbAndRerunCandidates|StartCafe24ControlAndRerunCandidates|RefreshCafe24OAuthStatus)\(/);
   for (const command of [
     'factory/db:runCandidatesForSelection',
@@ -435,9 +649,11 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(analysisOnlyWriter, /factoryRuntimeUpdateOwnedFactory\([\s\S]*factory\/db:runCurrentProductAnalysisOnly/);
   assert.match(analysisOnlyWriter, /factoryEnsureCurrentProductImageAnalysisForOneClick\(\{[\s\S]*factory,[\s\S]*operationToken/);
   assert.match(dbOneClickWriter, /factoryRuntimeUpdateOwnedFactory\([\s\S]*factory\/db:runDb/);
-  assert.match(dbOneClickWriter, /factoryRunVmCompetitorCollectionForSelection\(\{ factory, operationToken \}\)/);
-  assert.match(runtimeCompetitorMarket, /factoryRuntimeRequireCurrentFollowupReceipt\('factory\/competitor:market:quick-action', receipt\)/);
-  assert.match(runtimeCompetitorMarket, /factoryRunVmCompetitorCollectionForSelection\(\{ operationToken: receipt\.operationToken \}\)/);
+  assert.match(dbOneClickWriter, /factoryRunVmCompetitorCollectionForSelection\(\{[\s\S]*factory,[\s\S]*operationToken,[\s\S]*skipServicePreflight:\s*true[\s\S]*\}\)/);
+  assert.match(runtimeCompetitorMarket, /const actionName = 'factory\/competitor:market:quick-action'/);
+  assert.match(runtimeCompetitorMarket, /factoryRuntimeRequireCurrentFollowupReceipt\(actionName, receipt\)/);
+  assert.match(runtimeCompetitorMarket, /factoryRuntimeWithOperationLease\([\s\S]*\{ operationToken: receipt\.operationToken \}/);
+  assert.match(runtimeCompetitorMarket, /factoryRunVmCompetitorCollectionForSelection\(\{[\s\S]*operationToken: operation\.operationToken,[\s\S]*operationSignal: operation\.operationSignal,[\s\S]*forceCollect: true,[\s\S]*\}\)/);
   assert.doesNotMatch(runtimeCompetitorMarket, /if \(quickAction === 'start-vm'\) return factoryRunVmCompetitorCollectionForSelection\(\)/);
   for (const command of [
     'factory/competitor:runVmCandidatesForSelection',
@@ -540,7 +756,6 @@ test('B3 production action bridge commits through the owned store draft transact
     sourceSlice(factoryCore, 'function factoryLocalArchiveSessionRunId(', 'function factoryLocalArchiveIdentity('),
     sourceSlice(factoryCore, 'function factoryRetryMissingLocalArchiveAssets(', 'function factoryLocalArchiveSearchProductName('),
     sourceSlice(factoryCore, 'function factoryAdoptWorkfileArchiveStageRuns(', 'async function factoryBootstrapCurrentWorkfileArchive('),
-    sourceSlice(factoryCore, 'function factoryScheduleLocalArchiveAutoRefresh(', 'function factoryRenderLocalArchivePanel('),
     sourceSlice(factoryCore, 'function factoryRestoreLocalArchiveAssetFast(', 'function factoryOpenLocalArchivePreview('),
     sourceSlice(factoryCore, 'function factorySyncDbOptionsToOptionSorter(', 'function factoryOpenOptionSorterEditor('),
     sourceSlice(factoryCore, 'function factoryEnsureArchiveStageRunId(', 'async function factoryArchiveOptionSorterResultToWorkfile('),
@@ -560,10 +775,15 @@ test('B3 production action bridge commits through the owned store draft transact
   const archiveAutoRefreshWriter = sourceSlice(
     factoryCore,
     'function factoryScheduleLocalArchiveAutoRefresh(',
-    'function factoryRenderLocalArchivePanel(',
+    'function factoryPatchLocalArchiveMiniPanel(',
   );
   assert.match(archiveAutoRefreshWriter, /getOperationToken\(\)/);
   assert.match(archiveAutoRefreshWriter, /factoryRuntimeIsOperationCurrent\(operationToken\)/);
+  assert.match(
+    archiveAutoRefreshWriter,
+    /const latestFactory = typeof factoryRuntimeReadFactory === 'function'[\s\S]*\? factoryRuntimeReadFactory\(\)[\s\S]*: factory/,
+  );
+  assert.match(archiveAutoRefreshWriter, /factoryLocalArchiveRefreshSignature\(latestFactory\) !== signature/);
   const fastArchiveRestoreWriter = sourceSlice(
     factoryCore,
     'function factoryRestoreLocalArchiveAssetFast(',
@@ -579,7 +799,8 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(optionArchiveWriter, /const factory = options\.factory/);
   assert.match(optionArchiveWriter, /factoryRegisterAsset\([\s\S]*?\{[\s\S]*?factory,/);
   assert.match(optionArchiveWriter, /factoryQueueLocalArchiveAsset\([\s\S]*?\{[\s\S]*?factory,[\s\S]*?operationToken,/);
-  assert.match(optionArchiveWriter, /factorySetStageStatus\('options',[\s\S]*?factory\)/);
+  assert.match(optionArchiveWriter, /factory\.stages\.options\s*=\s*\{/);
+  assert.match(optionArchiveWriter, /factoryEnsureOptionGroupShotHeroAsset\(result,\s*asset,\s*factory\)/);
   assert.doesNotMatch(optionArchiveWriter, /(?:const|let|var)\s+factory\s*=\s*factoryRuntimeReadFactory\(\)/);
   const restoredCutStageWriter = sourceSlice(
     factoryCore,
@@ -656,7 +877,10 @@ test('B3 production action bridge commits through the owned store draft transact
   );
   assert.match(archiveBootstrapWriter, /const operationToken = options\.operationToken \|\| store\.getOperationToken\(\)/);
   assert.match(factoryCore, /function factoryWorkfileArchiveRequestIsCurrent\(/);
-  assert.match(archiveBootstrapWriter, /await ensureWorkspaceEditAuthority[\s\S]*factoryWorkfileArchiveRequestIsCurrent\(identity, authorityScope, fencingToken\)/);
+  assert.doesNotMatch(archiveBootstrapWriter, /await ensureWorkspaceEditAuthority/);
+  assert.match(archiveBootstrapWriter, /const authorityScope = branchScope/);
+  assert.match(archiveBootstrapWriter, /const authority = currentWorkspaceAuthority\(\)/);
+  assert.match(archiveBootstrapWriter, /factoryWorkfileArchiveRequestIsCurrent\(identity, authorityScope, fencingToken\)/);
   assert.match(archiveBootstrapWriter, /await response\.json[\s\S]*factoryWorkfileArchiveRequestIsCurrent\(identity, authorityScope, fencingToken\)/);
   assert.doesNotMatch(archiveBootstrapWriter, /await response\.json[\s\S]*store\.isOperationCurrent\(operationToken\)/);
   assert.match(archiveBootstrapWriter, /explicitFactory[\s\S]*factoryAdoptWorkfileArchiveStageRuns\(stageScopes, explicitFactory\)/);
@@ -763,6 +987,9 @@ test('B3 production action bridge commits through the owned store draft transact
     'async function factoryRunHeroAndCutsForOneClick(',
     'function factoryClearStaleProductAnalysis(',
   );
+  assert.match(heroCutsOneClickWriter, /const operationToken = options\.operationToken \|\| store\.getOperationToken\(\)/);
+  assert.match(heroCutsOneClickWriter, /factoryRunStage\('hero', \{ factory, operationToken, operationSignal \}\)/);
+  assert.match(heroCutsOneClickWriter, /factoryRunStage\('cuts', \{ factory, operationToken, operationSignal \}\)/);
   const staleAnalysisWriter = sourceSlice(
     factoryCore,
     'function factoryClearStaleProductAnalysis(',
@@ -824,16 +1051,37 @@ test('B3 production action bridge commits through the owned store draft transact
   );
   assert.match(optionSendWriter, /factoryRuntimeUpdateOwnedFactory\([\s\S]*factory\/optionsorter:sendResultsToFactory/);
   assert.match(optionSendWriter, /factoryImportOptionSorterResults\(\{[\s\S]*factory,/);
+  assert.match(optionSendWriter, /transaction && typeof transaction\.then === 'function'[\s\S]*Promise\.resolve\(transaction\)\.then\(finishCommittedSend\)/);
+  assert.match(optionSendWriter, /const finishCommittedSend = receipt => \{[\s\S]*saveLastWorkNow\(\)[\s\S]*render\(\)[\s\S]*return receipt\.result;/);
 
   const productImageWriter = sourceSlice(
+    assetCore,
+    'function factoryProductImageFileSupported(',
+    'async function factoryAddCompletedFiles(',
+  );
+  const productImageReader = sourceSlice(
+    productImageWriter,
+    'function factoryReadProductImageFile(',
+    'function factoryApplyProductImagePayload(',
+  );
+  const productImageApply = sourceSlice(
+    productImageWriter,
+    'function factoryApplyProductImagePayload(',
+    'function factorySetProductImage(',
+  );
+  const productImageSet = sourceSlice(
     assetCore,
     'function factorySetProductImage(',
     'async function factoryAddCompletedFiles(',
   );
-  assert.match(productImageWriter, /return new Promise\(\(resolve, reject\) =>/);
-  assert.match(productImageWriter, /options\.operationToken[\s\S]*factoryRuntimeIsOperationCurrent/);
-  assert.doesNotMatch(productImageWriter, /const factory = factoryRuntimeReadFactory\(\)/);
-  assert.match(core, /factorySetProductImage\(file, \{ factory: draft, operationToken \}\)/);
+  assert.match(productImageReader, /return new Promise\(\(resolve, reject\) =>/);
+  assert.match(productImageApply, /options\.operationToken[\s\S]*factoryRuntimeIsOperationCurrent/);
+  assert.doesNotMatch(productImageApply, /const factory = factoryRuntimeReadFactory\(\)/);
+  assert.match(productImageSet, /factoryReadProductImageFile\(file\)\.then\(payload => factoryApplyProductImagePayload\(payload, options\)\)/);
+  assert.match(
+    core,
+    /factoryReadProductImageFile\(file\)[\s\S]*factoryApplyProductImagePayload\(payload, \{[\s\S]*factory: draft,[\s\S]*operationToken: currentToken,[\s\S]*syncState: false,[\s\S]*\}\)/,
+  );
 
   const archiveWriter = sourceSlice(
     factoryCore,
@@ -849,7 +1097,11 @@ test('B3 production action bridge commits through the owned store draft transact
     [archiveWriter, 'factory/runtime:archiveCurrentInputImage'],
     [archiveRefreshWriter, 'factory/runtime:refreshLocalArchiveAssets'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`).test(writer);
+    const leaseAwareOwnedUpdate = new RegExp(
+      `const updateOwnedFactory = options\\.operationLeaseHeld === true[\\s\\S]*factoryRuntimeUpdateOwnedFactoryDuringLease[\\s\\S]*: factoryRuntimeUpdateOwnedFactory;[\\s\\S]*updateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`,
+    ).test(writer);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /const (?:factory|latestFactory) = factoryRuntimeReadFactory\(\)/);
   }
 
@@ -905,9 +1157,18 @@ test('B3 production action bridge commits through the owned store draft transact
     [localHydrateWriter, 'factory/runtime:hydrateCafe24ImagesFromLocalArchive'],
     [localRestoreWriter, 'factory/runtime:restoreLocalArchiveToCurrentWork'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`).test(writer);
+    const leaseAwareOwnedUpdate = new RegExp(
+      `const updateOwnedFactory = options\\.operationLeaseHeld === true[\\s\\S]*factoryRuntimeUpdateOwnedFactoryDuringLease[\\s\\S]*: factoryRuntimeUpdateOwnedFactory;[\\s\\S]*updateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`,
+    ).test(writer);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /(?:const|let)\s+\w+\s*=\s*factoryRuntimeReadFactory\(\)/);
   }
+  assert.match(
+    localRestoreWriter,
+    /acquireOperationLease\('factory-archive:restore-current-work', operationToken\)[\s\S]*if \(!lease\.acquired\) return false[\s\S]*factory\/runtime:restoreLocalArchiveToCurrentWork[\s\S]*FACTORY_RUNTIME_OPERATION_LEASE_INTERNAL[\s\S]*finally \{[\s\S]*lease\.release\(\)/,
+    'local archive restore must fence background durable saves for its full async transaction',
+  );
 
   const cafe24Payloads = source('src/cafe24-payloads.js');
   const cafe24ApiSourceWriter = sourceSlice(
@@ -930,7 +1191,11 @@ test('B3 production action bridge commits through the owned store draft transact
     [cafe24EndpointWriter, 'factory/cafe24:probe-endpoint-health'],
     [cafe24ReferenceWriter, 'factory/cafe24:refresh-reference-lists'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`).test(writer);
+    const leaseAwareOwnedUpdate = new RegExp(
+      `const updateOwnedFactory = options\\.operationLeaseHeld === true[\\s\\S]*factoryRuntimeUpdateOwnedFactoryDuringLease[\\s\\S]*: factoryRuntimeUpdateOwnedFactory;[\\s\\S]*updateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`,
+    ).test(writer);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /(?:const|let)\s+\w+\s*=\s*factoryRuntimeReadFactory\(\)/);
   }
 
@@ -955,7 +1220,13 @@ test('B3 production action bridge commits through the owned store draft transact
     [cafe24AdditionalImagesWriter, 'factory/cafe24:sync-additional-images'],
     [cafe24DetailHtmlWriter, 'factory/cafe24:publish-detail-html'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = /factoryRuntimeUpdateOwnedFactory/.test(writer) && writer.includes(command);
+    const leaseAwareOwnedUpdate = /const updateOwnedFactory = options\.operationLeaseHeld === true/.test(writer)
+      && /factoryRuntimeUpdateOwnedFactoryDuringLease/.test(writer)
+      && /: factoryRuntimeUpdateOwnedFactory;/.test(writer)
+      && /updateOwnedFactory\(/.test(writer)
+      && writer.includes(command);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /(?:const|let)\s+\w+\s*=\s*factoryRuntimeReadFactory\(\)/);
   }
   assert.match(cafe24DetailHtmlWriter, /factoryUploadCafe24DetailInlineImages\([\s\S]*factory,/);
@@ -986,7 +1257,13 @@ test('B3 production action bridge commits through the owned store draft transact
     [cafe24RelationsWriter, 'factory/cafe24:sync-relations'],
     [cafe24PromotionsWriter, 'factory/cafe24:refresh-promotions'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = /factoryRuntimeUpdateOwnedFactory/.test(writer) && writer.includes(command);
+    const leaseAwareOwnedUpdate = /const updateOwnedFactory = options\.operationLeaseHeld === true/.test(writer)
+      && /factoryRuntimeUpdateOwnedFactoryDuringLease/.test(writer)
+      && /: factoryRuntimeUpdateOwnedFactory;/.test(writer)
+      && /updateOwnedFactory\(/.test(writer)
+      && writer.includes(command);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /(?:const|let)\s+\w+\s*=\s*factoryRuntimeReadFactory\(\)/);
   }
   assert.match(cafe24IconSyncWriter, /factoryUpdateCafe24IconDraftFromDom\(\{ factory \}\)/);
@@ -1102,7 +1379,13 @@ test('B3 production action bridge commits through the owned store draft transact
     [candidateCafe24ApplyWriter, 'factory/cafe24:apply-cafe24-candidate'],
     [candidateCollectWriter, 'factory/cafe24:collect-product-candidates'],
   ]) {
-    assert.match(writer, new RegExp(`factoryRuntimeUpdateOwnedFactory\\([\\s\\S]*${command.replace('/', '\\/')}`));
+    const directOwnedUpdate = /factoryRuntimeUpdateOwnedFactory/.test(writer) && writer.includes(command);
+    const leaseAwareOwnedUpdate = /const updateOwnedFactory = options\.operationLeaseHeld === true/.test(writer)
+      && /factoryRuntimeUpdateOwnedFactoryDuringLease/.test(writer)
+      && /: factoryRuntimeUpdateOwnedFactory;/.test(writer)
+      && /updateOwnedFactory\(/.test(writer)
+      && writer.includes(command);
+    assert.equal(directOwnedUpdate || leaseAwareOwnedUpdate, true, `${command} must use an owned factory draft updater`);
     assert.doesNotMatch(writer, /(?:const|let)\s+\w+\s*=\s*(?:options\.factory\s*\|\|\s*)?factoryRuntimeReadFactory\(\)/);
     assert.match(core, new RegExp(command.replace('/', '\\/')));
   }
@@ -1499,6 +1782,17 @@ test('B1 VM and analysis orchestration opens exact commands and rejects stale wo
     factoryRuntimeStaleActionError: action => Object.assign(new Error(`STALE_FACTORY_RUNTIME_ACTION: ${action}`), {
       code: 'STALE_FACTORY_RUNTIME_ACTION',
     }),
+    factoryRuntimeWithOperationLease: (_key, operationContext, execute) => execute({
+      operationToken: operationContext?.operationToken || store.getOperationToken(),
+      operationSignal: null,
+    }),
+    factoryCompetitorCandidateScopePayload: () => ({
+      scopeKey: 'run-b1::product-b1::image-b1',
+      currentRunId: 'run-b1',
+      productKey: 'product-b1',
+      inputImageFingerprint: 'image-b1',
+      stageId: 'competitors',
+    }),
     factoryRuntimeUpdateOwnedFactory: async (command, owner, mutator) => {
       commands.push(`${owner}:${command}`);
       const draft = command.includes('runVmCandidates')
@@ -1508,8 +1802,12 @@ test('B1 VM and analysis orchestration opens exact commands and rejects stale wo
           : drafts.db;
       return { result: await mutator(draft) };
     },
+    factoryRuntimeRenderWithOwnedDraft: (_draft, renderer) => (
+      typeof renderer === 'function' ? renderer() : true
+    ),
     cleanDbSearchTerm: () => '',
     factoryLog: () => true,
+    scheduleLastWorkSave: () => true,
     render: () => true,
     factoryUpdateFromInputs: () => true,
     factoryApplyProductToApp: () => true,
@@ -1580,6 +1878,7 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
   const runScenario = async ({ switchDuringExternal = false } = {}) => {
     const initialToken = Object.freeze({ workspaceId: 'workspace-vm-success', revision: 3, fence: 7 });
     let activeToken = initialToken;
+    let committed = false;
     const events = [];
     const row = { id: 'vm-row-1', title: 'VM 후보', _vm_search_id: 'vm-search-1' };
     const market = {
@@ -1602,7 +1901,7 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
       isOperationCurrent: token => token === activeToken,
     };
     const context = vm.createContext({
-      state: { analysis: {}, productName: '테스트 제품', compPage: { marketScrape: market } },
+      state: { step: 'factory', analysis: {}, productName: '테스트 제품', compPage: { marketScrape: market } },
       AbortController,
       COMP_MARKET_SITES: [{ id: 'site-a' }],
       factoryRuntimeRequireStore: () => store,
@@ -1613,6 +1912,7 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
         events.push(`command-open:${owner}:${command}`);
         const result = await mutator(factory);
         events.push('command-commit');
+        committed = true;
         return { result };
       },
       cleanDbSearchTerm: value => String(value || '').trim(),
@@ -1623,14 +1923,30 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
       compMarketTargetForSite: () => 1,
       factoryAutomationStartRunCountForExecution: () => 1,
       compMarketCurrentWorkScope: () => ({ productKey: 'vm-product-1' }),
+      factoryCompetitorCandidateScopePayload: () => ({
+        scopeKey: 'run-vm::vm-product-1::image-vm',
+        currentRunId: 'run-vm',
+        productKey: 'vm-product-1',
+        inputImageFingerprint: 'image-vm',
+        stageId: 'competitors',
+      }),
       compMarketApplyCurrentWorkScope: () => true,
+      compMarketRunWithOwnedWorkScope: async (_scope, action) => action(),
       compMarketSetSiteSearchStatus: () => true,
       compMarketRecordVmSearchAttempt: () => true,
       factoryLog: () => true,
       factorySetGoalRunProgress: () => true,
-      scheduleLastWorkSave: () => true,
-      render: () => true,
-      factoryRuntimeRenderWithOwnedDraft: () => true,
+      scheduleLastWorkSave: () => {
+        if (committed) events.push('save-after-commit');
+        return true;
+      },
+      render: () => {
+        if (committed) events.push('render-after-commit');
+        return true;
+      },
+      factoryRuntimeRenderWithOwnedDraft: (_draft, renderer) => (
+        typeof renderer === 'function' ? renderer() : true
+      ),
       factoryYieldToPaint: async () => true,
       factoryStartGoalHeartbeat: () => 'vm-heartbeat',
       factoryStopGoalHeartbeat: () => true,
@@ -1667,6 +1983,12 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
       factoryShowVmCandidateSelectionTab: draft => {
         draft.automation.activeTab = 'competitor';
       },
+      factorySyncCompetitorMarketToOwnedFactory: (draft, nextMarket) => {
+        draft.competitors = draft.competitors || {};
+        draft.competitors.compPage = draft.competitors.compPage || {};
+        draft.competitors.compPage.marketScrape = structuredClone(nextMarket);
+        return true;
+      },
       factoryMarkVmCandidateCollectionFailure: () => true,
       factoryClearVmCompetitorData: () => true,
     });
@@ -1678,10 +2000,13 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
   const result = await success.context.runVmWorker({ operationToken: success.initialToken });
   assert.equal(result.ok, true);
   assert.equal(success.factory.product.competitors[0].id, 'vm-row-1');
+  assert.equal(success.factory.competitors.compPage.marketScrape.results[0].id, 'vm-row-1');
   assert.deepEqual(success.events, [
     'command-open:competitors:factory/competitor:runVmCandidatesForSelection',
     'vm-external-stub',
     'command-commit',
+    'save-after-commit',
+    'render-after-commit',
   ]);
 
   const stale = await runScenario({ switchDuringExternal: true });
@@ -1693,6 +2018,115 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
     'command-open:competitors:factory/competitor:runVmCandidatesForSelection',
     'vm-external-stub',
   ]);
+});
+
+test('VM candidate collection does not bump the committed store revision while an owned draft is active', () => {
+  const factoryCore = source('src/app-core-06.js');
+  const saveSource = sourceSlice(
+    factoryCore,
+    'function compMarketSave(options = {})',
+    'function compMarketSetStatus(',
+  );
+  const runScenario = ({ ownedDraftActive }) => {
+    const committedFactory = { id: 'committed-factory' };
+    const activeFactory = ownedDraftActive ? { id: 'owned-draft' } : committedFactory;
+    const calls = [];
+    const context = vm.createContext({
+      state: {
+        compPage: {
+          analysisResult: { product: '테스트 상품' },
+          sectionPlan: [],
+          planEdits: {},
+        },
+      },
+      factoryRuntimeReadFactory: () => activeFactory,
+      factoryRuntimeReadCommittedFactory: () => committedFactory,
+      saveCompAnalysis: (_analysis, _plan, _edits, options) => {
+        calls.push({ type: 'analysis', options });
+      },
+      saveLastWorkNow: () => {
+        calls.push({ type: 'last-work' });
+      },
+    });
+    vm.runInContext(`${saveSource}\nthis.saveMarket = compMarketSave;`, context);
+    context.saveMarket();
+    return calls;
+  };
+
+  const ownedDraftCalls = runScenario({ ownedDraftActive: true });
+  assert.equal(ownedDraftCalls[0].type, 'analysis');
+  assert.equal(ownedDraftCalls[0].options.skipPersistentState, true);
+  assert.equal(ownedDraftCalls[1].type, 'last-work');
+
+  const committedCalls = runScenario({ ownedDraftActive: false });
+  assert.equal(committedCalls[0].type, 'analysis');
+  assert.equal(committedCalls[0].options.skipPersistentState, false);
+  assert.equal(committedCalls[1].type, 'last-work');
+});
+
+test('VM rerun guide acquires its lease before any store write and ignores a duplicate click', async () => {
+  const factoryCore = source('src/app-core-03.js');
+  const guideSource = sourceSlice(
+    factoryCore,
+    'function factoryRuntimeCompetitorGuideAction(',
+    'function factoryRuntimeCompetitorDraft(',
+  );
+  let bridgeWrites = 0;
+  let workerCalls = 0;
+  let revision = 9;
+  let leaseActive = false;
+  let finishWorker;
+  const workerPending = new Promise(resolve => { finishWorker = resolve; });
+  const context = vm.createContext({
+    AbortController,
+    FACTORY_RUNTIME_COMMAND_RECEIPT_SCHEMA: 'factory-runtime-command-receipt:v1',
+    factoryRuntimeBridgeAction: () => {
+      bridgeWrites += 1;
+      revision += 1;
+      return {
+        operationToken: Object.freeze({ workspaceId: 'workspace-vm-guide', revision, fence: 1 }),
+        value: true,
+        assignments: Object.freeze([]),
+      };
+    },
+    factoryRuntimeRequireCurrentFollowupReceipt: () => true,
+    factoryRuntimeWithOperationLease: (_key, _operationContext, execute) => {
+      if (leaseActive) return false;
+      leaseActive = true;
+      const result = execute(Object.freeze({
+        operationToken: Object.freeze({ workspaceId: 'workspace-vm-guide', revision, fence: 1 }),
+        operationSignal: new AbortController().signal,
+      }));
+      return Promise.resolve(result).finally(() => { leaseActive = false; });
+    },
+    factoryRunVmCompetitorCollectionForSelection: options => {
+      workerCalls += 1;
+      assert.equal(options.forceCollect, true);
+      return workerPending;
+    },
+    factoryRuntimeFollowupCommandReceipt: (receipt, result) => Object.freeze({
+      ...receipt,
+      operationToken: Object.freeze({ workspaceId: 'workspace-vm-guide', revision, fence: 1 }),
+      value: result,
+    }),
+  });
+  vm.runInContext(`${guideSource}\nthis.runGuide = factoryRuntimeCompetitorGuideAction;`, context);
+
+  const first = context.runGuide('rerun-vm-competitors', {
+    operationToken: Object.freeze({ workspaceId: 'workspace-vm-guide', revision, fence: 1 }),
+  });
+  const duplicate = context.runGuide('rerun-vm-competitors', {
+    operationToken: Object.freeze({ workspaceId: 'workspace-vm-guide', revision, fence: 1 }),
+  });
+
+  assert.equal(await duplicate, false);
+  assert.equal(workerCalls, 1);
+  assert.equal(bridgeWrites, 0);
+
+  finishWorker({ ok: true, searchId: 'vm-search-guide' });
+  const receipt = await first;
+  assert.equal(receipt.value.ok, true);
+  assert.equal(receipt.value.searchId, 'vm-search-guide');
 });
 
 test('B2 auto and goal loop share one lease and commit only their exact successful command', async () => {
@@ -1762,7 +2196,9 @@ test('B2 stage button rejects re-entry and workspace switch aborts before commit
   assert.equal(await first, true);
   assert.deepEqual(harness.events.filter(event => /^(?:command|external)/.test(event)), [
     'command-open:factory:factory/assets:handleRunStageButton',
+    'command-commit:factory/assets:handleRunStageButton',
     'external-stage:size',
+    'command-open:factory:factory/assets:handleRunStageButton',
     'command-commit:factory/assets:handleRunStageButton',
   ]);
 
@@ -1782,6 +2218,7 @@ test('B2 stage button rejects re-entry and workspace switch aborts before commit
   );
   assert.deepEqual(stale.events.filter(event => /^(?:command|external)/.test(event)), [
     'command-open:factory:factory/assets:handleRunStageButton',
+    'command-commit:factory/assets:handleRunStageButton',
     'external-stage:size',
   ]);
   assert.deepEqual(stale.sideEffects, effectsAtSwitch);
@@ -1847,7 +2284,7 @@ test('B3 detail and cut generation source requires exact commands, stable identi
   const detailWriter = sourceSlice(
     factoryCore,
     'async function runCompMarketDetailCapture(',
-    'async function compMarketResumeDetailJobRequest(',
+    'function compMarketManualRetryCandidateIds(',
   );
   const cutsWriter = sourceSlice(
     factoryCore,
@@ -2677,10 +3114,15 @@ test('factory store operation leases reject same-key re-entry and cancel private
   assert.equal(first.acquired, true);
   assert.equal(duplicate.acquired, false);
   assert.equal(independent.acquired, true);
+  assert.deepEqual(
+    store.getActiveOperationLeaseKeys().sort(),
+    ['factory/assets:stage-run', 'factory/automation:goal-run'].sort(),
+  );
   assert.equal(first.signal.aborted, false);
   assert.equal(independent.signal.aborted, false);
   assert.equal(duplicate.release(), false);
   assert.equal(first.release(), true);
+  assert.deepEqual(store.getActiveOperationLeaseKeys(), ['factory/assets:stage-run']);
   assert.equal(first.release(), false);
 
   const reacquired = store.acquireOperationLease('factory/automation:goal-run', token);
@@ -2702,6 +3144,31 @@ test('factory store operation leases reject same-key re-entry and cancel private
   disposeStore.dispose();
   assert.equal(disposeLease.signal.aborted, true);
   assert.equal(disposeLease.release(), false);
+});
+
+test('factory store blocks an older async draft when an operation lease starts before commit', async () => {
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'operation-lease-commit-fence');
+  const store = createFactoryStore({
+    initialSnapshot: initialSnapshot(),
+    workspaceId: 'workspace-lease-commit-fence',
+  });
+  let releaseDraft;
+  const pending = store.updateDraft(async draft => {
+    draft.nested.count = 99;
+    await new Promise(resolve => { releaseDraft = resolve; });
+    return true;
+  }, { owner: 'factory', expectedRevision: 0 });
+
+  const lease = store.acquireOperationLease('factory/assets:stage-run', store.getOperationToken());
+  releaseDraft();
+
+  await assert.rejects(
+    pending,
+    error => error?.code === 'STALE_FACTORY_STORE_OPERATION',
+  );
+  assert.equal(store.getSnapshot().factory.nested.count, 1);
+  assert.equal(store.getOperationToken().revision, 0);
+  assert.equal(lease.release(), true);
 });
 
 test('declared command policies reject cross-owner diffs and split mixed-owner composition atomically', async () => {
@@ -2925,7 +3392,13 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
     coordinator: 'factory-assets',
     targetPath: 'factory',
     parts: [
-      { owner: 'factory-assets', paths: ['assets', 'archive', 'stages.options'] },
+      {
+        owner: 'factory-assets',
+        paths: [
+          'assets', 'previousAssets', 'archive', 'stages.options', 'stages.hero',
+          'runtimeAssetPrunedAt', 'runtimeAssetPrunedCount',
+        ],
+      },
       {
         owner: 'factory',
         paths: [
@@ -2978,6 +3451,11 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
         ],
       },
     ],
+  });
+  assert.deepEqual(runtimePolicies['factory/archive:setLocalShowAll'], {
+    coordinator: 'factory-assets',
+    targetPath: 'factory',
+    parts: [{ owner: 'factory-assets', paths: ['archive.localShowAll'] }],
   });
   assert.deepEqual(runtimePolicies['factory/archive:restoreDirectoryHandle'], {
     coordinator: 'factory-assets',
@@ -3354,7 +3832,7 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
     draft.logStageId = '';
   }, { owner: 'cafe24', expectedRevision: 11 }, 'factory/cafe24:update-image-draft');
   const afterImageDraftToken = runtimeStore.getOperationToken();
-  assert.equal(runtimeStore.isOperationCurrent(beforeImageDraftToken), false);
+  assert.equal(runtimeStore.isOperationCurrent(beforeImageDraftToken), true);
   assert.equal(runtimeStore.isOperationCurrent(afterImageDraftToken), true);
   assert.equal(afterImageDraftToken.revision, beforeImageDraftToken.revision + 1);
   runtimeStore.updateDraft(draft => {
@@ -3399,7 +3877,7 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
     draft.goalRun.failureReason = '';
   }, { owner: 'factory-assets', expectedRevision: 15 }, 'factory/runtime:completeRegisteredAssetArchive');
   const afterArchiveCompletionToken = runtimeStore.getOperationToken();
-  assert.equal(runtimeStore.isOperationCurrent(beforeArchiveCompletionToken), false);
+  assert.equal(runtimeStore.isOperationCurrent(beforeArchiveCompletionToken), true);
   assert.equal(runtimeStore.isOperationCurrent(afterArchiveCompletionToken), true);
   assert.equal(afterArchiveCompletionToken.revision, beforeArchiveCompletionToken.revision + 1);
   runtimeStore.updateDraft(draft => {
@@ -3495,7 +3973,7 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
     draft.goalRun.progress = 100;
     draft.goalRun.failureReason = '';
   }, { owner: 'factory-assets', expectedRevision: 24 }, 'factory/db:schedule-size-cut-review');
-  assert.equal(runtimeStore.isOperationCurrent(beforeRerankToken), false);
+  assert.equal(runtimeStore.isOperationCurrent(beforeRerankToken), true);
   assert.throws(() => runtimeStore.updateDraft(draft => {
     draft.product.cafe24RerankRunning = true;
   }, { owner: 'cafe24', expectedRevision: beforeRerankToken.revision }, 'factory/cafe24:rerank-candidates'), /STALE/i);
@@ -3618,12 +4096,22 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
   }, { owner: 'factory-assets', expectedRevision: 33 }, 'factory/optionsorter:ensureArchiveStageRunId');
   runtimeStore.updateDraft(draft => {
     draft.assets.push({ id: 'option-archive-1', stageId: 'options', archiveId: 'archive-option-1' });
+    draft.assets.push({ id: 'option-hero-1', stageId: 'hero', sourceMap: { optionGroupShotResultId: 'option-result-1' } });
     draft.archive.localStatus = '옵션표 로컬 보관 완료';
     draft.stages.options.status = 'done';
     draft.stages.options.message = '옵션표 후보 연결 완료';
+    draft.stages.hero.currentRunId = 'hero-run-from-group-shot';
+    draft.stages.hero.latestGenerationRunId = 'hero-run-from-group-shot';
+    draft.previousAssets.push({ id: 'option-pruned-1', stageId: 'options' });
+    draft.runtimeAssetPrunedAt = 35;
+    draft.runtimeAssetPrunedCount = 1;
     draft.logs = [{ message: 'option-result-archived' }, ...draft.logs];
     draft.logStageId = 'options';
   }, { owner: 'factory-assets', expectedRevision: 34 }, 'factory/optionsorter:archiveGeneratedResult');
+  const optionArchiveCommitted = runtimeStore.getSnapshot().factory;
+  assert.equal(optionArchiveCommitted.runtimeAssetPrunedAt, 35);
+  assert.equal(optionArchiveCommitted.runtimeAssetPrunedCount, 1);
+  assert.equal(optionArchiveCommitted.previousAssets.at(-1).id, 'option-pruned-1');
   runtimeStore.updateDraft(draft => {
     draft.stages.hero.currentRunId = 'hero-run-1';
     draft.stages.hero.latestGenerationRunId = 'hero-run-1';
@@ -3759,6 +4247,13 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
   runtimeStore.updateDraft(draft => {
     draft.product.competitors = [{ id: 'vm-candidate-1' }];
     draft.product.competitorSource = 'VM';
+    draft.competitors = {
+      ...(draft.competitors || {}),
+      compPage: {
+        ...(draft.competitors?.compPage || {}),
+        marketScrape: { status: 'vm-candidate-ready' },
+      },
+    };
     draft.automation.activeTab = 'competitor';
     draft.uiPanels.materials = false;
     draft.stages.db.status = 'running';
@@ -3814,6 +4309,7 @@ test('declared command policies reject cross-owner diffs and split mixed-owner c
   assert.equal(runtimeUiCommitted.automation.candidateSearchProgress.kind, 'start-sinhwa-db');
   assert.equal(runtimeUiCommitted.product.cafe24OAuthStatus.state, 'ready');
   assert.equal(runtimeUiCommitted.product.competitors[0].id, 'vm-candidate-1');
+  assert.equal(runtimeUiCommitted.competitors.compPage.marketScrape.status, 'vm-candidate-ready');
   assert.equal(runtimeUiCommitted.product.analysis.product_name, 'analysis-product-1');
   assert.equal(runtimeUiCommitted.assets.some(item => item.id === 'goal-loop-asset-1'), true);
   assert.equal(runtimeUiCommitted.automation.activeTaskId, 'stage-size');
@@ -4275,40 +4771,14 @@ test('B3 stale cut partial failure has zero post-switch effects and the cancelle
   assert.equal(harness.events.filter(event => event === 'command-commit:factory/assets:generateAllCuts').length, 1);
 });
 
-async function createB3DetailRuntimeHarness(label) {
+async function createB3DetailRuntimeHarness(label, options = {}) {
   const core = source('src/app-core-03.js');
   const factoryCore = source('src/app-core-06.js');
   const createRuntimePolicies = new Function(
     `${sourceSlice(core, 'function factoryRuntimeCreateCommandPolicies()', 'const FACTORY_RUNTIME_COMMAND_POLICIES =')}\nreturn factoryRuntimeCreateCommandPolicies;`,
   )();
   const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', `b3-detail-${label}`);
-  const factoryValue = () => ({
-    product: { productName: 'B3 상세 테스트 상품' },
-    automation: {},
-    goalRun: { progress: 0, currentStage: '', failureReason: '' },
-    stages: { detail: { status: 'idle', targetCount: 0 }, cuts: { status: 'idle' } },
-    assets: [],
-    previousAssets: [],
-    detailPlacement: {},
-    archive: {},
-    logs: [],
-    uiPanels: {},
-    openMarketSync: {},
-  });
-  const snapshotValue = () => ({
-    factory: factoryValue(),
-    productDb: {},
-    competitors: {},
-    factoryAssets: {},
-    detailDocument: {},
-    cafe24: {},
-  });
-  const store = createFactoryStore({
-    initialSnapshot: snapshotValue(),
-    workspaceId: `workspace-b3-detail-${label}`,
-    commandPolicies: createRuntimePolicies(),
-  });
-  const market = {
+  const marketValue = (overrides = {}) => ({
     selectedIds: ['b', 'a'],
     results: [
       { id: 'b', title: '후보 B', platform: 'stub', product_url: 'https://example.test/b' },
@@ -4321,22 +4791,88 @@ async function createB3DetailRuntimeHarness(label) {
     route: 'stub-local',
     detailSelectionVersion: 0,
     loading: false,
+    ...structuredClone(overrides),
+  });
+  const factoryValue = () => {
+    const factory = {
+      product: { productName: 'B3 상세 테스트 상품' },
+      automation: {},
+      goalRun: { progress: 0, currentStage: '', failureReason: '' },
+      stages: { detail: { status: 'idle', targetCount: 0 }, cuts: { status: 'idle' } },
+      assets: [],
+      previousAssets: [],
+      detailPlacement: {},
+      archive: {},
+      logs: [],
+      uiPanels: {},
+      openMarketSync: {},
+    };
+    if (options.factoryViewMarket) {
+      factory.competitors = { compPage: { marketScrape: marketValue(options.factoryViewMarket) } };
+    }
+    return factory;
   };
+  const snapshotValue = () => ({
+    factory: factoryValue(),
+    productDb: {},
+    competitors: { compPage: { marketScrape: marketValue(options.canonicalMarket || {}) } },
+    factoryAssets: {},
+    detailDocument: {},
+    cafe24: {},
+  });
+  const store = createFactoryStore({
+    initialSnapshot: snapshotValue(),
+    workspaceId: `workspace-b3-detail-${label}`,
+    commandPolicies: createRuntimePolicies(),
+  });
   const events = [];
   const activeHeartbeats = new Set();
-  const sideEffects = { log: 0, save: 0, status: 0, render: 0 };
+  const sideEffects = { log: 0, save: 0, persisted: 0, persistedImageCounts: [], status: 0, render: 0 };
   const controls = {
     onExternal: async payload => ({
       images: payload.selectedIds.map(id => ({ id: `img-${id}`, candidateId: id, url: `memory://${id}` })),
     }),
+    onRecovery: async () => ({ ok: false, count: 0 }),
+    detailInfo: { entries: [], failed: 0, completed: 2, total: 2, active: false, manual: false },
+    activeFactoryMarket: null,
+    legacyMarket: options.legacyMarket ? marketValue(options.legacyMarket) : null,
+    replacementApplied: false,
   };
   const staleError = action => Object.assign(new Error(`STALE_FACTORY_RUNTIME_ACTION: ${action}`), {
     code: 'STALE_FACTORY_RUNTIME_ACTION',
   });
   const context = vm.createContext({
-    state: {},
+    state: options.activeMarket
+      ? { compPage: { marketScrape: marketValue(options.activeMarket) } }
+      : {},
     JEPUM_MARKET_API: { endpoints: {} },
-    ensureCompMarketScrapeState: () => market,
+    factoryRuntimeDetachedValue: value => JSON.parse(JSON.stringify(value)),
+    factorySyncCompetitorMarketToOwnedFactory: (factory, market) => {
+      factory.competitors = factory.competitors && typeof factory.competitors === 'object'
+        ? factory.competitors
+        : {};
+      factory.competitors.compPage = factory.competitors.compPage && typeof factory.competitors.compPage === 'object'
+        ? factory.competitors.compPage
+        : {};
+      factory.competitors.compPage.marketScrape = JSON.parse(JSON.stringify(market));
+      return true;
+    },
+    ensureCompMarketScrapeState: (options = {}) => {
+      if (options.factory && typeof options.factory === 'object') {
+        options.factory.compPage = options.factory.compPage && typeof options.factory.compPage === 'object'
+          ? options.factory.compPage
+          : {};
+        options.factory.compPage.marketScrape = options.factory.compPage.marketScrape
+          && typeof options.factory.compPage.marketScrape === 'object'
+          ? options.factory.compPage.marketScrape
+          : marketValue();
+        controls.activeFactoryMarket = options.factory.compPage.marketScrape;
+        return options.factory.compPage.marketScrape;
+      }
+      return context.state?.compPage?.marketScrape
+        || controls.legacyMarket
+        || store.getSnapshot().competitors.compPage.marketScrape;
+    },
     factoryRuntimeRequireStore: () => store,
     factoryRequireCurrentRunOperation: (action, runtimeStore, token, signal) => {
       if (signal?.aborted || !runtimeStore.isOperationCurrent(token)) throw staleError(action);
@@ -4359,17 +4895,20 @@ async function createB3DetailRuntimeHarness(label) {
         : finish(transaction);
     },
     factoryRunOperationIsStale: error => ['STALE_FACTORY_RUNTIME_ACTION', 'STALE_FACTORY_STORE_OPERATION'].includes(error?.code) || /STALE_FACTORY_(?:RUNTIME|STORE)/.test(error?.message || ''),
-    compMarketSetStatus: (message, code, tone) => {
+    compMarketSetStatus: (message, code, tone, options = {}) => {
+      const market = context.ensureCompMarketScrapeState(options);
       sideEffects.status += 1;
       market.status = message;
       market.statusCode = code;
       market.statusTone = tone;
     },
-    compMarketLog: message => {
+    compMarketLog: (message, type, options = {}) => {
+      const market = context.ensureCompMarketScrapeState(options);
       sideEffects.log += 1;
       market.lastLog = message;
     },
     render: () => { sideEffects.render += 1; },
+    factoryRuntimeRenderWithOwnedDraft: () => { sideEffects.render += 1; },
     factoryPatchGoalRunStatusInPlace: () => true,
     factoryYieldToPaint: async () => true,
     compMarketResultId: item => String(item?.id || ''),
@@ -4381,6 +4920,13 @@ async function createB3DetailRuntimeHarness(label) {
       factory.goalRun.progress = progress;
       factory.goalRun.currentStage = stage;
       if (options.failureReason !== undefined) factory.goalRun.failureReason = options.failureReason;
+      if (options.stageId) {
+        factory.stages[options.stageId] = {
+          ...(factory.stages[options.stageId] || {}),
+          status: options.stageStatus || 'running',
+          message: options.stageMessage || stage || message || '',
+        };
+      }
       return progress;
     },
     factoryStartGoalHeartbeat: () => {
@@ -4404,19 +4950,41 @@ async function createB3DetailRuntimeHarness(label) {
       return controls.onExternal({ route, selectedIds: body.selected_ids.slice() });
     },
     compMarketSave: () => { sideEffects.save += 1; },
+    saveLastWorkNow: async options => {
+      sideEffects.persisted += 1;
+      sideEffects.persistedImageCounts.push(options.factory.compPage.marketScrape.scrapedImages.length);
+      return true;
+    },
     compMarketRememberManualIntervention: () => false,
     compMarketExtractDetailImages: result => result?.images || [],
     compMarketFilterScrapedImagesForCurrentWork: images => images,
     compMarketDedupeScrapedImages: images => images,
     compMarketMergeScrapedImages: (previous, incoming) => incoming.slice(),
-    compMarketDetailJobInfo: () => ({ entries: [], failed: 0, completed: 2, total: 2, active: false, manual: false }),
+    recoverCompMarketDetailImagesFromHistory: options => controls.onRecovery({
+      market: context.ensureCompMarketScrapeState(options),
+      options,
+    }),
+    compMarketDetailJobInfo: () => controls.detailInfo,
     compMarketDetailJobWaitMessage: (info, fallback) => fallback,
     compMarketScrapedImageId: image => image.id,
   });
   const detailHelpers = sourceSlice(factoryCore, 'function compMarketDetailOperationIds(', 'async function runCompMarketDetailCapture(');
-  const detailWorker = sourceSlice(factoryCore, 'async function runCompMarketDetailCapture(', 'async function compMarketResumeDetailJobRequest(');
+  const detailWorker = sourceSlice(factoryCore, 'async function runCompMarketDetailCapture(', 'function compMarketManualRetryCandidateIds(');
   vm.runInContext(`${detailHelpers}\n${detailWorker}\nthis.b3DetailWorker = runCompMarketDetailCapture;`, context);
-  return { activeHeartbeats, context, controls, events, factoryValue, market, sideEffects, snapshotValue, staleError, store };
+  return {
+    activeHeartbeats,
+    context,
+    controls,
+    events,
+    factoryValue,
+    get market() {
+      return store.getSnapshot().competitors.compPage.marketScrape;
+    },
+    sideEffects,
+    snapshotValue,
+    staleError,
+    store,
+  };
 }
 
 test('B3 detail uses one exact lease, keeps selected and output order, and clears heartbeat on success', async () => {
@@ -4436,12 +5004,24 @@ test('B3 detail uses one exact lease, keeps selected and output order, and clear
 
   assert.deepEqual(Array.from(harness.market.detailOperation.selectedIds), ['b', 'a']);
   assert.deepEqual(Array.from(harness.market.scrapedImages, image => image.candidateId), ['b', 'a']);
+  assert.deepEqual(
+    harness.store.getSnapshot().competitors.compPage.marketScrape.scrapedImages.map(image => image.candidateId),
+    ['b', 'a'],
+  );
   assert.equal(harness.market.detailOperation.stableTargetKey, ['a', 'b'].join('\u001f'));
   assert.equal(harness.activeHeartbeats.size, 0);
+  assert.equal(harness.sideEffects.persisted, 1);
+  assert.deepEqual(harness.sideEffects.persistedImageCounts, [2]);
   assert.deepEqual(harness.events, [
     'command-open:competitors:factory/competitor:runDetailCapture',
-    'external-local:b,a',
     'command-commit:factory/competitor:runDetailCapture',
+    'command-open:competitors:factory/competitor:syncDetailMarket',
+    'command-commit:factory/competitor:syncDetailMarket',
+    'external-local:b,a',
+    'command-open:competitors:factory/competitor:runDetailCapture',
+    'command-commit:factory/competitor:runDetailCapture',
+    'command-open:competitors:factory/competitor:syncDetailMarket',
+    'command-commit:factory/competitor:syncDetailMarket',
   ]);
 
   const token = harness.store.getOperationToken();
@@ -4450,11 +5030,183 @@ test('B3 detail uses one exact lease, keeps selected and output order, and clear
   }, { owner: 'competitors', expectedRevision: token.revision }, 'factory/competitor:runDetailCapture'), /PATH_REJECTED|owner/i);
 });
 
+test('B3 selection replacement closes the obsolete detail heartbeat instead of leaving the UI running', async () => {
+  const harness = await createB3DetailRuntimeHarness('selection-replaced');
+  harness.controls.onExternal = async payload => {
+    const market = harness.controls.activeFactoryMarket;
+    assert.ok(market?.detailOperation?.id, '실행 중인 detail operation이 있어야 합니다.');
+    market.detailSelectionVersion += 1;
+    market.selectedIds = [];
+    market.detailOperation = {
+      id: 'replacement-operation',
+      selectionVersion: market.detailSelectionVersion,
+      selectedIds: [],
+    };
+    harness.controls.replacementApplied = true;
+    return {
+      images: payload.selectedIds.map(id => ({ id: `img-${id}`, candidateId: id, url: `memory://${id}` })),
+    };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  assert.equal(harness.controls.replacementApplied, true);
+  assert.equal(
+    harness.activeHeartbeats.size,
+    0,
+    '선택이 바뀐 이전 상세수집은 현재 operation이 교체돼도 heartbeat를 종료해야 합니다.',
+  );
+});
+
+test('B3 detail carries the captured selection into an older empty canonical mirror', async () => {
+  const harness = await createB3DetailRuntimeHarness('selection-handoff', {
+    canonicalMarket: { selectedIds: [], detailSelectionVersion: 0 },
+    legacyMarket: { selectedIds: ['b', 'a'], detailSelectionVersion: 1 },
+  });
+  let externalCalls = 0;
+  harness.controls.onExternal = async payload => {
+    externalCalls += 1;
+    return {
+      images: payload.selectedIds.map(id => ({ id: `img-${id}`, candidateId: id, url: `memory://${id}` })),
+    };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  assert.equal(externalCalls, 1, '선택 snapshot이 더 최신이면 상세수집 시작 전 빈 mirror에 인계해야 합니다.');
+  assert.deepEqual(Array.from(harness.market.selectedIds), ['b', 'a']);
+  assert.equal(harness.market.detailSelectionVersion, 1);
+  assert.equal(harness.activeHeartbeats.size, 0);
+});
+
+test('B3 detail outer capture prefers matching active selection mirror over empty canonical mirror', async () => {
+  const harness = await createB3DetailRuntimeHarness('active-selection-mirror', {
+    canonicalMarket: { results: [], selectedIds: [], detailSelectionVersion: 0 },
+    activeMarket: { selectedIds: ['b', 'a'], detailSelectionVersion: 1 },
+  });
+  let externalCalls = 0;
+  harness.controls.onExternal = payload => {
+    externalCalls += 1;
+    return {
+      images: payload.selectedIds.map(id => ({ id: `img-${id}`, candidateId: id, url: `memory://${id}` })),
+    };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  assert.equal(externalCalls, 1, '현재 화면의 선택·후보 mirror가 요청과 일치하면 빈 canonical mirror보다 우선해야 합니다.');
+  assert.deepEqual(
+    Array.from(harness.market.scrapedImages, image => image.candidateId),
+    ['b', 'a'],
+    '활성 선택 mirror의 후보 정보가 실제 상세수집 payload까지 전달되어야 합니다.',
+  );
+  assert.equal(harness.activeHeartbeats.size, 0);
+});
+
+test('B3 detail outer capture uses the same factory view mirror that rendered the selected candidate', async () => {
+  const harness = await createB3DetailRuntimeHarness('factory-view-selection-mirror', {
+    canonicalMarket: { results: [], selectedIds: [], detailSelectionVersion: 0 },
+    factoryViewMarket: { selectedIds: ['b', 'a'], detailSelectionVersion: 1 },
+  });
+  let externalCalls = 0;
+  harness.controls.onExternal = payload => {
+    externalCalls += 1;
+    return {
+      images: payload.selectedIds.map(id => ({ id: `img-${id}`, candidateId: id, url: `memory://${id}` })),
+    };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  assert.equal(externalCalls, 1, '화면이 보여준 factory view 후보·선택 mirror를 상세수집 작업본도 사용해야 합니다.');
+  assert.deepEqual(
+    Array.from(harness.market.scrapedImages, image => image.candidateId),
+    ['b', 'a'],
+    '표시된 후보 mirror의 URL과 선택 범위가 실제 상세수집 payload까지 유지되어야 합니다.',
+  );
+  assert.equal(harness.activeHeartbeats.size, 0);
+});
+
+test('B3 detail progress synchronizes the selected candidate into the factory view mirror', async () => {
+  const harness = await createB3DetailRuntimeHarness('progress-factory-view-mirror', {
+    canonicalMarket: { selectedIds: ['b', 'a'], detailSelectionVersion: 2 },
+    factoryViewMarket: { selectedIds: [], detailSelectionVersion: 1 },
+  });
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  const factoryMirror = harness.store.getSnapshot().factory.competitors.compPage.marketScrape;
+  assert.deepEqual(Array.from(factoryMirror.selectedIds), ['b', 'a']);
+  assert.equal(factoryMirror.detailOperation?.selectedIds.join(','), 'b,a');
+  assert.deepEqual(
+    factoryMirror.scrapedImages.map(image => image.candidateId),
+    ['b', 'a'],
+    '상세수집 결과는 일반 렌더가 읽는 factory 경쟁사 복사본에도 남아야 합니다.',
+  );
+});
+
+test('B3 detail does not restore a selection cleared by a newer canonical revision', async () => {
+  const harness = await createB3DetailRuntimeHarness('selection-handoff-newer-clear', {
+    canonicalMarket: { selectedIds: [], detailSelectionVersion: 2 },
+    legacyMarket: { selectedIds: ['b', 'a'], detailSelectionVersion: 1 },
+  });
+  let externalCalls = 0;
+  harness.controls.onExternal = async () => {
+    externalCalls += 1;
+    return { images: [] };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  assert.equal(externalCalls, 0, '더 최신인 선택 해제는 이전 snapshot이 되살리면 안 됩니다.');
+  assert.deepEqual(Array.from(harness.market.selectedIds), []);
+  assert.equal(harness.market.detailSelectionVersion, 2);
+  assert.equal(harness.activeHeartbeats.size, 0);
+});
+
+test('B3 detail automatically restores scoped VM images and reports partial completion as review at 100 percent', async () => {
+  const harness = await createB3DetailRuntimeHarness('partial-history-recovery');
+  harness.controls.onExternal = async () => ({ images: [] });
+  harness.controls.detailInfo = {
+    entries: [{ status: 'partial_success' }],
+    failed: 1,
+    completed: 1,
+    total: 2,
+    active: false,
+    manual: false,
+  };
+  harness.controls.onRecovery = async ({ market }) => {
+    market.scrapedImages = [{
+      id: 'history-a',
+      candidateId: 'a',
+      src: 'memory://history-a',
+      detailOperationId: market.detailOperation.id,
+    }];
+    return { ok: true, count: 1 };
+  };
+
+  await harness.context.b3DetailWorker(['b', 'a'], { runtime: 'local' });
+
+  const committed = harness.store.getSnapshot();
+  assert.deepEqual(Array.from(harness.market.scrapedImages, image => image.candidateId), ['a']);
+  assert.equal(harness.market.detailOperation.status, 'partial');
+  assert.equal(harness.market.statusTone, 'warn');
+  assert.match(harness.market.status, /실패 항목/);
+  assert.equal(committed.factory.stages.detail.status, 'review');
+  assert.equal(committed.factory.stages.detail.completedItemCount, 2);
+  assert.equal(committed.factory.stages.detail.targetCount, 2);
+  assert.equal(harness.activeHeartbeats.size, 0);
+  assert.equal(harness.sideEffects.persisted, 1);
+  assert.deepEqual(harness.sideEffects.persistedImageCounts, [1]);
+});
+
 test('B3 detail workspace switch aborts stale completion with no post-switch effects and no heartbeat leak', async () => {
   const harness = await createB3DetailRuntimeHarness('stale-switch');
   let effectsAtSwitch = null;
+  let eventsAtSwitch = null;
   harness.controls.onExternal = async payload => {
     effectsAtSwitch = { ...harness.sideEffects };
+    eventsAtSwitch = [...harness.events];
     harness.store.switchWorkspace('workspace-b3-detail-switched', {
       snapshot: harness.snapshotValue(),
       revision: 0,
@@ -4466,8 +5218,9 @@ test('B3 detail workspace switch aborts stale completion with no post-switch eff
     /STALE_FACTORY_RUNTIME_ACTION|STALE_FACTORY_STORE/,
   );
   assert.deepEqual(harness.sideEffects, effectsAtSwitch);
+  assert.deepEqual(harness.events, eventsAtSwitch);
   assert.equal(harness.activeHeartbeats.size, 0);
-  assert.equal(harness.events.some(event => event === 'command-commit:factory/competitor:runDetailCapture'), false);
+  assert.equal(harness.events.some(event => event === 'command-commit:factory/competitor:runDetailCapture'), true);
 });
 
 test('B3 image request timer registry is empty after success, throw, and operation abort', async () => {

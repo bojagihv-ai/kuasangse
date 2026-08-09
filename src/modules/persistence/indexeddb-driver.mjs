@@ -77,7 +77,9 @@ export function createBrowserIndexedDbDriver(root, config = DEFAULT_DB) {
       if (guard.expectedDestinationVersion !== undefined) {
         assertDestinationVersion(current, guard.expectedDestinationVersion);
       }
-      assertReplicaCanPublish(current, guard.envelope);
+      assertReplicaCanPublish(current, guard.envelope, {
+        allowSameRevisionMutation: guard.allowSameRevisionMutation === true,
+      });
       return action(transaction);
     });
   }

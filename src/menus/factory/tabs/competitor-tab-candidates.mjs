@@ -102,15 +102,15 @@ export function renderCompetitorCandidatePicker(model, helpers, imagePickerHtml)
   if (!candidates.length) {
     return `<div class="factory-automation-panel" id="factoryCompetitorPickerPanel" style="margin-top:12px;border-color:rgba(245,158,11,.44);background:rgba(245,158,11,.045);min-width:0;max-width:100%;overflow-wrap:anywhere">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;min-width:0">
-        <div style="min-width:0;overflow-wrap:anywhere"><h4 style="margin:0">경쟁사 후보 선택</h4><p style="margin:5px 0 0;overflow-wrap:anywhere">아직 위 단계창에 표시할 후보가 없습니다. VM 또는 본컴 수집을 실행한 뒤, search_id가 남아 있으면 다시 읽을 수 있습니다.</p></div>
+        <div style="min-width:0;overflow-wrap:anywhere"><h4 style="margin:0">경쟁사 후보 선택</h4><p style="margin:5px 0 0;overflow-wrap:anywhere">아직 위 단계창에 표시할 후보가 없습니다. 아래에서 수집 환경을 직접 선택하세요.</p></div>
         <div class="factory-automation-actions" style="margin:0;min-width:0;flex-wrap:wrap">
-          <button class="btn-sm" type="button" data-factory-guide-action="rerun-vm-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)} style="background:var(--primary);border-color:var(--primary);color:#fff">VM 후보 수집</button>
-          <button class="btn-sm" type="button" data-factory-guide-action="rerun-local-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)}>본컴 후보 수집</button>
+          <button class="btn-sm" type="button" data-factory-guide-action="rerun-vm-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)} style="background:var(--primary);border-color:var(--primary);color:#fff">VM에서 수집</button>
+          <button class="btn-sm" type="button" data-factory-guide-action="rerun-local-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)}>내 Windows Chrome에서 수집</button>
           <button class="btn-sm" type="button" data-comp-market-quick-action="reload" ${disabledAttr(Boolean(market.loading), loadingReason)}>${market.searchId ? '후보 다시 읽기' : '최근 VM 후보 불러오기'}</button>
         </div>
       </div>
       ${renderFactoryAutomationVmSearchInfo(factory, 'warn', market)}
-      <div class="factory-guide-note warn" style="margin-top:10px;overflow-wrap:anywhere">${imageCount ? `후보 카드는 0건이지만 이미 수집된 상세페이지 이미지 ${imageCount}장은 아래에서 분석 선택할 수 있습니다.` : '후보가 0건이면 선택할 카드가 없습니다. 먼저 VM 후보 수집을 실행하거나 아래 수집판의 검색어/사이트 설정을 확인해주세요.'}</div>
+      <div class="factory-guide-note warn" style="margin-top:10px;overflow-wrap:anywhere">${imageCount ? `후보 카드는 0건이지만 이미 수집된 상세페이지 이미지 ${imageCount}장은 아래에서 분석 선택할 수 있습니다.` : '후보가 0건이면 선택할 카드가 없습니다. VM 또는 내 Windows Chrome 중 한 경로를 직접 선택해 다시 수집해주세요.'}</div>
       ${imagePickerHtml}
     </div>`;
   }
@@ -127,11 +127,13 @@ export function renderCompetitorCandidatePicker(model, helpers, imagePickerHtml)
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;min-width:0">
       <div style="min-width:0"><h4 style="margin:0">경쟁사 후보 선택</h4><p style="margin:5px 0 0;overflow-wrap:anywhere">${activeLabel} 후보 ${candidates.length}건 중 상세페이지를 수집할 상품을 선택하세요. 선택하면 아래 버튼에서 VM 또는 본컴 상세수집 방식을 고를 수 있습니다.</p></div>
       <div class="factory-automation-actions" style="margin:0;min-width:0;flex-wrap:wrap">
-        <button class="btn-sm" type="button" data-factory-guide-action="rerun-vm-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)}>${market.loading ? '재수집 중' : 'VM 후보 다시 수집'}</button>
+        <button class="btn-sm" type="button" data-factory-guide-action="rerun-vm-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)}>${market.loading ? '재수집 중' : 'VM에서 다시 수집'}</button>
+        <button class="btn-sm" type="button" data-factory-guide-action="rerun-local-competitors" ${disabledAttr(Boolean(market.loading), loadingReason)}>내 Windows Chrome에서 다시 수집</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="select-all" ${disabledAttr(Boolean(market.loading), loadingReason)}>후보 전체 선택</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="clear-selection" ${disabledAttr(Boolean(market.loading || !selectedCount), market.loading ? loadingReason : '선택된 후보가 없습니다.')}>선택 해제</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="detail-vm" ${disabledAttr(Boolean(detailReason), detailReason)} style="background:var(--primary);border-color:var(--primary);color:#fff">선택 ${selectedCount}건 VM 상세수집</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="detail-local" ${disabledAttr(Boolean(detailReason), detailReason)}>선택 ${selectedCount}건 본컴 상세수집</button>
+        <button class="btn-sm" type="button" data-comp-market-quick-action="detail-scrapling" ${disabledAttr(Boolean(detailReason), detailReason)}>B안 · Scrapling 상세수집</button>
         <button class="btn-sm" type="button" data-comp-market-quick-action="analyze-vm" ${disabledAttr(Boolean(detailReason), detailReason)}>VM 수집 후 분석</button>
       </div>
     </div>

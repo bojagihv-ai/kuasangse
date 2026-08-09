@@ -2,38 +2,19 @@ import { migrateIndexedDbV4Record } from './migrations.mjs';
 import { normalizeProjectScope, normalizeWorkspaceScope } from './contracts.mjs';
 import { destinationVersion } from './fencing.mjs';
 import { createBrowserIndexedDbDriver } from './indexeddb-driver.mjs';
+import {
+  cloneSessionAssets,
+  legacyScope,
+  projectIdFromScope,
+  scopedSessionAssetId,
+  sessionAssetRecordMatchesAuthority,
+  sessionAssetsDocumentId,
+} from './indexeddb-session-assets.mjs';
 
 export { createBrowserIndexedDbDriver };
+export { scopedSessionAssetId, sessionAssetRecordMatchesAuthority };
 
 const SHARED_GLOBAL_STORES = new Set(['appSettings']);
-
-function projectIdFromScope(scopeId) {
-  return normalizeProjectScope(scopeId).slice('project:'.length);
-}
-
-export function scopedSessionAssetId(projectId) {
-  return `session-assets:${normalizeWorkspaceScope(projectId)}`;
-}
-
-export function sessionAssetRecordMatchesAuthority(record, authority, scopeId) {
-  if (!record || typeof record !== 'object') return false;
-  const scope = normalizeWorkspaceScope(scopeId);
-  const recordScope = record.persistenceAuthority?.scopeId
-    || record.scopeId
-    || record.workspaceScope?.id
-    || '';
-  if (recordScope) {
-    try {
-      if (normalizeWorkspaceScope(recordScope) !== scope) return false;
-    } catch (_) {
-      return false;
-    }
-  }
-  if (!authority || authority.scopeId !== scope) return true;
-  const recordRevision = Number(record.persistenceAuthority?.revision) || 0;
-  const authorityRevision = Number(authority.revision) || 0;
-  return !(recordRevision && authorityRevision && recordRevision !== authorityRevision);
-}
 
 function workspaceEnvelopeId(scopeId) {
   return `workspace-envelope:${normalizeWorkspaceScope(scopeId)}`;
@@ -73,12 +54,12 @@ function commitSessionAssets(envelope, context = {}) {
   if (!context.sessionAssets || typeof context.sessionAssets !== 'object') return null;
   const scopeId = normalizeWorkspaceScope(envelope.scopeId);
   return {
-    ...structuredClone(context.sessionAssets),
+    ...cloneSessionAssets(context.sessionAssets),
     id: scopedSessionAssetId(scopeId),
     scopeId,
     workspaceScope: { id: scopeId },
     workspaceRevision: structuredClone(envelope.metadata.revision),
-    currentProjectId: scopeId.startsWith('project:') ? projectIdFromScope(scopeId) : '',
+    currentProjectId: sessionAssetsDocumentId(scopeId, context.sessionAssets),
     persistenceAuthority: {
       scopeId,
       leaseId: String(envelope.metadata.leaseId || ''),
@@ -90,15 +71,6 @@ function commitSessionAssets(envelope, context = {}) {
   };
 }
 
-function legacyScope(record) {
-  const raw = record?.scopeId
-    || record?.workspaceScope?.id
-    || record?.workspaceRevision?.scopeId
-    || record?.currentProjectId;
-  if (!raw) return '';
-  try { return normalizeProjectScope(raw); } catch (_) { return ''; }
-}
-
 export function createIndexedDbPersistenceAdapter({ driver } = {}) {
   const recordDriver = driver || createBrowserIndexedDbDriver(typeof self === 'undefined' ? null : self);
   async function getSessionAssets(projectId) {
@@ -108,17 +80,18 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
   async function putSessionAssets(projectId, payload, context = {}) {
     const scopeId = normalizeWorkspaceScope(projectId);
     const record = {
-      ...structuredClone(payload || {}),
+      ...cloneSessionAssets(payload),
       id: scopedSessionAssetId(scopeId),
       scopeId,
       workspaceScope: { id: scopeId },
-      currentProjectId: scopeId.startsWith('project:') ? projectIdFromScope(scopeId) : '',
+      currentProjectId: sessionAssetsDocumentId(scopeId, payload),
       ...(context.persistenceAuthority ? { persistenceAuthority: context.persistenceAuthority } : {}),
     };
     context.assertAuthority?.();
     if (context.persistenceAuthority) {
       await recordDriver.compareAndPut('sessionAssets', record, {
         envelope: record, assertAuthority: context.assertAuthority,
+        allowSameRevisionMutation: true,
       });
     } else {
       await recordDriver.put('sessionAssets', record);
@@ -144,6 +117,7 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
         envelope: record,
         assertAuthority: context.assertAuthority,
         expectedDestinationVersion,
+        allowSameRevisionMutation: sharedGlobal,
       });
     }
     else await recordDriver.put(storeName, record);
@@ -165,6 +139,7 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
           envelope: tombstone,
           assertAuthority: context.assertAuthority,
           expectedDestinationVersion,
+          allowSameRevisionMutation: true,
         });
       } else {
         await recordDriver.compareAndDelete(storeName, key, {
@@ -193,6 +168,13 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
         : records;
     },
     getSessionAssets,
+    async getDocumentSessionAssetsForBranchMigration(projectId) {
+      const scopeId = normalizeProjectScope(projectId);
+      const scoped = await getSessionAssets(scopeId);
+      if (scoped) return scoped;
+      const legacy = await recordDriver.get('sessionAssets', 'current');
+      return legacy && legacyScope(legacy) === scopeId ? legacy : null;
+    },
     async migrateLegacySessionAssets(projectId, context = {}) {
       const scopeId = normalizeWorkspaceScope(projectId);
       const existing = await getSessionAssets(scopeId);
@@ -241,6 +223,7 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
       await recordDriver.compareAndPutMany(entries, {
         storeName: 'sessionAssets', key: record.id, envelope,
         assertAuthority: context.assertAuthority,
+        allowSameRevisionMutation: context.allowSameRevisionMutation === true,
       });
       context.assertCompletion?.();
       return envelope;

@@ -26,6 +26,7 @@ function readPersistedExpression() {
     const sessionRecord = await read('pdp_session');
     const session = sessionRecord.value;
     const pick = value => ({
+      step: value?.step || '',
       projectId: value?.currentProjectId || value?.factory?.currentProjectId || value?.factory?.workspace?.id || '',
       workspaceScope: value?.workspaceScope || value?.workspaceId || null,
       workspaceRevision: value?.workspaceRevision || value?.factory?.workspaceRevision || null,
@@ -60,6 +61,12 @@ async function reloadAndRead(cdp, appUrl) {
     const factory = readFactory();
     const operationToken = readOperationToken();
     const factoryWorkspaceId = factory.workspace?.id || factory.currentProjectId || '';
+    const dbCandidates = factory.product?.pendingDbCandidates?.length
+      ? factory.product.pendingDbCandidates
+      : (factory.product?.dbCandidates || []);
+    const cafeCandidates = factory.product?.pendingCafe24Candidates?.length
+      ? factory.product.pendingCafe24Candidates
+      : (factory.product?.cafe24Candidates || []);
     return {
       projectId: appState.currentProjectId || '',
       productName: appState.productName || factory.product?.productName || '',
@@ -75,6 +82,26 @@ async function reloadAndRead(cdp, appUrl) {
         cafeResolution: factory.product?.cafe24CandidateResolution || '',
         hasConfirmedDb: !!factory.product?.confirmedDb,
         confirmedCafeKey: factory.product?.confirmedCafe24ProductKey || '',
+      },
+      candidateState: {
+        route: String(appState.step || ''),
+        activeTab: String(factory.automation?.activeTab || ''),
+        pendingDbCount: Number(factory.product?.pendingDbCandidates?.length || 0),
+        dbCount: Number(factory.product?.dbCandidates?.length || 0),
+        pendingCafeCount: Number(factory.product?.pendingCafe24Candidates?.length || 0),
+        cafeCount: Number(factory.product?.cafe24Candidates?.length || 0),
+        currentScopeKey: factoryCandidateReviewScopeKey(factory),
+        dbScopeKey: factoryCandidateReviewScopeKeyFromCandidate(dbCandidates[0] || {}),
+        cafeScopeKey: factoryCandidateReviewScopeKeyFromCandidate(cafeCandidates[0] || {}),
+        dbSelectable: dbCandidates[0] ? factoryCandidateReviewCanApply(dbCandidates[0], factory) : false,
+        cafeSelectable: cafeCandidates[0] ? factoryCandidateReviewCanApply(cafeCandidates[0], factory) : false,
+        dbButtonCount: document.querySelectorAll('[data-factory-apply-db-candidate]').length,
+        cafeButtonCount: document.querySelectorAll('[data-factory-apply-cafe24-candidate]').length,
+        reviewPanelCount: document.querySelectorAll('.factory-candidate-review').length,
+        activeFactoryTab: document.querySelector('[data-factory-tab].active')?.getAttribute('data-factory-tab') || '',
+        hydrationActive: typeof classicRuntimeHydrationActive === 'boolean' ? classicRuntimeHydrationActive : null,
+        initialRenderComplete: typeof classicRuntimeInitialRenderComplete === 'boolean' ? classicRuntimeInitialRenderComplete : null,
+        hiddenCandidateNotice: document.querySelector('[data-factory-stale-candidate-notice]')?.textContent?.trim() || '',
       },
       persisted: await ${readPersistedExpression()},
       domConfirmedCount: document.body.innerText.includes('확정됨') ? (document.body.innerText.match(/확정됨/g) || []).length : 0,

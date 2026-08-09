@@ -28,9 +28,16 @@ function Invoke-WorkerNative {
     )
 
     Write-WorkerLog "$Label 시작"
-    & $FilePath @Arguments *>> $script:BootstrapLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Label 실패: exitCode=$LASTEXITCODE"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments *>> $script:BootstrapLog
+        $nativeExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($nativeExitCode -ne 0) {
+        throw "$Label 실패: exitCode=$nativeExitCode"
     }
     Write-WorkerLog "$Label 완료"
 }
@@ -179,8 +186,8 @@ function Install-WorkerSource {
 
 function Get-WorkerSharedSourceRoot {
     $sourceRoots = @(
-        'Z:\output\vm-rebuild\source-stage\JepumScraper',
-        '\\VBOXSVR\KuasangseBootstrap\output\vm-rebuild\source-stage\JepumScraper'
+        '\\VBOXSVR\KuasangseBootstrap\output\vm-rebuild\source-stage\JepumScraper',
+        'Z:\output\vm-rebuild\source-stage\JepumScraper'
     )
     foreach ($sourceRoot in $sourceRoots) {
         if (Test-Path -LiteralPath (Join-Path $sourceRoot 'main.py') -PathType Leaf) {
@@ -188,6 +195,35 @@ function Get-WorkerSharedSourceRoot {
         }
     }
     return ''
+}
+
+function Update-PersistentBootstrapSource {
+    $sourceCandidates = @(
+        '\\VBOXSVR\KuasangseBootstrap\tools\bootstrap_jepumscraper_vm_worker.ps1',
+        'Z:\tools\bootstrap_jepumscraper_vm_worker.ps1'
+    )
+    $source = $sourceCandidates |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        Select-Object -First 1
+    if (-not $source) {
+        Write-WorkerLog '호스트의 최신 VM 부트스트랩을 찾지 못해 현재 사본을 유지합니다.'
+        return $false
+    }
+
+    $target = Join-Path $script:StateRoot 'bootstrap_jepumscraper_vm_worker.ps1'
+    $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
+    $targetHash = if (Test-Path -LiteralPath $target -PathType Leaf) {
+        (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+    } else {
+        ''
+    }
+    if ($sourceHash -eq $targetHash) {
+        return $false
+    }
+
+    Copy-Item -LiteralPath $source -Destination $target -Force
+    Write-WorkerLog "최신 VM 부트스트랩 영구 사본 갱신 완료: $sourceHash"
+    return $true
 }
 
 function Sync-WorkerSourcePatch {
@@ -200,7 +236,12 @@ function Sync-WorkerSourcePatch {
         @{ Source = (Join-Path $sourceRoot 'main.py'); Relative = 'main.py' },
         @{ Source = (Join-Path $sourceRoot 'engine\browser_profile.py'); Relative = 'engine\browser_profile.py' },
         @{ Source = (Join-Path $sourceRoot 'engine\pro_crawler.py'); Relative = 'engine\pro_crawler.py' },
+        @{ Source = (Join-Path $sourceRoot 'scrapers\coupang_scraper.py'); Relative = 'scrapers\coupang_scraper.py' },
+        @{ Source = (Join-Path $sourceRoot 'scrapers\auction_scraper.py'); Relative = 'scrapers\auction_scraper.py' },
+        @{ Source = (Join-Path $sourceRoot 'scrapers\elevenst_scraper.py'); Relative = 'scrapers\elevenst_scraper.py' },
+        @{ Source = (Join-Path $sourceRoot 'scrapers\gmarket_scraper.py'); Relative = 'scrapers\gmarket_scraper.py' },
         @{ Source = (Join-Path $sourceRoot 'scrapers\naver_shopping_scraper.py'); Relative = 'scrapers\naver_shopping_scraper.py' },
+        @{ Source = (Join-Path $sourceRoot 'services\search_service.py'); Relative = 'services\search_service.py' },
         @{ Source = (Join-Path $sourceRoot 'services\detail_scraper.py'); Relative = 'services\detail_scraper.py' },
         @{ Source = (Join-Path $sourceRoot 'services\vm_capture_client.py'); Relative = 'services\vm_capture_client.py' },
         @{ Source = (Join-Path $sourceRoot 'tools\naver_login_click_v2.ahk'); Relative = 'tools\naver_login_click_v2.ahk' }
@@ -298,7 +339,18 @@ function Start-Worker {
 
     $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $WorkerRoot 'ms-playwright'
     $dependencyMarker = Join-Path $script:StateRoot 'dependencies-ready'
-    if (-not (Test-Path -LiteralPath $dependencyMarker)) {
+    $dependenciesReady = Test-Path -LiteralPath $dependencyMarker
+    if ($dependenciesReady) {
+        $dependencyProbe = Start-Process -FilePath $python -ArgumentList @(
+            '-c', 'import greenlet; from playwright.sync_api import sync_playwright'
+        ) -Wait -PassThru -WindowStyle Hidden
+        if ($dependencyProbe.ExitCode -ne 0) {
+            $dependenciesReady = $false
+            Remove-Item -LiteralPath $dependencyMarker -Force -ErrorAction SilentlyContinue
+            Write-WorkerLog '의존성 마커는 있었지만 Playwright/greenlet import가 실패하여 복구 설치합니다.'
+        }
+    }
+    if (-not $dependenciesReady) {
         $candidatePackages = @(
             'flask',
             'asgiref',
@@ -327,6 +379,16 @@ function Start-Worker {
         # required packages are otherwise available. The cache is optional, so
         # bootstrap must bypass it instead of leaving the VM worker half-built.
         Invoke-WorkerNative -FilePath $python -Arguments (@('-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location', '--no-cache-dir') + $candidatePackages) -Label '후보 수집 의존성 설치'
+        # pip may report "requirement already satisfied" even when greenlet's
+        # compiled extension is missing or corrupt. Playwright then fails in
+        # every browser-backed market, so repair that binary explicitly.
+        Invoke-WorkerNative -FilePath $python -Arguments @(
+            '-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location',
+            '--no-cache-dir', '--force-reinstall', '--no-deps', 'greenlet'
+        ) -Label 'Playwright greenlet 바이너리 복구'
+        Invoke-WorkerNative -FilePath $python -Arguments @(
+            '-c', 'import greenlet; from playwright.sync_api import sync_playwright'
+        ) -Label 'Playwright 런타임 import 확인'
         Invoke-WorkerNative -FilePath $python -Arguments @('-m', 'playwright', 'install', 'chromium') -Label 'Playwright Chromium 설치'
         New-Item -ItemType File -Path $dependencyMarker -Force | Out-Null
     }
@@ -364,6 +426,7 @@ function Start-Worker {
 
 function Start-CandidateBridge {
     $sourceCandidates = @(
+        '\\VBOXSVR\KuasangseBootstrap\tools\vm_candidate_file_bridge.ps1',
         'Z:\tools\vm_candidate_file_bridge.ps1',
         (Join-Path $PSScriptRoot 'vm_candidate_file_bridge.ps1'),
         (Join-Path (Split-Path -Parent $PSCommandPath) 'vm_candidate_file_bridge.ps1')
@@ -378,6 +441,7 @@ function Start-CandidateBridge {
         Copy-Item -LiteralPath $source -Destination $target -Force
     }
     $supervisorCandidates = @(
+        '\\VBOXSVR\KuasangseBootstrap\tools\vm_candidate_bridge_supervisor.ps1',
         'Z:\tools\vm_candidate_bridge_supervisor.ps1',
         (Join-Path $PSScriptRoot 'vm_candidate_bridge_supervisor.ps1'),
         (Join-Path (Split-Path -Parent $PSCommandPath) 'vm_candidate_bridge_supervisor.ps1')
@@ -413,6 +477,25 @@ $script:BootstrapLog = Join-Path $StateRoot 'bootstrap.log'
 
 try {
     Write-WorkerLog 'VM 워커 부트스트랩 시작'
+    $persistentBootstrapUpdated = Update-PersistentBootstrapSource
+    $persistentBootstrap = Join-Path $script:StateRoot 'bootstrap_jepumscraper_vm_worker.ps1'
+    if ($persistentBootstrapUpdated -and
+        [IO.Path]::GetFullPath($PSCommandPath).Equals([IO.Path]::GetFullPath($persistentBootstrap), [StringComparison]::OrdinalIgnoreCase)) {
+        $restartArguments = @(
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $persistentBootstrap,
+            '-Port', [string]$Port,
+            '-WorkerRoot', $WorkerRoot,
+            '-StateRoot', $StateRoot,
+            '-BridgeRoot', $BridgeRoot,
+            '-NoRegister',
+            '-ForceRestart'
+        )
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $restartArguments -WindowStyle Hidden | Out-Null
+        Write-WorkerLog '갱신된 VM 부트스트랩으로 즉시 재실행합니다.'
+        exit 0
+    }
     Install-WorkerSource
     $null = Ensure-AutoHotkey
     Sync-WorkerSourcePatch

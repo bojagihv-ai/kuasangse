@@ -179,31 +179,45 @@ function renderUploadView(view, helpers) {
     disabledAttr,
     escapeHtml,
   } = helpers;
+  const visibleImages = (Array.isArray(view.analysisImages) ? view.analysisImages : [])
+    .map((img, index) => {
+      const src = analysisImageSrc(img);
+      return {
+        img,
+        index,
+        src,
+        html: src ? renderFactoryLightImage(src, `제품 이미지 ${index + 1}`) : '',
+      };
+    })
+    .filter(item => item.html)
+    .map((item, visibleIndex) => ({ ...item, visibleIndex }));
+  const previewSrc = analysisImageSrc({ preview: view.imagePreview });
+  const hasVisibleImage = visibleImages.length > 0 || !!previewSrc;
   return `<div class="fade-in">
     <h1 class="page-title">상세페이지 자동 생성</h1>
     <p class="page-desc">제품 이미지를 업로드하면 AI가 분석하여 15개 섹션의 상세페이지를 자동으로 생성합니다.</p>
 
-    ${view.analysisImages.length > 0 ? `
+    ${visibleImages.length > 0 ? `
     <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <span style="font-size:13px;font-weight:600">분석 이미지 (${view.analysisImages.length}/5) <span style="color:var(--text-d);font-weight:400">— 첫 번째가 대표 이미지</span></span>
+        <span style="font-size:13px;font-weight:600">분석 이미지 (${visibleImages.length}/5) <span style="color:var(--text-d);font-weight:400">— 첫 번째가 대표 이미지</span></span>
         <button class="btn-sm" id="clearAnalysisImages" style="color:var(--err)">전체 삭제</button>
       </div>
       <div class="analysis-imgs-row" id="analysisImgsRow">
-        ${view.analysisImages.map((img, i) => `
-          <div class="analysis-img-thumb ${i===0?'primary':''}">
-            ${renderFactoryLightImage(analysisImageSrc(img), `제품 이미지 ${i + 1}`)}
-            <button class="remove-img" data-remove-analysis-img="${i}" title="삭제">✕</button>
+        ${visibleImages.map(({ index, visibleIndex, html }) => `
+          <div class="analysis-img-thumb ${visibleIndex===0?'primary':''}">
+            ${html}
+            <button class="remove-img" data-remove-analysis-img="${index}" title="삭제">✕</button>
           </div>`).join('')}
-        ${view.analysisImages.length < 5 ? `
+        ${visibleImages.length < 5 ? `
           <div class="analysis-img-thumb" id="addMoreImgBtn" style="border-style:dashed;display:flex;align-items:center;justify-content:center;color:var(--text-d);font-size:24px;cursor:pointer" title="이미지 추가">
             +<input type="file" id="addMoreFileInput" accept="image/*" multiple style="display:none">
           </div>` : ''}
       </div>
     </div>` : `
-    <div class="upload-area ${view.imagePreview?'has-image':''}" id="uploadArea">
-      ${view.imagePreview
-        ? renderFactoryLightImage(view.imagePreview, 'preview', 'class="preview-img"')
+    <div class="upload-area ${hasVisibleImage?'has-image':''}" id="uploadArea">
+      ${hasVisibleImage
+        ? renderFactoryLightImage(previewSrc, 'preview', 'class="preview-img"')
         : `<div style="display:flex;flex-direction:column;align-items:center">
             <span class="material-icons-outlined" style="font-size:48px;color:var(--primary);margin-bottom:12px">cloud_upload</span>
             <p style="font-size:16px;font-weight:500">클릭 또는 드래그하여 이미지 업로드</p>
@@ -212,9 +226,9 @@ function renderUploadView(view, helpers) {
       }
       <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
     </div>`}
-    <button class="btn-primary" id="startAnalysis" style="margin-bottom:8px" ${disabledAttr(!view.imagePreview && view.analysisImages.length===0, '분석할 제품 이미지를 먼저 업로드해주세요.')}>
+    <button class="btn-primary" id="startAnalysis" style="margin-bottom:8px" ${disabledAttr(!hasVisibleImage, '분석할 제품 이미지를 먼저 업로드해주세요.')}>
       <span class="material-icons-outlined" style="font-size:20px">auto_fix_high</span>
-      AI 분석 시작 ${view.analysisImages.length > 1 ? `(${view.analysisImages.length}장)` : ''}
+      AI 분석 시작 ${visibleImages.length > 1 ? `(${visibleImages.length}장)` : ''}
     </button>
 
     <div class="input-group">
