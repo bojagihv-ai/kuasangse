@@ -64,7 +64,21 @@ const LLM_PROVIDERS = {
       { id: 'gpt-4o-mini',  label: 'GPT-4o mini',  desc: '빠름 · 멀티모달',           inputPerM: 0.15,  outputPerM: 0.60  },
     ],
   },
+  // 로컬 Ollama. 상세페이지 작업은 이미지 판독이 필수라 vision 지원 모델만 등록한다.
+  // (gemma4-26b·gemma:latest·mistral-small 은 vision 미지원이라 제외)
+  ollama: {
+    label: '로컬 Ollama',
+    icon: '▣',
+    color: '#f59e0b',
+    local: true,
+    models: [
+      { id: 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL', label: 'Qwen3.8 27B · 판독 정확', desc: '로컬 vision · 실측 34초 · 이미지 내용을 가장 정확히 읽음(권장)', inputPerM: 0, outputPerM: 0 },
+      { id: 'gemma4:e4b',   label: 'Gemma4 e4b · 빠름', desc: '로컬 vision · 실측 27초 · 빠르지만 판독이 일반론으로 흐를 수 있음', inputPerM: 0, outputPerM: 0 },
+    ],
+  },
 };
+
+const OLLAMA_DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
 
 const GPT_OAUTH_API_BASE = 'http://127.0.0.1:4321';
 const GPT_OAUTH_REASONING_EFFORTS = [
@@ -161,10 +175,30 @@ const IMAGE_MODELS = [
 ];
 
 // 설정 저장/불러오기
+// 사용량 한도로 기본 provider 가 막혔을 때 자동으로 넘어갈 폴백 대상.
+// 기본 실행 provider 는 gpt_oauth 로 유지하고, 폴백만 사용자가 지정한다.
+const LLM_FALLBACK_PROVIDERS = ['none', 'openai', 'ollama'];
+
+function normalizeLlmFallbackConfig(c) {
+  const provider = LLM_FALLBACK_PROVIDERS.includes(c.fallbackProvider) ? c.fallbackProvider : 'ollama';
+  c.fallbackProvider = provider;
+  c.fallbackEnabled = c.fallbackEnabled !== false && provider !== 'none';
+  const allowed = (LLM_PROVIDERS[provider]?.models || []).map(m => m.id);
+  if (provider === 'none') {
+    c.fallbackModel = '';
+  } else if (!allowed.includes(c.fallbackModel)) {
+    c.fallbackModel = allowed[0] || '';
+  }
+  const base = String(c.ollamaBaseUrl || '').trim().replace(/\/+$/, '');
+  c.ollamaBaseUrl = base || OLLAMA_DEFAULT_BASE_URL;
+  return c;
+}
+
 function normalizeModelConfig(cfg) {
   const c = { ...(cfg || {}) };
-  const provider = ['gpt_oauth', 'gemini', 'openai'].includes(c.llmProvider) ? c.llmProvider : 'gpt_oauth';
+  const provider = ['gpt_oauth', 'gemini', 'openai', 'ollama'].includes(c.llmProvider) ? c.llmProvider : 'gpt_oauth';
   c.llmProvider = provider;
+  normalizeLlmFallbackConfig(c);
 
   const allowedLlm = (LLM_PROVIDERS[provider]?.models || []).map(m => m.id);
   if (!allowedLlm.includes(c.llmModel)) c.llmModel = allowedLlm[0] || (provider === 'gemini' ? 'gemini-3.5-flash' : 'gpt-5.6-sol');
@@ -1895,6 +1929,34 @@ IMPORTANT:
 }
 
 // ════════════════════════════════════════════════════════════════
+// LOCAL OLLAMA (OpenAI 호환 엔드포인트)
+// ════════════════════════════════════════════════════════════════
+// Ollama 는 /v1/chat/completions 에서 OpenAI 스키마와 data:image base64 vision 을
+// 그대로 지원한다. 프롬프트·파싱을 다시 쓰지 않고 OpenAIAPI 를 상속해 baseUrl 만 바꾼다.
+class OllamaAPI extends OpenAIAPI {
+  constructor(model, baseUrl = OLLAMA_DEFAULT_BASE_URL) {
+    super('ollama', model);            // 로컬 서버는 키를 검사하지 않는다
+    const root = String(baseUrl || OLLAMA_DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
+    this.rootUrl = root || OLLAMA_DEFAULT_BASE_URL;
+    this.baseUrl = `${this.rootUrl}/v1`;
+    this.isLocal = true;
+  }
+
+  // 로컬 모델은 이미지 생성을 하지 못한다. 조용히 빈 결과를 주지 않고 명확히 알린다.
+  async generateImage() {
+    throw new Error('로컬 Ollama 모델은 이미지 생성을 지원하지 않습니다. 이미지 생성은 Gemini 또는 OpenAI를 사용하세요.');
+  }
+}
+
+async function probeOllamaModels(baseUrl = OLLAMA_DEFAULT_BASE_URL, fetchImpl = fetch) {
+  const root = String(baseUrl || OLLAMA_DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
+  const res = await fetchImpl(`${root}/api/tags`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+  const data = await res.json();
+  return (data?.models || []).map(m => String(m?.name || '')).filter(Boolean);
+}
+
+// ════════════════════════════════════════════════════════════════
 // GPT OAUTH API HUB BRIDGE
 // ════════════════════════════════════════════════════════════════
 function parseJsonObjectFromText(text) {
@@ -2824,8 +2886,72 @@ function getLLMClient() {
     if (!openaiKey) throw new Error('OpenAI API 키가 설정되지 않았습니다. 모델 설정에서 입력해주세요.');
     return new OpenAIAPI(openaiKey, cfg.llmModel);
   }
+  if (cfg.llmProvider === 'ollama') {
+    return new OllamaAPI(cfg.llmModel, cfg.ollamaBaseUrl);
+  }
   if (!hasGeminiConnection()) throw new Error('Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.');
   return createGeminiClient(cfg.llmModel);
+}
+
+// ── LLM 폴백: 사용량 한도로 막혔을 때만 지정한 대체 모델로 한 번 더 시도 ──────
+// 한도 판정은 formatGptOAuthBridgeError 와 같은 기준을 쓴다.
+const LLM_USAGE_LIMIT_PATTERN =
+  /codex-usage-limit|usage.?limit|rate.?limit|quota|too many requests|\b429\b|insufficient_quota|billing|사용량|한도/i;
+
+function isLlmUsageLimitError(error) {
+  return LLM_USAGE_LIMIT_PATTERN.test(String(error?.message || error || ''));
+}
+
+function llmFallbackPlan(cfg = normalizeModelConfig(state.modelConfig)) {
+  if (!cfg.fallbackEnabled || cfg.fallbackProvider === 'none') return null;
+  if (cfg.fallbackProvider === cfg.llmProvider && cfg.fallbackModel === cfg.llmModel) return null;
+  const label = LLM_PROVIDERS[cfg.fallbackProvider]?.label || cfg.fallbackProvider;
+  const modelLabel = (LLM_PROVIDERS[cfg.fallbackProvider]?.models || [])
+    .find(m => m.id === cfg.fallbackModel)?.label || cfg.fallbackModel;
+  return { provider: cfg.fallbackProvider, model: cfg.fallbackModel, label, modelLabel, cfg };
+}
+
+function createLlmFallbackClient(plan) {
+  if (plan.provider === 'ollama') return new OllamaAPI(plan.model, plan.cfg.ollamaBaseUrl);
+  if (plan.provider === 'openai') {
+    const key = getRuntimeOpenAIKey();
+    if (!key) throw new Error('폴백 대상이 OpenAI API인데 API 키가 없습니다. 모델 설정에서 키를 입력하세요.');
+    return new OpenAIAPI(key, plan.model);
+  }
+  throw new Error(`지원하지 않는 폴백 provider: ${plan.provider}`);
+}
+
+// method 를 기본 클라이언트로 실행하고, 사용량 한도 실패일 때만 폴백으로 재시도한다.
+// onFallback 은 화면 로그용 알림 훅이다(선택).
+async function runLlmWithFallback(method, args = [], options = {}) {
+  const cfg = normalizeModelConfig(state.modelConfig);
+  const primary = options.client || getLLMClient();
+  try {
+    return await primary[method](...args);
+  } catch (primaryError) {
+    const plan = llmFallbackPlan(cfg);
+    if (!plan || !isLlmUsageLimitError(primaryError)) throw primaryError;
+    let fallbackClient;
+    try {
+      fallbackClient = createLlmFallbackClient(plan);
+    } catch (setupError) {
+      throw new Error(`${primaryError.message}\n폴백도 사용할 수 없습니다: ${setupError.message}`);
+    }
+    if (typeof options.onFallback === 'function') {
+      options.onFallback({ plan, reason: primaryError.message || String(primaryError) });
+    }
+    try {
+      const result = await fallbackClient[method](...args);
+      if (result && typeof result === 'object' && !Array.isArray(result)) {
+        result.__fallbackUsed = { provider: plan.provider, model: plan.model, label: plan.label, modelLabel: plan.modelLabel };
+      }
+      return result;
+    } catch (fallbackError) {
+      throw new Error(
+        `${primaryError.message}\n폴백(${plan.label} · ${plan.modelLabel})도 실패했습니다: ${fallbackError.message || fallbackError}`,
+      );
+    }
+  }
 }
 
 function getAnalysisEngineModel(engine, settings = null) {

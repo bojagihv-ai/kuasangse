@@ -60,6 +60,38 @@ export function bindModelSettingsEvents({ root, contract, controller, config }) 
   for (const node of eventNodes(root, '[data-pick-imgmodel]')) {
     listen(disposers, node, 'click', () => contract.invoke('selectImageModel', node.dataset.pickImgmodel));
   }
+  // 사용량 한도 폴백 지정
+  for (const node of eventNodes(root, '[data-pick-fallback-provider]')) {
+    listen(disposers, node, 'click', () => {
+      try {
+        contract.invoke('selectFallbackProvider', node.dataset.pickFallbackProvider);
+      } catch (error) {
+        reportError?.(error);
+        requestRender();
+      }
+    });
+  }
+  for (const node of eventNodes(root, '[data-pick-fallback-model]')) {
+    listen(disposers, node, 'click', () => {
+      try {
+        contract.invoke('selectFallbackModel', node.dataset.pickFallbackModel);
+      } catch (error) {
+        reportError?.(error);
+        requestRender();
+      }
+    });
+  }
+  const ollamaInput = eventNode(root, '#ollamaBaseUrlInput');
+  if (ollamaInput) {
+    listen(disposers, ollamaInput, 'change', () => {
+      try {
+        contract.invoke('setOllamaBaseUrl', ollamaInput.value);
+      } catch (error) {
+        reportError?.(error);
+        requestRender();
+      }
+    });
+  }
 
   const toggleSecret = (buttonSelector, inputSelector) => {
     const button = eventNode(root, buttonSelector);

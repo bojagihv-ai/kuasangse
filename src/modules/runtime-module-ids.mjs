@@ -62,6 +62,7 @@ export const KNOWN_FOUNDATION_MODULE_IDS = Object.freeze([
   'src/menus/modelsettings-config.mjs',
   'src/menus/modelsettings-controller.mjs',
   'src/menus/modelsettings-bindings.mjs',
+  'src/menus/modelsettings-fallback-view.mjs',
   'src/menus/modelsettings-view.mjs',
   'src/menus/modelsettings-menu.mjs',
   'src/menus/automation-contract.mjs',

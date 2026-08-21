@@ -1,6 +1,6 @@
 {
   "schema": "kuasangse.runtime.v1",
-  "buildId": "20260811-webmcp-hydration-bridge-v1126",
+  "buildId": "20260811-webmcp-hydration-bridge-v1130",
   "entry": "app.html",
   "loader": "src/app-loader.js",
   "bundle": "dist/app-runtime.bundle.js",
@@ -69,6 +69,7 @@
     "src/menus/modelsettings-config.mjs",
     "src/menus/modelsettings-controller.mjs",
     "src/menus/modelsettings-bindings.mjs",
+    "src/menus/modelsettings-fallback-view.mjs",
     "src/menus/modelsettings-view.mjs",
     "src/menus/modelsettings-menu.mjs",
     "src/menus/automation-contract.mjs",

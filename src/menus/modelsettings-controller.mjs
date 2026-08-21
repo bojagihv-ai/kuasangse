@@ -82,6 +82,44 @@ export function createModelSettingsController(config) {
         return updateModelConfig({ imageModel: modelId });
       },
     },
+    // ── 사용량 한도 폴백 ───────────────────────────────────────
+    // 기본 실행 provider 는 그대로 두고, 한도로 막혔을 때만 쓸 대체 모델을 지정한다.
+    selectFallbackProvider: {
+      capability: 'settings:write',
+      execute(providerId) {
+        assertMutable();
+        const id = String(providerId || '');
+        if (id === 'none') {
+          return updateModelConfig({ fallbackProvider: 'none', fallbackEnabled: false, fallbackModel: '' });
+        }
+        const provider = providers[id];
+        if (!provider) throw new Error('unknown fallback provider');
+        return updateModelConfig({
+          fallbackProvider: id,
+          fallbackEnabled: true,
+          fallbackModel: provider.models?.[0]?.id || '',
+        });
+      },
+    },
+    selectFallbackModel: {
+      capability: 'settings:write',
+      execute(modelId) {
+        assertMutable();
+        const providerId = String(currentConfig().fallbackProvider || '');
+        const allowed = providers[providerId]?.models || [];
+        if (!allowed.some(model => model.id === modelId)) {
+          throw new Error('선택한 폴백 프로바이더의 모델만 지정할 수 있습니다.');
+        }
+        return updateModelConfig({ fallbackModel: modelId, fallbackEnabled: true });
+      },
+    },
+    setOllamaBaseUrl: {
+      capability: 'settings:write',
+      execute(value) {
+        assertMutable();
+        return updateModelConfig({ ollamaBaseUrl: String(value || '').trim() });
+      },
+    },
     setImageSizeMode: {
       capability: 'settings:write',
       execute(mode) {

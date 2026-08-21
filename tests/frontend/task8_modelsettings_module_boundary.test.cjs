@@ -11,8 +11,17 @@ const MODELSETTINGS_MODULES = Object.freeze([
   'modelsettings-config.mjs',
   'modelsettings-controller.mjs',
   'modelsettings-bindings.mjs',
+  'modelsettings-fallback-view.mjs',
   'modelsettings-view.mjs',
   'modelsettings-menu.mjs',
+]);
+
+// facade 가 직접 조립하는 모듈. 하위 뷰(fallback-view)는 facade 가 아니라 view 가 합성한다.
+const MODELSETTINGS_FACADE_DEPENDENCIES = Object.freeze([
+  'modelsettings-config.mjs',
+  'modelsettings-controller.mjs',
+  'modelsettings-bindings.mjs',
+  'modelsettings-view.mjs',
 ]);
 
 function modulePath(file) {
@@ -55,7 +64,7 @@ test('TASK8-MODELSETTINGS-SIZE: 모델 설정 production ESM은 각각 250 pure 
 
 test('TASK8-MODELSETTINGS-BOUNDARY: facade는 분리 모듈을 조립하고 global 상태를 읽지 않는다', () => {
   const facade = fs.readFileSync(modulePath('modelsettings-menu.mjs'), 'utf8');
-  for (const dependency of MODELSETTINGS_MODULES.slice(0, -1)) {
+  for (const dependency of MODELSETTINGS_FACADE_DEPENDENCIES) {
     assert.match(facade, new RegExp(`from ['"]\\./${dependency.replace('.', '\\.')}['"]`));
   }
 
@@ -63,6 +72,11 @@ test('TASK8-MODELSETTINGS-BOUNDARY: facade는 분리 모듈을 조립하고 glob
     const source = fs.readFileSync(modulePath(file), 'utf8');
     assert.doesNotMatch(source, /\b(?:window|globalThis|document|localStorage|sessionStorage)\b/, file);
   }
+
+  // 하위 뷰는 view 가 합성한다. 이 사슬이 끊기면 폴백 설정 UI 가 화면에서 사라진다.
+  const view = fs.readFileSync(modulePath('modelsettings-view.mjs'), 'utf8');
+  assert.match(view, /from ['"]\.\/modelsettings-fallback-view\.mjs['"]/);
+  assert.match(view, /renderFallbackSection\(/);
 });
 
 test('TASK8-MODELSETTINGS-OAUTH: runtime 목록이 좁아도 현재 선택 모델을 드롭다운에 유지한다', () => {

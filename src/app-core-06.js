@@ -19206,6 +19206,22 @@ function failCompetitorAnalyzeStart(stage, message, detail) {
   render();
 }
 
+// 기본 모델이 사용량 한도로 막히면 모델 설정에서 지정한 폴백으로 자동 전환하고,
+// 어떤 모델로 넘어갔는지 진행 로그에 남겨 사용자가 결과 출처를 알 수 있게 한다.
+async function runCompetitorLlm(llm, method, args) {
+  if (typeof runLlmWithFallback !== 'function') return llm[method](...args);
+  return runLlmWithFallback(method, args, {
+    client: llm,
+    onFallback: ({ plan, reason }) => {
+      const message = `기본 모델 사용량 한도 · ${plan.label}(${plan.modelLabel})로 전환합니다`;
+      if (typeof pushCompetitorAnalyzeLog === 'function') pushCompetitorAnalyzeLog(message, reason);
+      if (typeof compMarketLog === 'function') compMarketLog(message, 'warn');
+      state.compPage.analyzeDetail = message;
+      render();
+    },
+  });
+}
+
 async function startCompetitorAnalysis(operationContext = null) {
   assertRuntimeOperationContextCurrent(operationContext);
   const cp = state.compPage;
@@ -19326,7 +19342,7 @@ async function startCompetitorAnalysis(operationContext = null) {
           `${imgs.length}장 이미지 기준 · 점수/개선점과 함께 톤앤매너, 강조 컬러, 이미지 디렉션을 추출합니다. · ${state.compPage.analyzeModel?.modelLabel || getCurrentLlmRunInfo().modelLabel}`,
           '이미지 구조/스타일 분석'
         );
-        analysisResult = await llm.analyzeCompetitorImages(imgs);
+        analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorImages', [imgs]);
         assertRuntimeOperationContextCurrent(operationContext);
       } else if (fetchResult.html_text) {
         state.compPage.evidenceImages = [];
@@ -19336,7 +19352,7 @@ async function startCompetitorAnalysis(operationContext = null) {
           `텍스트 길이 약 ${String(fetchResult.html_text || '').length.toLocaleString('ko-KR')}자 · 카피 톤, 반복 키워드, 레이아웃 방향을 추출합니다.`,
           'HTML 구조/스타일 분석'
         );
-        analysisResult = await llm.analyzeCompetitorHTML(fetchResult.html_text);
+        analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorHTML', [fetchResult.html_text]);
         assertRuntimeOperationContextCurrent(operationContext);
       } else {
         throw new Error('페이지 데이터를 가져오지 못했습니다.');
@@ -19350,7 +19366,7 @@ async function startCompetitorAnalysis(operationContext = null) {
         `${cp.uploadedImages.length}장 이미지 기준 · 외부 모델 응답을 기다리는 동안 88%에서 대기합니다. 응답이 오면 자동으로 분석 결과 화면으로 전환됩니다. · ${state.compPage.analyzeModel?.modelLabel || getCurrentLlmRunInfo().modelLabel}`,
         'GPT OAuth 응답 대기'
       );
-      analysisResult = await llm.analyzeCompetitorImages(cp.uploadedImages);
+      analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorImages', [cp.uploadedImages]);
       assertRuntimeOperationContextCurrent(operationContext);
 
     } else {
@@ -19361,7 +19377,7 @@ async function startCompetitorAnalysis(operationContext = null) {
         `텍스트 길이 약 ${String(cp.htmlText || '').length.toLocaleString('ko-KR')}자 · 카피 톤, 반복 키워드, 레이아웃 방향을 추출합니다.`,
         'HTML 구조/스타일 분석'
       );
-      analysisResult = await llm.analyzeCompetitorHTML(cp.htmlText);
+      analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorHTML', [cp.htmlText]);
       assertRuntimeOperationContextCurrent(operationContext);
     }
 

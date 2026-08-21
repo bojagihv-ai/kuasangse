@@ -1,3 +1,5 @@
+import { renderFallbackSection } from './modelsettings-fallback-view.mjs';
+
 export function renderModelSettingsView(view = {}, capabilities) {
   const {
     providers,
@@ -117,6 +119,8 @@ export function renderModelSettingsView(view = {}, capabilities) {
       </div>
       ` : ''}
     </div>
+
+    ${renderFallbackSection(cfg, providers)}
 
     <!-- ── 이미지 생성 모델 ── -->
     <div class="settings-section">
