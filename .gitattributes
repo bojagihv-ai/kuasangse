@@ -1,0 +1,30 @@
+# 줄바꿈을 저장소에서 LF 로 고정한다.
+#
+# 왜 필요한가: core.autocrlf=true 인 윈도우 체크아웃에서 작업본이 CRLF 가 되면서,
+# 소스를 문자열로 읽어 검사하는 테스트가 `\n}\n` 같은 패턴을 못 찾아 실패했다
+# (DETAIL-11, 2026-08-21). 개발자마다 autocrlf 설정이 달라도 같은 결과가 나오도록
+# 저장소 차원에서 못 박는다.
+
+* text=auto eol=lf
+
+# 윈도우 배치 파일은 cmd.exe 파싱 때문에 CRLF 를 유지한다.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 바이너리는 줄바꿈 변환 대상이 아니다.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.exe  binary
+*.dll  binary
+*.vdi  binary
+*.nvram binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
