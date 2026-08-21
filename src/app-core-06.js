@@ -19208,15 +19208,19 @@ function failCompetitorAnalyzeStart(stage, message, detail) {
 
 // 기본 모델이 사용량 한도로 막히면 모델 설정에서 지정한 폴백으로 자동 전환하고,
 // 어떤 모델로 넘어갔는지 진행 로그에 남겨 사용자가 결과 출처를 알 수 있게 한다.
-async function runCompetitorLlm(llm, method, args) {
+async function runLlmStage(llm, method, args) {
   if (typeof runLlmWithFallback !== 'function') return llm[method](...args);
   return runLlmWithFallback(method, args, {
     client: llm,
     onFallback: ({ plan, reason }) => {
       const message = `기본 모델 사용량 한도 · ${plan.label}(${plan.modelLabel})로 전환합니다`;
-      if (typeof pushCompetitorAnalyzeLog === 'function') pushCompetitorAnalyzeLog(message, reason);
+      if (typeof pushCompetitorAnalyzeLog === 'function' && state.compPage?.subStep === 'analyzing') {
+        pushCompetitorAnalyzeLog(message, reason);
+        state.compPage.analyzeDetail = message;
+      }
       if (typeof compMarketLog === 'function') compMarketLog(message, 'warn');
-      state.compPage.analyzeDetail = message;
+      if (typeof factoryLog === 'function') factoryLog(message, 'warn');
+      if (typeof setUiNotice === 'function') setUiNotice(message, 'info');
       render();
     },
   });
@@ -19342,7 +19346,7 @@ async function startCompetitorAnalysis(operationContext = null) {
           `${imgs.length}장 이미지 기준 · 점수/개선점과 함께 톤앤매너, 강조 컬러, 이미지 디렉션을 추출합니다. · ${state.compPage.analyzeModel?.modelLabel || getCurrentLlmRunInfo().modelLabel}`,
           '이미지 구조/스타일 분석'
         );
-        analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorImages', [imgs]);
+        analysisResult = await runLlmStage(llm, 'analyzeCompetitorImages', [imgs]);
         assertRuntimeOperationContextCurrent(operationContext);
       } else if (fetchResult.html_text) {
         state.compPage.evidenceImages = [];
@@ -19352,7 +19356,7 @@ async function startCompetitorAnalysis(operationContext = null) {
           `텍스트 길이 약 ${String(fetchResult.html_text || '').length.toLocaleString('ko-KR')}자 · 카피 톤, 반복 키워드, 레이아웃 방향을 추출합니다.`,
           'HTML 구조/스타일 분석'
         );
-        analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorHTML', [fetchResult.html_text]);
+        analysisResult = await runLlmStage(llm, 'analyzeCompetitorHTML', [fetchResult.html_text]);
         assertRuntimeOperationContextCurrent(operationContext);
       } else {
         throw new Error('페이지 데이터를 가져오지 못했습니다.');
@@ -19366,7 +19370,7 @@ async function startCompetitorAnalysis(operationContext = null) {
         `${cp.uploadedImages.length}장 이미지 기준 · 외부 모델 응답을 기다리는 동안 88%에서 대기합니다. 응답이 오면 자동으로 분석 결과 화면으로 전환됩니다. · ${state.compPage.analyzeModel?.modelLabel || getCurrentLlmRunInfo().modelLabel}`,
         'GPT OAuth 응답 대기'
       );
-      analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorImages', [cp.uploadedImages]);
+      analysisResult = await runLlmStage(llm, 'analyzeCompetitorImages', [cp.uploadedImages]);
       assertRuntimeOperationContextCurrent(operationContext);
 
     } else {
@@ -19377,7 +19381,7 @@ async function startCompetitorAnalysis(operationContext = null) {
         `텍스트 길이 약 ${String(cp.htmlText || '').length.toLocaleString('ko-KR')}자 · 카피 톤, 반복 키워드, 레이아웃 방향을 추출합니다.`,
         'HTML 구조/스타일 분석'
       );
-      analysisResult = await runCompetitorLlm(llm, 'analyzeCompetitorHTML', [cp.htmlText]);
+      analysisResult = await runLlmStage(llm, 'analyzeCompetitorHTML', [cp.htmlText]);
       assertRuntimeOperationContextCurrent(operationContext);
     }
 
@@ -19448,10 +19452,10 @@ async function generateCompetitorPlan() {
   setCompetitorAnalyzeStatus(18, '15개 섹션 플랜 생성 중...', `${state.compPage.analyzeModel?.modelLabel || getCurrentLlmRunInfo().modelLabel}로 섹션별 역할과 개선 포인트를 작성합니다.`, '섹션 플랜 생성');
 
   try {
-    const plan = await llm.generateCompetitorSectionPlan(
+    const plan = await runLlmStage(llm, 'generateCompetitorSectionPlan', [
       state.compPage.analysisResult,
-      state.analysis
-    );
+      state.analysis,
+    ]);
     // 초기 planEdits를 recommended_sections 기본값으로 채움
     const edits = {};
     (plan.recommended_sections || []).forEach(r => {
@@ -19545,7 +19549,7 @@ async function generateCompSection(sectionId) {
       ? buildSectionCompetitorReferenceForPrompt(sectionId, basis.id)
       : (basis.id === 'image_analysis' ? '' : rawCompRef);
     const contentPrompt = buildSectionPromptInstructions(sectionId, state.sectionInstructions[sectionId] || '');
-    const content = await llm.generateSectionContent(s, buildSectionScopedAnalysisPayload(sectionId, state.analysis), contentPrompt, compRef);
+    const content = await runLlmStage(llm, 'generateSectionContent', [s, buildSectionScopedAnalysisPayload(sectionId, state.analysis), contentPrompt, compRef]);
     content.generation_mode = mode;
     content.generation_basis = basis.id;
     content.generation_basis_label = basis.shortLabel;
@@ -19701,7 +19705,7 @@ async function ensureImageInferenceForMatching(options = {}) {
     start: 18,
     end: 24,
     expectedMs: 150000,
-  }, () => llm.analyzeImage(primaryImg.base64, primaryImg.mime, extraImgs));
+  }, () => runLlmStage(llm, 'analyzeImage', [primaryImg.base64, primaryImg.mime, extraImgs]));
   if (settings.useName && state.productName) analysis.product_name = state.productName;
   attachCurrentAnalysisImageIdentity(analysis);
   analysis.image_inference_engine = settings.imageInferenceEngine;
@@ -20195,7 +20199,7 @@ async function startImageAnalysisOnly() {
       start: 18,
       end: 34,
       expectedMs: 150000,
-    }, () => llm.analyzeImage(primaryImg.base64, primaryImg.mime, extraImgs));
+    }, () => runLlmStage(llm, 'analyzeImage', [primaryImg.base64, primaryImg.mime, extraImgs]));
     if (state.productName) analysis.product_name = state.productName;
     attachCurrentAnalysisImageIdentity(analysis);
     analysis.image_inference_engine = settings.imageInferenceEngine;
@@ -20256,7 +20260,7 @@ async function startAnalysis(operationContext = null) {
       end: 24,
       expectedMs: 150000,
       operationContext,
-    }, () => llm.analyzeImage(primaryImg.base64, primaryImg.mime, extraImgs));
+    }, () => runLlmStage(llm, 'analyzeImage', [primaryImg.base64, primaryImg.mime, extraImgs]));
     assertRuntimeOperationContextCurrent(operationContext);
     if (state.productName) analysis.product_name = state.productName;
     attachCurrentAnalysisImageIdentity(analysis);
@@ -20454,7 +20458,7 @@ async function generateAllSections(operationContext = null) {
   let sectionFallbackLogged = false;
   const generateSectionContentWithFallback = async (section, analysisPayload, contentPrompt, compRef) => {
     try {
-      return await llm.generateSectionContent(section, analysisPayload, contentPrompt, compRef);
+      return await runLlmStage(llm, 'generateSectionContent', [section, analysisPayload, contentPrompt, compRef]);
     } catch (error) {
       assertRuntimeOperationContextCurrent(operationContext);
       const cfg = typeof normalizeModelConfig === 'function' ? normalizeModelConfig(state.modelConfig) : (state.modelConfig || {});
@@ -20715,9 +20719,9 @@ async function generateSingleSection(sectionId, options = {}) {
       ? buildSectionCompetitorReferenceForPrompt(sectionId, basis.id)
       : (basis.id === 'image_analysis' ? '' : rawCompRef);
     const contentPrompt = buildSectionPromptInstructions(sectionId, state.sectionInstructions[sectionId] || '');
-    const content = await llm.generateSectionContent(
-      s, buildSectionScopedAnalysisPayload(sectionId, state.analysis), contentPrompt, compRef
-    );
+    const content = await runLlmStage(llm, 'generateSectionContent', [
+      s, buildSectionScopedAnalysisPayload(sectionId, state.analysis), contentPrompt, compRef,
+    ]);
     assertRuntimeOperationContextCurrent(operationContext);
     content.generation_mode = mode;
     content.generation_basis = basis.id;

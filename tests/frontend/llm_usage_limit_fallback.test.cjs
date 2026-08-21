@@ -229,3 +229,30 @@ test('폴백 기본값은 OpenAI API 이고 로컬 Ollama 는 명시 선택일 �
   assert.equal(off.fallbackEnabled, false);
   assert.equal(off.fallbackModel, '');
 });
+
+test('모든 LLM 공정이 폴백 경로를 지난다 (직접 llm.* 호출 금지)', () => {
+  // 경쟁사 분석만 폴백에 걸려 있고 섹션 플랜·섹션 본문·이미지 분석이 빠져 있어서,
+  // 한도에 걸리면 그 공정들만 그대로 실패했다(2026-08-21 섹션 플랜 생성 실패).
+  const core06 = fs.readFileSync(path.join(ROOT, 'src', 'app-core-06.js'), 'utf8');
+
+  const direct = core06.match(/llm\.(?:analyze|generate|compare)[A-Za-z]*\(/g) || [];
+  assert.deepEqual(direct, [], `폴백을 지나지 않는 직접 호출이 남았습니다: ${direct.join(', ')}`);
+
+  // 실제로 감싸는 헬퍼가 있고 폴백 실행기로 위임해야 한다.
+  assert.match(core06, /async function runLlmStage\(llm, method, args\)/);
+  assert.match(core06, /runLlmStage[\s\S]{0,200}runLlmWithFallback\(method, args/);
+
+  // 한도로 막히기 쉬운 공정 4종이 모두 연결됐는지 확인한다.
+  for (const method of [
+    'analyzeCompetitorImages',
+    'analyzeCompetitorHTML',
+    'generateCompetitorSectionPlan',
+    'generateSectionContent',
+    'analyzeImage',
+  ]) {
+    assert.ok(
+      core06.includes(`runLlmStage(llm, '${method}'`),
+      `${method} 가 폴백 경로에 연결되지 않았습니다`,
+    );
+  }
+});
