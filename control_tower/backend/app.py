@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 from typing import Final
 
 from flask import Flask, Response, jsonify, request
@@ -21,6 +23,15 @@ SCHEMA_VERSION: Final = "1"
 SAFE_CORS_METHODS: Final = "GET, HEAD, OPTIONS"
 
 
+def _runtime_build_id() -> str:
+    manifest_path = Path(__file__).parents[2] / "src" / "runtime-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    build_id = manifest.get("buildId")
+    if not isinstance(build_id, str):
+        return ""
+    return build_id
+
+
 def create_app(
     config: ControlTowerConfig | None = None,
     pdp_api: PdpApi | None = None,
@@ -32,11 +43,18 @@ def create_app(
     settings = config if config is not None else load_config()
     app = Flask(__name__)
     app.config["CONTROL_TOWER_CONFIG"] = settings
+    factory_sync = factory_sync_bridge or FactorySyncBridge(
+        state_path=Path(settings.cache_root) / "factory-product-jobs.json",
+        expected_build_id=_runtime_build_id(),
+    )
+    resolved_cafe24_bridge = cafe24_bridge or QueuedCafe24CommandBridge(
+        worker_target=factory_sync.active_worker_target,
+    )
     register_routes(
         app,
         pdp_api or PdpControlHttpApi(settings.pdp_control_url, settings.pdp_service_key),
-        cafe24_bridge=cafe24_bridge,
-        factory_sync_bridge=factory_sync_bridge,
+        cafe24_bridge=resolved_cafe24_bridge,
+        factory_sync_bridge=factory_sync,
         workbench_api=workbench_api
         or PdpWorkbenchHttpApi(
             settings.pdp_assets_url,
@@ -44,6 +62,7 @@ def create_app(
             settings.pdp_service_key,
         ),
         gpt_judge=gpt_judge or GptOAuthJudge(settings.api_hub_url),
+        factory_archive_root=Path(settings.cache_root).resolve().parent / "local-archive",
     )
 
     @app.before_request
@@ -63,6 +82,7 @@ def create_app(
         if origin is None or origin not in settings.cors_origins:
             return response
         response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
         if request.method == "OPTIONS":
             requested_method = request.headers.get("Access-Control-Request-Method", "")
@@ -105,11 +125,7 @@ def main() -> None:
     except ConfigurationError as error:
         print(f"configuration error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-    create_app(
-        settings,
-        cafe24_bridge=QueuedCafe24CommandBridge(),
-        factory_sync_bridge=FactorySyncBridge(),
-    ).run(
+    create_app(settings).run(
         host=settings.backend_host,
         port=settings.backend_port,
         debug=False,

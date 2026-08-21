@@ -846,6 +846,8 @@ test('Given a restored tab session When startup hydration reaches the server The
       imagePreview: null,
     },
     classicRuntimeIsBatchWorker: () => false,
+    getCurrentLastWorkWorkspaceScope: () => 'draft:startup-tab',
+    ensureWorkspaceEditAuthority: async scopeId => ({ scopeId, mode: 'editing' }),
     hydratePersistentSessionAssets: async () => false,
     hydrateServerLastWorkSnapshot: async options => {
       capturedOptions.push({ ...options });
@@ -1089,12 +1091,180 @@ test('Given a tab session is newer than the server receipt, startup cleanup wait
   );
   assert.match(
     deferredHydration,
-    /await hydrateServerLastWorkSnapshot\(\{\s*isCurrent:\s*intentIsCurrent,\s*\}\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*factoryClearRestoredImageGenerationRuntime\(\{\s*save:\s*true,/,
-    'the quality-gated server hydration must finish before runtime cleanup may persist',
+    /await hydrateServerLastWorkSnapshot\(\{\s*isCurrent:\s*intentIsCurrent,\s*\}\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*const persistRuntimeCleanup = !shouldRetryProjectServerSnapshot;[\s\S]*factoryClearRestoredImageGenerationRuntime\(\{\s*save:\s*persistRuntimeCleanup,/,
+    'runtime cleanup may persist only when startup is not projecting a project receipt into a draft branch',
   );
   assert.doesNotMatch(
     deferredHydration,
     /hydrateServerLastWorkSnapshot\(\{\s*force:\s*true,\s*forceRevisionRestore:\s*true,/,
     'startup must not force an older server receipt over the restored tab session',
   );
+});
+
+test('Given a current workfile restores project identity after tab-local hydration When startup checks identity Then it rereads identity before the project receipt', async () => {
+  const deferredHydrationSource = sourceSlice(
+    source('src/app-core-06.js'),
+    'async function continueClassicRuntimeHydrationInBackground(',
+    'async function runClassicRuntimeHydration(',
+  );
+  const calls = [];
+  let archiveRestoreCount = 0;
+  const context = vm.createContext({
+    state: { currentProjectId: '', step: 'factory', factory: { product: {} } },
+    classicRuntimeIsBatchWorker: () => false,
+    getCurrentLastWorkWorkspaceScope: () => 'draft:tab',
+    ensureWorkspaceEditAuthority: async scopeId => ({ scopeId, mode: 'editing' }),
+    serverLastWorkSnapshotMissing: false,
+    hydratePersistentSessionAssets: async () => calls.push('session'),
+    hydrateServerLastWorkSnapshot: async options => calls.push(options.projectFallback === true ? 'server:project' : 'server:draft'),
+    getCurrentDocumentWorkspaceScope: () => (
+      context.state.currentProjectId ? `project:${context.state.currentProjectId}` : ''
+    ),
+    factoryRestoreCurrentWorkfileLocalArchive: async () => {
+      archiveRestoreCount += 1;
+      calls.push(`archive:${archiveRestoreCount}`);
+      return true;
+    },
+    factoryRuntimeReadFactory: () => ({
+      workspace: { id: 'saved-work', name: '모시꽃수파우치', createdAt: 1710000000000 },
+      product: {},
+    }),
+    restoreLastWorkProjectIdentityFromAssets: assets => {
+      calls.push(`identity:${assets.currentProjectId}`);
+      context.state.currentProjectId = assets.currentProjectId;
+      return true;
+    },
+    hydrateLastProductImageBackup: null,
+    flushOptionSorterLiveRecoverySave: null,
+    showImageRestoreWarningIfNeeded: () => false,
+    render: () => {},
+  });
+  vm.runInContext(`${deferredHydrationSource}\nglobalThis.runBackground = continueClassicRuntimeHydrationInBackground;`, context);
+
+  const result = await context.runBackground({
+    initialHydrationIdentity: Object.freeze({ scopeId: 'draft:tab', projectId: '' }),
+    initialAuthority: Object.freeze({ scopeId: 'draft:tab' }),
+    readHydrationIdentity: () => Object.freeze({
+      scopeId: 'draft:tab',
+      projectId: context.state.currentProjectId,
+    }),
+    hydrationIdentityIsCurrent: identity => identity.scopeId === 'draft:tab'
+      && identity.projectId === context.state.currentProjectId,
+    hydrationIntentToken: 0,
+    hydrationIntentIsCurrent: () => true,
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(calls, [
+    'session',
+    'server:draft',
+    'archive:1',
+    'identity:saved-work',
+    'server:project',
+    'archive:2',
+    'server:project',
+  ]);
+});
+
+test('Given a restored project is active while this tab has a draft branch When ordinary server hydration starts Then it reads the project receipt', async () => {
+  const calls = [];
+  const context = vm.createContext({
+    serverLastWorkHydrated: false,
+    serverLastWorkHydrating: false,
+    serverLastWorkHydrationPromise: null,
+    serverLastWorkSnapshotMissing: false,
+    workspaceBlankResetToken: 0,
+    workspaceScopeTransitionState: { persistentSaveQueued: false },
+    getCurrentLastWorkWorkspaceScope: () => 'draft:tab',
+    getCurrentDocumentWorkspaceScope: () => 'project:restored-work',
+    workspaceHydrationScopeIsCurrent: () => true,
+    workspacePersistenceApi: () => ({
+      restore: async ({ scopeId }) => {
+        calls.push(scopeId);
+        return null;
+      },
+    }),
+    setTimeout: () => 1,
+    console: { warn: () => {} },
+  });
+  const hydrateSource = sourceSlice(
+    source('src/app-core-02.js'),
+    'async function hydrateServerLastWorkSnapshot(',
+    'async function refreshCompetitorAnalysisFromServer(',
+  );
+  vm.runInContext(`${hydrateSource}\nglobalThis.hydrateServer = hydrateServerLastWorkSnapshot;`, context);
+
+  const changed = await context.hydrateServer({ force: true });
+
+  assert.equal(changed, false);
+  assert.deepEqual(calls, ['project:restored-work']);
+  assert.equal(context.serverLastWorkHydrated, true);
+});
+
+test('Given a draft branch reads its project receipt When hydration finishes Then it never writes that receipt back', () => {
+  const hydrateSource = sourceSlice(
+    source('src/app-core-02.js'),
+    'async function hydrateServerLastWorkSnapshot(',
+    'async function refreshCompetitorAnalysisFromServer(',
+  );
+
+  assert.match(hydrateSource, /const crossScopeRestore = restoreScopeId !== hydrateScopeId;/);
+  assert.match(hydrateSource, /shouldResaveAfterHydrate = options\.takeoverSync !== true\s*&& !crossScopeRestore\s*&& currentStateOutranksServer;/);
+  assert.match(hydrateSource, /shouldResaveAfterHydrate = options\.takeoverSync !== true && !crossScopeRestore;/);
+  const deferredHydrationSource = sourceSlice(
+    source('src/app-core-06.js'),
+    'async function continueClassicRuntimeHydrationInBackground(',
+    'async function runClassicRuntimeHydration(',
+  );
+  assert.match(deferredHydrationSource, /const persistRuntimeCleanup = !shouldRetryProjectServerSnapshot;/);
+  assert.match(deferredHydrationSource, /factoryClearRestoredCandidateRuntime\(\{\s*save:\s*persistRuntimeCleanup,/);
+});
+
+test('Given startup project loading is still replacing the thin workfile payload When classic hydration starts Then deferred server hydration waits for that replacement', async () => {
+  const calls = [];
+  let resolveWorkspaceLists;
+  const workspaceLists = new Promise(resolve => { resolveWorkspaceLists = resolve; });
+  const context = vm.createContext({
+    state: { currentProjectId: '', step: 'factory' },
+    gemini: null,
+    classicRuntimeIsBatchWorker: () => false,
+    installClassicRuntimeLifecycle: () => {},
+    disposeClassicRuntimeLifecycle: () => {},
+    hasGeminiConnection: () => false,
+    getCurrentLastWorkWorkspaceScope: () => 'draft:tab',
+    ensureWorkspaceEditAuthority: async () => ({ scopeId: 'draft:tab' }),
+    markSessionAssetFingerprintSaved: () => {},
+    loadCutsArchiveFolderStatus: async () => {},
+    refreshWorkspaceLists: async () => {
+      calls.push('workspace-lists:start');
+      await workspaceLists;
+      context.state.currentProjectId = 'restored-work';
+      calls.push('workspace-lists:settled');
+    },
+    applyOptionSorterLiveRecovery: () => {},
+    continueClassicRuntimeHydrationInBackground: async options => {
+      calls.push(`deferred:${options.initialHydrationIdentity.projectId}`);
+      return true;
+    },
+    setTimeout(callback) {
+      queueMicrotask(callback);
+      return 1;
+    },
+  });
+  const startupSource = sourceSlice(
+    source('src/app-core-06.js'),
+    'async function runClassicRuntimeHydration(',
+    'function hydrateClassicRuntime(',
+  );
+  vm.runInContext(`${startupSource}\nglobalThis.runStartup = runClassicRuntimeHydration;`, context);
+
+  const pending = context.runStartup({ schema: 'kuasangse.app-state', version: 'app-state:v1' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['workspace-lists:start']);
+
+  resolveWorkspaceLists();
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(calls, ['workspace-lists:start', 'workspace-lists:settled', 'deferred:restored-work']);
 });

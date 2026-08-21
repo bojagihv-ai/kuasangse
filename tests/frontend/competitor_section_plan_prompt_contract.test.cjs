@@ -185,7 +185,8 @@ test('화면의 실제 생성 요청 입력에는 content prompt와 별도 compe
 
 test('최종 provider prompt 미리보기와 실제 세 provider 실행은 같은 조립 함수를 사용한다', () => {
   const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-01.js'), 'utf8');
-  const match = core.match(/function buildSectionContentProviderPrompt\([^]*?\n}\n/);
+  // core.autocrlf 체크아웃에서는 줄 끝이 CRLF이므로 `\n}\n`으로는 함수 끝을 못 찾는다.
+  const match = core.match(/function buildSectionContentProviderPrompt\([^]*?\r?\n}\r?\n/);
   assert.ok(match, 'buildSectionContentProviderPrompt 함수가 필요합니다.');
   const create = new Function(
     'getEffectiveImageDirectives',

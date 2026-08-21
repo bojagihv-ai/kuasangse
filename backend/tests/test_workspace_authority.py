@@ -363,6 +363,342 @@ def test_richer_factory_snapshot_keep_is_exact_protected_noop(authority_client) 
     assert len(restored.get_json()["snapshot"]["assets"]["factory"]["assets"]) == 2
 
 
+def test_named_option_cuts_cannot_regress_to_startup_defaults(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    completed_options = {
+        "images": [{"id": "source-red", "archiveId": "archive-red"}],
+        "slots": [{"id": "slot-red", "name": "1.빨강", "imgIds": ["source-red"]}],
+        "optionResults": [{"id": "result-red", "imageUrl": "/api/local-archive/assets/result-red/image"}],
+    }
+    startup_defaults = {
+        "images": [],
+        "slots": [{"id": "slot-red", "name": "1번", "imgIds": []}],
+        "optionResults": [],
+    }
+    completed_competitor = {
+        "marketScrape": {
+            "results": [{"id": "candidate-red"}],
+            "vmResults": [{"id": "candidate-red"}],
+            "selectedIds": ["candidate-red"],
+            "detailResults": {"candidate-red": {"images": ["detail-red"]}},
+        },
+        "sectionPlan": {"header": {"headline": "kept"}},
+    }
+    startup_competitor = {
+        "marketScrape": {"results": [], "vmResults": [], "selectedIds": [], "detailResults": {}},
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {"product": product},
+                    "optionSorter": completed_options,
+                    "compPage": completed_competitor,
+                },
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    regressed = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {"product": product},
+                    "optionSorter": startup_defaults,
+                    "compPage": startup_competitor,
+                },
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert regressed.status_code == 200
+    assert regressed.get_json()["accepted"] is False
+    assert regressed.get_json()["protectedNoOp"] is True
+    assert restored["assets"]["optionSorter"] == completed_options
+    assert restored["assets"]["compPage"] == completed_competitor
+
+
+def test_same_count_sparse_derived_rows_cannot_erase_saved_content(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    completed = {
+        "workspaceScope": {"id": "project:alpha"},
+        "assets": {
+            "factory": {"product": product},
+            "optionSorter": {
+                "images": [{"id": "source-red", "archiveId": "archive-red"}],
+                "slots": [{"id": "slot-red", "name": "1.빨강", "imgIds": ["source-red"]}],
+                "optionResults": [{"id": "result-red", "imageUrl": "/api/local-archive/assets/result-red/image"}],
+            },
+            "compPage": {
+                "marketScrape": {
+                    "results": [{"id": "candidate-red", "title": "보존 후보"}],
+                    "selectedIds": ["candidate-red"],
+                    "detailResults": {"candidate-red": {"images": ["detail-red"], "body": "보존 상세"}},
+                },
+                "analysisResult": {"analyzedAt": 100, "conclusion": "보존 분석"},
+                "sectionPlan": {"hero": {"headline": "보존 플랜"}},
+                "planEdits": {"hero": "보존 지시"},
+            },
+        },
+    }
+    sparse = {
+        "workspaceScope": {"id": "project:alpha"},
+        "assets": {
+            "factory": {"product": product},
+            "optionSorter": {
+                "images": [{"id": "source-red", "archiveId": "archive-red"}],
+                "slots": [{"id": "slot-red", "name": "1.빨강", "imgIds": []}],
+                "optionResults": [{"id": "result-red"}],
+            },
+            "compPage": {
+                "marketScrape": {
+                    "results": [{"id": "candidate-red"}],
+                    "selectedIds": ["candidate-red"],
+                    "detailResults": {"candidate-red": {}},
+                },
+                "analysisResult": {"analyzedAt": 100},
+                "sectionPlan": {"hero": {}},
+                "planEdits": {"hero": ""},
+            },
+        },
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": completed,
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    regressed = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": sparse,
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+
+    assert accepted.status_code == 200
+    assert regressed.status_code == 200
+    assert regressed.get_json()["accepted"] is False
+    assert regressed.get_json()["protectedNoOp"] is True
+    assert regressed.get_json()["reason"].endswith("optionSorter.slots.content")
+
+
+def test_richer_option_slots_may_replace_generated_row_ids(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    initial_slots = [
+        {"id": "slot_1", "name": "1번", "imgIds": []},
+        {"id": "slot_2", "name": "2번", "imgIds": []},
+    ]
+    matched_slots = [
+        {"id": "slot_generated_red", "name": "1.빨강", "imgIds": ["image-red"]},
+        {"id": "slot_generated_blue", "name": "2.파랑", "imgIds": ["image-blue"]},
+    ]
+
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {"product": product},
+                    "optionSorter": {"images": [], "slots": initial_slots, "optionResults": []},
+                },
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    updated = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {
+                    "factory": {"product": product},
+                    "optionSorter": {
+                        "images": [{"id": "image-red"}, {"id": "image-blue"}],
+                        "slots": matched_slots,
+                        "optionResults": [],
+                    },
+                },
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert updated.status_code == 200
+    assert updated.get_json()["accepted"] is True
+    assert restored["assets"]["optionSorter"]["slots"] == matched_slots
+
+
+def test_newer_explicit_candidate_selection_change_may_clear_selection(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    initial = {
+        "workspaceScope": {"id": "project:alpha"},
+        "assets": {
+            "factory": {"product": product},
+            "compPage": {
+                "marketScrape": {
+                    "results": [{"id": "candidate-red", "title": "보존 후보"}],
+                    "selectedIds": ["candidate-red"],
+                    "selectedImageIds": ["detail-red"],
+                    "detailSelectionVersion": 4,
+                    "detailResults": {"candidate-red": {"images": ["detail-red"], "body": "보존 상세"}},
+                },
+            },
+        },
+    }
+    cleared = {
+        "workspaceScope": {"id": "project:alpha"},
+        "assets": {
+            "factory": {"product": product},
+            "compPage": {
+                "marketScrape": {
+                    "results": [{"id": "candidate-red", "title": "보존 후보"}],
+                    "selectedIds": [],
+                    "selectedImageIds": [],
+                    "detailSelectionVersion": 5,
+                    "detailResults": {"candidate-red": {"images": ["detail-red"], "body": "보존 상세"}},
+                },
+            },
+        },
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": initial,
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    updated = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": cleared,
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    restored = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert accepted.status_code == 200
+    assert updated.status_code == 200
+    assert updated.get_json()["accepted"] is True
+    assert restored["assets"]["compPage"]["marketScrape"]["selectedIds"] == []
+    assert restored["assets"]["compPage"]["marketScrape"]["detailResults"]["candidate-red"]["body"] == "보존 상세"
+
+
+def test_grouped_competitor_candidates_cannot_regress_to_empty_snapshot(authority_client) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    product = {
+        "productName": "A",
+        "productKey": "product-a",
+        "currentRunId": "run-a",
+        "inputImageFingerprint": "image-a",
+    }
+    completed_competitor = {
+        "marketScrape": {
+            "results": [],
+            "groupedResults": {"vm": [{"id": "candidate-red"}]},
+            "selectedIds": [],
+        },
+    }
+    startup_competitor = {
+        "marketScrape": {"results": [], "groupedResults": {}, "selectedIds": []},
+    }
+    accepted = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {"factory": {"product": product}, "compPage": completed_competitor},
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    regressed = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "workspaceScope": {"id": "project:alpha"},
+                "assets": {"factory": {"product": product}, "compPage": startup_competitor},
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+
+    assert accepted.status_code == 200
+    assert regressed.status_code == 200
+    assert regressed.get_json()["accepted"] is False
+    assert regressed.get_json()["protectedNoOp"] is True
+
+
 def test_option_none_may_remove_only_the_color_option_section(authority_client) -> None:
     client, _ = authority_client
     lease = _acquire(client, "project:alpha")

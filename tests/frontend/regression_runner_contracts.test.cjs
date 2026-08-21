@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -10,7 +12,11 @@ const {
   compareRuntimeSourceSnapshots,
   findAvailableCdpBasePort,
   isRetryableInfrastructureFailure,
+  prepareDetail04Fixture,
+  prepareTaskOwnedDailyFixture,
+  startTaskOwnedDailyServices,
   startTaskOwnedStaticServer,
+  stopServices,
 } = require('../../tools/run_daily_regression.cjs');
 const {
   buildRegressionSteps,
@@ -505,6 +511,128 @@ test('daily 전체는 공유 5050/8081 대신 task-owned archive, state, fronten
   assert.match(source, /stopServices\(runtime\.services\)/);
   assert.doesNotMatch(source, /if \(!await urlIsReady\(appUrl\)\)/);
   assert.doesNotMatch(source, /if \(!await urlIsReady\(`\$\{apiBase\}\/api\/sections`\)\)/);
+});
+
+test('DETAIL-04 task runtime은 상세 검증 시작 전에 pinned fixture 하나만 준비하고 repository archive를 보존한다', async t => {
+  const fixtureRoot = path.resolve(__dirname, '..', 'fixtures', 'detail-04');
+  const manifest = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'manifest.json'), 'utf8'));
+  const rootSourcePath = path.resolve(__dirname, '..', '..', ...manifest.targetRelativePath.split('/'));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kuasangse-detail04-run-'));
+  const rootSourceExists = fs.existsSync(rootSourcePath);
+  const rootSourceHash = rootSourceExists
+    ? crypto.createHash('sha256').update(fs.readFileSync(rootSourcePath)).digest('hex').toUpperCase()
+    : '';
+  const rootSourceMode = rootSourceExists ? fs.statSync(rootSourcePath).mode & 0o777 : 0;
+  const pythonExe = fs.existsSync(path.resolve(__dirname, '../../backend/venv311/Scripts/python.exe'))
+    ? path.resolve(__dirname, '../../backend/venv311/Scripts/python.exe')
+    : 'python';
+  let runtime;
+  let caught;
+  try {
+    runtime = await startTaskOwnedDailyServices(
+      pythonExe,
+      runDir,
+      await findAvailableCdpBasePort(1),
+    );
+    const copiedPath = path.join(runtime.runtimeRoot, ...manifest.targetRelativePath.split('/'));
+    const probe = spawnSync(process.execPath, ['-e', [
+      "const fs=require('node:fs');",
+      "const path=require('node:path');",
+      "const target=path.join(process.env.KUASANGSE_DETAIL_04_RUNTIME_ROOT,...process.env.DETAIL_04_TARGET.split('/'));",
+      "if(!fs.existsSync(target))process.exit(1);",
+      'process.stdout.write(target);',
+    ].join('')], {
+      cwd: path.resolve(__dirname, '../..'),
+      encoding: 'utf8',
+      env: { ...runtime.env, DETAIL_04_TARGET: manifest.targetRelativePath },
+    });
+
+    assert.equal(runtime.detail04Fixture.targetRelativePath, manifest.targetRelativePath);
+    assert.equal(probe.status, 0, probe.stderr);
+    assert.equal(probe.stdout, copiedPath);
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(copiedPath)).digest('hex').toUpperCase(), manifest.fixtureSha256);
+    assert.deepEqual(
+      fs.readdirSync(runtime.runtimeRoot, { recursive: true })
+        .filter(relativePath => fs.statSync(path.join(runtime.runtimeRoot, relativePath)).isFile())
+        .map(relativePath => relativePath.replace(/\\/g, '/')),
+      [manifest.targetRelativePath],
+    );
+    assert.equal(fs.existsSync(rootSourcePath), rootSourceExists);
+    if (rootSourceExists) {
+      assert.equal(crypto.createHash('sha256').update(fs.readFileSync(rootSourcePath)).digest('hex').toUpperCase(), rootSourceHash);
+      assert.equal(fs.statSync(rootSourcePath).mode & 0o777, rootSourceMode);
+    }
+  } catch (error) {
+    caught = error;
+  } finally {
+    if (runtime) await stopServices(runtime.services);
+    fs.rmSync(runDir, { recursive: true, force: true });
+  }
+  assert.equal(fs.existsSync(runDir), false);
+  t.diagnostic('temporary task runtime removed after the pretest fixture probe');
+  if (caught) throw caught;
+});
+
+test('DETAIL-04 task-owned fixture는 손상, stale GUID, 경로 탈출, root 오용에서 fail closed 한다', t => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kuasangse-detail04-corrupt-'));
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kuasangse-detail04-run-'));
+  const runtimeRoot = path.join(runDir, 'task-owned-runtime');
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../fixtures/detail-04/manifest.json'), 'utf8'));
+  t.after(() => {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    fs.rmSync(runDir, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(fixtureRoot, 'image.jpg'), 'corrupt fixture');
+  fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+    ...manifest,
+    fixtureRelativePath: 'image.jpg',
+  }));
+
+  assert.throws(
+    () => prepareDetail04Fixture({
+      root: runtimeRoot,
+      runDir,
+      fixtureRoot,
+      env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
+    }),
+    /DETAIL-04 fixture SHA-256 mismatch/,
+  );
+  fs.copyFileSync(path.resolve(__dirname, '../fixtures/detail-04/image.jpg'), path.join(fixtureRoot, 'image.jpg'));
+  fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+    ...manifest,
+    fixtureRelativePath: '../image.jpg',
+  }));
+  assert.throws(
+    () => prepareDetail04Fixture({
+      root: runtimeRoot,
+      runDir,
+      fixtureRoot,
+      env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
+    }),
+    /invalid DETAIL-04 fixture path/,
+  );
+  fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+    ...manifest,
+    targetRelativePath: manifest.targetRelativePath.replace('draft_lastwork_', 'draft_stale_'),
+  }));
+  assert.throws(
+    () => prepareDetail04Fixture({
+      root: runtimeRoot,
+      runDir,
+      fixtureRoot,
+      env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
+    }),
+    /invalid DETAIL-04 fixture manifest/,
+  );
+  assert.throws(
+    () => prepareDetail04Fixture({
+      root: path.resolve(__dirname, '../..'),
+      runDir,
+      fixtureRoot,
+      env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
+    }),
+    /invalid DETAIL-04 task-owned runtime root/,
+  );
 });
 
 test('앱 로더 전송이 한 번 끊겨도 제한된 자체 복구 뒤에만 최종 오류를 표시한다', () => {

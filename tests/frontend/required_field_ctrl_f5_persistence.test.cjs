@@ -152,3 +152,101 @@ test('동일 작업 복원은 양수 판매가를 오래된 0으로 낮추지 �
     '복원 병합은 필드 경로를 전달해 금액 필드 보호를 적용해야 합니다.',
   );
 });
+
+test('같은 작업의 얇은 snapshot은 실제 필수값을 지우지 않고 최종 등록에서 그대로 읽힌다', () => {
+  const literals = {
+    size: '가로21cm*세로14cm',
+    width_mm: '21cm',
+    depth_mm: '14cm',
+    weight: '1.00g',
+    material: '모시',
+    usage: '화장품용파우치,작은소품보관용',
+  };
+  const current = {
+    product: {
+      productName: '모시꽃수파우치3',
+      finalDb: { product_name: '모시꽃수파우치3', sale_price: '4670', ...literals },
+      dbFieldSettings: Object.fromEntries(Object.entries(literals).map(([fieldId, manualValue]) => [
+        fieldId,
+        { enabled: true, manualTouched: true, manualValue },
+      ])),
+    },
+  };
+  const incoming = {
+    product: {
+      productName: '모시꽃수파우치3',
+      finalDb: Object.fromEntries(Object.keys(literals).map(fieldId => [fieldId, ''])),
+      dbFieldSettings: Object.fromEntries(Object.keys(literals).map(fieldId => [
+        fieldId,
+        { enabled: true, manualTouched: false, manualValue: '' },
+      ])),
+    },
+  };
+  const cloneData = value => JSON.parse(JSON.stringify(value));
+  const preserve = compileFunction(
+    source('app-core-03.js'),
+    'factoryPreserveProgressForSameWork',
+    'factoryHasMeaningfulWork',
+    {
+      cloneData,
+      normalizeFactoryState: cloneData,
+      factoryHasMeaningfulWork: () => true,
+      factoryPreserveProgressScopeMatches: () => true,
+    },
+  );
+  const preserved = preserve(incoming, current);
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(literals).map(fieldId => [fieldId, preserved.product.finalDb[fieldId]])),
+    literals,
+    'same-work incoming blank values must not lower the retained literal fields',
+  );
+
+  const finalModel = compileFunction(
+    source('app-core-05.js'),
+    'factoryFinalRegistrationBasicInfoModel',
+    'renderFactoryFinalRegistrationBasicInfoPanel',
+    {
+      factoryFinalRegistrationCreateModel: () => null,
+      factoryRuntimeReadCommittedFactory: () => preserved,
+      factoryCafe24PositiveMoneyText: value => Number(value) > 0,
+      factoryFinalRegistrationFirstText: (...values) => values.map(value => String(value ?? '').trim()).find(Boolean) || '',
+      factoryFinalRegistrationAuthoritativeProductName: factory => factory.product.productName,
+      state: { productName: '모시꽃수파우치3' },
+    },
+  );
+  assert.deepEqual(
+    Object.fromEntries(finalModel(preserved).requiredRows.map(row => [row.fieldId, row.value])),
+    literals,
+    '최종 등록 화면의 필수값/사이즈 확인판은 retained literal만 그대로 보여줘야 합니다.',
+  );
+});
+
+test('최종 등록의 긴 사용용도 값은 필수값 grid 전체 행을 사용한다', () => {
+  const renderPanel = compileFunction(
+    source('app-core-05.js'),
+    'renderFactoryFinalRegistrationBasicInfoPanel',
+    'factoryNormalizeFinalRegistrationBasicValue',
+    {
+      factoryFinalRegistrationBasicInfoModel: () => ({
+        rows: [],
+        requiredMissing: [],
+        createReferenceDefaults: [],
+        requiredRows: [
+          { fieldId: 'material', label: '소재', value: '모시' },
+          { fieldId: 'usage', label: '용도', value: '화장품용파우치,작은소품보관용' },
+        ],
+      }),
+      escapeHtml: value => String(value),
+      escAttr: value => String(value),
+    },
+  );
+
+  const html = renderPanel({});
+  const usageCard = html.match(/<div class="factory-cafe24-save-stat"[^>]*data-factory-final-required-field="usage"[^>]*>/)?.[0] || '';
+  const materialCard = html.match(/<div class="factory-cafe24-save-stat"[^>]*data-factory-final-required-field="material"[^>]*>/)?.[0] || '';
+
+  assert.match(usageCard, /grid-column\s*:\s*1\s*\/\s*-1/,
+    '긴 사용용도 값은 마지막 한글 음절이 고립되지 않도록 필수값 grid 전체 행을 사용해야 합니다.');
+  assert.doesNotMatch(materialCard, /grid-column\s*:\s*1\s*\/\s*-1/,
+    '짧은 필수값 카드까지 전체 행으로 넓히면 기존 compact grid를 훼손합니다.');
+});

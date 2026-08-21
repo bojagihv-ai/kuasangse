@@ -1,3 +1,11 @@
+const LEGACY_QUICK_ACTIONS = Object.freeze({
+  compMarketDetailSelectedMain: 'detail-vm',
+  compMarketVmAnalyzeMain: 'analyze-vm',
+  compMarketDetailSelectedLocalMain: 'detail-local',
+  compMarketDetailSelectedVm: 'detail-vm',
+  compMarketDetailSelectedAnalyzeVm: 'analyze-vm',
+});
+
 const CLICK_SELECTORS = Object.freeze([
   '[data-factory-guide-action]',
   '[data-comp-market-quick-action]',
@@ -10,6 +18,7 @@ const CLICK_SELECTORS = Object.freeze([
   '#compMarketCloseImagePreviewFixed',
   '#compMarketAnalyzeSelectedImages',
   '#compMarketAnalyzeAllImages',
+  ...Object.keys(LEGACY_QUICK_ACTIONS).map(id => `#${id}`),
 ]);
 
 function closestInside(root, target, selector) {
@@ -35,6 +44,9 @@ function stopEvent(event) {
 }
 
 function marketPayload(node) {
+  if (LEGACY_QUICK_ACTIONS[node.id]) {
+    return { type: 'quick-action', action: LEGACY_QUICK_ACTIONS[node.id] };
+  }
   if (node.dataset?.compMarketQuickAction) {
     return { type: 'quick-action', action: String(node.dataset.compMarketQuickAction) };
   }

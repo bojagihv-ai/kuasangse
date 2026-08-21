@@ -23,6 +23,19 @@ export function buildDbSnapshotRequest({ jcode, batchId, requestedBy }) {
   };
 }
 
+export function buildPdpJobRequest({ inputSnapshotId, idempotencyKey, actor = 'operator', correlationId = '' }) {
+  const snapshotId = text(inputSnapshotId);
+  const key = text(idempotencyKey);
+  if (!snapshotId) throw new ProductIntakeError('input_snapshot_required');
+  if (!key) throw new ProductIntakeError('idempotency_key_required');
+  return {
+    inputSnapshotId: snapshotId,
+    idempotencyKey: key,
+    actor: text(actor) || 'operator',
+    ...(text(correlationId) ? { correlationId: text(correlationId) } : {}),
+  };
+}
+
 export function createManualManifest({
   jcode,
   productName,
@@ -31,8 +44,9 @@ export function createManualManifest({
   baseImages,
   colorImages = [],
 }) {
-  const normalizedJcode = Number(jcode);
-  if (!Number.isInteger(normalizedJcode) || normalizedJcode < 1) {
+  const rawJcode = text(jcode);
+  const normalizedJcode = rawJcode ? Number(rawJcode) : null;
+  if (normalizedJcode !== null && (!Number.isInteger(normalizedJcode) || normalizedJcode < 1)) {
     throw new ProductIntakeError('jcode_required');
   }
   if (!text(productName)) throw new ProductIntakeError('product_name_required');
@@ -46,12 +60,16 @@ export function createManualManifest({
     fileName: text(image.fileName),
     colorName: index < baseImages.length ? null : text(image.colorName),
     sha256: text(image.sha256),
+    dataUrl: text(image.dataUrl),
   }));
   if (inputImages.some(image => !image.name || !image.fileName || !image.sha256)) {
     throw new ProductIntakeError('image_metadata_required');
   }
   if (inputImages.some(image => image.role === 'color-option' && !image.colorName)) {
     throw new ProductIntakeError('color_name_required');
+  }
+  if (inputImages.some(image => !image.dataUrl.startsWith('data:image/') || !image.dataUrl.includes(';base64,'))) {
+    throw new ProductIntakeError('image_payload_required');
   }
   return {
     contractType: 'manual-product-intake',

@@ -23,6 +23,7 @@ test('신화사 자산관에서 선택한 로컬 작업파일을 상세페이지
   assert.match(runtime, /importFactoryProjectFileBundle/);
   assert.match(runtime, /importWorkfile: async \(text, fileName, options = \{\}\)/);
   assert.match(runtime, /skipLeaveConfirm: options\.skipLeaveConfirm === true/);
+  assert.match(runtime, /if \(imported\) \{[\s\S]*factoryControlPreflightCache\.clear\(\);[\s\S]*const syncBundle = await buildFactoryProjectFileBundle/);
   assert.match(runtime, /const syncBundle = await buildFactoryProjectFileBundle/);
   assert.match(runtime, /requestCurrentWorkBundleLiveSync\('로컬 작업파일 불러오기'/);
   assert.match(runtime, /sourceScheme: 'local-workfile'/);

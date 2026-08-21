@@ -1,3 +1,23 @@
+import {
+  BatchWorkerContractError,
+  hasSensitiveProductField,
+  hasSensitiveProductValue,
+  record,
+  text,
+  validateProductCheckpoint,
+  validateProductRunPayload,
+} from './batch-control-product-contract.mjs';
+
+export {
+  BatchWorkerContractError,
+  hasSensitiveProductField,
+  hasSensitiveProductValue,
+  record,
+  text,
+  validateProductCheckpoint,
+  validateProductRunPayload,
+};
+
 export const BATCH_CONTROL_WORKER_CAPABILITY_VERSION = 'batch-control-worker:v1';
 export const BATCH_CONTROL_WORK_ORDER_VERSION = 'control-work-order:v1';
 export const BATCH_CONTROL_CAFE24_COMMAND_VERSION = 'factory-cafe24-command:v1';
@@ -22,31 +42,18 @@ export const WORKER_ENDPOINTS = Object.freeze({
   factoryHello: '/api/factory/session/hello',
   factoryHeartbeat: '/api/factory/session/heartbeat',
   factorySync: '/api/factory/sync',
+  factoryWorkfileHydrate: '/api/factory/workfile/hydrate',
 });
 
-export class BatchWorkerContractError extends Error {
-  constructor(code, message = code) {
-    super(message);
-    this.name = 'BatchWorkerContractError';
-    this.code = code;
-  }
-}
-
 export class BatchWorkerHttpError extends Error {
-  constructor(status, endpoint) {
-    super(`batch worker HTTP ${status}: ${endpoint}`);
+  constructor(status, endpoint, code = '') {
+    const errorCode = text(code);
+    super(`batch worker HTTP ${status}: ${endpoint}${errorCode ? ` (${errorCode})` : ''}`);
     this.name = 'BatchWorkerHttpError';
     this.status = status;
     this.endpoint = endpoint;
+    this.code = errorCode || 'batch_worker_http_error';
   }
-}
-
-export function record(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function text(value) {
-  return String(value ?? '').trim();
 }
 
 export function validateOrder(order) {
@@ -112,9 +119,10 @@ export function validateOrder(order) {
     }
   }
   if (order.command.kind === 'factory-control') {
+    const isProductRun = order.command.name === 'runFactoryProduct';
     if (
       order.command.version !== BATCH_CONTROL_FACTORY_COMMAND_VERSION
-      || !['getFactoryProjection', 'selectFactoryACut'].includes(order.command.name)
+      || !['getFactoryProjection', 'selectFactoryACut', 'runFactoryProduct'].includes(order.command.name)
     ) {
       throw new BatchWorkerContractError('factory_control_command_version_unsupported');
     }
@@ -128,6 +136,20 @@ export function validateOrder(order) {
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
     const payload = order.command.payload;
+    if (isProductRun) {
+      validateProductRunPayload(payload);
+      if (
+        payload.jobId !== order.currentRunId
+        || payload.batchId !== order.batchId
+        || payload.productName !== order.productKey
+      ) {
+        throw new BatchWorkerContractError('factory_product_identity_mismatch');
+      }
+      if (payload.source.kind === 'sinhwa-db' && order.productId !== `sinhwa:${payload.jcode}`) {
+        throw new BatchWorkerContractError('factory_product_jcode_invalid');
+      }
+      return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
+    }
     for (const field of [
       'productId',
       'productKey',

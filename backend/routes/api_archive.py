@@ -186,6 +186,161 @@ def _last_work_has_required_field_drop(existing, incoming):
         for field_id in _LAST_WORK_REQUIRED_FIELD_ALIASES
     )
 
+
+def _last_work_value_drop_path(existing, incoming, path=""):
+    if isinstance(existing, str):
+        if not existing.strip():
+            return ""
+        return (path or "$") if not isinstance(incoming, str) or not incoming.strip() else ""
+    if isinstance(existing, list):
+        if not existing:
+            return ""
+        if not isinstance(incoming, list) or len(existing) > len(incoming):
+            return path or "$"
+        for index, value in enumerate(existing):
+            dropped = _last_work_value_drop_path(value, incoming[index], f"{path}[{index}]")
+            if dropped:
+                return dropped
+        return ""
+    if isinstance(existing, dict):
+        if not existing:
+            return ""
+        if not isinstance(incoming, dict):
+            return path or "$"
+        for key, value in existing.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            dropped = _last_work_value_drop_path(value, incoming.get(key), child_path)
+            if dropped:
+                return dropped
+        return ""
+    return (path or "$") if existing is not None and incoming is None else ""
+
+
+def _last_work_value_dropped(existing, incoming):
+    return bool(_last_work_value_drop_path(existing, incoming))
+
+
+def _last_work_nonnegative_int(value):
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _last_work_row_key(row, index):
+    if not isinstance(row, dict):
+        return f"row:{index}"
+    return str(
+        row.get("id")
+        or row.get("archiveId")
+        or row.get("resultAssetId")
+        or row.get("product_id")
+        or row.get("product_no")
+        or row.get("product_url")
+        or row.get("url")
+        or row.get("link")
+        or f"row:{index}"
+    )
+
+
+def _last_work_rows_sparse_drop_reason(existing_rows, incoming_rows, *, match_by_position=False):
+    existing_rows = existing_rows if isinstance(existing_rows, list) else []
+    incoming_rows = incoming_rows if isinstance(incoming_rows, list) else []
+    if len(existing_rows) > len(incoming_rows):
+        return "length"
+    if match_by_position:
+        for index, row in enumerate(existing_rows):
+            dropped = _last_work_value_drop_path(row, incoming_rows[index])
+            if dropped:
+                return f"[{index}].{dropped}"
+        return ""
+    incoming_by_key = {
+        _last_work_row_key(row, index): row
+        for index, row in enumerate(incoming_rows)
+    }
+    for index, row in enumerate(existing_rows):
+        key = _last_work_row_key(row, index)
+        if key not in incoming_by_key:
+            return f"[{key}].missing"
+        dropped = _last_work_value_drop_path(row, incoming_by_key[key])
+        if dropped:
+            return f"[{key}].{dropped}"
+    return ""
+
+
+def _last_work_rows_have_sparse_drop(existing_rows, incoming_rows, *, match_by_position=False):
+    return bool(_last_work_rows_sparse_drop_reason(
+        existing_rows,
+        incoming_rows,
+        match_by_position=match_by_position,
+    ))
+
+
+def _last_work_derived_state_drop_reason(existing, incoming):
+    existing_assets = existing.get("assets") if isinstance(existing.get("assets"), dict) else {}
+    incoming_assets = incoming.get("assets") if isinstance(incoming.get("assets"), dict) else {}
+    existing_options = existing_assets.get("optionSorter") if isinstance(existing_assets.get("optionSorter"), dict) else {}
+    incoming_options = incoming_assets.get("optionSorter") if isinstance(incoming_assets.get("optionSorter"), dict) else {}
+    for key in ("images", "pool", "optionResults", "slots"):
+        if _list_len(existing_options.get(key)) > _list_len(incoming_options.get(key)):
+            return f"optionSorter.{key}.length"
+    for key in ("slots", "optionResults"):
+        if _last_work_rows_have_sparse_drop(
+            existing_options.get(key),
+            incoming_options.get(key),
+            match_by_position=key == "slots",
+        ):
+            return f"optionSorter.{key}.content"
+    existing_named = any(
+        isinstance(slot, dict) and not re.fullmatch(r"\d+(?:번)?", str(slot.get("name") or "").strip())
+        for slot in existing_options.get("slots") or []
+    )
+    incoming_named = any(
+        isinstance(slot, dict) and not re.fullmatch(r"\d+(?:번)?", str(slot.get("name") or "").strip())
+        for slot in incoming_options.get("slots") or []
+    )
+    if existing_named and not incoming_named:
+        return "optionSorter.slots.names"
+
+    existing_comp = existing_assets.get("compPage") if isinstance(existing_assets.get("compPage"), dict) else {}
+    incoming_comp = incoming_assets.get("compPage") if isinstance(incoming_assets.get("compPage"), dict) else {}
+    existing_market = existing_comp.get("marketScrape") if isinstance(existing_comp.get("marketScrape"), dict) else {}
+    incoming_market = incoming_comp.get("marketScrape") if isinstance(incoming_comp.get("marketScrape"), dict) else {}
+    for key in ("results", "vmResults", "localResults", "scrapedImages"):
+        if _list_len(existing_market.get(key)) > _list_len(incoming_market.get(key)):
+            return f"compPage.marketScrape.{key}.length"
+        sparse_reason = _last_work_rows_sparse_drop_reason(existing_market.get(key), incoming_market.get(key))
+        if sparse_reason:
+            return f"compPage.marketScrape.{key}.content{sparse_reason}"
+    existing_groups = existing_market.get("groupedResults") if isinstance(existing_market.get("groupedResults"), dict) else {}
+    incoming_groups = incoming_market.get("groupedResults") if isinstance(incoming_market.get("groupedResults"), dict) else {}
+    for group, rows in existing_groups.items():
+        if (
+            _list_len(rows) > _list_len(incoming_groups.get(group))
+            or _last_work_rows_have_sparse_drop(rows, incoming_groups.get(group))
+        ):
+            return f"compPage.marketScrape.groupedResults.{group}"
+    existing_selection_version = _last_work_nonnegative_int(existing_market.get("detailSelectionVersion"))
+    incoming_selection_version = _last_work_nonnegative_int(incoming_market.get("detailSelectionVersion"))
+    incoming_selection_is_newer = incoming_selection_version > existing_selection_version
+    for key in ("selectedIds", "selectedImageIds"):
+        existing_selected = {str(value) for value in existing_market.get(key) or [] if str(value)}
+        incoming_selected = {str(value) for value in incoming_market.get(key) or [] if str(value)}
+        if not incoming_selection_is_newer and not existing_selected.issubset(incoming_selected):
+            return f"compPage.marketScrape.{key}"
+    existing_details = existing_market.get("detailResults") if isinstance(existing_market.get("detailResults"), dict) else {}
+    incoming_details = incoming_market.get("detailResults") if isinstance(incoming_market.get("detailResults"), dict) else {}
+    if any(
+        key not in incoming_details
+        or _last_work_value_dropped(value, incoming_details.get(key))
+        for key, value in existing_details.items()
+    ):
+        return "compPage.marketScrape.detailResults"
+    for key in ("analysisResult", "sectionPlan", "planEdits"):
+        if _last_work_value_dropped(existing_comp.get(key), incoming_comp.get(key)):
+            return f"compPage.{key}"
+    return ""
+
 @api.route("/last-work", methods=["GET"])
 def get_last_work():
     workspace_id = _last_work_workspace_id()
@@ -271,6 +426,21 @@ def save_last_work():
             "keptExisting": True,
             "protectedNoOp": True,
             "reason": "incoming snapshot dropped protected required fields",
+            "scopeId": authority_snapshot.scope_id,
+            "revision": authority_snapshot.revision,
+            "score": existing_score,
+            "incomingScore": incoming_score,
+            "savedAt": existing.get("savedAt"),
+        })
+
+    derived_drop_reason = existing and _last_work_derived_state_drop_reason(existing, incoming)
+    if derived_drop_reason:
+        return jsonify({
+            "ok": True,
+            "accepted": False,
+            "keptExisting": True,
+            "protectedNoOp": True,
+            "reason": f"incoming snapshot changed work identity or dropped protected work data: {derived_drop_reason}",
             "scopeId": authority_snapshot.scope_id,
             "revision": authority_snapshot.revision,
             "score": existing_score,

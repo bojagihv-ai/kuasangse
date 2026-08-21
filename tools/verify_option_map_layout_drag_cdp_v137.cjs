@@ -21,7 +21,15 @@ async function main() {
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
     await cdp.send('Page.navigate', { url: APP_URL });
-    await waitFor(cdp, "!!(window.state && window.render && window.defaultOptionSorterState && window.__KUASANGSE_APP_LOADER__?.modules?.includes('src/menus/optionsorter-menu.mjs'))", 60000);
+    await waitFor(cdp, `!!(window.state
+      && window.render
+      && window.defaultOptionSorterState
+      && window.__KUASANGSE_APP_LOADER__?.ready === true
+      && window.__KUASANGSE_APP_LOADER__?.modules?.includes('src/menus/optionsorter-menu.mjs')
+      && classicRuntimeHydrationReady === true
+      && classicRuntimeInitialRenderComplete === true
+      && (typeof classicRuntimeDeferredHydrationPromise === 'undefined'
+        || classicRuntimeDeferredHydrationPromise === null))`, 60000);
     const setup = await evaluate(cdp, `(async () => {
       const colors = ['자주', '빨강', '연핑', '연두', '검정', '파랑', '연하늘', '청록', '노랑', '연두2', '보라', '자색'];
       const os = window.defaultOptionSorterState();
@@ -41,10 +49,16 @@ async function main() {
       window.state.optionSorter = os;
       window.state.step = 'optionsorter';
       await window.render();
+      const readyDeadline = Date.now() + 30000;
+      while (Date.now() < readyDeadline) {
+        const row = document.querySelector('[data-opt-map-row-index="0"]');
+        if (row && window.Sortable?.get?.(row)) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
       const beforeRows = [...document.querySelectorAll('[data-opt-map-row-index]')].map(row => row.children.length);
       const before = [...document.querySelectorAll('[data-opt-map-pair-key]')].map(card => card.querySelector('.name')?.textContent?.trim() || '');
       const firstRow = document.querySelector('[data-opt-map-row-index="0"]');
-      const sortable = window.Sortable?.get?.(firstRow);
+      const sortable = firstRow ? window.Sortable?.get?.(firstRow) : null;
       const onStart = sortable?.option?.('onStart');
       const onEnd = sortable?.option?.('onEnd');
       const cards = [...(firstRow?.querySelectorAll('[data-opt-map-pair-key]') || [])];
@@ -61,11 +75,15 @@ async function main() {
         afterRows: [...document.querySelectorAll('[data-opt-map-row-index]')].map(row => row.children.length),
         after: [...document.querySelectorAll('[data-opt-map-pair-key]')].map(card => card.querySelector('.name')?.textContent?.trim() || ''),
         pairOrder: [...(window.state.optionSorter.optionPairOrder || [])],
+        step: window.state.step,
+        subStep: window.state.optionSorter.subStep,
+        hasFirstRow: !!firstRow,
+        sortableLoaded: !!window.Sortable,
         hasSortable: !!sortable,
         dragHandle: sortable?.option?.('handle') || '',
       };
     })()`);
-    if (!setup.hasSortable) throw new Error('SortableJS is unavailable for map drag verification.');
+    if (!setup.hasSortable) throw new Error(`SortableJS map binding is unavailable: ${JSON.stringify(setup)}`);
     proof = setup;
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));

@@ -143,9 +143,12 @@ function compileServerLastWorkHydrator(observed) {
     serverLastWorkHydrating: false,
     serverLastWorkHydrationPromise: null,
     serverLastWorkLastSavedAt: 0,
+    sessionAssetsHydrated: false,
+    pendingSessionAssetSaveAfterHydrate: false,
     workspaceBlankResetToken: 0,
     workspaceScopeTransitionState: { persistentSaveQueued: false },
     getCurrentLastWorkWorkspaceScope: () => 'project:current',
+    getCurrentDocumentWorkspaceScope: () => '',
     workspaceHydrationScopeIsCurrent: () => true,
     workspacePersistenceApi: () => ({
       restore: async () => ({ snapshot }),
@@ -153,15 +156,23 @@ function compileServerLastWorkHydrator(observed) {
     lastWorkSnapshotMatchesWorkspaceScope: () => true,
     lastWorkSnapshotScore: () => 0,
     getCurrentLastWorkScore: () => 0,
+    optionSorterSnapshotIsMoreComplete: () => false,
+    hasInlineImagePayload: () => false,
+    lastWorkOptionLabelsRestoreNeeded: () => false,
     getCurrentLastWorkSavedAt: () => 0,
     lastWorkCompAnalysisTime: () => 0,
     getCurrentCompAnalysisTime: () => 0,
+    lastWorkCompMarketScore: () => 0,
     snapshotSectionImagesQualityScore: () => 0,
     sectionImagesQualityScore: () => 0,
     persistedCutResultCount: () => 0,
     lastWorkRequiredFieldRestoreNeeded: () => false,
     lastWorkFactoryHasSelfConsistentCurrentAssets: () => false,
     factoryRuntimeReadFactory: () => ({}),
+    // 추출한 hydrate 블록은 app-core-02 모듈 스코프의 이 두 함수를 참조한다.
+    // 스텁이 없으면 ReferenceError가 내부 catch에 삼켜져 복원 자체가 일어나지 않는다.
+    workspaceSnapshotRevision: snapshot => (snapshot && snapshot.workspaceRevision) || null,
+    observeWorkspaceRevisionSnapshot: () => null,
     hydrateWorkspacePayloadImageBackup: async payload => ({
       ...payload,
       productImageBackup: {
@@ -424,6 +435,26 @@ test('Given a generated asset with a durable local archive ID When counting rest
   const countRestoreRefs = compileCounter(state, factory);
 
   assert.equal(countRestoreRefs(), 0);
+});
+
+test('Given archive-backed option results When counting restore failures Then only a result with no durable image source is missing', () => {
+  const state = {
+    step: 'optionsorter',
+    optionSorter: {
+      images: [],
+      optionResults: [
+        { id: 'result-1', hasImage: true, image: null, archiveId: 'archive-result-1', imageUrl: '/api/local-archive/assets/archive-result-1/image' },
+        { id: 'result-2', hasImage: true, image: null, archiveId: 'archive-result-2', imageUrl: '/api/local-archive/assets/archive-result-2/image' },
+        { id: 'result-3', hasImage: true, image: null, archiveId: 'archive-result-3', imageUrl: '/api/local-archive/assets/archive-result-3/image' },
+        { id: 'result-4', hasImage: true, image: null, archiveId: 'archive-result-4', imageUrl: '/api/local-archive/assets/archive-result-4/image' },
+        { id: 'result-missing', hasImage: true, image: null, archiveId: '', imageUrl: '' },
+      ],
+    },
+  };
+
+  const countRestoreRefs = compileCounter(state, { product: {}, assets: [] });
+
+  assert.equal(countRestoreRefs(), 1);
 });
 
 test('Given missing edit sources but restored generated outputs When warning is shown Then the output recovery is stated explicitly', () => {

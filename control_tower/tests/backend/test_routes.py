@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from collections.abc import Mapping
+import hashlib
+from io import BytesIO
+import json
 from pathlib import Path
 from threading import Thread
 from typing import Final
 
+from flask import Flask
+from PIL import Image
 import requests
 from werkzeug.serving import make_server
 
@@ -13,9 +19,279 @@ from control_tower.backend.app import create_app
 from control_tower.backend.cafe24_bridge import QueuedCafe24CommandBridge, build_cafe24_command
 from control_tower.backend.cafe24_staging import SAFE_DEFAULTS, build_preview
 from control_tower.backend.config import ControlTowerConfig
+from control_tower.backend.factory_sync import FactorySyncBridge, FactorySyncError
+from control_tower.backend.gpt_oauth import build_evidence_bundle
 from control_tower.backend.pdp_client import PdpHttpError
-from control_tower.backend.routes import ExternalDependencyError
-from control_tower.backend.runtime_cache import JsonObject
+from control_tower.backend.routes import ExternalDependencyError, _factory_history_snapshot, _factory_stage_candidates, _history_asset_key, _history_entry_path, _history_load_manifest, _history_selection_state, _history_thumbnail, register_routes
+from control_tower.backend.runtime_cache import JsonObject, JsonValue
+
+
+def test_factory_history_thumbnail_bounds_large_originals() -> None:
+    # Given: 상세페이지처럼 세로로 매우 긴 원본 이미지를 준비한다.
+    original = Image.new("RGB", (1905, 16219), (240, 180, 80))
+    source = BytesIO()
+    original.save(source, format="JPEG", quality=90)
+
+    # When: 생산관제 목록용 썸네일을 만든다.
+    mime_type, thumbnail = _history_thumbnail(source.getvalue(), "image/jpeg")
+
+    # Then: 원본을 유지하면서 카드 표시용 크기로 제한되어야 한다.
+    assert mime_type == "image/jpeg"
+    with Image.open(BytesIO(thumbnail)) as rendered:
+        assert rendered.width <= 480
+        assert rendered.height <= 360
+        assert rendered.width * rendered.height < original.width * original.height / 100
+
+
+def test_factory_history_thumbnail_uses_placeholder_when_source_is_not_decodable() -> None:
+    original = b"not-an-image" * 1000
+
+    mime_type, thumbnail = _history_thumbnail(original, "application/octet-stream")
+
+    assert mime_type == "image/svg+xml"
+    assert thumbnail != original
+    assert len(thumbnail) < len(original)
+
+
+def test_factory_history_manifest_binds_job_workspace_product_and_run(tmp_path: Path) -> None:
+    workfile_dir = tmp_path / "작업파일별" / "상품_batch_job-1"
+    workfile_dir.mkdir(parents=True)
+    (workfile_dir / "manifest.json").write_text(
+        '{"workspaceId":"batch:job-1","productKey":"상품","runId":"run-1","assets":[]}',
+        encoding="utf-8",
+    )
+
+    loaded_dir, records = _history_load_manifest(
+        tmp_path,
+        "상품",
+        "batch:job-1",
+        "상품",
+        "run-1",
+        "job-1",
+    )
+
+    assert loaded_dir == workfile_dir
+    assert records == []
+    try:
+        _history_load_manifest(tmp_path, "상품", "batch:job-1", "상품", "run-2", "job-1")
+    except FactorySyncError as error:
+        assert str(error) == "factory_history_identity_mismatch"
+    else:
+        raise AssertionError("run identity mismatch must be rejected")
+
+
+def test_factory_history_reads_current_local_archive_workfile_for_blocked_job(tmp_path: Path) -> None:
+    workspace_id = "batch:job-1"
+    workfile_dir = tmp_path / "workfiles" / f"batch_job-1__{hashlib.sha256(workspace_id.encode()).hexdigest()[:12]}"
+    image_path = workfile_dir / "assets" / "상품" / "old-run" / "hero-images" / "hero.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(b"png")
+    (workfile_dir / "manifest.json").write_text(
+        json.dumps({
+            "version": 1,
+            "workspaceId": workspace_id,
+            "workfileFolder": str(workfile_dir),
+            "assets": [{
+                "productKey": "상품",
+                "currentRunId": "old-run",
+                "category": "hero-images",
+                "stageId": "hero",
+                "assetKind": "hero",
+                "title": "대표 후보",
+                "contentHash": "hero-hash",
+                "files": {"imagePath": str(image_path)},
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    class HistoryFactory:
+        def product_job_context(self, job_id: str) -> dict[str, object]:
+            assert job_id == "job-1"
+            return {
+                "job": {},
+                "payload": {"productName": "상품", "inputImages": []},
+                "checkpoint": {
+                    "projectId": workspace_id,
+                    "productKey": "상품",
+                    "runId": "current-run",
+                    "revision": 7,
+                },
+            }
+
+    loaded_dir, records = _history_load_manifest(
+        tmp_path,
+        "상품",
+        workspace_id,
+        "상품",
+        "current-run",
+        "job-1",
+    )
+    work_bundle, history, _payload, resolved_dir = _factory_history_snapshot(HistoryFactory(), tmp_path, "job-1")
+
+    assert loaded_dir == workfile_dir
+    assert _history_entry_path(loaded_dir, records[0]) == image_path
+    assert resolved_dir == workfile_dir
+    assert work_bundle["assets"][0]["role"] == "hero"
+    assert work_bundle["assets"][0]["factoryStageKey"] == "representative"
+    assert history["workfileFolderName"] == workfile_dir.name
+
+
+def test_factory_history_asset_route_resolves_current_v2_manifest_image_path(tmp_path: Path) -> None:
+    workspace_id = "batch:job-1"
+    cache_root = tmp_path / "cache"
+    archive_root = tmp_path / "local-archive"
+    workfile_dir = archive_root / "workfiles" / f"batch_job-1__{hashlib.sha256(workspace_id.encode()).hexdigest()[:12]}"
+    image_path = workfile_dir / "assets" / "상품" / "run-1" / "09_OUTPUT_대표이미지" / "hero.png"
+    image_path.parent.mkdir(parents=True)
+    image = Image.new("RGB", (8, 6), (240, 180, 80))
+    image.save(image_path, format="PNG")
+    (workfile_dir / "manifest.json").write_text(
+        json.dumps({
+            "version": 2,
+            "workspaceId": workspace_id,
+            "assets": [{
+                "productKey": "상품",
+                "currentRunId": "run-1",
+                "category": "09_OUTPUT_대표이미지",
+                "stageId": "hero",
+                "title": "대표 후보",
+                "contentHash": "hero-hash",
+                "sourceKey": "hero-source",
+                "files": {"imagePath": str(image_path)},
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    class HistoryFactory:
+        def product_job_context(self, job_id: str) -> JsonObject:
+            assert job_id == "job-1"
+            return {
+                "job": {},
+                "payload": {"productName": "상품", "inputImages": []},
+                "checkpoint": {
+                    "projectId": workspace_id,
+                    "productKey": "상품",
+                    "runId": "run-1",
+                    "revision": 7,
+                },
+            }
+
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(cache_root)})
+    client = create_app(
+        config,
+        pdp_api=FakePdpApi(),
+        cafe24_bridge=FakeCafe24Bridge(),
+        factory_sync_bridge=HistoryFactory(),
+    ).test_client()
+
+    history_response = client.get("/api/factory/jobs/job-1/history")
+
+    assert history_response.status_code == 200
+    history_json = history_response.get_json()
+    output_asset = history_json["workBundle"]["assets"][0]
+    asset_key = _history_asset_key("09_OUTPUT_대표이미지", "", "hero-hash", "hero-source")
+    assert output_asset["id"] == asset_key
+    response_text = history_response.get_data(as_text=True)
+    assert "imagePath" not in response_text
+    assert str(image_path) not in response_text
+
+    image_response = client.get(f"/api/factory/jobs/job-1/history/assets/{asset_key}/image")
+    thumbnail_response = client.get(f"/api/factory/jobs/job-1/history/assets/{asset_key}/thumbnail")
+
+    assert image_response.status_code == 200
+    assert image_response.content_type.startswith("image/")
+    assert image_response.data == image_path.read_bytes()
+    assert thumbnail_response.status_code == 200
+    assert thumbnail_response.content_type.startswith("image/")
+    assert thumbnail_response.data
+
+
+def test_factory_history_route_canonicalizes_work_bundle_key_while_preserving_raw_workspace_id(tmp_path: Path) -> None:
+    # Given: factory checkpoint의 raw workspace identity와 일치하는 보관소 manifest가 있다.
+    workspace_id = "batch:job-1"
+    cache_root = tmp_path / "cache"
+    archive_root = tmp_path / "local-archive"
+    workfile_dir = archive_root / "workfiles" / f"batch_job-1__{hashlib.sha256(workspace_id.encode()).hexdigest()[:12]}"
+    workfile_dir.mkdir(parents=True)
+    (workfile_dir / "manifest.json").write_text(
+        json.dumps({"version": 2, "workspaceId": workspace_id, "assets": []}),
+        encoding="utf-8",
+    )
+
+    class HistoryFactory:
+        def product_job_context(self, job_id: str) -> JsonObject:
+            assert job_id == "job-1"
+            return {
+                "job": {},
+                "payload": {"productName": "상품", "inputImages": []},
+                "checkpoint": {
+                    "projectId": workspace_id,
+                    "productKey": "상품",
+                    "runId": "run-1",
+                    "revision": 7,
+                },
+            }
+
+    client = create_app(
+        ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(cache_root)}),
+        pdp_api=FakePdpApi(),
+        cafe24_bridge=FakeCafe24Bridge(),
+        factory_sync_bridge=HistoryFactory(),
+    ).test_client()
+
+    # When: completed factory-job history HTTP projection을 읽는다.
+    response = client.get("/api/factory/jobs/job-1/history")
+
+    # Then: PDP 선택 키만 canonical 형식이고 history identity는 raw 형식을 보존한다.
+    assert response.status_code == 200
+    response_json = response.get_json()
+    assert response_json["workBundle"]["bundleKey"] == "kuasangse:batch:job-1"
+    assert response_json["history"]["workspaceId"] == "batch:job-1"
+
+
+def test_factory_history_marks_source_cut_when_final_archive_contains_same_file_or_hash() -> None:
+    assert _history_selection_state(
+        "09_OUTPUT_대표이미지",
+        content_hash="hero-hash",
+        final_hashes={"hero-hash"},
+    ) == "selected"
+    assert _history_selection_state(
+        "11_OUTPUT_사이즈컷",
+        file_name="size.png",
+        final_files={"size.png"},
+    ) == "selected"
+    assert _history_selection_state(
+        "10_OUTPUT_이미지컷",
+        content_hash="cut-hash",
+        final_hashes={"other-hash"},
+    ) == "candidate"
+def test_factory_candidates_keep_thumbnail_reference_for_gpt_evidence() -> None:
+    candidates = _factory_stage_candidates(
+        {
+            "stages": [{
+                "key": "representative",
+                "candidates": [{
+                    "id": "representative-a",
+                    "assetId": "asset-a",
+                    "digest": "sha256:a",
+                    "thumbnailUrl": "http://127.0.0.1/candidate-a.png",
+                    "source": "factory",
+                    "model": "factory-model",
+                    "confidence": 0.88,
+                    "rationale": "대표 구도와 상품명 가독성이 가장 좋음",
+                }],
+            }],
+        },
+        "representative",
+    )
+
+    evidence = build_evidence_bundle([], candidates)
+
+    assert evidence["candidateRefs"][0]["thumbnailRef"] == "http://127.0.0.1/candidate-a.png"
+    assert evidence["candidateRefs"][0]["rationale"] == "대표 구도와 상품명 가독성이 가장 좋음"
+    assert evidence["candidateRefs"][0]["confidence"] == 0.88
 
 
 class FakePdpApi:
@@ -144,6 +420,23 @@ class FakeCafe24Bridge:
             "payloadDigest": command["payloadDigest"],
             "remoteReadbackDigest": "remote-html-digest",
             "externalProductNo": product_id.removeprefix("cafe24:") or "fake-42",
+            "remoteReadback": {
+                "productNo": product_id.removeprefix("cafe24:") or "fake-42",
+                "productCode": "P0000TEST",
+                "productName": str(command["command"]["payload"].get("productKey", "")),
+                "display": "F",
+                "selling": "F",
+                "marketSync": "F",
+                "categoryIds": ["71"],
+                "representativeImageCount": 4,
+                "detailImageCount": 14,
+                "optionValues": ["초록"],
+                "variantCount": 1,
+                "inventoryByOption": {"초록": {"quantity": "99", "useInventory": "T"}},
+                "detailHtmlDigest": "detail-html-digest",
+                "imageDigests": ["image-digest"],
+                "updatedAt": "2026-08-15T15:39:40+09:00",
+            },
             "idempotencyKey": command["idempotencyKey"],
         }
 
@@ -177,6 +470,194 @@ class FakeGptJudge:
                 "evidence": {},
             },
         }
+
+
+def test_workfile_rebind_route_exposes_only_public_queue_or_receipt_fields() -> None:
+    # Given: the route receives a service result containing worker-only and secret-shaped fields.
+    class RebindFactory(FactorySyncBridge):
+        def __init__(self) -> None:
+            super().__init__()
+            self.error_code = ""
+            self.idempotent = False
+            self.calls: list[JsonObject] = []
+
+        def queue_product_workfile_rebind(
+            self,
+            job_id: str,
+            payload: Mapping[str, JsonValue],
+        ) -> JsonObject:
+            self.calls.append({"jobId": job_id, "payload": dict(payload)})
+            if self.error_code:
+                raise FactorySyncError(self.error_code)
+            if self.idempotent:
+                return {
+                    "accepted": True,
+                    "idempotent": True,
+                    "receipt": {
+                        "schema": "factory-product-checkpoint-rebind-receipt:v1",
+                        "jobId": job_id,
+                        "workfileSha256": payload["expectedSha256"],
+                        "oldRevision": 20,
+                        "oldRunId": "run-old",
+                        "newRevision": 87,
+                        "newRunId": "run-new",
+                        "checkpointDigest": "digest-1",
+                        "operationToken": "receipt-worker-only",
+                    },
+                }
+            return {
+                "orderId": "factory-workfile-1",
+                "productId": "factory:job-1",
+                "productKey": "job-1",
+                "currentRunId": "run-new",
+                "expectedWorkfileRevision": 20,
+                "command": {"payload": {"workfileText": payload["workfileText"]}},
+                "operationToken": "worker-only-operation",
+                "workerHttpSessionId": "worker-session-only",
+                "workfileText": payload["workfileText"],
+                "filePath": "C:/private/authorized-b.kuasangse",
+                "csrfToken": "csrf-private",
+                "approvalToken": "approval-private",
+            }
+
+    factory = RebindFactory()
+    app = Flask(__name__)
+    register_routes(app, factory_sync_bridge=factory)
+    client = app.test_client()
+    session = client.get("/api/session").get_json()
+    headers = {
+        "X-Control-Tower-CSRF": session["csrfToken"],
+        "X-Control-Tower-Session": session["sessionId"],
+    }
+    workfile_text = '{"format":"kuasangse.factory.project","version":1}'
+    payload = {
+        "fileName": "authorized-b.kuasangse",
+        "workfileText": workfile_text,
+        "expectedSha256": hashlib.sha256(workfile_text.encode("utf-8")).hexdigest(),
+        "expectedWorkspaceId": "batch:job-1",
+        "expectedProductId": "factory:job-1",
+        "expectedProductKey": "job-1",
+        "expectedRunId": "run-new",
+        "expectedInputFingerprint": "sha256:job-1",
+        "expectedWorkfileRevision": 20,
+        "expectedHydratedWorkfileRevision": 87,
+        "expectedCheckpointRevision": 20,
+        "expectedCheckpointRunId": "run-old",
+        "idempotencyKey": "rebind-job-1-20-87",
+    }
+
+    # When: a valid rebind is admitted through the public HTTP route.
+    accepted = client.post(
+        "/api/factory/jobs/job-1/workfile-rebind",
+        json=payload,
+        headers=headers,
+    )
+
+    # Then: only the stable admission identity is public; workfile and worker internals stay server-side.
+    assert accepted.status_code == 202
+    assert accepted.get_json() == {
+        "accepted": True,
+        "status": "queued",
+        "order": {
+            "jobId": "job-1",
+            "orderId": "factory-workfile-1",
+            "workspaceId": "batch:job-1",
+            "productId": "factory:job-1",
+            "productKey": "job-1",
+            "workfileSha256": payload["expectedSha256"],
+            "runId": "run-new",
+            "workfileRevision": 20,
+            "hydratedWorkfileRevision": 87,
+            "checkpointRevision": 20,
+            "checkpointRunId": "run-old",
+        },
+    }
+    response_text = accepted.get_data(as_text=True)
+    for private_value in (
+        workfile_text,
+        "C:/private/authorized-b.kuasangse",
+        "worker-only-operation",
+        "worker-session-only",
+        "csrf-private",
+        "approval-private",
+    ):
+        assert private_value not in response_text
+
+    factory.idempotent = True
+    replay = client.post(
+        "/api/factory/jobs/job-1/workfile-rebind",
+        json=payload,
+        headers=headers,
+    )
+    assert replay.status_code == 200
+    assert replay.get_json() == {
+        "accepted": True,
+        "idempotent": True,
+        "status": "rebound",
+        "receipt": {
+            "schema": "factory-product-checkpoint-rebind-receipt:v1",
+            "jobId": "job-1",
+            "workfileSha256": payload["expectedSha256"],
+            "oldRevision": 20,
+            "oldRunId": "run-old",
+            "newRevision": 87,
+            "newRunId": "run-new",
+            "checkpointDigest": "digest-1",
+        },
+    }
+    assert "receipt-worker-only" not in replay.get_data(as_text=True)
+    factory.idempotent = False
+
+    # When: CSRF, malformed request, missing job, stale checkpoint, and idempotency conflicts are requested.
+    rejected_csrf = client.post("/api/factory/jobs/job-1/workfile-rebind", json=payload)
+    rejected_shape = client.post(
+        "/api/factory/jobs/job-1/workfile-rebind",
+        json={**payload, "unexpected": "field"},
+        headers=headers,
+    )
+    typed_responses = []
+    for error_code in (
+        "factory_product_job_not_found",
+        "stale_product_checkpoint",
+        "idempotency_conflict",
+    ):
+        factory.error_code = error_code
+        typed_responses.append(
+            client.post(
+                "/api/factory/jobs/job-1/workfile-rebind",
+                json=payload,
+                headers=headers,
+            )
+        )
+
+    # Then: synchronous failures are typed and sanitized without invoking a worker.
+    assert rejected_csrf.status_code == 428
+    assert rejected_shape.status_code == 422
+    assert [response.status_code for response in typed_responses] == [404, 409, 409]
+    for response in [rejected_shape, *typed_responses]:
+        body = response.get_json()
+        assert set(body) == {"error"}
+        assert set(body["error"]) == {"code", "message", "retryable", "correlationId"}
+        assert "workfileText" not in response.get_data(as_text=True)
+
+    # When: resume identity fields cross the HTTP boundary with the wrong JSON types.
+    invalid_resume_responses = [
+        client.post(
+            "/api/factory/jobs/job-1/resume",
+            json=invalid_payload,
+            headers=headers,
+        )
+        for invalid_payload in (
+            {"imageModel": 1},
+            {"expectedCheckpointRevision": "20"},
+            {"expectedCheckpointRevision": True},
+            {"expectedCheckpointRunId": 20},
+        )
+    ]
+
+    # Then: the route rejects them before FactorySyncBridge can mutate a job.
+    assert [response.status_code for response in invalid_resume_responses] == [422, 422, 422, 422]
+    assert all(response.get_json()["error"]["code"] == "request_invalid" for response in invalid_resume_responses)
 
 
 def _client(api: FakePdpApi, tmp_path: Path):
@@ -219,6 +700,32 @@ def test_session_csrf_is_required_for_mutating_bff_requests(tmp_path: Path) -> N
     assert rejected.status_code == 428
     assert accepted.status_code == 201
     assert api.calls == ["create_job"]
+
+
+def test_same_origin_session_pair_rehydrates_after_backend_restart(tmp_path: Path) -> None:
+    before_restart = _client(FakePdpApi(), tmp_path)
+    session = before_restart.get("/api/session").get_json()
+    headers = {
+        "X-Control-Tower-CSRF": session["csrfToken"],
+        "X-Control-Tower-Session": session["sessionId"],
+    }
+    without_cookie = _client(FakePdpApi(), tmp_path)
+    rejected = without_cookie.post(
+        "/api/jobs",
+        json={"inputSnapshotId": "snapshot-001"},
+        headers=headers,
+    )
+    after_restart = _client(FakePdpApi(), tmp_path)
+    after_restart.get("/api/session")
+
+    response = after_restart.post(
+        "/api/jobs",
+        json={"inputSnapshotId": "snapshot-001"},
+        headers=headers,
+    )
+
+    assert rejected.status_code == 428
+    assert response.status_code == 201
 
 
 def test_input_snapshot_rejects_raw_file_paths(tmp_path: Path) -> None:
@@ -322,7 +829,30 @@ def test_worker_routes_prioritize_local_cafe24_bridge_order_without_remote_claim
         pending = executor.submit(bridge.execute, command)
         claimed = client.post("/api/worker/claim", json={"workerId": "worker-1", "contractVersion": "control-work-order:v1", "capabilityVersion": "batch-control-worker:v1"}, headers=headers)
         order = claimed.get_json()["order"]
-        result = {"status": "staged_verified", "payloadDigest": preview["payloadDigest"], "remoteReadbackDigest": "remote-html", "externalProductNo": "2994", "idempotencyKey": preview["idempotencyKey"]}
+        result = {
+            "status": "staged_verified",
+            "payloadDigest": preview["payloadDigest"],
+            "remoteReadbackDigest": "remote-html",
+            "externalProductNo": "2994",
+            "remoteReadback": {
+                "productNo": "2994",
+                "productCode": "P0000TEST",
+                "productName": "방울수저집",
+                "display": "F",
+                "selling": "F",
+                "marketSync": "F",
+                "categoryIds": ["71"],
+                "representativeImageCount": 4,
+                "detailImageCount": 14,
+                "optionValues": ["초록"],
+                "variantCount": 1,
+                "inventoryByOption": {"초록": {"quantity": "99", "useInventory": "T"}},
+                "detailHtmlDigest": "detail-html-digest",
+                "imageDigests": ["image-digest"],
+                "updatedAt": "2026-08-15T15:39:40+09:00",
+            },
+            "idempotencyKey": preview["idempotencyKey"],
+        }
         acknowledged = client.post(f"/api/worker/{order['orderId']}/ack", json={**order, "workerId": "worker-1", "accepted": True, "eventSequence": 1}, headers=headers)
         completed = client.post(f"/api/worker/{order['orderId']}/complete", json={**order, "workerId": "worker-1", "eventSequence": 2, "result": result}, headers=headers)
 
@@ -504,34 +1034,35 @@ def test_automation_policy_snapshot_and_oauth_decision_persist_to_pdp_api(tmp_pa
     assert snapshot["effectiveSources"]["representative_image"] == "stage"
     assert snapshot["locked"] is True
 
+    decision_payload = {
+        "jobId": "job-a",
+        "decisionType": "representative_image",
+        "identity": {
+            "jobId": "job-a",
+            "productId": "product-a",
+            "productKey": "key-a",
+            "runId": "run-a",
+            "inputFingerprint": "sha256:a",
+            "revision": 7,
+            "eventId": "event-7",
+        },
+        "policySnapshot": {
+            **snapshot,
+        },
+        "candidates": [
+            {"candidateId": "a", "identityKey": "a", "contentDigest": "sha256:a", "source": "factory", "thumbnailRef": "asset:a"},
+            {"candidateId": "b", "identityKey": "b", "contentDigest": "sha256:b", "source": "factory", "thumbnailRef": "asset:b"},
+        ],
+        "judgementOptions": {
+            "model": "latestModel",
+            "reasoningEffort": "medium",
+            "serviceTier": "standard",
+            "preset": "fast_single",
+        },
+    }
     decision = client.post(
         "/api/automation/decisions",
-        json={
-            "jobId": "job-a",
-            "decisionType": "representative_image",
-            "identity": {
-                "jobId": "job-a",
-                "productId": "product-a",
-                "productKey": "key-a",
-                "runId": "run-a",
-                "inputFingerprint": "sha256:a",
-                "revision": 7,
-                "eventId": "event-7",
-            },
-            "policySnapshot": {
-                **snapshot,
-            },
-            "candidates": [
-                {"candidateId": "a", "identityKey": "a", "contentDigest": "sha256:a", "source": "factory", "thumbnailRef": "asset:a"},
-                {"candidateId": "b", "identityKey": "b", "contentDigest": "sha256:b", "source": "factory", "thumbnailRef": "asset:b"},
-            ],
-            "judgementOptions": {
-                "model": "latestModel",
-                "reasoningEffort": "medium",
-                "serviceTier": "standard",
-                "preset": "fast_single",
-            },
-        },
+        json=decision_payload,
         headers=headers,
     )
     assert decision.status_code == 200
@@ -541,6 +1072,19 @@ def test_automation_policy_snapshot_and_oauth_decision_persist_to_pdp_api(tmp_pa
     assert api.decision_receipts[0]["idempotencyKey"].startswith("judgment:")
     assert api.decision_receipts[0]["judgmentReceipt"]["schema"] == "gpt-judgment-receipt:v1"
     assert api.decision_receipts[0]["judgmentReceipt"]["policySnapshotId"] == snapshot["snapshotId"]
+
+    untrusted_reference = client.post(
+        "/api/automation/decisions",
+        json={
+            **decision_payload,
+            "inputRefs": [{"inputId": "fixture-token-hidden-in-allowed-field"}],
+        },
+        headers=headers,
+    )
+    assert untrusted_reference.status_code == 422
+    assert untrusted_reference.get_json()["error"]["code"] == "request_invalid"
+    assert len(judge.calls) == 1
+    assert len(api.decision_receipts) == 1
 
 
 def test_cafe24_approval_gate_requires_target_then_records_fake_staged_publication(tmp_path: Path) -> None:
@@ -563,7 +1107,19 @@ def test_cafe24_approval_gate_requires_target_then_records_fake_staged_publicati
     assert approved.status_code == 200
     token = approved.get_json()["approvalToken"]
 
-    published = client.post("/api/cafe24/publish", json={"jobId": "job-1", "approvalToken": token, **binding}, headers=headers)
+    unconfirmed = client.post("/api/cafe24/publish", json={"jobId": "job-1", "approvalToken": token, **binding}, headers=headers)
+    assert unconfirmed.status_code == 409
+    assert unconfirmed.get_json()["error"]["code"] == "confirmation_required"
+    assert bridge.commands == []
+
+    confirmed = client.post(
+        "/api/cafe24/confirm",
+        json={"approvalToken": token, "confirmed": True, **binding},
+        headers=headers,
+    )
+    assert confirmed.status_code == 200
+    nonce = confirmed.get_json()["confirmationNonce"]
+    published = client.post("/api/cafe24/publish", json={"jobId": "job-1", "approvalToken": token, "confirmationNonce": nonce, **binding}, headers=headers)
     assert published.status_code == 200
     assert published.get_json()["status"] == "staged_verified"
     assert len(bridge.commands) == 1
@@ -578,7 +1134,7 @@ def test_cafe24_approval_gate_requires_target_then_records_fake_staged_publicati
         "idempotencyKey": preview["idempotencyKey"],
         "actor": "production-control-tower",
     }
-    reused = client.post("/api/cafe24/publish", json={"jobId": "job-1", "approvalToken": token, **binding}, headers=headers)
+    reused = client.post("/api/cafe24/publish", json={"jobId": "job-1", "approvalToken": token, "confirmationNonce": nonce, **binding}, headers=headers)
     assert reused.status_code == 409
     assert reused.get_json()["error"]["code"] == "approval_token_reused"
 
@@ -662,16 +1218,21 @@ def test_cafe24_preexecution_validation_failure_spends_only_that_token_and_requi
         json={"approvalRequestId": preview["approvalRequestId"], "approved": True, **binding},
         headers=headers,
     ).get_json()
+    confirmed = client.post(
+        "/api/cafe24/confirm",
+        json={"approvalToken": approved["approvalToken"], "confirmed": True, **binding},
+        headers=headers,
+    ).get_json()
 
     bridge.input_fingerprint = "fp-2"
     rejected = client.post(
         "/api/cafe24/publish",
-        json={"jobId": "job-1", "approvalToken": approved["approvalToken"], **binding},
+        json={"jobId": "job-1", "approvalToken": approved["approvalToken"], "confirmationNonce": confirmed["confirmationNonce"], **binding},
         headers=headers,
     )
     replay = client.post(
         "/api/cafe24/publish",
-        json={"jobId": "job-1", "approvalToken": approved["approvalToken"], **binding},
+        json={"jobId": "job-1", "approvalToken": approved["approvalToken"], "confirmationNonce": confirmed["confirmationNonce"], **binding},
         headers=headers,
     )
 
@@ -692,9 +1253,14 @@ def test_cafe24_preexecution_validation_failure_spends_only_that_token_and_requi
         json={"approvalRequestId": fresh_preview["approvalRequestId"], "approved": True, **fresh_binding},
         headers=headers,
     ).get_json()
+    fresh_confirmed = client.post(
+        "/api/cafe24/confirm",
+        json={"approvalToken": fresh_approved["approvalToken"], "confirmed": True, **fresh_binding},
+        headers=headers,
+    ).get_json()
     published = client.post(
         "/api/cafe24/publish",
-        json={"jobId": "job-1", "approvalToken": fresh_approved["approvalToken"], **fresh_binding},
+        json={"jobId": "job-1", "approvalToken": fresh_approved["approvalToken"], "confirmationNonce": fresh_confirmed["confirmationNonce"], **fresh_binding},
         headers=headers,
     )
 
@@ -756,3 +1322,53 @@ def test_cafe24_reconcile_is_read_only_and_records_verified_publication_receipt(
     events = client.get("/api/jobs/job-1/publication-events")
     assert events.status_code == 200
     assert events.get_json()["events"][0]["payload"]["idempotencyKey"] == preview["idempotencyKey"]
+
+
+def test_direct_factory_job_reconcile_records_local_terminal_receipt_without_pdp_write(tmp_path: Path) -> None:
+    api = FakePdpApi()
+    bridge = FakeCafe24Bridge()
+    factory = FactorySyncBridge()
+    job_id = "factory-job-local-receipt"
+    payload = {"batchId": "b1", "productId": "cafe24:2994", "productKey": "방울수저집", "categoryId": "71", "htmlDigest": "html-1", "imageDigests": ["img-1"], "expectedWorkfileRevision": 108, "expectedRunId": "run-1", "expectedInputFingerprint": "fp-1", "selling": "F", "display": "F", "market_sync": "F"}
+    preview = build_preview(payload)
+    projection = {
+        "schema": "factory-control-projection:v1",
+        "connected": True,
+        "status": "connected",
+        "sequence": 1,
+        "cursor": "1",
+        "session": {"productId": "cafe24:2994", "productKey": "방울수저집", "runId": "run-1", "inputFingerprint": "fp-1", "revision": 109},
+        "inputs": [],
+        "stages": [],
+        "registration": {
+            "status": "staged_verified",
+            "blockers": [],
+            "mode": "update",
+            "jobId": job_id,
+            "expectedWorkfileRevision": 108,
+            "idempotencyKey": preview["idempotencyKey"],
+            "publicationReceipt": {"schema": "kuasangse.cafe24-publication-receipt", "productNo": "2994", "productName": "방울수저집"},
+        },
+    }
+    factory.seed_projection(projection)
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=api, cafe24_bridge=bridge, factory_sync_bridge=factory).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+
+    response = client.post(
+        "/api/cafe24/reconcile",
+        json={"jobId": job_id, "payloadDigest": preview["payloadDigest"], **payload},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["externalWrite"] is False
+    assert api.publication_receipts == []
+    terminal = factory.current_state()["registration"]["publicationReceipt"]
+    assert terminal["schema"] == "factory-cafe24-terminal-publication-receipt:v1"
+    assert terminal["remoteProductNo"] == "2994"
+    assert terminal["remoteReadback"]["variantCount"] == 1
+    incoming = {**projection, "sequence": 2, "cursor": "2"}
+    factory.accept_projection(incoming)
+    assert factory.current_state()["registration"]["publicationReceipt"] == terminal

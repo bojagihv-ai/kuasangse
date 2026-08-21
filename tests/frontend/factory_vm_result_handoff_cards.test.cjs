@@ -113,6 +113,11 @@ test('fresh VM wrapper handoff publishes source and visible candidate rows after
   const context = vm.createContext({
     state,
     AbortController,
+    cloneData: value => structuredClone(value),
+    sanitizeCompMarketScrapeForPersistence: value => structuredClone(value),
+    mergeCompMarketStoredState: (_previous, next) => structuredClone(next),
+    compMarketSourceResults: market => market.vmResults || [],
+    compMarketSourceGroupedResults: market => market.vmGroupedResults || {},
     factoryRuntimeRequireStore: () => store,
     factoryRuntimeStaleActionError: action => new Error(`stale: ${action}`),
     factoryCompetitorCandidateScopePayload: () => scope,
@@ -223,7 +228,7 @@ test('factory competitor view reads the committed VM candidates instead of stale
   const source = fs.readFileSync(CORE_03, 'utf8');
   const viewSource = sourceSlice(
     source,
-    'function factoryRuntimeReadViewSnapshot()',
+    'function factoryRuntimeCandidateRows(',
     'function factoryRuntimeNormalizeFactorySnapshot(',
   );
   const factory = {
@@ -252,6 +257,8 @@ test('factory competitor view reads the committed VM candidates instead of stale
   const context = vm.createContext({
     factoryRuntimeOwnedRenderDraft: null,
     factoryRuntimeRequireStore: () => store,
+    factoryRuntimeDetachedValue: value => structuredClone(value),
+    factoryRuntimeFreezeDetachedValue: value => value,
   });
   vm.runInContext(`${viewSource}\nthis.readViewSnapshot = factoryRuntimeReadViewSnapshot;`, context);
 
@@ -271,7 +278,7 @@ test('factory competitor view restores scoped legacy detail images when the comm
   const source = fs.readFileSync(CORE_03, 'utf8');
   const viewSource = sourceSlice(
     source,
-    'function factoryRuntimeReadViewSnapshot()',
+    'function factoryRuntimeCandidateRows(',
     'function factoryRuntimeNormalizeFactorySnapshot(',
   );
   const legacyImages = [{ id: 'vm-image-1', src: '/api/vm-detail-capture/job/artifacts/0' }];
@@ -282,6 +289,8 @@ test('factory competitor view restores scoped legacy detail images when the comm
     state: { compPage: legacyCompPage },
     factoryRuntimeOwnedRenderDraft: null,
     factoryRuntimeRequireStore: () => store,
+    factoryRuntimeDetachedValue: value => structuredClone(value),
+    factoryRuntimeFreezeDetachedValue: value => value,
     compMarketCurrentWorkScope: () => ({ scopeKey: 'scope:current' }),
     compMarketFilterScrapedImagesForCurrentWork: images => images,
   });

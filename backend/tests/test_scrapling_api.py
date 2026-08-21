@@ -78,3 +78,30 @@ def test_scrapling_detail_capture_rejects_missing_products():
 
     assert response.status_code == 400
     assert response.get_json()["ok"] is False
+
+
+def test_competitor_fetch_url_returns_a_pollable_html_job():
+    # Given: 사용자가 공개 경쟁사 URL 분석을 시작한다.
+    app = create_app()
+    client = app.test_client()
+
+    # When: 브라우저가 기존 fetch-url/poll 계약을 호출한다.
+    with patch(
+        "routes.api_scrapling.scrapling_service.fetch_url_html_text",
+        return_value="경쟁사 상세페이지 본문",
+        create=True,
+    ):
+        started = client.post(
+            "/api/competitor/fetch-url",
+            json={"url": "https://example.com/product"},
+        )
+
+    # Then: 화면이 HTML 근거를 읽을 수 있는 완료 작업을 다시 조회한다.
+    assert started.status_code == 202
+    job_id = started.get_json()["job_id"]
+    completed = client.get(f"/api/competitor/job/{job_id}")
+    assert completed.status_code == 200
+    assert completed.get_json() == {
+        "status": "done",
+        "result": {"html_text": "경쟁사 상세페이지 본문"},
+    }

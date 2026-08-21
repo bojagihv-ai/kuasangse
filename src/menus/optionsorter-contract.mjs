@@ -55,7 +55,7 @@ export function createOptionSorterCommands(dependencies) {
 }
 
 export function createOptionSorterContract(dependencies) {
-  const { getSnapshot, commands, render, refresh, bind, onEnter, onLeave } = dependencies;
+  const { getSnapshot, commands, render, refresh, bind, onEnter, onLeave, prepare } = dependencies;
   return createMenuContract({
     version: MENU_CONTRACT_VERSION,
     id: 'optionsorter',
@@ -65,8 +65,9 @@ export function createOptionSorterContract(dependencies) {
     persistence: { reads: ['options'], writes: ['options'] },
     select(root = {}) {
       const snapshot = getSnapshot() || {};
-      return { optionSorter: root.optionSorter || snapshot.optionSorter || {} };
+      return { optionSorter: snapshot.optionSorter || root.optionSorter || {} };
     },
+    prepare,
     commands,
     render,
     refresh,

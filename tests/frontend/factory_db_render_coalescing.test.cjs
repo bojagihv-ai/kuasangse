@@ -49,6 +49,7 @@ function createFactory() {
 
 function createStageHarness() {
   const renders = [];
+  const collections = [];
   const context = vm.createContext({
     state: {},
     factoryDbCandidateCollectionBusy: false,
@@ -64,15 +65,29 @@ function createStageHarness() {
     factoryYieldToPaint: async () => {},
     factoryStartGoalHeartbeat: () => ({ id: 'heartbeat' }),
     factoryStopGoalHeartbeat: () => {},
-    factoryCollectProductCandidatesForReview: async () => ({ dbCount: 1, cafeCount: 1 }),
+    factoryCollectProductCandidatesForReview: async () => {
+      collections.push('collected');
+      return { dbCount: 1, cafeCount: 1 };
+    },
     saveLastWorkNow: async () => {},
     render: () => renders.push('render'),
     console: { warn: () => {} },
   });
   const source = fs.readFileSync(CORE, 'utf8');
   vm.runInContext(`${extractFunction(source, 'factoryRunDbStage')}\nglobalThis.runDbStage = factoryRunDbStage;`, context);
-  return { context, renders };
+  return { context, renders, collections };
 }
+
+test('DB-15: DB 후보 수집을 한 번 마친 뒤 OAuth 확인 후 후보 재수집도 실제 조회를 다시 시작한다', async () => {
+  const { context, collections } = createStageHarness();
+
+  const first = await context.runDbStage({ factory: createFactory(), render: false });
+  const second = await context.runDbStage({ factory: createFactory(), render: false });
+
+  assert.equal(first, true);
+  assert.equal(second, true, '이전 후보 수집의 busy 상태가 남아 재수집을 막으면 안 됩니다.');
+  assert.equal(collections.length, 2, '두 번째 실행도 실제 후보 조회 함수까지 도달해야 합니다.');
+});
 
 test('DB 후보 수집을 상위 호출이 렌더할 때 임시 복제본의 중복 전체 렌더를 만들지 않는다', async () => {
   const { context, renders } = createStageHarness();
@@ -98,7 +113,7 @@ test('상위 DB 후보 수집은 하위 단계에 자신의 render 정책을 전
 
   assert.match(
     outer,
-    /factoryRunDbStage\(\{\s*factory,\s*operationToken,\s*cafe24Only,\s*render:\s*options\.render\s*\}\);/s,
+    /factoryRunDbStage\(\{\s*factory,\s*operationToken,\s*cafe24Only,\s*render:\s*options\.render,\s*preserveManualFields:\s*options\.preserveManualFields === true,\s*\}\);/s,
     '상위 수집이 render:false로 동작할 때 하위 DB 단계도 임시 복제본을 다시 그리면 안 됩니다.',
   );
 });

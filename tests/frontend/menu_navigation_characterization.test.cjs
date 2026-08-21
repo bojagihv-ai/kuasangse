@@ -292,6 +292,7 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
   assert.match(stripSource, /class="db-workfile-strip" aria-label="(?:DB 동기화와 작업파일|제품정보 DB·자산관 사진과 작업파일)"/);
   assert.match(stripSource, /현재 작업파일/);
   assert.match(stripSource, /\.kuasangse/);
+  assert.ok(stripSource.includes('class="db-workfile-name-base">${escapeHtml(workfileNamePrefix)}<span class="${workfileNameTailClass}">${escapeHtml(workfileNameTail)}&#8288;<span class="db-workfile-name-ext">.kuasangse</span></span></span>'));
   assert.match(stripSource, /renderWorkfileSaveStatus\(\)/);
   assert.match(stripSource, /renderWorkfileBuildLabel\(\)/);
   for (const [id, label] of required) {
@@ -299,6 +300,59 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
   }
   assert.ok(shellMarkupSource.indexOf('<div class="top-command-row">') < shellMarkupSource.indexOf('<div class="container'));
   assert.ok(shellMarkupSource.indexOf('renderGlobalDbSyncStatusStrip') < shellMarkupSource.indexOf('renderApiStatusStrip'));
+});
+
+test('작업파일 제목은 마지막 공백 토큰과 확장자를 하나의 줄바꿈 금지 tail로 렌더한다', () => {
+  const stripSource = extractFunction(source(CORE_02), 'renderGlobalDbSyncStatusStrip');
+  const state = { currentProjectName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817' };
+  const renderStrip = Function(
+    'state',
+    'workspaceDocumentAuthorityIsReadOnly',
+    'factoryRuntimeReadFactory',
+    'deriveProjectName',
+    'escAttr',
+    'escapeHtml',
+    'workspaceDocumentStatusLabel',
+    'getCurrentStepLabel',
+    'latestDbSyncInfo',
+    'factoryProjectFileLocationLabel',
+    'renderWorkfileSaveStatus',
+    'renderWorkfileBuildLabel',
+    'renderRuntimePerformanceStatus',
+    'renderProjectSafetyBackupStatus',
+    'workBundleSyncStatusLabel',
+    `"use strict"; ${stripSource}; return renderGlobalDbSyncStatusStrip;`,
+  )(
+    state,
+    () => false,
+    () => null,
+    () => '',
+    value => String(value),
+    value => String(value),
+    () => '초안',
+    () => '작업 화면',
+    () => null,
+    () => '',
+    () => '',
+    () => '',
+    () => '',
+    () => '',
+    '자산관 사진: 확인 전',
+  );
+  const markup = renderStrip();
+
+  assert.match(markup, /db-workfile-name-base">수동 A컷 검증 미니 데스크 오거나이저 B <span class="db-workfile-name-tail">20260817&#8288;<span class="db-workfile-name-ext">\.kuasangse<\/span><\/span><\/span>/);
+  assert.equal((markup.match(/class="db-workfile-name-tail"/g) || []).length, 1);
+
+  state.currentProjectName = '매우긴무공백작업파일이름';
+  const noSpaceMarkup = renderStrip();
+  assert.match(noSpaceMarkup, /class="db-workfile-name-tail db-workfile-name-tail-wrap">매우긴무공백작업파일이름&#8288;<span class="db-workfile-name-ext">\.kuasangse<\/span>/);
+});
+
+test('작업파일 제목 tail의 일반·무공백 CSS 계약은 atomic과 줄바꿈 가능 fallback을 함께 보장한다', () => {
+  const html = source(APP_HTML);
+  assert.match(html, /\.db-workfile-name-tail\{display:inline-block;white-space:nowrap\}/);
+  assert.match(html, /\.db-workfile-name-tail-wrap\{display:inline;white-space:normal;overflow-wrap:break-word;word-break:keep-all\}/);
 });
 
 test('새 작업 뒤 현재 작업파일 제목과 보관함 기준은 canonical factory runtime을 읽는다', () => {
@@ -327,6 +381,16 @@ test('작은 창 기준선은 앱 전체 우측 단일 세로 스크롤과 반�
   assert.match(html, /\.sidebar\{[^}]*min-height:100vh[^}]*overflow:visible(?:;overflow-anchor:none)?\}/);
   assert.match(html, /\.db-workfile-strip\{display:grid;grid-template-columns:/);
   assert.match(html, /\.db-workfile-actions\{[^}]*flex-wrap:wrap/);
+  assert.match(html, /body:has\(\.work-identity-float\.is-authority-dock\) \.main\{padding-right:0\}/);
+  assert.match(html, /@media\(min-width:601px\) and \(max-width:900px\)\{[\s\S]*?\.sidebar\{width:176px\}/);
+  assert.match(html, /\.sidebar \.logo-text,\.sidebar \.logo-sub,\.sidebar \.nav-label,\.sidebar \.nav-api-badges\{display:block\}/);
+  assert.match(html, /@media\(max-width:1360px\)\{[\s\S]*?\.top-command-row\{display:flex;flex-direction:column;align-items:stretch;gap:10px/);
+  assert.match(html, /\.top-command-row \.db-workfile-strip\{grid-template-columns:1fr;gap:10px\}/);
+  assert.match(html, /\.factory-recent-workfile-row\{display:grid;grid-template-columns:repeat\(auto-fit,minmax\(260px,1fr\)\)/);
+  assert.match(html, /@media\(max-width:900px\)[\s\S]*?\.factory-recent-workfile-row\{grid-template-columns:repeat\(auto-fit,minmax\(260px,1fr\)\)\}/);
+  assert.match(html, /@media\(max-width:900px\) and \(min-height:641px\)\{[\s\S]*?\.main\{padding-bottom:calc\(var\(--work-identity-bottom\) \+ var\(--work-identity-short-min-height\) \+ var\(--space-6\)\)/);
+  assert.match(html, /body:has\(\.work-identity-float\.is-authority-dock\) \.main\{padding-right:calc\(var\(--work-identity-short-width\) \+ var\(--space-4\)\)\}/);
+  assert.match(html, /@media\(max-width:600px\) and \(min-height:641px\)\{[\s\S]*?\.work-identity-float\{display:none\}/);
   assert.match(html, /@media\(max-height:640px\)[\s\S]*?\.top-command-row\{position:static;display:block\}/);
 });
 
@@ -334,6 +398,7 @@ test('한글 작업파일 이름은 음절 중간 분리를 피하면서 긴 무
   const html = source(APP_HTML);
   assert.match(html, /\.db-workfile-name\{[^}]*overflow-wrap:break-word;word-break:keep-all/);
   assert.match(html, /\.db-workfile-name-base\{[^}]*overflow-wrap:break-word;word-break:keep-all/);
+  assert.match(html, /\.db-workfile-name-ext\{white-space:nowrap\}/);
   assert.doesNotMatch(html, /\.db-workfile-name(?:-base)?\{[^}]*overflow-wrap:anywhere/);
 });
 

@@ -56,3 +56,12 @@ test('app shell gives the outer runtime loader a fresh token on every page boot'
   assert.match(source, /const LOADER_BOOT_CACHE_TOKEN = `loader-\$\{Date\.now\(\)\.toString\(36\)\}-\$\{Math\.random\(\)\.toString\(36\)\.slice\(2, 8\)\}`/);
   assert.match(source, /loaderUrl\.searchParams\.set\('boot', LOADER_BOOT_CACHE_TOKEN\)/);
 });
+
+test('batch worker identity includes the page-unique boot token', () => {
+  const source = fs.readFileSync(LOADER, 'utf8');
+
+  assert.match(
+    source,
+    /workerId:\s*`factory-worker-\$\{buildId\}-\$\{RUNTIME_BOOT_CACHE_TOKEN\}`/,
+  );
+});

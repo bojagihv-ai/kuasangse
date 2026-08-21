@@ -383,10 +383,11 @@ test('옵션 배정 저장 예약은 즉시 전체 factory snapshot을 복제하
   );
 });
 
-test('옵션 전용 저장은 factory 복제나 전체 세션 commit 없이 scope 전용 복구값만 저장한다', () => {
+test('옵션 전용 저장은 factory 복제나 전체 세션 commit 없이 같은 작업 서버 저장본도 갱신한다', async () => {
   const timers = [];
   let cloneCalls = 0;
   let recoveryCalls = 0;
+  const serverSaveCalls = [];
   const sandbox = {
     Math,
     Number,
@@ -418,6 +419,11 @@ test('옵션 전용 저장은 factory 복제나 전체 세션 commit 없이 scop
     },
     saveOptionSorterLiveRecovery() {
       recoveryCalls += 1;
+      return Promise.resolve(true);
+    },
+    saveServerLastWorkSnapshot(reason) {
+      serverSaveCalls.push(reason);
+      return Promise.resolve(true);
     },
   };
   vm.createContext(sandbox);
@@ -426,8 +432,97 @@ test('옵션 전용 저장은 factory 복제나 전체 세션 commit 없이 scop
   assert.equal(cloneCalls, 0, '사용자 입력 이벤트 중에는 factory 전체 복제가 없어야 합니다.');
   assert.equal(timers.length, 1);
   timers[0].callback();
+  await Promise.resolve();
   assert.equal(cloneCalls, 0, '옵션 전용 저장 타이머에서도 factory snapshot을 복제하면 안 됩니다.');
   assert.equal(recoveryCalls, 1, '현재 작업 scope에 묶인 옵션 전용 복구값만 저장해야 합니다.');
+  assert.deepEqual(
+    serverSaveCalls,
+    ['option-sorter-live'],
+    '새 탭과 재시작에서도 배정·생성컷이 남도록 같은 작업 서버 저장본을 갱신해야 합니다.',
+  );
+});
+
+test('로컬 보관본 복원용 옵션 저장은 현재 작업의 durable project replica를 강제 갱신한다', async () => {
+  const timers = [];
+  const serverSaveCalls = [];
+  const sandbox = {
+    Math,
+    Number,
+    Promise,
+    LAST_WORK_INPUT_IDLE_MS: 1400,
+    lastWorkSaveTimer: null,
+    optionSorterLiveSaveTimer: null,
+    lastWorkSyncingVisibleInputs: false,
+    factoryRuntimeReadFactory: () => ({ id: 'active' }),
+    factoryRuntimeReadCommittedFactory: () => ({ id: 'committed' }),
+    factoryRuntimeDetachedValue: value => value,
+    cloneData: value => value,
+    clearTimeout() {},
+    setTimeout(callback, delay) {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    lastWorkIsInteractiveInputWindow: () => false,
+    saveLastWorkNow() {},
+    syncVisibleLastWorkInputs() {},
+    saveOptionSorterLiveRecovery: () => Promise.resolve(true),
+    saveServerLastWorkSnapshot(reason, options) {
+      serverSaveCalls.push({ reason, options });
+      return Promise.resolve(true);
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFunction(APP_CORE_02, 'scheduleLastWorkSave'), sandbox);
+
+  sandbox.scheduleLastWorkSave(120, { lightweight: true, optionSorterOnly: true, durable: true });
+  timers[0].callback();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(JSON.parse(JSON.stringify(serverSaveCalls)), [{
+    reason: 'option-sorter-live',
+    options: { force: true },
+  }], 'archive 복원은 초안 탭이어도 현재 프로젝트의 durable replica를 강제 갱신해야 합니다.');
+});
+
+test('hydration 중 큐에 남은 옵션 보관본 복구도 완료 뒤 durable project replica를 갱신한다', async () => {
+  const serverSaveCalls = [];
+  const sandbox = {
+    Promise,
+    optionSorterLiveSaveQueued: true,
+    serverLastWorkHydrated: true,
+    serverLastWorkHydrating: false,
+    saveOptionSorterLiveRecovery: () => Promise.resolve(true),
+    saveServerLastWorkSnapshot(reason, options) {
+      serverSaveCalls.push({ reason, options });
+      return Promise.resolve(true);
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFunction(APP_CORE_02, 'flushOptionSorterLiveRecoverySave'), sandbox);
+
+  await sandbox.flushOptionSorterLiveRecoverySave();
+
+  assert.equal(sandbox.optionSorterLiveSaveQueued, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(serverSaveCalls)), [{
+    reason: 'option-sorter-live',
+    options: { force: true },
+  }], 'hydration 전에 복원된 15개 매칭과 생성컷은 큐를 비운 뒤에도 프로젝트 서버 저장본까지 이어져야 합니다.');
+});
+
+test('얇은 서버 저장본보다 풍부한 옵션 상태는 hydration 뒤 force 저장으로 서버도 복구한다', () => {
+  const hydrateSource = extractFunction(APP_CORE_02, 'hydrateServerLastWorkSnapshot');
+  const persistentSource = extractFunction(APP_CORE_02, 'savePersistentState');
+
+  assert.match(
+    hydrateSource,
+    /savePersistentState\(\{\s*server:\s*shouldResaveAfterHydrate,\s*force:\s*shouldResaveAfterHydrate,\s*\}\)/,
+    '화면이 서버보다 풍부하면 hydration 종료 저장이 같은 프로젝트 replica를 강제로 갱신해야 합니다.',
+  );
+  assert.match(
+    persistentSource,
+    /scheduleServerLastWorkSave\(\s*['"]persistent-state['"],\s*3200,\s*\{\s*factorySnapshot,\s*force:\s*options\.force\s*===\s*true,\s*\}\s*\)/,
+    'hydration의 force 의도는 예약된 서버 저장까지 그대로 전달되어야 합니다.',
+  );
 });
 
 test('옵션 배정 복구값은 현재 프로젝트에만 적용되고 새 작업에서 함께 삭제된다', () => {

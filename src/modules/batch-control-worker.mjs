@@ -14,7 +14,9 @@ import {
   validateOrder,
   WORKER_ENDPOINTS,
 } from './batch-control-contract.mjs';
-import { createRecurringTask } from './batch-control-polling.mjs';
+import { createRecurringTask, createSingleFlight } from './batch-control-polling.mjs';
+import { installBatchControlWorkerWithFactory } from './batch-control-worker-install.mjs';
+import { createFactoryWorkfileHydrationSubmission } from './factory-workfile-webmcp.mjs';
 
 export { BATCH_CONTROL_CAFE24_COMMAND_VERSION, BATCH_CONTROL_COMMAND_KINDS, BATCH_CONTROL_FACTORY_COMMAND_VERSION, BATCH_CONTROL_WORKFILE_COMMAND_VERSION, BATCH_CONTROL_WORKER_CAPABILITY_VERSION, BATCH_CONTROL_WORK_ORDER_VERSION, BatchWorkerContractError, BatchWorkerHttpError };
 
@@ -25,6 +27,7 @@ export function createBatchControlWorker({
   workerSessionId = '',
   commandBridge,
   projectionBridge = null,
+  authorityHeartbeat = null,
   fetchImpl,
   setIntervalImpl,
   clearIntervalImpl,
@@ -42,11 +45,11 @@ export function createBatchControlWorker({
   let activeOrder = null;
   let eventSequence = 0;
   let heartbeatTimer = null;
-  let helloRequest = null;
   let liveSessionCursor = 0;
   let liveSessionReady = false;
   let lastProjection = null;
   let sessionHeaders = null;
+  const runSessionRequest = createSingleFlight();
 
   async function ensureSession() {
     if (sessionHeaders) return sessionHeaders;
@@ -63,28 +66,33 @@ export function createBatchControlWorker({
     return sessionHeaders;
   }
 
-  async function post(endpoint, payload) {
+  async function post(endpoint, payload, canRefreshSession = true) {
     const headers = { ...jsonHeaders(), ...(await ensureSession()) };
     const response = await fetchImpl(`${base}${endpoint}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
     });
-    if (!response.ok) throw new BatchWorkerHttpError(response.status, endpoint);
+    if (response.status === 428 && canRefreshSession) {
+      sessionHeaders = null;
+      return post(endpoint, payload, false);
+    }
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw new BatchWorkerHttpError(response.status, endpoint, failure?.error?.code);
+    }
     return response.status === 204 ? null : response.json();
   }
 
   async function heartbeat() {
     if (!activeOrder) return null;
-    return post(WORKER_ENDPOINTS.heartbeat(activeOrder.orderId), {
-      contractVersion: BATCH_CONTROL_WORK_ORDER_VERSION,
-      capabilityVersion: BATCH_CONTROL_WORKER_CAPABILITY_VERSION,
-      orderId: activeOrder.orderId,
-      productId: activeOrder.productId,
-      currentRunId: activeOrder.currentRunId,
-      operationToken: activeOrder.operationToken,
+    const result = await post(WORKER_ENDPOINTS.heartbeat(activeOrder.orderId), {
+      ...activeOrder,
+      workerId,
       eventSequence,
     });
+    if (typeof authorityHeartbeat === 'function') await authorityHeartbeat();
+    return result;
   }
 
   function sessionEnvelope(projection = lastProjection) {
@@ -101,31 +109,27 @@ export function createBatchControlWorker({
     };
   }
 
-  async function hello() {
-    if (helloRequest) return helloRequest;
+  async function helloNow() {
     if (!record(projectionBridge) || typeof projectionBridge.getProjection !== 'function') {
       throw new BatchWorkerContractError('projection_bridge_missing');
     }
-    helloRequest = (async () => {
-      const projection = await projectionBridge.getProjection();
-      if (!record(projection) || projection.schema !== 'factory-control-projection:v1') {
-        throw new BatchWorkerContractError('factory_projection_invalid');
-      }
-      lastProjection = projection;
-      const result = await post(WORKER_ENDPOINTS.factoryHello, {
-        ...sessionEnvelope(projection),
-        projection,
-      });
-      liveSessionReady = true;
-      return result;
-    })().finally(() => {
-      helloRequest = null;
+    const projection = await projectionBridge.getProjection();
+    if (!record(projection) || projection.schema !== 'factory-control-projection:v1') {
+      throw new BatchWorkerContractError('factory_projection_invalid');
+    }
+    lastProjection = projection;
+    const result = await post(WORKER_ENDPOINTS.factoryHello, {
+      ...sessionEnvelope(projection),
+      projection,
     });
-    return helloRequest;
+    liveSessionReady = true;
+    return result;
   }
 
-  async function sessionHeartbeat() {
-    if (!liveSessionReady) return hello();
+  const hello = () => runSessionRequest(helloNow);
+
+  async function sessionHeartbeatNow() {
+    if (!liveSessionReady) return helloNow();
     try {
       return await post(WORKER_ENDPOINTS.factoryHeartbeat, sessionEnvelope());
     } catch (error) {
@@ -134,7 +138,9 @@ export function createBatchControlWorker({
     }
   }
 
-  async function syncProjection() {
+  const sessionHeartbeat = () => runSessionRequest(sessionHeartbeatNow);
+
+  async function syncProjectionNow() {
     if (!record(projectionBridge) || typeof projectionBridge.getProjection !== 'function') {
       throw new BatchWorkerContractError('projection_bridge_missing');
     }
@@ -144,7 +150,7 @@ export function createBatchControlWorker({
     }
     if (!liveSessionReady) {
       lastProjection = projection;
-      return hello();
+      return helloNow();
     }
     lastProjection = projection;
     return post(WORKER_ENDPOINTS.factorySync, {
@@ -152,6 +158,8 @@ export function createBatchControlWorker({
       projection,
     });
   }
+
+  const syncProjection = () => runSessionRequest(syncProjectionNow);
 
   async function start() {
     const claimed = await post(WORKER_ENDPOINTS.claim, {
@@ -187,9 +195,12 @@ export function createBatchControlWorker({
         : await commandBridge.run(activeOrder.command.kind, activeOrder.command.name, activeOrder.command.payload ?? {}, activeOrder);
       await post(WORKER_ENDPOINTS.events(activeOrder.orderId), { ...activeOrder, workerId, status: 'completed', eventSequence: ++eventSequence, result });
       await post(WORKER_ENDPOINTS.complete(activeOrder.orderId), { ...activeOrder, workerId, eventSequence, result });
+      workfileHydration.resolve(activeOrder.orderId, result);
       return Object.freeze({ status: 'completed', orderId: activeOrder.orderId });
     } catch (error) {
+      console.error('Batch worker command failed', error);
       await post(WORKER_ENDPOINTS.fail(activeOrder.orderId), { ...activeOrder, workerId, eventSequence: ++eventSequence, error: String(error?.code || error?.message || error) });
+      workfileHydration.reject(activeOrder.orderId, error);
       throw error;
     } finally {
       activeOrder = null;
@@ -221,13 +232,13 @@ export function createBatchControlWorker({
     timerError,
   });
 
-  function startSessionHeartbeat(intervalMs = 15000) {
-    return sessionHeartbeatTask.start(intervalMs);
-  }
+  const workfileHydration = createFactoryWorkfileHydrationSubmission({
+    post, runOnce: pollingTask.runOnce, endpoint: WORKER_ENDPOINTS.factoryWorkfileHydrate,
+  });
 
-  function startPolling(intervalMs = 1000) {
-    return pollingTask.start(intervalMs);
-  }
+  function startSessionHeartbeat(intervalMs = 15000) { return sessionHeartbeatTask.start(intervalMs); }
+
+  function startPolling(intervalMs = 1000) { return pollingTask.start(intervalMs); }
 
   function startProjectionPolling(intervalMs = 1000) {
     if (!record(projectionBridge) || typeof projectionBridge.getProjection !== 'function') {
@@ -247,21 +258,11 @@ export function createBatchControlWorker({
     startHeartbeat,
     startSessionHeartbeat,
     startPolling,
+    hydrateFactoryWorkfile: workfileHydration.submit,
     syncProjection,
     startProjectionPolling,
     endpoints: WORKER_ENDPOINTS,
   });
 }
 
-export function installBatchControlWorker(windowObject, options = {}) {
-  if (!record(windowObject)) throw new BatchWorkerContractError('window_missing');
-  const worker = createBatchControlWorker(options);
-  const receipt = Object.freeze({ schema: 'batch-control-worker:v1', capabilityVersion: BATCH_CONTROL_WORKER_CAPABILITY_VERSION, worker });
-  Object.defineProperty(windowObject, '__KUASANGSE_BATCH_CONTROL_WORKER__', {
-    value: receipt,
-    enumerable: false,
-    writable: false,
-    configurable: false,
-  });
-  return receipt;
-}
+export function installBatchControlWorker(windowObject, options = {}) { return installBatchControlWorkerWithFactory(windowObject, options, createBatchControlWorker); }

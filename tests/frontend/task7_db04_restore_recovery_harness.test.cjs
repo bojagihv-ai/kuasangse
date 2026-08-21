@@ -18,11 +18,11 @@ test('DB-04 check boundary rejects non-exact fence and empty recovery evidence',
   const proof = {
     expected: { projectId: 'project', draftScope: 'draft::product::candidate-review', currentScope: scope, foreignScope: foreign.scope, currentIdentity: identity, foreignIdentity: foreign.identity },
     normalizedDraftScope: 'draft::product::candidate-review', appWorkspaceId: 'project', factoryWorkspaceId: 'project', currentScope: scope,
-    before: { token: { fence: 4 }, recovery, scopedBackend: backend, globalBackend: backend },
-    after: { token: { version: 'factory-store:v1', workspaceId: 'project', revision: 0, fence: 5 }, recovery: { ...recovery }, scopedBackend: { ...backend }, globalBackend: { ...backend } },
+    before: { token: { revision: 0, fence: 4 }, recovery, scopedBackend: backend, globalBackend: backend },
+    after: { token: { version: 'factory-store:v1', workspaceId: 'project', revision: 1, fence: 5 }, recovery: { ...recovery }, scopedBackend: { ...backend }, globalBackend: { ...backend } },
     sentinel: { recoverySha256: 'recovery', revisionsSha256: 'revisions' }, cleanup: { recoveryRestored: true, revisionsRestored: true, authorityReleased: true },
     db: [candidate, foreign], cafe24: [candidate, foreign],
-    buttons: { dbDraft: { exists: true, disabled: false }, cafeDraft: { exists: true, disabled: false }, dbForeign: { exists: true, disabled: true }, cafeForeign: { exists: true, disabled: true } },
+    buttons: { dbDraft: { exists: true, disabled: false }, cafeDraft: { exists: true, disabled: false }, dbForeign: { exists: false, disabled: null }, cafeForeign: { exists: false, disabled: null } },
   };
   assert.equal(buildRestoreRecoveryChecks(proof).every(check => check.ok), true);
   proof.after.token.fence = 6;
@@ -55,8 +55,11 @@ test('DB-04 canonical fixture exposes the actual factory store token boundary', 
       render: () => 'rendered',
       classicRuntimeHydrationReady: true,
       classicRuntimeInitialRenderComplete: true,
+      classicRuntimeDeferredHydrationPromise: Promise.resolve(),
     });
     const { factoryCdpFixtureExpression, factoryCdpFixtureReadyExpression } = require(UTILS);
+    assert.equal(vm.runInContext(factoryCdpFixtureReadyExpression(), context), false);
+    vm.runInContext('classicRuntimeDeferredHydrationPromise = null', context);
     assert.equal(vm.runInContext(factoryCdpFixtureReadyExpression(), context), true);
     const proof = vm.runInContext(factoryCdpFixtureExpression(`({ readFactory, readOperationToken, replaceFactory }) => {
       const before = readOperationToken();

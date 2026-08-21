@@ -2111,6 +2111,35 @@ function factoryCafe24VariantRows(factory = factoryRuntimeReadFactory(), optionV
   const sourceInventoryMap = typeof factoryCafe24SourceVariantInventoryMap === 'function'
     ? factoryCafe24SourceVariantInventoryMap(factory, target?.product_no || raw.product_no || '')
     : null;
+  const draftGroups = factoryCafe24OptionGroupsDraft(factory);
+  const singleDraftGroup = draftGroups.length === 1 ? draftGroups[0] : null;
+  const draftValues = singleDraftGroup?.values || [];
+  const createDraftRow = (value, index) => {
+    const key = `new_${index + 1}`;
+    const edit = edits[key] || {};
+    const optionName = singleDraftGroup?.name || '색상';
+    const seed = sourceInventoryMap && typeof factoryCafe24SourceInventoryForRow === 'function'
+      ? factoryCafe24SourceInventoryForRow({ option_value: value, option_pairs: value ? [{ name: optionName, value }] : [] }, sourceInventoryMap)
+      : null;
+    return {
+      key,
+      index,
+      variant_code: '',
+      option_value: edit.option_value ?? value,
+      option_pairs: value ? [{ name: optionName, value }] : [],
+      display: edit.display ?? '진열함(T)',
+      selling: edit.selling ?? '판매함(T)',
+      use_inventory: edit.use_inventory ?? factoryCafe24FlagText(seed?.use_inventory || 'T', '재고관리 사용', '재고관리 안 함'),
+      important_inventory: edit.important_inventory ?? String(seed?.important_inventory || 'A'),
+      inventory_control_type: edit.inventory_control_type ?? String(seed?.inventory_control_type || 'B'),
+      display_soldout: edit.display_soldout ?? factoryCafe24FlagText(seed?.display_soldout || 'T', '품절 표시함', '품절 표시 안 함'),
+      additional_amount: edit.additional_amount ?? edit.price ?? '',
+      quantity: edit.quantity ?? String(seed?.quantity ?? ''),
+      safety_inventory: edit.safety_inventory ?? String(seed?.safety_inventory ?? ''),
+      custom_variant_code: edit.custom_variant_code ?? '',
+      hasInventory: false,
+    };
+  };
   const rows = sourceVariants.map((variant, index) => {
     const key = factoryCafe24VariantKey(variant, index);
     const edit = edits[key] || {};
@@ -2141,32 +2170,21 @@ function factoryCafe24VariantRows(factory = factoryRuntimeReadFactory(), optionV
       hasInventory: !!(variant.inventory || variant.inventories || variant.quantity !== undefined || variant.stock_quantity !== undefined),
     };
   });
+  if (draftValues.length) {
+    const sourceByValue = new Map(rows.map(row => [factoryDbNormalizeKey(row.option_value), row]));
+    return draftValues.map((value, index) => {
+      const existing = sourceByValue.get(factoryDbNormalizeKey(value));
+      if (!existing) return createDraftRow(value, index);
+      return {
+        ...existing,
+        index,
+        option_value: value,
+        option_pairs: [{ name: singleDraftGroup.name || '색상', value }],
+      };
+    });
+  }
   if (rows.length) return rows;
-  return optionValues.map((value, index) => {
-    const key = `new_${index + 1}`;
-    const edit = edits[key] || {};
-    const seed = sourceInventoryMap && typeof factoryCafe24SourceInventoryForRow === 'function'
-      ? factoryCafe24SourceInventoryForRow({ option_value: value, option_pairs: value ? [{ name: '색상', value }] : [] }, sourceInventoryMap)
-      : null;
-    return {
-      key,
-      index,
-      variant_code: '',
-      option_value: edit.option_value ?? value,
-      option_pairs: value ? [{ name: '색상', value }] : [],
-      display: edit.display ?? '진열함(T)',
-      selling: edit.selling ?? '판매함(T)',
-      use_inventory: edit.use_inventory ?? factoryCafe24FlagText(seed?.use_inventory || 'T', '재고관리 사용', '재고관리 안 함'),
-      important_inventory: edit.important_inventory ?? String(seed?.important_inventory || 'A'),
-      inventory_control_type: edit.inventory_control_type ?? String(seed?.inventory_control_type || 'B'),
-      display_soldout: edit.display_soldout ?? factoryCafe24FlagText(seed?.display_soldout || 'T', '품절 표시함', '품절 표시 안 함'),
-      additional_amount: edit.additional_amount ?? edit.price ?? '',
-      quantity: edit.quantity ?? String(seed?.quantity ?? ''),
-      safety_inventory: edit.safety_inventory ?? String(seed?.safety_inventory ?? ''),
-      custom_variant_code: edit.custom_variant_code ?? '',
-      hasInventory: false,
-    };
-  });
+  return optionValues.map(createDraftRow);
 }
 
 function factoryNormalizeCafe24OptionGroup(group = {}, index = 0) {
@@ -2646,11 +2664,8 @@ function factoryCafe24ImagePayloadSummary(payload = {}) {
 }
 
 function factoryCafe24AdditionalImageDrafts(factory = factoryRuntimeReadFactory()) {
-  const draft = factoryCafe24ImageDraft(factory);
-  draft.additional_images = Array.isArray(draft.additional_images)
-    ? draft.additional_images.filter(item => item && typeof item === 'object')
-    : [];
-  return draft.additional_images;
+  const images = factory?.product?.cafe24ImageDraft?.additional_images;
+  return Array.isArray(images) ? images.filter(item => item && typeof item === 'object') : [];
 }
 
 function factoryCafe24ExistingAdditionalImages(factory = factoryRuntimeReadFactory()) {
@@ -3610,7 +3625,8 @@ function renderFactoryCafe24OptionEditor(factory, model) {
         <input id="factoryCafe24InventoryAll" type="number" min="0" step="1" value="99" placeholder="예: 99">
       </label>
       <button class="btn-sm" id="factoryCafe24ApplyInventoryAll" type="button" ${disabledAttr(!optionModel.variants.length, '품목이 없어 재고를 적용할 수 없습니다.')}><span class="material-icons-outlined" style="font-size:14px">inventory_2</span>전체 품목에 적용</button>
-      <span class="factory-source-sub">각 품목 행의 재고 입력값을 일괄 변경한 뒤 옵션/품목 동기화에서 전송합니다.</span>
+      <button class="btn-sm" id="factoryCafe24SaveVariantInventory" type="button" ${disabledAttr(!optionModel.variants.length, '저장할 품목이 없습니다.')}><span class="material-icons-outlined" style="font-size:14px">save</span>재고 변경 저장</button>
+      <span class="factory-source-sub" id="factoryCafe24InventorySaveStatus" aria-live="polite">행별 재고는 저장한 값 그대로 최종 등록에 사용합니다.</span>
     </div>
     <div class="factory-cafe24-variant-table">
       <div class="factory-cafe24-variant-row header">

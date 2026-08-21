@@ -211,6 +211,11 @@ def register_workbench_routes(
         result = _invoke(lambda: api.get_product_assets(jcode))
         return result if isinstance(result, tuple) else jsonify(result)
 
+    @app.get("/api/pdp/products/<int:jcode>/source-images")
+    def workbench_product_source_images(jcode: int) -> Response | CsrfError:
+        result = _invoke(lambda: api.get_product_source_images(jcode))
+        return result if isinstance(result, tuple) else jsonify(result)
+
     @app.get("/api/pdp/work-bundles")
     def workbench_list_work_bundles() -> Response | CsrfError:
         result = _invoke(

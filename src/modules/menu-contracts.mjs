@@ -158,6 +158,7 @@ export function createMenuContract(definition) {
       return command.execute(...args);
     },
   };
+  if (typeof definition.prepare === 'function') contract.prepare = definition.prepare;
   const validatedContract = Object.freeze(contract);
   VALIDATED_MENU_CONTRACTS.add(validatedContract);
   return validatedContract;

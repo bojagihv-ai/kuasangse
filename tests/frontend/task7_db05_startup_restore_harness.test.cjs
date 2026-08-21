@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -8,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const {
   buildStartupChecks,
   buildStartupSeed,
+  startupSeedScript,
   storageFingerprint,
 } = require('../../tools/factory_startup_restore_harness_utils.cjs');
 const {
@@ -24,14 +26,10 @@ function validProof(token, seed) {
   const appOrigin = 'http://127.0.0.1:19381';
   const backendOrigin = 'http://127.0.0.1:19382';
   const authority = {
-    mode: 'editing', scopeId: seed.projectScope, leaseId: `db05-lease-${seed.projectId}`,
-    fencingToken: 7, ownerId: 'DB05 owner', sessionId: 'db05-session', revision: 4,
+    mode: 'offline-edit', scopeId: seed.draftWorkspaceId, leaseId: '',
+    fencingToken: 0, ownerId: 'DB05 owner', sessionId: 'db05-session', revision: 4,
   };
   const mutations = [
-    { method: 'POST', origin: backendOrigin, path: '/api/workspace-lock/acquire' },
-    ...Array.from({ length: 4 }, () => ({ method: 'POST', origin: backendOrigin, path: '/api/last-work' })),
-    { method: 'POST', origin: backendOrigin, path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest` },
-    { method: 'POST', origin: backendOrigin, path: '/api/cafe24-control/start' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/setup-status' },
   ];
@@ -39,7 +37,8 @@ function validProof(token, seed) {
     expected: { ...seed, appOrigin, backendOrigin },
     appWorkspaceId: seed.projectId,
     factoryWorkspaceId: seed.projectId,
-    persistenceScope: seed.projectScope,
+    persistenceScope: seed.draftWorkspaceId,
+    branch: { scopeId: seed.draftWorkspaceId, documentScopeId: seed.projectScope },
     currentScope: seed.currentScope,
     token,
     settledToken: { ...token },
@@ -60,7 +59,165 @@ function validProof(token, seed) {
   };
 }
 
-test('DB-05 startup checks reject token, authority, network, and cleanup drift by stable code', async () => {
+test('DB-05 startup seed isolates API Hub GETs from native fetch', async () => {
+  const seed = buildStartupSeed(22308);
+  const nativeFetches = [];
+  const storage = () => {
+    const values = new Map();
+    return {
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: key => values.delete(key),
+    };
+  };
+  const context = vm.createContext({
+    console,
+    fetch: async input => {
+      nativeFetches.push(String(input));
+      return new Response(JSON.stringify({ native: true }), { status: 599 });
+    },
+    location: { href: 'http://127.0.0.1:19381/' },
+    localStorage: storage(),
+    sessionStorage: storage(),
+    Request,
+    Response,
+    URL,
+  });
+  context.window = context;
+  vm.runInContext(startupSeedScript(seed, {
+    appOrigin: 'http://127.0.0.1:19381',
+    backendOrigin: 'http://127.0.0.1:19382',
+  }), context);
+
+  const status = await context.fetch('http://127.0.0.1:4321/api/playbooks/gpt-oauth/status');
+  const options = await context.fetch('http://127.0.0.1:4321/api/llm/options');
+  assert.deepEqual(nativeFetches, []);
+  assert.equal(status.status, 200);
+  assert.deepEqual(await status.json(), {
+    connectorId: 'chatgpt_login_oauth', mode: 'chatgpt-login-oauth',
+    authMode: 'chatgpt', chatGptLoginReady: true,
+  });
+  assert.equal(options.status, 200);
+  assert.deepEqual(await options.json(), {
+    latestModel: 'gpt-5.6-sol', modelOptions: [{ id: 'gpt-5.6-sol' }],
+    reasoningOptions: [{ id: 'medium' }], serviceTierOptions: [{ id: 'standard' }],
+  });
+  assert.deepEqual([...context.__DB05_NETWORK_PROBE__.unexpected], []);
+
+  const blockedGet = await context.fetch('http://127.0.0.1:4321/api/catalog');
+  const blockedHead = await context.fetch('http://127.0.0.1:4321/api/status', { method: 'HEAD' });
+  assert.equal(blockedGet.status, 409);
+  assert.equal(blockedHead.status, 409);
+  assert.deepEqual(nativeFetches, []);
+  assert.deepEqual(
+    [...context.__DB05_NETWORK_PROBE__.unexpected].map(item => `${item.method} ${item.origin}${item.path}`),
+    [
+      'GET http://127.0.0.1:4321/api/catalog',
+      'HEAD http://127.0.0.1:4321/api/status',
+    ],
+  );
+});
+
+test('DB-05 startup fetch probe keeps app-origin native fallback out of API Hub transport count', async () => {
+  const seed = buildStartupSeed(22309);
+  const nativeFetches = [];
+  const storage = () => ({ setItem: () => {}, removeItem: () => {} });
+  const context = vm.createContext({
+    console,
+    fetch: async input => {
+      nativeFetches.push(String(input));
+      return new Response(JSON.stringify({ native: true }), { status: 599 });
+    },
+    location: { href: 'http://127.0.0.1:19381/' },
+    localStorage: storage(),
+    sessionStorage: storage(),
+    Request,
+    Response,
+    URL,
+  });
+  context.window = context;
+  vm.runInContext(startupSeedScript(seed, {
+    appOrigin: 'http://127.0.0.1:19381',
+    backendOrigin: 'http://127.0.0.1:19382',
+  }), context);
+
+  assert.equal((await context.fetch('http://127.0.0.1:4321/api/playbooks/gpt-oauth/status')).status, 200);
+  assert.equal((await context.fetch('http://127.0.0.1:4321/api/invoke/cafe24_control_tower/refresh-token', { method: 'POST' })).status, 200);
+  assert.equal(context.__DB05_NETWORK_PROBE__.nativeApiHubTransportCount, 0);
+  assert.deepEqual(nativeFetches, []);
+
+  assert.equal((await context.fetch('http://127.0.0.1:4321/api/catalog')).status, 409);
+  assert.equal(context.__DB05_NETWORK_PROBE__.nativeApiHubTransportCount, 0);
+
+  assert.equal((await context.fetch('http://127.0.0.1:19381/native-fallback')).status, 599);
+  assert.deepEqual(nativeFetches, ['http://127.0.0.1:19381/native-fallback']);
+  assert.equal(context.__DB05_NETWORK_PROBE__.nativeApiHubTransportCount, 0);
+});
+
+test('DB-05 startup fetch probe counts test-only API Hub native transport at the native seam', async () => {
+  const seed = buildStartupSeed(22310);
+  const nativeFetches = [];
+  const storage = () => ({ setItem: () => {}, removeItem: () => {} });
+  const context = vm.createContext({
+    console,
+    fetch: async input => {
+      nativeFetches.push(String(input));
+      return new Response(JSON.stringify({ native: true }), { status: 599 });
+    },
+    location: { href: 'http://127.0.0.1:19381/' },
+    localStorage: storage(),
+    sessionStorage: storage(),
+    Request,
+    Response,
+    URL,
+  });
+  context.window = context;
+  vm.runInContext(startupSeedScript(seed, {
+    appOrigin: 'http://127.0.0.1:19381',
+    backendOrigin: 'http://127.0.0.1:19382',
+    testOnlyNativeApiHubTransport: true,
+  }), context);
+
+  assert.equal((await context.fetch('http://127.0.0.1:4321/__db05_test_native_api_hub_transport')).status, 599);
+  assert.deepEqual(nativeFetches, ['http://127.0.0.1:4321/__db05_test_native_api_hub_transport']);
+  assert.equal(context.__DB05_NETWORK_PROBE__.nativeApiHubTransportCount, 1);
+});
+
+test('DB-05 restore save behavior and startup checks reject token, authority, network, and cleanup drift', async () => {
+  const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-06.js'), 'utf8');
+  const restoreStart = core.indexOf('async function factoryRestoreLocalArchiveToCurrentWork(');
+  const restoreEnd = core.indexOf('\nfunction sectionLocalArchiveStageId(', restoreStart);
+  assert.notEqual(restoreStart, -1);
+  assert.notEqual(restoreEnd, -1);
+  let saveCount = 0;
+  const restoreToken = { version: 'factory-store:v1', workspaceId: 'project:manual', revision: 0, fence: 1 };
+  const restoreStore = {
+    getOperationToken: () => restoreToken,
+    acquireOperationLease: () => ({ acquired: true, operationToken: restoreToken, release: () => true }),
+  };
+  const restoreContext = vm.createContext({
+    FACTORY_RUNTIME_OPERATION_LEASE_INTERNAL: Symbol('internal'),
+    factoryLocalArchiveRestoreTargets: () => [],
+    factoryRenderLocalArchivePanel: () => {},
+    factoryRuntimeFlushDeferredOperations: () => {},
+    factoryRuntimeRequireStore: () => restoreStore,
+    factoryRuntimeUpdateOwnedFactory: async (_action, _owner, update) => ({
+      result: await update({ archive: { localAssets: [] } }),
+    }),
+    saveLastWorkNow: () => {
+      saveCount += 1;
+      return true;
+    },
+  });
+  vm.runInContext(`${core.slice(restoreStart, restoreEnd)}\nthis.restore = factoryRestoreLocalArchiveToCurrentWork;`, restoreContext);
+  await restoreContext.restore({ refresh: false });
+  assert.equal(saveCount, 1);
+  saveCount = 0;
+  await restoreContext.restore({ refresh: false, save: true });
+  assert.equal(saveCount, 1);
+  saveCount = 0;
+  await restoreContext.restore({ refresh: false, save: false });
+  assert.equal(saveCount, 0);
+
   const seed = buildStartupSeed(22305);
   const { createFactoryStore } = await import(`${pathToFileURL(path.join(ROOT, 'src', 'modules', 'factory-store.mjs')).href}?db05-check=${Date.now()}`);
   const store = createFactoryStore({
@@ -92,6 +249,11 @@ test('DB-05 startup checks reject token, authority, network, and cleanup drift b
       path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest`,
     });
     assert.equal(buildStartupChecks(duplicateRecovery).networkBoundary.ok, false);
+    const startupLastWorkWrite = structuredClone(proof);
+    startupLastWorkWrite.networkProbe.mutations.push({
+      method: 'POST', origin: proof.expected.backendOrigin, path: '/api/last-work',
+    });
+    assert.equal(buildStartupChecks(startupLastWorkWrite).networkBoundary.ok, false);
     proof.cleanup.afterStorage = { ...proof.cleanup.afterStorage, sha256: 'changed' };
     assert.equal(buildStartupChecks(proof).storageCleanup.ok, false);
     proof.cleanup.afterStorage = { ...proof.cleanup.beforeStorage };
@@ -107,9 +269,6 @@ test('DB-05 startup network gate accepts idempotent OAuth refresh variations ins
   const token = { version: 'factory-store:v1', workspaceId: seed.projectId, revision: 4, fence: 2 };
   const proof = validProof(token, seed);
   proof.networkProbe.mutations = [
-    { method: 'POST', origin: proof.expected.backendOrigin, path: '/api/workspace-lock/acquire' },
-    { method: 'POST', origin: proof.expected.backendOrigin, path: '/api/last-work' },
-    { method: 'POST', origin: proof.expected.backendOrigin, path: `/api/local-archive/workfiles/${encodeURIComponent(seed.projectId)}/recover-latest` },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/refresh-token' },
     { method: 'POST', origin: 'http://127.0.0.1:4321', path: '/api/invoke/cafe24_control_tower/setup-status' },

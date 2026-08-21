@@ -40,6 +40,10 @@ class FakeElement {
     this.listeners.set(type, listener);
   }
 
+  setAttribute(name, value) {
+    this[name] = String(value);
+  }
+
   replaceWith(replacement) {
     const index = this.parentElement?.children.indexOf(this) ?? -1;
     if (index < 0) return;
@@ -208,6 +212,53 @@ test('blank product key still binds the exact current workfile workspace bundle'
   );
 });
 
+test('completed history keeps its exact job identity in the reload route and exposes a zoom action', async () => {
+  const { factoryHistoryJobFromLocation } = await workbench();
+  assert.equal(
+    factoryHistoryJobFromLocation('?factoryHistoryJob=factory-job-88e6ba8fa26a41b0ae396d2be6cb160a'),
+    'factory-job-88e6ba8fa26a41b0ae396d2be6cb160a',
+  );
+  assert.equal(factoryHistoryJobFromLocation('?factoryHistoryJob='), '');
+
+  const source = fs.readFileSync(MODULE, 'utf8');
+  const html = fs.readFileSync(CONTROL_TOWER_HTML, 'utf8');
+  assert.match(source, /view-work-bundle-image/);
+  assert.match(html, /id=["']work-bundle-image-dialog["']/);
+});
+
+test('base route restores its only completed job instead of showing a blank session', async () => {
+  const { defaultCompletedHistoryJobId } = await workbench();
+  const completedJob = {
+    jobId: 'factory-job-only-completed',
+    status: 'completed',
+  };
+
+  assert.equal(
+    defaultCompletedHistoryJobId([completedJob], {
+      hasSession: false,
+      historyJobId: '',
+      requestedBundleId: '',
+    }),
+    'factory-job-only-completed',
+  );
+  assert.equal(
+    defaultCompletedHistoryJobId([completedJob, { jobId: 'factory-job-running', status: 'running' }], {
+      hasSession: false,
+      historyJobId: '',
+      requestedBundleId: '',
+    }),
+    '',
+  );
+  assert.equal(
+    defaultCompletedHistoryJobId([completedJob], {
+      hasSession: true,
+      historyJobId: '',
+      requestedBundleId: '',
+    }),
+    '',
+  );
+});
+
 test('rendered work-bundle cards expose the stable asset key for exact DOM inventory checks', async () => {
   const previousDocument = globalThis.document;
   globalThis.document = { createElement: tagName => new FakeElement(tagName) };
@@ -231,7 +282,7 @@ test('rendered work-bundle cards expose the stable asset key for exact DOM inven
     assert.equal(card.dataset.assetKey, 'output:hero:stable-workfile-id');
     assert.equal(image.tagName, 'IMG');
     assert.equal(image.src, 'http://127.0.0.1:5050/api/pdp/assets/remote-asset-id/thumbnail');
-    assert.equal(image.loading, 'lazy');
+    assert.equal(image.loading, 'eager');
   } finally {
     globalThis.document = previousDocument;
   }
@@ -388,8 +439,17 @@ test('event-driven automatic scheduler invokes the composite path without a butt
     policySnapshot: { locked: true },
     isAutomatic: () => true,
   });
+  const localProjection = projection('product-c');
+  localProjection.registration.jobId = 'factory-job-product-c';
+  await schedule({
+    projection: localProjection,
+    workBundle: {},
+    policySnapshot: { locked: true },
+    localJob: { jobId: 'factory-job-product-c', status: 'waiting_manual' },
+    isAutomatic: () => true,
+  });
 
-  assert.deepEqual(calls, [['representative', 'auto']]);
+  assert.deepEqual(calls, [['representative', 'auto'], ['representative', 'auto']]);
 });
 
 test('work-bundle reload identity changes only for a different workspace or product', async () => {

@@ -74,32 +74,10 @@ function factoryCompetitorMatchesCurrentWork(item = {}, factory = factoryRuntime
     item?.metadata?.currentProjectId ||
     ''
   ).trim();
-  if (!currentWorkspaceId || !itemWorkspaceId || currentWorkspaceId !== itemWorkspaceId) return false;
-  if (typeof compMarketCandidateMatchesCurrentWork === 'function' && !compMarketCandidateMatchesCurrentWork(item, current)) {
-    return false;
-  }
-  if (!current?.scopeKey) return true;
-  const workKey = String(item?.factoryWorkKey || item?.workScopeKey || '').trim();
-  if (workKey) return workKey === current.scopeKey;
-  const currentRunId = String(current.currentRunId || '').trim();
-  const itemRunId = String(
-    item?.currentRunId ||
-    item?.generationRunId ||
-    item?.metadata?.currentRunId ||
-    item?.metadata?.generationRunId ||
-    ''
-  ).trim();
-  if (currentRunId && itemRunId !== currentRunId) return false;
-  const currentProductKey = String(current.productKey || '').trim();
-  const currentInputKey = String(current.inputImageFingerprint || '').trim();
-  const itemProductKey = String(item?.productKey || item?.productIdentityKey || '').trim();
-  const itemInputKey = String(item?.inputImageFingerprint || item?.inputImageKey || item?.sourceImageKey || '').trim();
-  if (itemProductKey || itemInputKey) {
-    const productOk = !itemProductKey || !currentProductKey || itemProductKey === currentProductKey;
-    const inputOk = !itemInputKey || !currentInputKey || itemInputKey === currentInputKey;
-    return productOk && inputOk;
-  }
-  return false;
+  if (!currentWorkspaceId || (itemWorkspaceId && currentWorkspaceId !== itemWorkspaceId)) return false;
+  if (!itemWorkspaceId && typeof compMarketCandidateMatchesCurrentWork !== 'function') return false;
+  return typeof compMarketCandidateMatchesCurrentWork !== 'function'
+    || compMarketCandidateMatchesCurrentWork(item, current, { allowHistoricalRun: true });
 }
 
 function factoryCurrentWorkCompetitors(factory = factoryRuntimeReadFactory()) {
@@ -5553,6 +5531,23 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
   const liveFactory = typeof factoryRuntimeReadCommittedFactory === 'function'
     ? factoryRuntimeReadCommittedFactory()
     : factory;
+  const requiredRows = [
+    ['size', '사이즈'],
+    ['width_mm', '가로'],
+    ['depth_mm', '세로'],
+    ['weight', '무게'],
+    ['material', '소재'],
+    ['usage', '용도'],
+  ].map(([fieldId, label]) => ({
+    fieldId,
+    label,
+    value: factoryFinalRegistrationFirstText(
+      liveFactory?.product?.finalDb?.[fieldId],
+      liveFactory?.product?.dbFieldSettings?.[fieldId]?.manualValue,
+      finalDb[fieldId],
+      factory?.product?.dbFieldSettings?.[fieldId]?.manualValue,
+    ),
+  }));
   const automationSalePrice = typeof factoryAutomationFieldValue === 'function'
     ? factoryAutomationFieldValue(factory, 'sale_price', ['price', 'selling_price', '판매가격']).value
     : '';
@@ -5653,6 +5648,7 @@ function factoryFinalRegistrationBasicInfoModel(factory = factoryRuntimeReadFact
   ];
   return {
     rows,
+    requiredRows,
     createReferenceDefaults,
     productName,
     salePrice: rows.find(row => row.fieldId === 'sale_price')?.value || '',
@@ -5681,6 +5677,13 @@ function renderFactoryFinalRegistrationBasicInfoPanel(factory = factoryRuntimeRe
         </span>
         <input class="input" data-factory-final-basic-field="${escAttr(row.fieldId)}" value="${escAttr(row.value)}" inputmode="${escAttr(row.inputMode)}" placeholder="${row.required ? '필수 입력' : '선택 입력'}" title="${escAttr(row.help)}">
       </label>`).join('')}
+    </div>
+    <div data-factory-final-required-values="1" style="margin-top:10px">
+      <div class="factory-cafe24-save-title">필수값/사이즈 확인</div>
+      <div class="factory-cafe24-save-sub">현재 작업에 저장된 실제 값입니다. 빈 항목은 값을 만들지 않고 비워 둡니다.</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:8px">
+        ${model.requiredRows.map(row => `<div class="factory-cafe24-save-stat" data-factory-final-required-field="${escAttr(row.fieldId)}"${row.fieldId === 'usage' ? ' style="grid-column:1 / -1"' : ''}><b data-factory-final-required-value="${escAttr(row.fieldId)}">${escapeHtml(row.value)}</b><span>${escapeHtml(row.label)} · ${escapeHtml(row.fieldId)}</span></div>`).join('')}
+      </div>
     </div>
     <div class="factory-cafe24-save-stats" data-factory-final-create-reference-defaults="1" style="margin-top:8px">
       ${model.createReferenceDefaults.map(item => `<div class="factory-cafe24-save-stat"><b>${escapeHtml(item.value)}</b><span>${escapeHtml(item.label)} · ${escapeHtml(item.apiField)}</span></div>`).join('')}
@@ -5901,6 +5904,11 @@ function factoryEnsureCurrentDetailHtmlAsset(factory) {
     : '';
   const imageHtml = wrapImageHtml(renderedImageRefs);
   if (html && renderedImageRefs.length) {
+    const sectionLabels = new Set((typeof orderedSections === 'function'
+      ? orderedSections({ includeHidden: true, includeAutoExcluded: true })
+      : [])
+      .map(section => String(section?.name || '').trim())
+      .filter(Boolean));
     const labelCounts = renderedImageRefs.reduce((counts, ref) => {
       counts.set(ref.label, (counts.get(ref.label) || 0) + 1);
       return counts;
@@ -5913,7 +5921,7 @@ function factoryEnsureCurrentDetailHtmlAsset(factory) {
         ref.renderedSource ? escAttr(ref.renderedSource) : '',
         ref.lightKey,
       ].filter(Boolean);
-      if (labelCounts.get(ref.label) === 1) {
+      if (labelCounts.get(ref.label) === 1 || sectionLabels.has(ref.label)) {
         const escapedLabel = escAttr(ref.label);
         markers.push(`alt="${escapedLabel}"`, `alt='${escapedLabel}'`);
       }
@@ -6265,6 +6273,7 @@ function factoryBuildRegistrationHistoryRecord(options = {}) {
     detailSectionCount: detailModel.generated,
     detailAssetCount: detailModel.detailAssets,
     savedProjectUpdatedAt: project?.updatedAt || null,
+    registrationReceipt: factory.product?.cafe24RegistrationReceipt || null,
     source: options.source || 'final-registration',
   };
 }
@@ -6322,6 +6331,237 @@ async function factoryResumeLatestExactCafe24Product(options = {}) {
     factoryOpenMarketLog(factory.product.cafe24ApiStatus, 'error', factory);
     return null;
   }
+}
+
+function factoryCafe24BuildRegistrationReceiptPreflight(factory = factoryRuntimeReadFactory(), options = {}) {
+  const basicInfo = options.basicInfo || factoryFinalRegistrationBasicInfoModel(factory);
+  const settings = options.settings || factoryFinalRegistrationSettings(factory);
+  const optionPlan = typeof factoryBuildCafe24OptionSyncPlan === 'function'
+    ? factoryBuildCafe24OptionSyncPlan(factory, factory.product?.finalDb || {}, null, {
+      forceInventory: true,
+      forceInventoryQuantity: options.forceInventoryQuantity || '',
+    })
+    : { optionName: '', optionValues: [] };
+  const optionValues = Array.isArray(optionPlan.optionValues) ? optionPlan.optionValues.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const variants = typeof factoryCafe24VariantRows === 'function' ? factoryCafe24VariantRows(factory, optionValues) : [];
+  const inventoryByOption = {};
+  variants.forEach((row, index) => {
+    const key = String(typeof factoryCafe24VariantNormalizedOptionKey === 'function'
+      ? factoryCafe24VariantNormalizedOptionKey(row)
+      : (row?.option_value || row?.option_text || index + 1)).trim() || String(index + 1);
+    const inventory = typeof factoryCafe24InventoryPayload === 'function' ? factoryCafe24InventoryPayload(row) : row;
+    inventoryByOption[key] = Object.freeze({
+      quantity: String(options.forceInventoryQuantity || inventory?.quantity || '').trim(),
+      useInventory: String(inventory?.use_inventory ?? row?.use_inventory ?? '').trim().toUpperCase(),
+    });
+  });
+  const review = typeof factoryAutomationReviewSummary === 'function'
+    ? factoryAutomationReviewSummary(factory, typeof factoryAutomationCounts === 'function' ? factoryAutomationCounts(factory) : {})
+    : { fields: [] };
+  const requiredValues = Object.fromEntries((review.fields || [])
+    .filter(field => field?.required)
+    .map(field => [String(field.id || field.label || '').trim(), String(field.value ?? '').trim()]));
+  const imagePayload = typeof factoryCafe24ImagePayload === 'function' ? factoryCafe24ImagePayload(factory) : {};
+  const imageSlots = typeof FACTORY_CAFE24_IMAGE_SLOTS !== 'undefined' && Array.isArray(FACTORY_CAFE24_IMAGE_SLOTS)
+    ? FACTORY_CAFE24_IMAGE_SLOTS
+    : [];
+  const detailHtml = String(options.detailHtml || '').trim();
+  return Object.freeze({
+    schema: 'kuasangse.cafe24-registration-receipt',
+    version: 1,
+    status: 'preflight',
+    capturedAt: Date.now(),
+    mode: String(options.mode || settings.cafe24RegistrationMode || '').trim(),
+    productNo: String(options.productNo || '').trim(),
+    productName: String(basicInfo.productName || '').trim(),
+    price: String(basicInfo.salePrice || '').trim(),
+    retailPrice: String(basicInfo.consumerPrice || '').trim(),
+    supplyPrice: String(basicInfo.supplyPrice || '').trim(),
+    display: String(settings.display || '').trim().toUpperCase(),
+    selling: String(settings.selling || '').trim().toUpperCase(),
+    representativeImageCount: Number.isFinite(Number(options.representativeImageCount))
+      ? Number(options.representativeImageCount)
+      : imageSlots.filter(slot => imagePayload?.[slot.key]).length,
+    detailImageCount: Number.isFinite(Number(options.detailImageCount))
+      ? Number(options.detailImageCount)
+      : typeof factoryCafe24DetailImageSrcValues === 'function'
+        ? factoryCafe24DetailImageSrcValues(detailHtml).length
+        : (detailHtml.match(/<img\b[^>]*\bsrc\s*=/gi) || []).length,
+    optionName: String(optionPlan.optionName || '').trim(),
+    optionValues: Object.freeze(optionValues),
+    variantCount: variants.length,
+    inventoryByOption: Object.freeze(inventoryByOption),
+    requiredValues: Object.freeze(requiredValues),
+  });
+}
+
+function factoryCafe24CompareRegistrationReadback(preflight = {}, detail = null, saveVerification = null) {
+  const raw = typeof parseCafe24Raw === 'function' ? (parseCafe24Raw(detail) || detail?.raw || detail || {}) : (detail?.raw || detail || {});
+  const optionSummary = typeof factoryOpenMarketOptionSummary === 'function'
+    ? factoryOpenMarketOptionSummary(null, raw)
+    : { values: [], variants: Array.isArray(raw.variants) ? raw.variants : [] };
+  const actualOptionValues = Array.isArray(optionSummary.values) ? optionSummary.values.map(value => String(value || '').trim()).filter(Boolean) : [];
+  const actualVariants = Array.isArray(optionSummary.variants) ? optionSummary.variants : [];
+  const actualInventory = {};
+  actualVariants.forEach((row, index) => {
+    const key = String(typeof factoryCafe24VariantNormalizedOptionKey === 'function'
+      ? factoryCafe24VariantNormalizedOptionKey(row)
+      : (row?.option_value || row?.option_text || index + 1)).trim() || String(index + 1);
+    const inventory = typeof factoryCafe24InventoryPayload === 'function' ? factoryCafe24InventoryPayload(row) : row;
+    actualInventory[key] = Object.freeze({
+      quantity: String(inventory?.quantity ?? row?.quantity ?? '').trim(),
+      useInventory: String(inventory?.use_inventory ?? row?.use_inventory ?? '').trim().toUpperCase(),
+    });
+  });
+  const roughlyEqual = (left, right) => typeof factoryCafe24ValuesRoughlyEqual === 'function'
+    ? factoryCafe24ValuesRoughlyEqual(left, right)
+    : String(left ?? '').trim() === String(right ?? '').trim();
+  const dimensionTokens = value => [...String(value ?? '').matchAll(/(\d+(?:\.\d+)?)\s*(mm|cm|㎜|㎝)?/gi)]
+    .map(match => {
+      const unit = String(match[2] || '').toLowerCase().replace('㎜', 'mm').replace('㎝', 'cm');
+      return String(Number((Number(match[1]) * (unit === 'cm' ? 10 : 1)).toFixed(6)));
+    });
+  const dimensionsEqual = (left, right) => {
+    const expected = dimensionTokens(left);
+    const actual = dimensionTokens(right);
+    if (!expected.length || !actual.length) return roughlyEqual(left, right);
+    return expected.length === actual.length && expected.every((value, index) => value === actual[index]);
+  };
+  const expectedOptionValues = Array.isArray(preflight.optionValues) ? preflight.optionValues : [];
+  const expectedInventory = preflight.inventoryByOption && typeof preflight.inventoryByOption === 'object'
+    ? preflight.inventoryByOption
+    : {};
+  const expectedRequiredValues = preflight.requiredValues && typeof preflight.requiredValues === 'object'
+    ? preflight.requiredValues
+    : {};
+  const additionalInformation = typeof factoryCafe24AdditionalInformationPayload === 'function'
+    ? factoryCafe24AdditionalInformationPayload(raw.additional_information)
+    : (Array.isArray(raw.additional_information) ? raw.additional_information : []);
+  const actualSize = String(additionalInformation.find(row => /^(사이즈|규격|크기)$/i.test(String(row?.name || '').trim()))?.value
+    || raw.size || raw.dimensions || raw.product_size || '').trim();
+  const actualSizeTokens = dimensionTokens(actualSize);
+  const actualMaterial = String(raw.product_material || raw.material || raw.cloth_fabric || '').trim();
+  const requiredValuesMatched = [
+    !expectedRequiredValues.size || dimensionsEqual(expectedRequiredValues.size, actualSize),
+    !expectedRequiredValues.width_mm || dimensionsEqual(expectedRequiredValues.width_mm, actualSizeTokens[0] || ''),
+    !expectedRequiredValues.depth_mm || dimensionsEqual(expectedRequiredValues.depth_mm, actualSizeTokens[1] || ''),
+    !expectedRequiredValues.material || roughlyEqual(expectedRequiredValues.material, actualMaterial),
+  ].every(Boolean);
+  const actualRepresentativeImageCount = [raw.detail_image, raw.list_image, raw.small_image, raw.tiny_image]
+    .filter(value => String(value || '').trim()).length;
+  const actualDetailHtml = String(raw.description || raw.mobile_description || '').trim();
+  const actualDetailImageCount = typeof factoryCafe24DetailImageSrcValues === 'function'
+    ? factoryCafe24DetailImageSrcValues(actualDetailHtml).length
+    : (actualDetailHtml.match(/<img\b[^>]*\bsrc\s*=/gi) || []).length;
+  const inventoryMatched = Object.entries(expectedInventory).every(([key, expected]) => {
+    const actual = actualInventory[key];
+    return !!actual
+      && (!expected.quantity || roughlyEqual(expected.quantity, actual.quantity))
+      && (!expected.useInventory || expected.useInventory === actual.useInventory);
+  });
+  const checks = [
+    ['상품명', roughlyEqual(preflight.productName, raw.product_name)],
+    ['판매가', roughlyEqual(preflight.price, raw.price)],
+    ['소비자가', !preflight.retailPrice || roughlyEqual(preflight.retailPrice, raw.retail_price)],
+    ['공급가', !preflight.supplyPrice || roughlyEqual(preflight.supplyPrice, raw.supply_price)],
+    ['진열 상태', !preflight.display || preflight.display === String(raw.display || '').trim().toUpperCase()],
+    ['판매 상태', !preflight.selling || preflight.selling === String(raw.selling || '').trim().toUpperCase()],
+    ['대표이미지', !Number(preflight.representativeImageCount || 0) || actualRepresentativeImageCount > 0],
+    ['상세이미지', !Number(preflight.detailImageCount || 0) || actualDetailImageCount >= Number(preflight.detailImageCount || 0)],
+    ['옵션값', expectedOptionValues.length === actualOptionValues.length && expectedOptionValues.every((value, index) => value === actualOptionValues[index])],
+    ['품목 수', Number(preflight.variantCount || 0) === actualVariants.length],
+    ['옵션별 재고', inventoryMatched],
+    ['필수값/사이즈', requiredValuesMatched],
+    ['기본/필수값 payload', !saveVerification || (saveVerification.ok === true && (!saveVerification.productNo || String(saveVerification.productNo) === String(raw.product_no || '')))],
+  ].map(([label, matched]) => Object.freeze({ label, matched: !!matched }));
+  const mismatches = checks.filter(check => !check.matched).map(check => check.label);
+  return Object.freeze({
+    productNo: String(raw.product_no || '').trim(),
+    checkedAt: Date.now(),
+    allMatched: mismatches.length === 0,
+    mismatches: Object.freeze(mismatches),
+    checks: Object.freeze(checks),
+    readback: Object.freeze({
+      productName: String(raw.product_name || '').trim(),
+      price: String(raw.price || '').trim(),
+      retailPrice: String(raw.retail_price || '').trim(),
+      supplyPrice: String(raw.supply_price || '').trim(),
+      display: String(raw.display || '').trim().toUpperCase(),
+      selling: String(raw.selling || '').trim().toUpperCase(),
+      representativeImageCount: actualRepresentativeImageCount,
+      detailImageCount: actualDetailImageCount,
+      optionValues: Object.freeze(actualOptionValues),
+      variantCount: actualVariants.length,
+      inventoryByOption: Object.freeze(actualInventory),
+      requiredValues: Object.freeze({
+        size: actualSize,
+        width_mm: actualSizeTokens[0] || '',
+        depth_mm: actualSizeTokens[1] || '',
+        material: actualMaterial,
+      }),
+    }),
+  });
+}
+
+async function factoryCafe24FinalizeRegistrationReceipt(factory = factoryRuntimeReadFactory(), options = {}) {
+  const preflight = options.preflight || factory.product?.cafe24RegistrationReceipt;
+  if (!preflight) return null;
+  const target = typeof factoryCafe24TargetInfo === 'function' ? factoryCafe24TargetInfo(factory) : {};
+  const productNo = String(options.productNo || target?.productNo || preflight.productNo || factory.product?.finalDb?.product_no || '').trim();
+  if (!productNo) throw new Error('Cafe24 등록 후 read-back 검증 실패: 상품번호가 없습니다.');
+  const mallId = target?.mallId || CAFE24_CONTROL_API.defaultMallId;
+  let detail = null;
+  let comparison = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    detail = await fetchCafe24ProductFullByNo(productNo, mallId);
+    if (typeof factoryAttachCafe24InventoryEchoes === 'function') detail = await factoryAttachCafe24InventoryEchoes(detail, mallId);
+    comparison = factoryCafe24CompareRegistrationReadback(preflight, detail, factory.product?.cafe24LastSaveVerification || null);
+    const inventoryPending = !comparison.allMatched
+      && comparison.mismatches.length > 0
+      && comparison.mismatches.every(label => label === '옵션별 재고');
+    if (!inventoryPending || attempt === 7) break;
+    await factoryCafe24Delay(1000);
+  }
+  const receipt = Object.freeze({
+    ...preflight,
+    status: comparison.allMatched ? 'verified' : 'mismatch',
+    productNo: comparison.productNo || productNo,
+    verifiedAt: comparison.checkedAt,
+    comparisons: comparison.checks,
+    mismatches: comparison.mismatches,
+    readback: comparison.readback,
+  });
+  factory.product.cafe24RegistrationReceipt = receipt;
+  if (!comparison.allMatched) throw new Error(`Cafe24 등록 후 A+B read-back 불일치: ${comparison.mismatches.join(', ')}`);
+  return receipt;
+}
+
+function renderFactoryCafe24RegistrationReceipt(factory = factoryRuntimeReadFactory()) {
+  const storedReceipt = factory.product?.cafe24RegistrationReceipt;
+  const currentDetail = !storedReceipt && typeof factoryCafe24CurrentScopedDetailHtml === 'function'
+    ? factoryCafe24CurrentScopedDetailHtml(factory)
+    : null;
+  const receipt = storedReceipt || factoryCafe24BuildRegistrationReceiptPreflight(factory, {
+    mode: factoryFinalRegistrationSettings(factory).cafe24RegistrationMode,
+    productNo: factoryCafe24TargetInfo(factory)?.productNo || '',
+    detailHtml: currentDetail?.html || '',
+    representativeImageCount: typeof factoryRegistrationHeroImageRef === 'function' && factoryRegistrationHeroImageRef(factory) ? 1 : 0,
+    detailImageCount: factoryFinalRegistrationDetailModel(factory).generated || 0,
+  });
+  const verified = receipt.status === 'verified';
+  const failed = receipt.status === 'mismatch' || receipt.status === 'failed';
+  const tone = verified ? 'var(--ok)' : failed ? 'var(--danger)' : 'var(--warn)';
+  const label = verified ? 'Cafe24 read-back 일치' : failed ? 'Cafe24 read-back 확인 필요' : storedReceipt ? 'Cafe24 전송 전 A 영수증 고정' : 'Cafe24 등록 전 A 영수증 준비';
+  const mismatchText = Array.isArray(receipt.mismatches) && receipt.mismatches.length
+    ? ` · 불일치 ${receipt.mismatches.join(', ')}`
+    : '';
+  return `<div data-factory-cafe24-registration-receipt style="margin-top:10px;border:1px solid color-mix(in srgb,${tone} 42%,transparent);background:rgba(15,23,42,.34);border-radius:9px;padding:9px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="factory-small" style="color:${tone};font-weight:950">${escapeHtml(label)}${receipt.productNo ? ` · #${escapeHtml(receipt.productNo)}` : ''}</div>
+      <span class="api-badge">${escapeHtml(receipt.mode || '등록')} · ${escapeHtml(receipt.productName || '상품명 없음')}</span>
+    </div>
+    <div class="factory-small" style="margin-top:6px;color:var(--text-m);line-height:1.55">판매가 ${escapeHtml(receipt.price || '-')} · 대표 ${Number(receipt.representativeImageCount || 0)} · 상세 ${Number(receipt.detailImageCount || 0)} · 옵션 ${Number(receipt.optionValues?.length || 0)} · 품목/재고 ${Number(receipt.variantCount || 0)} · 필수값 ${Object.keys(receipt.requiredValues || {}).length}${escapeHtml(mismatchText)}</div>
+  </div>`;
 }
 
 function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = {}) {
@@ -6443,6 +6683,7 @@ function renderFactoryFinalRegistrationPanel(factory, baseDraft = {}, options = 
         <div class="progress-inner" data-final-registration-progress-bar style="width:${progress}%;min-width:0;font-size:0"></div>
       </div>
     </div>
+    ${renderFactoryCafe24RegistrationReceipt(factory)}
   </div>`;
 }
 
@@ -6717,11 +6958,7 @@ async function factoryRunFinalRegistration(options = {}) {
   const detailModel = factoryFinalRegistrationDetailModel(factory);
   const cafe24Model = factoryFinalRegistrationCafe24Model(factory);
   const basicInfo = factoryFinalRegistrationBasicInfoModel(factory);
-  const inventoryQuantityInput = String(
-    options.forceInventoryQuantity ??
-    (typeof document !== 'undefined' ? document.getElementById('factoryCafe24InventoryAll')?.value : '') ??
-    ''
-  ).trim();
+  const inventoryQuantityInput = String(options.forceInventoryQuantity ?? '').trim();
   const forceInventoryQuantity = /^\d+$/.test(inventoryQuantityInput) ? inventoryQuantityInput : '';
   if (!detailModel.canProceed) {
     factoryUpdateFinalRegistrationStatus(detailModel.reason || '상세페이지 조각이 아직 없습니다.', 0, 'error', { factory, render: false });
@@ -6818,6 +7055,16 @@ async function factoryRunFinalRegistration(options = {}) {
     factoryOpenMarketLog('현재 미리보기 상세페이지 HTML은 이미 보존된 자산을 다시 사용합니다.', 'info', factory);
   }
 
+  const registrationPreflight = factoryCafe24BuildRegistrationReceiptPreflight(factory, {
+    mode: cafe24Model.mode,
+    productNo: cafe24Model.productNo,
+    basicInfo,
+    settings,
+    detailHtml: preservedDetailHtml,
+    forceInventoryQuantity,
+  });
+  factory.product.cafe24RegistrationReceipt = registrationPreflight;
+
   sync.finalRegistrationRunning = true;
   sync.finalRegistrationProgress = 5;
   sync.finalRegistrationStatus = '최종 등록 준비 중입니다.';
@@ -6857,11 +7104,18 @@ async function factoryRunFinalRegistration(options = {}) {
         factory,
         render: false,
       });
+      const forceInventory = Boolean(forceInventoryQuantity);
       const presentationPlan = typeof factoryCafe24CreatePostSyncPlan === 'function'
-        ? factoryCafe24CreatePostSyncPlan(factory)
+        ? factoryCafe24CreatePostSyncPlan(factory, { forceInventory, forceInventoryQuantity })
         : { imageSlotCount: 0, readyActions: [] };
+      const requiredPresentationKeys = forceInventory
+        ? ['images', 'category', 'options']
+        : ['images', 'category'];
       const requiredPresentationActions = (presentationPlan.readyActions || [])
-        .filter(action => ['images', 'category'].includes(action?.key));
+        .filter(action => requiredPresentationKeys.includes(action?.key));
+      if (forceInventory && !requiredPresentationActions.some(action => action?.key === 'options')) {
+        throw new Error('Cafe24 기존 상품 재고 99 동기화 준비가 되지 않았습니다.');
+      }
       if (requiredPresentationActions.length) {
         const presentationOk = await factoryRunCafe24PostCreateSync(requiredPresentationActions, {
           productNo,
@@ -6869,7 +7123,9 @@ async function factoryRunFinalRegistration(options = {}) {
           progressStart: 97,
           progressEnd: 99,
           onProgress: reportCafe24Progress,
-          requiredKeys: ['images', 'category'],
+          requiredKeys: requiredPresentationKeys,
+          forceInventory,
+          forceInventoryQuantity,
           factory,
           render: false,
         });
@@ -6888,6 +7144,7 @@ async function factoryRunFinalRegistration(options = {}) {
       factoryOpenMarketLog(`Cafe24 기존 상품 후속 등록 검증 완료: #${productNo} 상세페이지/대표이미지 반영 확인`, 'ok', factory);
       reportCafe24Progress(`Cafe24 기존 상품 후속 등록 검증 완료: #${productNo}`, 99, 'ok');
     }
+    await factoryCafe24FinalizeRegistrationReceipt(factory, { preflight: registrationPreflight });
     sync = factoryEnsureOpenMarketSync(factory);
     if (!settings.includeOpenMarket) {
       sync.finalRegistrationRunning = false;
@@ -6937,6 +7194,14 @@ async function factoryRunFinalRegistration(options = {}) {
     }).catch(err => factoryOpenMarketLog(`등록 이력 저장 실패: ${formatAppErrorMessage(err.message || String(err))}`, 'warn', factory));
     return true;
   } catch(e) {
+    const preflight = factory.product?.cafe24RegistrationReceipt;
+    if (preflight) {
+      factory.product.cafe24RegistrationReceipt = Object.freeze({
+        ...preflight,
+        status: preflight.status === 'mismatch' ? 'mismatch' : 'failed',
+        error: factoryFinalRegistrationErrorMessage(e),
+      });
+    }
     const failedSync = factoryEnsureOpenMarketSync(factory);
     failedSync.finalRegistrationRunning = false;
     failedSync.finalRegistrationProgress = Math.max(10, Math.min(95, Number(failedSync.finalRegistrationProgress || 0)));
@@ -7320,15 +7585,59 @@ function factorySetStagePromptForCurrentWork(factory, stageId = '', value = '') 
   return text;
 }
 
+function factoryPreviewOnlySizeAssets(factory = factoryRuntimeReadFactory()) {
+  const currentProductKey = String(typeof factoryCurrentProductKey === 'function'
+    ? factoryCurrentProductKey(factory)
+    : '').trim();
+  const currentSourceKey = String(typeof cutsCurrentSourceImageKey === 'function'
+    ? cutsCurrentSourceImageKey('size')
+    : '').trim();
+  if (!currentProductKey || !currentSourceKey) return [];
+  return (state.cuts?.sizePrompts || []).map((cut, index) => {
+    const assetId = String(cut?.assetId || cut?.resultAssetId || cut?.metadata?.assetId || cut?.metadata?.resultAssetId || '').trim();
+    const sourceKey = String(typeof cutPromptSourceImageKey === 'function' ? cutPromptSourceImageKey(cut) : '').trim();
+    if (!assetId || !sourceKey || sourceKey !== currentSourceKey || !factoryCutPromptMatchesStage(cut, 'size')) return null;
+    const promptProductKey = String(typeof cutPromptProductKey === 'function' ? cutPromptProductKey(cut) : '').trim();
+    if (!promptProductKey) return null;
+    const productMatches = (
+      typeof factoryJobProductKeysCompatible === 'function'
+        ? factoryJobProductKeysCompatible(promptProductKey, currentProductKey)
+        : promptProductKey === currentProductKey
+    );
+    if (!productMatches) return null;
+    const image = factoryCutPromptResultDisplaySrc(cut, 'size', {
+      requireCurrent: true,
+      requireJob: false,
+      factory,
+    });
+    if (!image) return null;
+    return {
+      id: assetId,
+      stageId: 'size',
+      title: cut.label || `사이즈컷 ${index + 1}`,
+      prompt: cut.prompt || '',
+      image,
+      type: 'image',
+      archived: true,
+      previewOnly: true,
+      metadata: { source: '보관된 사이즈컷', previewOnly: true },
+    };
+  }).filter(Boolean);
+}
+
 function renderFactoryStageCard(def, factory) {
   const stage = factory.stages[def.id] || {};
   const promptValue = factoryStagePromptForCurrentWork(factory, def.id);
   const promptExcluded = factoryStagePromptExcludedForCurrentWork(factory, def.id);
   const rawAssets = factoryAssetsForStage(def.id, factory);
-  const assets = ['hero', 'size', 'options', 'cuts'].includes(def.id)
+  const currentAssets = ['hero', 'size', 'options', 'cuts'].includes(def.id)
     ? factoryUsableAssetsForStage(def.id, factory)
     : rawAssets.filter(asset => factoryAssetHasCurrentProductPayload(asset, factory, { allowHtml: true }));
-  const missingAssetCount = rawAssets.length - assets.length;
+  const previewOnlyAssets = def.id === 'size'
+    ? factoryPreviewOnlySizeAssets(factory).filter(candidate => !currentAssets.some(asset => asset.id === candidate.id))
+    : [];
+  const assets = [...currentAssets, ...previewOnlyAssets];
+  const missingAssetCount = rawAssets.length - currentAssets.length;
   const used = assets.filter(asset => asset.used).length;
   const resultStage = ['hero', 'size', 'options', 'cuts', 'detail'].includes(def.id);
   const doneWithoutSelectableAsset = resultStage && stage.status === 'done' && assets.length === 0;
@@ -7409,10 +7718,11 @@ function renderFactoryStageResults(def, factory, assets = [], missingAssetCount 
         : '아직 이 단계 결과가 없습니다. 원래 메뉴에서 만든 결과를 가져오거나 현재 단계 생성을 실행하면 여기에 썸네일로 표시됩니다.'}</div>
     </div>`;
   }
+  const previewOnly = visibleAssets.every(asset => asset.previewOnly === true);
   return `<div class="factory-stage-results">
     <div class="factory-stage-results-head">
       <b>결과 전광판</b>
-      <span>${visibleAssets.length}${assets.length > visibleAssets.length ? ` / ${assets.length}` : ''}개 · 드래그해서 다른 입력 슬롯으로 보낼 수 있습니다.</span>
+      <span>${visibleAssets.length}${assets.length > visibleAssets.length ? ` / ${assets.length}` : ''}개 · ${previewOnly ? '보관 원본은 크게 보기만 가능합니다.' : '드래그해서 다른 입력 슬롯으로 보낼 수 있습니다.'}</span>
     </div>
     <div class="factory-stage-result-grid">
       ${visibleAssets.map((asset, index) => {
@@ -7425,7 +7735,7 @@ function renderFactoryStageResults(def, factory, assets = [], missingAssetCount 
           ? promptRaw.split(/\r?\n/).map(v => v.trim()).filter(Boolean)[0]
           : '';
         const promptPreview = promptLine || '프롬프트 미기입';
-        return `<article class="factory-stage-result-card ${asset.used ? 'used' : ''}" draggable="true" data-factory-asset-id="${escAttr(asset.id)}">
+        return `<article class="factory-stage-result-card ${asset.used ? 'used' : ''}" draggable="${asset.previewOnly ? 'false' : 'true'}" data-factory-asset-id="${escAttr(asset.id)}">
           <button class="factory-stage-result-thumb" type="button" data-factory-preview-asset="${escAttr(asset.id)}" title="크게 보기">
             ${assetImage ? renderFactoryLightImage(assetImage, title, `${priorityAttr}data-factory-asset-img="${escAttr(asset.id)}"`) : `<span>${escapeHtml(asset.type === 'html' ? 'HTML 상세' : '이미지 없음')}</span>`}
           </button>
@@ -7435,7 +7745,9 @@ function renderFactoryStageResults(def, factory, assets = [], missingAssetCount 
             <div class="factory-stage-result-meta">${escapeHtml([meta.presetLabel, meta.modelLabel || meta.model, asset.archived ? '저장됨' : ''].filter(Boolean).join(' · ') || '생성 결과')}</div>
           </div>
           <div class="factory-stage-result-actions">
-            <button class="btn-sm ${asset.used ? 'success' : ''}" type="button" data-factory-asset-use="${escAttr(asset.id)}">${asset.used ? '선택됨' : '사용'}</button>
+            ${asset.previewOnly
+              ? '<button class="btn-sm" type="button" disabled title="현재 단계 작업키와 분리된 보관 원본입니다.">보기 전용</button>'
+              : `<button class="btn-sm ${asset.used ? 'success' : ''}" type="button" data-factory-asset-use="${escAttr(asset.id)}">${asset.used ? '선택됨' : '사용'}</button>`}
             <button class="btn-sm" type="button" data-factory-preview-asset="${escAttr(asset.id)}">크게</button>
           </div>
         </article>`;
@@ -8452,7 +8764,7 @@ function compMarketTitleKeywordScore(item = {}) {
   return score;
 }
 
-function compMarketCandidateMatchesCurrentWork(item = {}, current = null) {
+function compMarketCandidateMatchesCurrentWork(item = {}, current = null, options = {}) {
   if (!compMarketIsUsableCandidate(item)) return false;
   const scope = current || (typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null);
   if (!compMarketCurrentScopeHasAnyKey(scope)) return true;
@@ -8461,9 +8773,33 @@ function compMarketCandidateMatchesCurrentWork(item = {}, current = null) {
   const hasWorkStamp = typeof compMarketHasWorkPayloadStamp === 'function' ? compMarketHasWorkPayloadStamp(item) : false;
   if (strictScopeReady && !hasWorkStamp) return false;
 
+  const currentProductKey = String(scope?.productKey || '').trim();
+  const itemProductKey = String(
+    item?.factoryProductKey ||
+    item?.scopeProductKey ||
+    item?.metadata?.factoryProductKey ||
+    item?.metadata?.scopeProductKey ||
+    item?.metadata?.productKey ||
+    ((item?.factoryWorkKey || item?.workScopeKey || item?.currentRunId || item?.generationRunId) ? (item?.productKey || item?.productIdentityKey || '') : '') ||
+    ''
+  ).trim();
+  const currentInputKey = String(scope?.inputImageFingerprint || '').trim();
+  const itemInputKey = String(item?.inputImageFingerprint || item?.inputImageKey || item?.sourceImageKey || item?.metadata?.inputImageFingerprint || '').trim();
+  const currentStageId = String(scope?.stageId || '').trim();
+  const itemStageId = String(item?.stageId || item?.metadata?.stageId || '').trim();
+  const stableIdentityMatches = !!(
+    currentProductKey && itemProductKey &&
+    compMarketScopeKeyText(itemProductKey) === compMarketScopeKeyText(currentProductKey) &&
+    currentInputKey && itemInputKey && itemInputKey === currentInputKey &&
+    currentStageId && itemStageId && itemStageId === currentStageId
+  );
+  const historicalStableMatch = options.allowHistoricalRun === true
+    && stableIdentityMatches
+    && (item?._recovered_search_result === true || item?.previousWorkCandidate === true);
+
   const currentWorkKey = String(scope?.scopeKey || '').trim();
   const workKey = String(item?.factoryWorkKey || item?.workScopeKey || item?.metadata?.factoryWorkKey || '').trim();
-  if (workKey && currentWorkKey && !compMarketWorkKeysCompatible(currentWorkKey, workKey)) return false;
+  if (!historicalStableMatch && workKey && currentWorkKey && !compMarketWorkKeysCompatible(currentWorkKey, workKey)) return false;
 
   const currentRunId = String(scope?.currentRunId || '').trim();
   const itemRunId = String(
@@ -8473,30 +8809,23 @@ function compMarketCandidateMatchesCurrentWork(item = {}, current = null) {
     item?.metadata?.generationRunId ||
     ''
   ).trim();
-  if (strictScopeReady && currentRunId && !itemRunId) return false;
-  if (currentRunId && itemRunId && itemRunId !== currentRunId) return false;
+  if (!historicalStableMatch && strictScopeReady && currentRunId && !itemRunId) return false;
+  if (!historicalStableMatch && currentRunId && itemRunId && itemRunId !== currentRunId) {
+    const regeneratedRunCompatible = stableIdentityMatches
+      && currentWorkKey
+      && workKey
+      && currentWorkKey !== workKey
+      && compMarketWorkKeysCompatible(currentWorkKey, workKey);
+    if (!regeneratedRunCompatible) return false;
+  }
 
-  const currentProductKey = String(scope?.productKey || '').trim();
-  const itemProductKey = String(
-    item?.factoryProductKey ||
-    item?.scopeProductKey ||
-    item?.metadata?.factoryProductKey ||
-    item?.metadata?.scopeProductKey ||
-    item?.metadata?.productKey ||
-    ((workKey || itemRunId) ? (item?.productKey || item?.productIdentityKey || '') : '') ||
-    ''
-  ).trim();
   if (strictScopeReady && currentProductKey && !itemProductKey) return false;
   if (currentProductKey && itemProductKey &&
     compMarketScopeKeyText(itemProductKey) !== compMarketScopeKeyText(currentProductKey)) return false;
 
-  const currentInputKey = String(scope?.inputImageFingerprint || '').trim();
-  const itemInputKey = String(item?.inputImageFingerprint || item?.inputImageKey || item?.sourceImageKey || item?.metadata?.inputImageFingerprint || '').trim();
   if (strictScopeReady && currentInputKey && !itemInputKey) return false;
   if (currentInputKey && itemInputKey && itemInputKey !== currentInputKey) return false;
 
-  const currentStageId = String(scope?.stageId || '').trim();
-  const itemStageId = String(item?.stageId || item?.metadata?.stageId || '').trim();
   if (strictScopeReady && currentStageId && !itemStageId) return false;
   if (currentStageId && itemStageId && itemStageId !== currentStageId) return false;
 
@@ -8549,12 +8878,12 @@ function compMarketFilterCandidatesForCurrentWork(rows = [], current = null) {
   return (Array.isArray(rows) ? rows : []).filter(item => compMarketCandidateMatchesCurrentWork(item, scope));
 }
 
-function compMarketCandidateVisibleForCurrentWork(item = {}, current = null, explicitSelectedIds = new Set(), index = 0) {
+function compMarketCandidateVisibleForCurrentWork(item = {}, current = null, explicitSelectedIds = new Set(), index = 0, options = {}) {
   const selectedIds = explicitSelectedIds instanceof Set
     ? explicitSelectedIds
     : new Set((Array.isArray(explicitSelectedIds) ? explicitSelectedIds : []).map(value => String(value || '').trim()).filter(Boolean));
   const candidateId = String(compMarketResultId(item, index) || '').trim();
-  return selectedIds.has(candidateId) || compMarketCandidateMatchesCurrentWork(item, current);
+  return selectedIds.has(candidateId) || compMarketCandidateMatchesCurrentWork(item, current, options);
 }
 
 function compMarketRowWorkPayload(row = {}) {
@@ -8576,7 +8905,7 @@ function compMarketWorkPayloadMatchesCurrent(row = {}, current = null) {
   if (!compMarketCurrentScopeIsComplete(scope)) return false;
   const payload = compMarketRowWorkPayload(row);
   const currentWorkKey = String(scope?.scopeKey || '').trim();
-  if (payload.workKey && currentWorkKey && payload.workKey !== currentWorkKey) return false;
+  if (payload.workKey && currentWorkKey && !compMarketWorkKeysCompatible(currentWorkKey, payload.workKey)) return false;
   const currentRunId = String(scope?.currentRunId || '').trim();
   if (currentRunId && !payload.runId) return false;
   if (payload.runId && currentRunId && payload.runId !== currentRunId) return false;
@@ -8736,7 +9065,7 @@ function compMarketAllCandidateResults(market = {}) {
     const normalized = siteId && !item.platform && !item.site && !item.mall
       ? { ...item, platform: siteId }
       : item;
-    if (!compMarketCandidateVisibleForCurrentWork(normalized, currentScope, explicitSelectedIds, index)) return;
+    if (!compMarketCandidateVisibleForCurrentWork(normalized, currentScope, explicitSelectedIds, index, { allowHistoricalRun: true })) return;
     const dedupeKey = compMarketCandidateDedupeKey(normalized, index || out.length);
     if (!dedupeKey || seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
@@ -9275,8 +9604,9 @@ function renderFactoryAutomationMaterials(factory, counts) {
 }
 
 function renderFactoryAutomationCollect(factory, counts) {
+  const competitorMarket = factoryCompetitorMarketForRender(factory);
   const competitorPanel = typeof renderCompMarketScrapePanel === 'function'
-    ? renderCompMarketScrapePanel()
+    ? renderCompMarketScrapePanel(null, competitorMarket)
     : '';
   return `<div class="factory-automation-grid">
     <div class="factory-automation-panel">
@@ -10407,10 +10737,14 @@ function renderFactoryAutomationCompetitorAnalysisSummary() {
   </div>`;
 }
 
-function renderFactoryAutomationCompetitorPicker(factory, counts) {
-  const market = typeof ensureCompMarketScrapeState === 'function'
-    ? ensureCompMarketScrapeState()
+function factoryCompetitorMarketForRender(factory) {
+  return typeof ensureCompMarketScrapeState === 'function'
+    ? ensureCompMarketScrapeState({ factory })
     : (state.compPage?.marketScrape || {});
+}
+
+function renderFactoryAutomationCompetitorPicker(factory, counts) {
+  const market = factoryCompetitorMarketForRender(factory);
   const candidates = typeof compMarketAllCandidateResults === 'function'
     ? compMarketAllCandidateResults(market)
     : (Array.isArray(market.results) ? market.results : []);
@@ -14444,6 +14778,63 @@ function compMarketDedupeCandidateRows(rows = []) {
   return result;
 }
 
+function compMarketSelectionIdsForVisibleRows(selectedIds = [], previousRows = [], visibleRows = []) {
+  const selected = Array.isArray(selectedIds) ? selectedIds.map(String).filter(Boolean) : [];
+  const previous = Array.isArray(previousRows) ? previousRows : [];
+  const visible = Array.isArray(visibleRows) ? visibleRows : [];
+  const visibleById = new Set(visible.map((item, index) => compMarketResultId(item, index)));
+  const previousById = new Map(previous.map((item, index) => [compMarketResultId(item, index), item]));
+  const visibleByKey = new Map(visible.map((item, index) => [compMarketCandidateDedupeKey(item, index), item]));
+  const resolved = [];
+  selected.forEach(id => {
+    if (visibleById.has(id)) {
+      resolved.push(id);
+      return;
+    }
+    const previousItem = previousById.get(id) || previous.find((item, index) => {
+      const candidateId = compMarketResultId(item, index);
+      return candidateId === id
+        || candidateId.endsWith(`::${id}`)
+        || id.endsWith(`::${candidateId}`);
+    });
+    if (!previousItem) {
+      const directVisible = visible.find((item, index) => {
+        const candidateId = compMarketResultId(item, index);
+        return candidateId === id
+          || candidateId.endsWith(`::${id}`)
+          || id.endsWith(`::${candidateId}`);
+      });
+      if (directVisible) resolved.push(compMarketResultId(directVisible, visible.indexOf(directVisible)));
+      return;
+    }
+    const directKey = compMarketCandidateDedupeKey(previousItem, 0);
+    const directMatch = visibleByKey.get(directKey);
+    if (directMatch) {
+      resolved.push(compMarketResultId(directMatch, visible.indexOf(directMatch)));
+      return;
+    }
+    const previousWorkKey = String(previousItem.factoryWorkKey || previousItem.workScopeKey || '').trim();
+    const previousIdentity = [
+      previousItem.factoryProductKey || previousItem.productKey,
+      previousItem.inputImageFingerprint || previousItem.inputImageKey,
+      previousItem.stageId,
+    ].map(value => String(value || '').trim()).join('::');
+    const compatible = visible.find(item => {
+      const candidateWorkKey = String(item?.factoryWorkKey || item?.workScopeKey || '').trim();
+      const candidateIdentity = [
+        item?.factoryProductKey || item?.productKey,
+        item?.inputImageFingerprint || item?.inputImageKey,
+        item?.stageId,
+      ].map(value => String(value || '').trim()).join('::');
+      return previousWorkKey && candidateWorkKey
+        && compMarketWorkKeysCompatible(previousWorkKey, candidateWorkKey)
+        && previousIdentity && previousIdentity === candidateIdentity;
+    });
+    if (compatible) resolved.push(compMarketResultId(compatible, visible.indexOf(compatible)));
+  });
+  return Array.from(new Set(resolved));
+}
+
 function compMarketSetCandidateSource(market = {}, source = 'vm', rows = [], grouped = {}) {
   const key = compMarketCandidateSourceView(source);
   market[`${key}Results`] = compMarketDedupeCandidateRows(rows);
@@ -14460,14 +14851,20 @@ function compMarketApplyCandidateSourceView(market = {}, source = 'vm', options 
   const rows = compMarketSourceResults(market, key);
   const grouped = compMarketSourceGroupedResults(market, key);
   const previousSelected = new Set(Array.isArray(market.selectedIds) ? market.selectedIds.map(String) : []);
+  const previousRows = typeof compMarketAllCandidateResults === 'function'
+    ? compMarketAllCandidateResults(market)
+    : (Array.isArray(market.results) ? market.results : []);
   market.candidateView = key;
   market.results = rows.slice();
   market.groupedResults = Object.fromEntries(
     Object.entries(grouped).map(([siteId, siteRows]) => [siteId, Array.isArray(siteRows) ? siteRows.slice() : []])
   );
   if (options.preserveSelection) {
-    const visibleIds = new Set(compMarketAllCandidateResults(market).map((item, index) => compMarketResultId(item, index)));
-    market.selectedIds = Array.from(previousSelected).filter(id => visibleIds.has(id));
+    market.selectedIds = compMarketSelectionIdsForVisibleRows(
+      Array.from(previousSelected),
+      previousRows,
+      compMarketAllCandidateResults(market),
+    );
   } else {
     market.selectedIds = [];
   }
@@ -15077,6 +15474,12 @@ function compMarketWorkKeysCompatible(currentWorkKey = '', candidateWorkKey = ''
   if (!current || !candidate || current === candidate) return true;
   const currentSeparator = current.indexOf('::');
   const candidateSeparator = candidate.indexOf('::');
+  const currentStableScope = currentSeparator >= 0 ? current.slice(currentSeparator + 2) : '';
+  const candidateStableScope = candidateSeparator >= 0 ? candidate.slice(candidateSeparator + 2) : '';
+  if (currentStableScope && candidateStableScope && currentStableScope === candidateStableScope) return true;
+  const currentIdentityTail = current.split('::').slice(-2).join('::');
+  const candidateIdentityTail = candidate.split('::').slice(-2).join('::');
+  if (currentIdentityTail && candidateIdentityTail && currentIdentityTail === candidateIdentityTail) return true;
   if (currentSeparator >= 0 && current.slice(currentSeparator + 2) === candidate) return true;
   if (candidateSeparator >= 0 && candidate.slice(candidateSeparator + 2) === current) return true;
   return false;
@@ -15187,37 +15590,35 @@ function compMarketFactoryCompetitorFallbackResults(market = {}, current = compM
   if (!rows.length) return [];
   const scoped = rows.filter(row => (
     (typeof compMarketHasWorkPayloadStamp !== 'function' || compMarketHasWorkPayloadStamp(row)) &&
-    (typeof compMarketCandidateMatchesCurrentWork !== 'function' || compMarketCandidateMatchesCurrentWork(row, current))
+    (typeof compMarketCandidateMatchesCurrentWork !== 'function'
+      || compMarketCandidateMatchesCurrentWork(row, current, { allowHistoricalRun: true }))
   ));
   if (!scoped.length) return [];
-  const limit = Math.max(1, Math.min(20, Number(market?.topN || 8) || 8));
-  return compMarketTrimResultRowsForState(scoped).slice(0, limit);
+  return compMarketTrimResultRowsForState(scoped).slice(0, 20);
 }
 
 function compMarketRestoreResultsFromFactoryCompetitors(market = {}, current = compMarketCurrentWorkScope()) {
   if (market?.suppressFactoryCompetitorFallback) return [];
-  const existing = Array.isArray(market.results) && market.results.length
-    ? market.results
-    : [];
-  const groupedCount = market.groupedResults && typeof market.groupedResults === 'object'
-    ? Object.values(market.groupedResults).reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0)
-    : 0;
-  if (existing.length || groupedCount) return [];
   const fallback = compMarketFactoryCompetitorFallbackResults(market, current);
   if (!fallback.length) return [];
-  market.results = fallback;
-  if (!market.groupedResults || typeof market.groupedResults !== 'object' || !Object.keys(market.groupedResults).length) {
-    market.groupedResults = typeof compMarketGroupProducts === 'function'
-      ? compMarketGroupProducts(fallback, market.selectedSites || [], market.marketTargets || market.topN || fallback.length)
-      : { vm: fallback };
-  }
-  const first = fallback[0] || {};
+  const existing = compMarketDedupeCandidateRows([
+    ...(Array.isArray(market.results) ? market.results : []),
+    ...Object.values(market.groupedResults && typeof market.groupedResults === 'object' ? market.groupedResults : {})
+      .flatMap(rows => Array.isArray(rows) ? rows : []),
+  ]);
+  const merged = compMarketDedupeCandidateRows([...existing, ...fallback]);
+  if (merged.length <= existing.length) return [];
+  market.results = merged;
+  market.groupedResults = typeof compMarketGroupProducts === 'function'
+    ? compMarketGroupProducts(merged, market.selectedSites || [], market.marketTargets || market.topN || merged.length)
+    : { vm: merged };
+  const first = merged[0] || {};
   market.searchId = market.searchId || first._search_id || first.search_id || first.searchId || '';
   market.vmSearchId = market.vmSearchId || first._vm_search_id || first.vm_search_id || market.searchId || '';
   market.phase = market.phase && market.phase !== 'idle' ? market.phase : 'done';
-  market.status = market.status || `현재 작업에 저장된 VM 후보 ${fallback.length}건을 선택판으로 복구했습니다.`;
+  market.status = market.status || `현재 작업에 저장된 VM 후보 ${merged.length}건을 선택판으로 복구했습니다.`;
   market.lastUpdatedAt = Date.now();
-  return fallback;
+  return merged;
 }
 
 function compMarketTrimImageRowsForState(images = []) {
@@ -15314,6 +15715,12 @@ function compMarketCommitNormalizedState(cp, raw, next) {
   return stable;
 }
 
+function compMarketSelectedIdsForNormalizedState(foreignWorkPayload, persistedSelectedIds, rawSelectedIds) {
+  if (foreignWorkPayload) return [];
+  if (persistedSelectedIds && persistedSelectedIds.size) return Array.from(persistedSelectedIds);
+  return Array.isArray(rawSelectedIds) ? rawSelectedIds.map(String) : [];
+}
+
 function ensureCompMarketScrapeState(options = {}) {
   const factory = options.factory && typeof options.factory === 'object' ? options.factory : null;
   const cp = factory
@@ -15327,6 +15734,15 @@ function ensureCompMarketScrapeState(options = {}) {
     : (factory && typeof factoryCompetitorCandidateScopePayload === 'function'
       ? factoryCompetitorCandidateScopePayload('competitors', factory)
       : compMarketCurrentWorkScope());
+  const canonicalMarket = factory && typeof state !== 'undefined' && state?.compPage?.marketScrape
+    && typeof state.compPage.marketScrape === 'object'
+    ? state.compPage.marketScrape
+    : null;
+  const factoryCanonicalSource = factory || (typeof state !== 'undefined' && state?.factory);
+  const factoryCanonicalMarket = factoryCanonicalSource?.competitors?.compPage?.marketScrape
+    && typeof factoryCanonicalSource.competitors.compPage.marketScrape === 'object'
+    ? factoryCanonicalSource.competitors.compPage.marketScrape
+    : null;
   let hiddenCandidateCount = 0;
   const foreignWorkPayload = !compMarketWorkScopeMatchesCurrent(next, currentScope);
   if (foreignWorkPayload) {
@@ -15365,22 +15781,40 @@ function ensureCompMarketScrapeState(options = {}) {
       .map(value => String(value || '').trim())
       .filter(Boolean),
   );
+  if (!foreignWorkPayload && canonicalMarket
+      && compMarketWorkScopeMatchesCurrent(canonicalMarket, currentScope)
+      && Array.isArray(canonicalMarket.selectedIds)) {
+    canonicalMarket.selectedIds.forEach(value => {
+      const id = String(value || '').trim();
+      if (id) persistedSelectedIds.add(id);
+    });
+  }
+  if (!foreignWorkPayload && factoryCanonicalMarket
+      && compMarketWorkScopeMatchesCurrent(factoryCanonicalMarket, currentScope)
+      && Array.isArray(factoryCanonicalMarket.selectedIds)) {
+    factoryCanonicalMarket.selectedIds.forEach(value => {
+      const id = String(value || '').trim();
+      if (id) persistedSelectedIds.add(id);
+    });
+  }
   next.results = next.results.filter((item, index) => (
     compMarketCandidateVisibleForCurrentWork(
       item,
       currentScope,
       foreignWorkPayload ? new Set() : persistedSelectedIds,
       index,
+      { allowHistoricalRun: true },
     )
   ));
   Object.keys(next.groupedResults).forEach(siteId => {
     if (Array.isArray(next.groupedResults[siteId])) {
       next.groupedResults[siteId] = next.groupedResults[siteId].filter((item, index) => (
         compMarketCandidateVisibleForCurrentWork(
-          item,
-          currentScope,
-          foreignWorkPayload ? new Set() : persistedSelectedIds,
-          index,
+        item,
+        currentScope,
+        foreignWorkPayload ? new Set() : persistedSelectedIds,
+        index,
+        { allowHistoricalRun: true },
         )
       ));
       if (!next.groupedResults[siteId].length) delete next.groupedResults[siteId];
@@ -15397,14 +15831,15 @@ function ensureCompMarketScrapeState(options = {}) {
   if (restoredSnapshotRows.length) {
     restoredRows = restoredSnapshotRows;
   }
-  if (!restoredRows.length) {
-    restoredRows = compMarketRestoreResultsFromFactoryCompetitors(next, currentScope);
+  const restoredFactoryRows = compMarketRestoreResultsFromFactoryCompetitors(next, currentScope);
+  if (restoredFactoryRows.length) {
+    restoredRows = restoredFactoryRows;
   }
-  const restoredSelectedIds = restoredRows.length
-    ? (persistedSelectedIds.size
-      ? Array.from(persistedSelectedIds)
-      : (Array.isArray(next.selectedIds) ? next.selectedIds.map(String) : []))
-    : null;
+  const restoredSelectedIds = compMarketSelectedIdsForNormalizedState(
+    foreignWorkPayload,
+    persistedSelectedIds,
+    raw.selectedIds,
+  );
   if (restoredRows.length) {
     next.logs = [
       {
@@ -15417,12 +15852,28 @@ function ensureCompMarketScrapeState(options = {}) {
       ...(Array.isArray(next.logs) ? next.logs : []),
     ].slice(0, 80);
   }
-  next.selectedIds = restoredSelectedIds
-    ? restoredSelectedIds
-    : (!foreignWorkPayload && Array.isArray(raw.selectedIds) ? raw.selectedIds.map(String) : []);
-  const visibleCandidateIds = new Set(compMarketAllCandidateResults(next).map((item, index) => compMarketResultId(item, index)));
-  if (visibleCandidateIds.size) {
-    next.selectedIds = next.selectedIds.filter(id => visibleCandidateIds.has(id));
+  next.selectedIds = restoredSelectedIds;
+  const visibleCandidates = compMarketAllCandidateResults(next);
+  if (visibleCandidates.length) {
+    const selectionSourceRows = [
+      ...(Array.isArray(raw.results) ? raw.results : []),
+      ...(Array.isArray(raw.vmResults) ? raw.vmResults : []),
+      ...(Array.isArray(raw.localResults) ? raw.localResults : []),
+      ...Object.values(raw.groupedResults && typeof raw.groupedResults === 'object' ? raw.groupedResults : {})
+        .flatMap(rows => Array.isArray(rows) ? rows : []),
+      ...(Array.isArray(canonicalMarket?.results) ? canonicalMarket.results : []),
+      ...(Array.isArray(canonicalMarket?.vmResults) ? canonicalMarket.vmResults : []),
+      ...(Array.isArray(factoryCanonicalMarket?.results) ? factoryCanonicalMarket.results : []),
+      ...(Array.isArray(factoryCanonicalMarket?.vmResults) ? factoryCanonicalMarket.vmResults : []),
+      ...(Array.isArray(factoryCanonicalMarket?.localResults) ? factoryCanonicalMarket.localResults : []),
+      ...Object.values(factoryCanonicalMarket?.groupedResults && typeof factoryCanonicalMarket.groupedResults === 'object' ? factoryCanonicalMarket.groupedResults : {})
+        .flatMap(rows => Array.isArray(rows) ? rows : []),
+    ];
+    next.selectedIds = compMarketSelectionIdsForVisibleRows(
+      next.selectedIds,
+      selectionSourceRows,
+      visibleCandidates,
+    );
   } else {
     next.selectedIds = [];
   }
@@ -15549,10 +16000,14 @@ function ensureCompMarketScrapeState(options = {}) {
     compMarketSetCandidateSource(next, raw.collectMode === 'local' ? 'local' : 'vm', next.results, next.groupedResults);
   } else {
     ['vm', 'local'].forEach(source => {
-      const sourceRows = compMarketTrimResultRowsForState(Array.isArray(raw[`${source}Results`]) ? raw[`${source}Results`] : []);
-      const sourceGrouped = raw[`${source}GroupedResults`] && typeof raw[`${source}GroupedResults`] === 'object'
-        ? raw[`${source}GroupedResults`]
-        : {};
+      const sourceRows = source === 'vm' && restoredFactoryRows.length
+        ? restoredFactoryRows
+        : compMarketTrimResultRowsForState(Array.isArray(raw[`${source}Results`]) ? raw[`${source}Results`] : []);
+      const sourceGrouped = source === 'vm' && restoredFactoryRows.length
+        ? next.groupedResults
+        : (raw[`${source}GroupedResults`] && typeof raw[`${source}GroupedResults`] === 'object'
+          ? raw[`${source}GroupedResults`]
+          : {});
       compMarketSetCandidateSource(next, source, sourceRows, sourceGrouped);
     });
   }

@@ -7,6 +7,7 @@ function requiredFunction(value, name) {
 
 export function createWorkBundleActivityHeartbeat({
   getBundleKey,
+  isReady = () => true,
   sendActivity,
   clientId,
   setIntervalFn = setInterval,
@@ -15,6 +16,7 @@ export function createWorkBundleActivityHeartbeat({
   onError = () => {},
 } = {}) {
   requiredFunction(getBundleKey, 'get_bundle_key');
+  requiredFunction(isReady, 'is_ready');
   requiredFunction(sendActivity, 'send_activity');
   requiredFunction(setIntervalFn, 'set_interval');
   requiredFunction(clearIntervalFn, 'clear_interval');
@@ -28,6 +30,7 @@ export function createWorkBundleActivityHeartbeat({
 
   async function pulse() {
     if (disposed || running) return null;
+    if (!isReady()) return null;
     const bundleKey = String(getBundleKey() || '').trim();
     if (!bundleKey) return null;
     running = true;

@@ -32,7 +32,10 @@ async function capture(cdp, filePath) {
 
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const sourcePath = path.join(process.cwd(), ...SOURCE_IMAGE_REL.split('/'));
+  const sourcePath = path.join(
+    process.env.KUASANGSE_DETAIL_04_RUNTIME_ROOT || process.cwd(),
+    ...SOURCE_IMAGE_REL.split('/'),
+  );
   if (!fs.existsSync(sourcePath)) throw new Error(`검증 원본 이미지가 없습니다: ${sourcePath}`);
 
   const sourceBuild = currentSourceBuildId();

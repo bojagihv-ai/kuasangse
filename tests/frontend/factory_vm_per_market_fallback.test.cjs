@@ -314,8 +314,9 @@ test('VM 브리지 복구는 반복 실행 이력에 성공 결과가 밀려도 
 
   assert.match(
     bridgeRecoveryBody,
-    /new URLSearchParams\(\{\s*keyword,\s*limit:\s*'100'\s*\}\)/,
+    /new URLSearchParams\(\{\s*limit:\s*'100'\s*\}\)/,
   );
+  assert.match(bridgeRecoveryBody, /exactKeywordParams\.set\('keyword', keyword\)/);
 });
 
 test('소유 초안 수집 중 복구한 VM 후보는 전역 화면이 아닌 수집 작업 범위표를 사용한다', async () => {

@@ -552,7 +552,7 @@ test('server adapter classifies an exact richer-snapshot keep as protected no-op
   assert.equal(result.revision, 1);
 });
 
-test('server adapter classifies an exact protected-data keep as protected no-op at the current accepted revision', async () => {
+test('server adapter classifies a detailed protected-data keep as protected no-op at the current accepted revision', async () => {
   const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
   const { createServerLastWorkAdapter } = await import(`${pathToFileURL(serverPath).href}?protected-no-op=${Date.now()}-${Math.random()}`);
   const adapter = createServerLastWorkAdapter({
@@ -562,7 +562,7 @@ test('server adapter classifies an exact protected-data keep as protected no-op 
         accepted: false,
         keptExisting: true,
         protectedNoOp: true,
-        reason: 'incoming snapshot changed work identity or dropped protected work data',
+        reason: 'incoming snapshot changed work identity or dropped protected work data: compPage.marketScrape.results.content[coupang_205067249].sourceFactoryWorkKey',
         scopeId: 'project:alpha',
         revision: 1,
       }),
@@ -584,6 +584,118 @@ test('server adapter classifies an exact protected-data keep as protected no-op 
   assert.equal(result.protectedNoOp, true);
   assert.equal(result.scopeId, 'project:alpha');
   assert.equal(result.revision, 1);
+});
+
+test('server adapter accepts the backend option-image protection receipt only with a verifiable matching scope and revision', async () => {
+  const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
+  const { createServerLastWorkAdapter, ServerPersistenceError } = await import(`${pathToFileURL(serverPath).href}?option-image-no-op=${Date.now()}-${Math.random()}`);
+  const reason = 'incoming snapshot changed work identity or dropped protected work data: optionSorter.images.length';
+  const rejectedReceipts = [
+    { accepted: false, keptExisting: true, protectedNoOp: true, reason, scopeId: '', revision: 1 },
+    { accepted: false, keptExisting: true, protectedNoOp: true, reason, scopeId: 'project:beta', revision: 1 },
+    { accepted: false, keptExisting: true, protectedNoOp: true, reason, scopeId: 'project:alpha', revision: 2 },
+    { accepted: false, keptExisting: true, protectedNoOp: true, reason, scopeId: 'draft:', revision: 1 },
+  ];
+  const receipts = [
+    { accepted: false, keptExisting: true, protectedNoOp: true, reason, scopeId: 'project:alpha', revision: 1 },
+    ...rejectedReceipts,
+  ];
+  const adapter = createServerLastWorkAdapter({
+    fetchImpl: async () => ({ ok: true, json: async () => receipts.shift() }),
+    bases: () => ['http://local.test'],
+  });
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 1,
+    digest: 'fnv1a32:option-image-no-op',
+    metadata: {
+      operationId: 'server-option-image-no-op',
+      revision: { scopeId: 'project:alpha', counter: 2, updatedAt: 1, writerId: 'writer' },
+      fencingToken: '2',
+    },
+    snapshot: { productName: 'B' },
+  };
+
+  const accepted = await adapter.write(envelope, { expectedRevision: 1 });
+  assert.deepEqual(accepted, {
+    protectedNoOp: true,
+    scopeId: 'project:alpha',
+    revision: 1,
+    acceptedRevision: 1,
+    reason,
+  });
+
+  for (const receipt of rejectedReceipts) {
+    await assert.rejects(
+      adapter.write(envelope, { expectedRevision: 1 }),
+      error => {
+        assert.equal(error instanceof ServerPersistenceError, true);
+        assert.equal(error.status, 409);
+        assert.equal(error.code, 'SERVER_SNAPSHOT_REJECTED');
+        assert.equal(error.snapshot.reason, reason);
+        assert.equal(error.snapshot.scopeId, receipt.scopeId);
+        assert.equal(error.snapshot.revision, receipt.revision);
+        return true;
+      },
+    );
+  }
+});
+
+test('server adapter rejects non-string or blank protected no-op scope metadata and coerced revision metadata while preserving numeric B scope/revision 90', async () => {
+  const serverPath = path.join(ROOT, 'src', 'modules', 'persistence', 'server-last-work-adapter.mjs');
+  const { createServerLastWorkAdapter, ServerPersistenceError } = await import(`${pathToFileURL(serverPath).href}?strict-revision=${Date.now()}-${Math.random()}`);
+  const reason = 'incoming snapshot changed work identity or dropped protected work data: optionSorter.images.length';
+  let receipt = null;
+  const adapter = createServerLastWorkAdapter({
+    fetchImpl: async () => ({ ok: true, json: async () => receipt }),
+    bases: () => ['http://local.test'],
+  });
+  const envelope = {
+    schema: 'kuasangse.workspace', version: 2, scopeId: 'project:alpha', savedAt: 1,
+    digest: 'fnv1a32:strict-revision',
+    metadata: {
+      operationId: 'server-strict-revision',
+      revision: { scopeId: 'project:alpha', counter: 91, updatedAt: 1, writerId: 'writer' },
+      fencingToken: '90',
+    },
+    snapshot: { productName: 'B' },
+  };
+  const rejectedCases = [
+    { scopeId: { id: 'project:alpha' }, revision: 90, expectedRevision: 90 },
+    { scopeId: '', revision: 90, expectedRevision: 90 },
+    { scopeId: null, revision: 90, expectedRevision: 90 },
+    { scopeId: '   ', revision: 90, expectedRevision: 90 },
+    { revision: true, expectedRevision: 1 },
+    { revision: '1', expectedRevision: 1 },
+    { revision: 1.5, expectedRevision: 1 },
+    { revision: -1, expectedRevision: 1 },
+    { revision: null, expectedRevision: 1 },
+    { revision: Number.MAX_SAFE_INTEGER + 1, expectedRevision: 1 },
+    { revision: 1, expectedRevision: true },
+    { revision: 1, expectedRevision: '1' },
+  ];
+
+  for (const rejectedCase of rejectedCases) {
+    receipt = {
+      accepted: false, keptExisting: true, protectedNoOp: true, reason,
+      scopeId: Object.hasOwn(rejectedCase, 'scopeId') ? rejectedCase.scopeId : 'project:alpha', revision: rejectedCase.revision,
+    };
+    await assert.rejects(
+      adapter.write(envelope, { expectedRevision: rejectedCase.expectedRevision }),
+      error => error instanceof ServerPersistenceError && error.status === 409,
+    );
+  }
+
+  receipt = {
+    accepted: false, keptExisting: true, protectedNoOp: true, reason,
+    scopeId: 'project:alpha', revision: 90,
+  };
+  assert.deepEqual(await adapter.write(envelope, { expectedRevision: 90 }), {
+    protectedNoOp: true,
+    scopeId: 'project:alpha',
+    revision: 90,
+    acceptedRevision: 90,
+    reason,
+  });
 });
 
 test('server adapter classifies a required-field drop as protected no-op at the current accepted revision', async () => {

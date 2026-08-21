@@ -275,3 +275,67 @@ test('reload failure closes its authority and the coordinator releases the lease
   assert.equal(releases.length, 1);
   assert.equal(JSON.parse(releases[0].options.body).leaseId, 'lease-b');
 });
+
+test('Given a richer current option state than the server receipt When ordinary hydration refuses the downgrade Then it forces a server-enabled repair save', async () => {
+  const core02 = read('src/app-core-02.js');
+  const hydrateSource = sourceBetween(
+    core02,
+    ['async function hydrateServerLastWorkSnapshot'],
+    'async function refreshCompetitorAnalysisFromServer',
+  );
+  const saveCalls = [];
+  const context = vm.createContext({
+    state: {
+      sectionImages: {},
+      optionSorter: { images: [{ id: 'red' }], slots: [{ id: 'slot-red', imgIds: ['red'] }], optionResults: [{ id: 'cut-red' }] },
+      compPage: {},
+      cuts: {},
+      productInfoManualValues: {},
+    },
+    serverLastWorkHydrated: false,
+    serverLastWorkHydrating: false,
+    serverLastWorkHydrationPromise: null,
+    workspaceBlankResetToken: 0,
+    workspaceScopeTransitionState: { persistentSaveQueued: false },
+    getCurrentLastWorkWorkspaceScope: () => 'project:option-work',
+    getCurrentDocumentWorkspaceScope: () => 'project:option-work',
+    workspaceHydrationScopeIsCurrent: () => true,
+    workspacePersistenceApi: () => ({
+      restore: async () => ({
+        snapshot: {
+          workspaceScope: { id: 'project:option-work' },
+          assets: { optionSorter: { images: [], slots: [], optionResults: [] }, compPage: {}, cuts: {} },
+        },
+      }),
+    }),
+    lastWorkSnapshotMatchesWorkspaceScope: () => true,
+    lastWorkSnapshotScore: () => 0,
+    getCurrentLastWorkScore: () => 0,
+    getCurrentLastWorkSavedAt: () => 0,
+    lastWorkCompAnalysisTime: () => 0,
+    getCurrentCompAnalysisTime: () => 0,
+    snapshotSectionImagesQualityScore: () => 0,
+    sectionImagesQualityScore: () => 0,
+    hasInlineImagePayload: () => false,
+    lastWorkCompMarketScore: () => 0,
+    optionSorterSnapshotIsMoreComplete: (current, incoming) => (current?.images?.length || 0) > (incoming?.images?.length || 0),
+    lastWorkOptionLabelsRestoreNeeded: () => false,
+    persistedCutResultCount: () => 0,
+    lastWorkRequiredFieldRestoreNeeded: () => false,
+    factoryRuntimeReadFactory: () => ({}),
+    lastWorkFactoryHasSelfConsistentCurrentAssets: () => false,
+    observeWorkspaceRevisionSnapshot: () => null,
+    // 추출한 hydrate 블록은 app-core-02 모듈 스코프의 이 함수를 참조한다.
+    // 스텁이 없으면 ReferenceError가 내부 catch에 삼켜져 검사 대상 분기까지 가지도 못한다.
+    workspaceSnapshotRevision: snapshot => (snapshot && snapshot.workspaceRevision) || null,
+    snapshotHasInlineImagePayload: () => false,
+    savePersistentState: options => saveCalls.push(options),
+    setTimeout: callback => { callback(); return 1; },
+    clearTimeout() {},
+  });
+  vm.runInContext(`${hydrateSource}\nglobalThis.runHydrate = hydrateServerLastWorkSnapshot;`, context);
+
+  await context.runHydrate();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(saveCalls)), [{ server: true, force: true }]);
+});

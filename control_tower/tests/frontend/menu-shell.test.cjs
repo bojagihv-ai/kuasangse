@@ -8,10 +8,11 @@ const ROOT = path.resolve(__dirname, '..', '..', '..');
 const HTML_PATH = path.join(ROOT, 'control_tower', 'frontend', 'control-tower.html');
 const MODULE_PATH = path.join(ROOT, 'control_tower', 'frontend', 'src', 'menu-shell.mjs');
 
-test('menu registry owns the seven production control-tower groups', async () => {
+test('menu registry owns the eight production control-tower groups', async () => {
   const module = await import(pathToFileURL(MODULE_PATH));
   assert.deepEqual(module.MENU_REGISTRY.map(item => item.key), [
     'overview',
+    'queue',
     'input-source',
     'competitors',
     'production-acut',
@@ -19,7 +20,7 @@ test('menu registry owns the seven production control-tower groups', async () =>
     'cafe24',
     'audit-sync',
   ]);
-  assert.equal(new Set(module.MENU_REGISTRY.map(item => item.key)).size, 7);
+  assert.equal(new Set(module.MENU_REGISTRY.map(item => item.key)).size, 8);
   assert.deepEqual(module.FACTORY_STAGE_KEYS, [
     'db',
     'representative',
@@ -36,10 +37,13 @@ test('menu state and keyboard actions are deterministic', async () => {
   const state = module.createMenuState('input-source');
   assert.equal(state.activeKey, 'input-source');
   assert.equal(module.menuKeyForKeyboard('ArrowRight', 'input-source'), 'competitors');
-  assert.equal(module.menuKeyForKeyboard('ArrowLeft', 'input-source'), 'overview');
+  assert.equal(module.menuKeyForKeyboard('ArrowLeft', 'input-source'), 'queue');
   assert.equal(module.menuKeyForKeyboard('Home', 'cafe24'), 'overview');
   assert.equal(module.menuKeyForKeyboard('End', 'overview'), 'audit-sync');
   assert.equal(module.menuKeyForKeyboard('Enter', 'automation'), 'automation');
+  assert.equal(module.menuKeyForTabKeyboard('Enter', 'cafe24', 'overview'), 'cafe24');
+  assert.equal(module.menuKeyForTabKeyboard(' ', 'input-source', 'overview'), 'input-source');
+  assert.equal(module.menuKeyForTabKeyboard('ArrowRight', 'cafe24', 'overview'), 'queue');
   assert.equal(module.applyMenuAction(state, 'competitors').activeKey, 'competitors');
 });
 
@@ -71,10 +75,10 @@ test('menu badges derive from the live projection and do not invent connected da
   assert.equal(module.menuBadgeText({ status: 'disconnected' }), '끊김');
 });
 
-test('production HTML declares one menu shell, persistent sync, active-panel semantics, and seven stage slots', () => {
+test('production HTML declares one menu shell, persistent sync, active-panel semantics, and eight menu slots', () => {
   const html = fs.readFileSync(HTML_PATH, 'utf8');
   assert.match(html, /id="primary-menu"[\s\S]*role="tablist"/);
-  assert.equal((html.match(/role="tab"/g) || []).length, 7);
+  assert.equal((html.match(/role="tab"/g) || []).length, 8);
   assert.match(html, /class="persistent-sync-bar(?:\s|\")/);
   assert.match(html, /data-menu-panel="overview"/);
   assert.match(html, /data-menu-panel="production-acut"/);
@@ -107,12 +111,12 @@ test('menu panels have unique ids and hidden inactive panels do not duplicate ro
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
   const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
   assert.deepEqual(duplicates, []);
-  assert.equal((html.match(/data-menu-panel="/g) || []).length, 7);
+  assert.equal((html.match(/data-menu-panel="/g) || []).length, 8);
   assert.match(html, /data-menu-panel="overview"[^>]*>/);
   assert.match(html, /data-menu-panel="input-source"[^>]*hidden/);
-  const overview = html.match(/id="menu-panel-overview"[\s\S]*?id="menu-panel-input-source"/)?.[0] || '';
+  const queue = html.match(/id="menu-panel-queue"[\s\S]*?id="menu-panel-input-source"/)?.[0] || '';
   const audit = html.match(/id="menu-panel-audit-sync"[\s\S]*?<footer/)?.[0] || '';
-  assert.match(overview, /id="product-list"/);
+  assert.match(queue, /id="product-list"/);
   assert.doesNotMatch(audit, /id="product-list"/);
 });
 

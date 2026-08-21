@@ -107,6 +107,7 @@ class _ApprovalRecord:
     preview: JsonObject
     expires_at: float
     approved_token_digest: str | None = None
+    confirmation_nonce_digest: str | None = None
     state: Literal["issued", "approved", "reserved", "consumed", "rejected"] = "issued"
 
 
@@ -135,9 +136,37 @@ class Cafe24ApprovalGate:
             token_digest = _digest(token)
             self._tokens[token_digest] = request_id
             self._requests[request_id] = replace(record, approved_token_digest=token_digest, state="approved")
-        return {"approvalRequestId": request_id, "approvalToken": token, "payloadDigest": record.preview["payloadDigest"], "idempotencyKey": record.preview["idempotencyKey"]}
+        return {
+            "approvalRequestId": request_id,
+            "approvalToken": token,
+            "payloadDigest": record.preview["payloadDigest"],
+            "idempotencyKey": record.preview["idempotencyKey"],
+            "confirmationRequired": True,
+        }
 
-    def reserve(self, token: str, binding: Mapping[str, JsonValue]) -> JsonObject:
+    def confirm(self, token: str, binding: Mapping[str, JsonValue]) -> JsonObject:
+        token_digest = _digest(token)
+        with self._lock:
+            record = self._token_record(token_digest)
+            _assert_binding(record.preview, binding)
+            nonce = secrets.token_urlsafe(24)
+            self._requests[record.request_id] = replace(
+                record,
+                confirmation_nonce_digest=_digest(nonce),
+            )
+            return {
+                "approvalRequestId": record.request_id,
+                "confirmationNonce": nonce,
+                "payloadDigest": record.preview["payloadDigest"],
+                "idempotencyKey": record.preview["idempotencyKey"],
+            }
+
+    def reserve(
+        self,
+        token: str,
+        binding: Mapping[str, JsonValue],
+        confirmation_nonce: str,
+    ) -> JsonObject:
         token_digest = _digest(token)
         with self._lock:
             record = self._token_record(token_digest)
@@ -146,6 +175,10 @@ class Cafe24ApprovalGate:
             except Cafe24StagingError:
                 self._finish(token_digest, record, "rejected")
                 raise
+            if not confirmation_nonce:
+                raise Cafe24StagingError("confirmation_required")
+            if record.confirmation_nonce_digest != _digest(confirmation_nonce):
+                raise Cafe24StagingError("confirmation_invalid")
             self._requests[record.request_id] = replace(record, state="reserved")
             return {"approvalRequestId": record.request_id, "payload": record.preview["payload"], "payloadDigest": record.preview["payloadDigest"], "idempotencyKey": record.preview["idempotencyKey"], "approvalGrantDigest": token_digest}
 
@@ -159,8 +192,13 @@ class Cafe24ApprovalGate:
             record = self._token_record(approval_grant_digest, required_state="reserved")
             self._finish(approval_grant_digest, record, "rejected")
 
-    def consume(self, token: str, binding: Mapping[str, JsonValue]) -> JsonObject:
-        grant = self.reserve(token, binding)
+    def consume(
+        self,
+        token: str,
+        binding: Mapping[str, JsonValue],
+        confirmation_nonce: str,
+    ) -> JsonObject:
+        grant = self.reserve(token, binding, confirmation_nonce)
         self.commit(str(grant["approvalGrantDigest"]))
         return grant
 

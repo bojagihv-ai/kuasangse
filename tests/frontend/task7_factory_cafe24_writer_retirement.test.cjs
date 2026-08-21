@@ -1240,7 +1240,7 @@ test('Cafe24 candidate searches await persistence before reporting completion', 
   }
 });
 
-test('final registration owns field review changes and holds one operation lease', () => {
+test('final registration owns basic field draft and review changes while holding one operation lease', () => {
   const runSource = sourceFunction(appCore05Source, 'factoryRunFinalRegistration');
   assert.match(runSource, /operationLeaseHeld\s*!==\s*true/);
   assert.match(runSource, /factoryRuntimeWithOperationLease\(\s*'factory\/final-registration:run'/);
@@ -1261,6 +1261,9 @@ test('final registration owns field review changes and holds one operation lease
     const fieldReviewPart = createPolicies()[command].parts.find(part => part.owner === 'product-db'
       && part.paths.includes('automation.fieldReview'));
     assert.ok(fieldReviewPart, `${command} must own automation.fieldReview`);
+    const fieldDraftsPart = createPolicies()[command].parts.find(part => part.owner === 'product-db'
+      && part.paths.includes('automation.fieldDrafts'));
+    assert.ok(fieldDraftsPart, `${command} must own automation.fieldDrafts`);
   }
 });
 
@@ -1358,6 +1361,20 @@ test('startup detail pruning never reads app state before state initialization',
   const pruned = prune({ stageId: 'detail', html }, true);
   assert.equal(completenessReads, 0);
   assert.equal(pruned.html, html);
+});
+
+test('selected detail HTML stays intact even when the current sections look complete', () => {
+  const prune = compileFunction(appCore03Source, 'factoryRuntimePruneAsset', {
+    factoryAppStateReady: true,
+    factoryRuntimeArchiveImageUrl: () => '',
+    factoryInlineImageLooksHeavy: () => false,
+    factorySanitizeHeavyInlineHolder: value => value,
+    factoryCurrentDetailSectionsComplete: () => true,
+  });
+  const html = `${'<img src="data:image/png;base64,full">'.repeat(14)}${'x'.repeat(25000)}`;
+  const pruned = prune({ stageId: 'detail', html }, true);
+  assert.equal(pruned.html, html);
+  assert.equal(pruned.hasHtml, undefined);
 });
 
 test('background Cafe24 save verification keeps one operation token and commits before save/render', async () => {

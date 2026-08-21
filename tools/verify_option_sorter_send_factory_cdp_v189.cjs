@@ -118,6 +118,9 @@ async function main() {
       }));
       return {
         step: appState.step,
+        activeRoute: typeof shellRuntimeComposition?.routeController?.currentRoute === 'function'
+          ? shellRuntimeComposition.routeController.currentRoute()
+          : null,
         optionPanelExists: !!optionPanel,
         optionResultCount: appState.optionSorter.optionResults.length,
         optionLastGeneratedResultIds: appState.optionSorter.optionLastGeneratedResultIds,
@@ -128,6 +131,17 @@ async function main() {
         resultSendButtonCount: document.querySelectorAll('[data-opt-send-factory-result]').length,
       };
     })`);
+
+    await waitFor(cdp, `window.state.step === 'optionsorter'
+      && shellRuntimeComposition?.routeController?.currentRoute?.() === 'optionsorter'
+      && !!document.querySelector('.opt-option-gen-panel')
+      && !!document.getElementById('optSendCurrentOptionResultsToFactory')`, 30000);
+    Object.assign(prepared, await evaluate(cdp, `(() => ({
+      activeRoute: shellRuntimeComposition?.routeController?.currentRoute?.() || null,
+      optionPanelExists: !!document.querySelector('.opt-option-gen-panel'),
+      sendButtonExists: !!document.getElementById('optSendCurrentOptionResultsToFactory'),
+      resultSendButtonCount: document.querySelectorAll('[data-opt-send-factory-result]').length,
+    }))()`));
 
     assertChecks([
       { ok: prepared.sendButtonExists, message: `현재 생성안 전체 전송 버튼이 없습니다: ${JSON.stringify(prepared)}` },
@@ -316,6 +330,20 @@ async function main() {
         bulkButtonDisabled: !!bulkButton && bulkButton.disabled,
       };
     })`);
+    await waitFor(cdp, `window.state.step === 'optionsorter'
+      && shellRuntimeComposition?.routeController?.currentRoute?.() === 'optionsorter'
+      && !!document.querySelector('[data-opt-send-factory-result="option_send_legacy_unscoped_v189"]')
+      && !!document.querySelector('[data-opt-send-factory-result="option_send_legacy_previous_v189"]')`, 30000);
+    Object.assign(legacyPrepared, await evaluate(cdp, `(() => {
+      const bulkButton = document.getElementById('optSendCurrentOptionResultsToFactory');
+      const currentButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_unscoped_v189"]');
+      const previousButton = document.querySelector('[data-opt-send-factory-result="option_send_legacy_previous_v189"]');
+      return {
+        currentButtonDisabled: !!currentButton && currentButton.disabled,
+        previousButtonDisabled: !!previousButton && previousButton.disabled,
+        bulkButtonDisabled: !!bulkButton && bulkButton.disabled,
+      };
+    })()`));
     assertChecks([
       { ok: legacyPrepared.currentButtonDisabled, message: `범위 미기록 옵션표 전송 버튼이 차단되지 않았습니다: ${JSON.stringify(legacyPrepared)}` },
       { ok: legacyPrepared.previousButtonDisabled, message: `이전 작업 옵션표 전송 버튼이 차단되지 않았습니다: ${JSON.stringify(legacyPrepared)}` },

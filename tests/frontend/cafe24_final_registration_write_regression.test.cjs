@@ -8,6 +8,7 @@ const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '../..');
 const CORE = fs.readFileSync(path.join(ROOT, 'src', 'app-core-05.js'), 'utf8');
+const CORE_BATCH = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
 const PAYLOADS = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-payloads.js'), 'utf8');
 const SYNC = fs.readFileSync(path.join(ROOT, 'src', 'cafe24-sync.js'), 'utf8');
 
@@ -47,6 +48,449 @@ function compile(source, name, globals) {
   vm.runInContext(`${sourceFunction(source, name)}\nthis.target = ${name};`, context);
   return context.target;
 }
+
+test('생산관제 Cafe24 등록은 기존 상품의 모든 옵션 재고를 99로 강제 검증한다', () => {
+  const batchRegistration = sourceFunction(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration');
+  const finalRegistration = sourceFunction(CORE, 'factoryRunFinalRegistration');
+
+  assert.match(batchRegistration, /forceInventoryQuantity:\s*'99'/);
+  assert.match(batchRegistration, /openMarketSync\?\.finalRegistrationStatus/);
+  assert.match(batchRegistration, /factory_cafe24_registration_failed: \$\{failureReason\}/);
+  assert.match(batchRegistration, /cafe24RegistrationMode = resumesCreatedProduct \|\| revisesPublishedProduct \? 'update' : 'create'/);
+  assert.match(batchRegistration, /cafe24RegistrationModeUserTouched = true/);
+  assert.match(finalRegistration, /factoryCafe24CreatePostSyncPlan\(factory, \{ forceInventory, forceInventoryQuantity \}\)/);
+  assert.match(finalRegistration, /\['images', 'category', 'options'\]/);
+  assert.match(finalRegistration, /requiredKeys:\s*requiredPresentationKeys/);
+  assert.match(finalRegistration, /forceInventoryQuantity,/);
+});
+
+test('생산관제 Cafe24 등록 바인딩은 게시 계약 idempotency가 바뀌면 이전 검증 영수증을 재사용하지 않는다', () => {
+  const context = vm.createContext({ JSON, Object, String, Number, Array });
+  vm.runInContext(`${sourceFunction(CORE_BATCH, 'factoryRuntimeBatchCafe24Binding')}
+${sourceFunction(CORE_BATCH, 'factoryRuntimeBatchCafe24BindingMatches')}
+this.matches = factoryRuntimeBatchCafe24BindingMatches;`, context);
+  const base = {
+    productId: 'cafe24:3011',
+    productKey: '방울수저집',
+    categoryId: '107',
+    htmlDigest: 'sha:detail',
+    imageDigests: ['sha:hero', 'sha:material'],
+    expectedWorkfileRevision: 22,
+    expectedRunId: 'run-1',
+    expectedInputFingerprint: 'fingerprint-1',
+  };
+
+  assert.equal(context.matches(
+    { ...base, idempotencyKey: 'cafe24-stage:v2:old-composer' },
+    { ...base, idempotencyKey: 'cafe24-stage:v6:current-composer' },
+  ), false);
+  assert.match(CORE_BATCH, /cafe24-stage:v6:/);
+  assert.match(CORE_BATCH, /factoryProjectFileImageFingerprint\([\s\S]*preflight\.imageDigests/);
+});
+
+test('로컬 보관 대표이미지를 inline으로 복원해도 생산관제 이미지 지문은 하나로 유지한다', () => {
+  const references = compile(CORE_BATCH, 'factoryRuntimeBatchImageReferences', {});
+  const factory = {
+    assets: [
+      {
+        id: 'hero-link',
+        type: 'image',
+        used: true,
+        image: '/api/local-archive/assets/hero-archive/image',
+        metadata: { localArchiveId: 'hero-archive' },
+      },
+      {
+        id: 'hero-inline',
+        type: 'image',
+        used: true,
+        image: 'data:image/jpeg;base64,SELECTED_HERO',
+        metadata: { localArchiveId: 'hero-archive' },
+      },
+      {
+        id: 'size-link',
+        type: 'image',
+        used: true,
+        image: '/api/local-archive/assets/size-archive/image',
+        metadata: { localArchiveId: 'size-archive' },
+      },
+    ],
+  };
+
+  assert.deepEqual(Array.from(references(factory)), [
+    'local-archive:hero-archive',
+    'local-archive:size-archive',
+  ]);
+});
+
+test('신규 등록 응답에 상품번호가 없으면 로컬 캐시가 아닌 Cafe24 최신 상품을 확인한다', () => {
+  const createRegistration = sourceFunction(SYNC, 'factoryCreateCafe24ProductFromFinalDb');
+  assert.match(createRegistration, /created = await factoryFindLiveCafe24ProductByExactName\(/);
+  assert.doesNotMatch(createRegistration, /created = await factoryFindLatestCafe24ProductByName\(/);
+});
+
+test('생산관제는 본체 생성 후 실패한 신규 상품을 찾아 새 상품을 더 만들지 않고 이어서 수정한다', async () => {
+  const batch = {
+    productId: 'cafe24:2994',
+    productKey: '방울수저집',
+    categoryId: '107',
+    htmlDigest: 'sha:full-detail',
+    imageDigests: ['sha:hero'],
+    expectedWorkfileRevision: 19,
+    expectedRunId: 'run-1',
+    expectedInputFingerprint: 'fingerprint-1',
+    idempotencyKey: 'cafe24-stage:v2:current-binding',
+    selling: 'F',
+    display: 'F',
+    market_sync: 'F',
+  };
+  const factory = {
+    automation: { currentRunId: 'run-1' },
+    product: {
+      currentProductKey: '방울수저집',
+      inputImageFingerprint: 'fingerprint-1',
+      cafe24ApiStatus: 'Cafe24 새 상품 #2994 본체 생성 후 후속 동기화 실패: options',
+      cafe24LastSaveVerification: { productNo: '2994' },
+      cafe24BatchControlBinding: { productId: 'cafe24:2994' },
+      finalDb: { product_no: '2994' },
+    },
+    openMarketSync: {},
+  };
+  let targetProductNo = '2994';
+  let liveLookups = 0;
+  let registrationMode = '';
+  const run = compile(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration', {
+    CAFE24_CONTROL_API: { defaultMallId: '1' },
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    factoryRuntimeReadViewSnapshot: () => ({ factory }),
+    factoryCafe24TargetInfo: () => ({ productNo: targetProductNo }),
+    factoryFindLiveCafe24ProductByExactName: async () => {
+      liveLookups += 1;
+      return { product_no: '3011', product_name: '방울수저집' };
+    },
+    parseCafe24Raw: value => value,
+    factoryAttachCafe24ProductAsCurrentTarget: product => {
+      targetProductNo = String(product.product_no);
+      return { productNo: targetProductNo, productName: product.product_name };
+    },
+    factoryRuntimeRequireStore: () => ({ getOperationToken: () => ({ revision: 19 }) }),
+    factoryRuntimeBridgeAction: async (_command, context, mutate) => ({
+      value: await mutate(factory),
+      operationToken: context.operationToken,
+    }),
+    factoryRuntimeAuthoritativeWorkspaceRevision: () => ({ counter: 19 }),
+    factoryRuntimeBatchCafe24BindingMatches: () => true,
+    factoryCurrentProductKey: () => '방울수저집',
+    factoryCurrentWorkflowRunId: () => 'run-1',
+    factoryCurrentInputImageFingerprint: () => 'fingerprint-1',
+    factoryEnsureCurrentDetailHtmlAsset: () => ({ html: 'full-detail' }),
+    factoryRuntimeSha256Text: async value => `sha:${value}`,
+    factoryRuntimeBatchImageReferences: () => ['hero'],
+    factoryEnsureOpenMarketSync: draft => draft.openMarketSync,
+    factoryRuntimeBatchCafe24Binding: value => value,
+    factoryApplyFinalCafe24StatusToDb() {},
+    factoryRunFinalRegistration: async () => {
+      registrationMode = factory.openMarketSync.cafe24RegistrationMode;
+      factory.product.cafe24BatchControlBinding = { idempotencyKey: 'cafe24-stage:v1:stale-binding' };
+      return true;
+    },
+    factoryRuntimeVerifiedCafe24Readback: async () => {
+      assert.equal(factory.product.cafe24BatchControlBinding.idempotencyKey, batch.idempotencyKey);
+      return { externalProductNo: targetProductNo };
+    },
+  });
+
+  const result = await run({ batchControl: batch });
+
+  assert.equal(liveLookups, 1);
+  assert.equal(targetProductNo, '3011');
+  assert.equal(registrationMode, 'update');
+  assert.equal(result.externalProductNo, '3011');
+});
+
+test('생산관제 체크포인트 복원 뒤 mismatch 영수증의 #3011은 신규 생성하지 않고 update로 이어간다', async () => {
+  const batch = {
+    productId: 'cafe24:3011',
+    productKey: '방울수저집',
+    categoryId: '107',
+    htmlDigest: 'sha:full-detail',
+    imageDigests: ['sha:hero'],
+    expectedWorkfileRevision: 1,
+    expectedRunId: 'run-1',
+    expectedInputFingerprint: 'fingerprint-1',
+    selling: 'F',
+    display: 'F',
+    market_sync: 'F',
+  };
+  const factory = {
+    automation: { currentRunId: 'run-1' },
+    product: {
+      currentProductKey: '방울수저집',
+      inputImageFingerprint: 'fingerprint-1',
+      cafe24BatchControlBinding: batch,
+      cafe24RegistrationReceipt: { status: 'mismatch', mode: 'update', productNo: '3011' },
+      finalDb: { product_no: '3011' },
+    },
+    openMarketSync: {},
+  };
+  let registrationMode = '';
+  const run = compile(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration', {
+    CAFE24_CONTROL_API: { defaultMallId: '1' },
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    factoryRuntimeReadViewSnapshot: () => ({ factory }),
+    factoryCafe24TargetInfo: () => ({ productNo: '3011' }),
+    factoryRuntimeRequireStore: () => ({ getOperationToken: () => ({ revision: 1 }) }),
+    factoryRuntimeBridgeAction: async (_command, context, mutate) => ({
+      value: await mutate(factory),
+      operationToken: context.operationToken,
+    }),
+    factoryRuntimeAuthoritativeWorkspaceRevision: () => ({ counter: 10 }),
+    factoryRuntimeBatchCafe24BindingMatches: () => true,
+    factoryCurrentProductKey: () => '방울수저집',
+    factoryCurrentWorkflowRunId: () => 'run-1',
+    factoryCurrentInputImageFingerprint: () => 'fingerprint-1',
+    factoryEnsureCurrentDetailHtmlAsset: () => ({ html: 'full-detail' }),
+    factoryRuntimeSha256Text: async value => `sha:${value}`,
+    factoryRuntimeBatchImageReferences: () => ['hero'],
+    factoryEnsureOpenMarketSync: draft => draft.openMarketSync,
+    factoryRuntimeBatchCafe24Binding: value => value,
+    factoryApplyFinalCafe24StatusToDb() {},
+    factoryRunFinalRegistration: async () => {
+      registrationMode = factory.openMarketSync.cafe24RegistrationMode;
+      return true;
+    },
+    factoryRuntimeVerifiedCafe24Readback: async () => ({ externalProductNo: '3011' }),
+  });
+
+  await run({ batchControl: batch });
+
+  assert.equal(registrationMode, 'update');
+});
+
+test('생산관제 최종 read-back은 update 영수증에 한해 승인 대상과 같은 #3011을 허용한다', async () => {
+  const batch = {
+    productId: 'cafe24:3011',
+    productKey: '방울수저집',
+    categoryId: '107',
+    htmlDigest: 'sha:detail',
+    imageDigests: ['sha:hero'],
+    expectedWorkfileRevision: 1,
+    expectedRunId: 'run-1',
+    expectedInputFingerprint: 'fingerprint-1',
+    selling: 'F',
+    display: 'F',
+    market_sync: 'F',
+  };
+  const factory = {
+    product: {
+      cafe24BatchControlBinding: batch,
+      cafe24RegistrationReceipt: { status: 'verified', mode: 'update', productNo: '3011' },
+    },
+  };
+  const verify = compile(CORE_BATCH, 'factoryRuntimeVerifiedCafe24Readback', {
+    CAFE24_CONTROL_API: { defaultMallId: '1' },
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    factoryRuntimeReadViewSnapshot: () => ({ factory }),
+    factoryRuntimeBatchCafe24BindingMatches: () => true,
+    factoryCafe24TargetInfo: () => ({ productNo: '3011', mallId: '1' }),
+    fetchCafe24ProductFullByNo: async () => ({ raw: {
+      product_no: '3011',
+      product_code: 'P0000ELV',
+      product_name: '방울수저집',
+      display: 'F',
+      selling: 'F',
+      market_sync: 'F',
+      description: 'detail',
+      detail_image: 'hero',
+      category: [{ category_no: '107' }],
+    } }),
+    parseCafe24Raw: value => value.raw,
+    factoryRuntimeSha256Text: async value => `sha:${value}`,
+    factoryCafe24CategoryNoSet: () => new Set(['107']),
+  });
+
+  const result = await verify(batch);
+
+  assert.equal(result.status, 'staged_verified');
+  assert.equal(result.externalProductNo, '3011');
+});
+
+test('생산관제 Cafe24 카테고리는 부분 생성 복구 뒤 finalDb category 배열의 선택을 유지한다', () => {
+  const selection = compile(CORE_BATCH, 'factoryRuntimeCafe24CategorySelection', {});
+
+  const result = selection({
+    product: {
+      finalDb: {
+        category: [{ category_no: '107', display_group: '1', recommend: 'F', new: 'F' }],
+      },
+      cafe24ReferenceLists: {
+        categories: [{ code: '107', name: '수저집' }],
+      },
+    },
+  });
+
+  assert.equal(result.categoryId, '107');
+  assert.equal(result.categoryLabel, '수저집');
+});
+
+test('생산관제 체크포인트는 같은 작업의 참고 #2994에서 update 대상 #3011로 전환된 복원을 허용한다', () => {
+  const matches = compile(CORE_BATCH, 'factoryRuntimeControlProjectionMatchesCheckpoint', {});
+  const checkpoint = {
+    projectId: 'batch:factory-job-1',
+    productId: 'cafe24:2994',
+    productKey: '방울수저집',
+    runId: 'run-1',
+    inputFingerprint: 'fingerprint-1',
+  };
+  const projection = {
+    session: {
+      workspaceId: 'batch:factory-job-1',
+      productId: 'cafe24:3011',
+      productKey: '방울수저집',
+      runId: 'run-1',
+      inputFingerprint: 'fingerprint-1',
+    },
+    registration: {
+      jobId: 'factory-job-1',
+      productId: 'cafe24:3011',
+      mode: 'update',
+    },
+  };
+
+  assert.equal(matches(projection, checkpoint, 'factory-job-1'), true);
+  assert.equal(matches({
+    ...projection,
+    registration: { ...projection.registration, mode: 'create' },
+  }, checkpoint, 'factory-job-1'), false);
+});
+
+test('서버 보호본 병합 전 로컬 #2994는 첫 복원 검사에서만 #3011 체크포인트와 이어진다', () => {
+  const matches = compile(CORE_BATCH, 'factoryRuntimeControlProjectionMatchesCheckpoint', {});
+  const checkpoint = {
+    projectId: 'batch:factory-job-1',
+    productId: 'cafe24:3011',
+    productKey: '방울수저집',
+    runId: 'run-1',
+    inputFingerprint: 'fingerprint-1',
+  };
+  const staleLocalProjection = {
+    session: {
+      workspaceId: checkpoint.projectId,
+      productId: 'cafe24:2994',
+      productKey: checkpoint.productKey,
+      runId: checkpoint.runId,
+      inputFingerprint: checkpoint.inputFingerprint,
+    },
+    registration: {
+      jobId: 'factory-job-1',
+      productId: 'cafe24:2994',
+      mode: 'create',
+    },
+  };
+
+  assert.equal(matches(staleLocalProjection, checkpoint, 'factory-job-1'), false);
+  assert.equal(matches(staleLocalProjection, checkpoint, 'factory-job-1', {
+    allowStaleProductBeforeHydration: true,
+  }), true);
+});
+
+test('Cafe24 사전점검은 복구된 update 대상 #3011을 승인 대상으로 고정한다', async () => {
+  const factory = {
+    automation: { currentRunId: 'run-1', optionMode: 'provided' },
+    product: {
+      currentProductKey: '방울수저집',
+      inputImageFingerprint: 'fingerprint-1',
+      cafe24BatchControlBinding: {
+        productId: 'cafe24:2994',
+        productKey: '방울수저집',
+        categoryId: '107',
+        htmlDigest: 'sha:detail',
+        imageDigests: ['sha:hero'],
+        idempotencyKey: 'cafe24-stage:v6:current-composer',
+        expectedWorkfileRevision: 1,
+        expectedRunId: 'run-1',
+        expectedInputFingerprint: 'fingerprint-1',
+      },
+      cafe24OptionGroupsDraft: [{ name: '색상', values: ['초록', '노랑'] }],
+    },
+  };
+  const inspect = compile(CORE_BATCH, 'factoryRuntimeInspectBatchCafe24Registration', {
+    factoryRuntimeReadViewSnapshot: () => ({ factory }),
+    factoryCurrentProductKey: () => '방울수저집',
+    factoryCurrentWorkflowRunId: () => 'run-1',
+    factoryCurrentInputImageFingerprint: () => 'fingerprint-1',
+    factoryCafe24TargetInfo: () => ({ productNo: '3011' }),
+    factoryRuntimeAuthoritativeWorkspaceRevision: () => ({ counter: 10 }),
+    factoryRuntimeResolveCafe24Category: async () => ({ categoryId: '107', categoryLabel: '기타공예용품' }),
+    factoryCafe24CurrentScopedDetailHtml: () => ({ html: 'detail' }),
+    factoryRuntimeSha256Text: async value => `sha:${value}`,
+    factoryRuntimeBatchImageReferences: () => ['hero'],
+  });
+
+  const result = await inspect();
+
+  assert.equal(result.productId, 'cafe24:3011');
+  assert.equal(result.expectedWorkfileRevision, 1);
+});
+
+test('생산관제 신규 등록은 참고 상품번호와 다른 Cafe24 생성 결과를 read-back한다', async () => {
+  const batch = {
+    productId: 'cafe24:2994',
+    productKey: '방울수저집',
+    categoryId: '107',
+    htmlDigest: 'html-digest',
+    imageDigests: ['image-digest'],
+    expectedWorkfileRevision: 19,
+    expectedRunId: 'run-1',
+    expectedInputFingerprint: 'fingerprint-1',
+    selling: 'F',
+    display: 'F',
+    market_sync: 'F',
+  };
+  const factory = {
+    product: {
+      cafe24RegistrationReceipt: { status: 'verified', mode: 'create', productNo: '4120' },
+    },
+  };
+  const context = vm.createContext({
+    factoryRuntimeReadViewSnapshot: () => ({ factory }),
+    factoryCafe24TargetInfo: () => ({
+      productNo: factory.product.cafe24RegistrationReceipt.productNo,
+      mallId: '1',
+    }),
+    fetchCafe24ProductFullByNo: async productNo => ({
+      raw: {
+        product_no: productNo,
+        product_code: 'P0000NEW',
+        product_name: '방울수저집',
+        display: 'F',
+        selling: 'F',
+        market_sync: 'F',
+        description: '<main>상세</main>',
+        detail_image: 'https://img.example/hero.jpg',
+      },
+    }),
+    parseCafe24Raw: value => value.raw,
+    factoryRuntimeSha256Text: async value => `sha:${String(value)}`,
+    factoryCafe24CategoryNoSet: () => new Set(['107']),
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    CAFE24_CONTROL_API: { defaultMallId: '1' },
+  });
+  vm.runInContext(`${sourceFunction(CORE_BATCH, 'factoryRuntimeBatchCafe24Binding')}
+${sourceFunction(CORE_BATCH, 'factoryRuntimeBatchCafe24BindingMatches')}
+${sourceFunction(CORE_BATCH, 'factoryRuntimeVerifiedCafe24Readback')}
+this.bind = factoryRuntimeBatchCafe24Binding;
+this.readback = factoryRuntimeVerifiedCafe24Readback;`, context);
+  factory.product.cafe24BatchControlBinding = context.bind(batch);
+
+  const result = await context.readback(batch);
+  assert.equal(result.externalProductNo, '4120');
+
+  factory.product.cafe24RegistrationReceipt = { status: 'verified', mode: 'create', productNo: '2994' };
+  await assert.rejects(
+    context.readback(batch),
+    error => error.code === 'factory_cafe24_target_mismatch',
+  );
+});
 
 test('최종 등록은 stale Cafe24 후보가 같은 값이라고 해도 입력한 판매가를 실제 payload에 강제한다', async () => {
   const sent = [];
@@ -146,6 +590,107 @@ test('현재 섹션 HTML이 텍스트만 있어도 등록 전 현재 작업 상�
 
   assert.match(result.html, /<img\b/i, 'complete text-only export must not discard current-work detail images');
   assert.match(result.asset?.html || '', /current-detail\/image/);
+});
+
+test('복원된 미리보기 이미지가 줄어도 같은 작업의 14장 상세 보존본과 선택 A컷을 등록 대상으로 합친다', () => {
+  const imageHtml = (count, inline = false, offset = 0) => Array.from(
+    { length: count },
+    (_, index) => `<img src="${inline ? `data:image/png;base64,QUJD${index + offset}` : `https://cdn.example/detail-${index + offset + 1}.jpg`}" alt="섹션 ${index + offset + 1}">`,
+  ).join('');
+  const partialHtml = `<main>방울수저집${imageHtml(2)}</main>`;
+  const completeHtml = `<main>방울수저집${imageHtml(6, true)}<img src="data:image/png;base64,OLD_MATERIAL" alt="소재/기술 (Material &amp; Tech)">${imageHtml(7, true, 7)}</main>`;
+  const scopedDetail = compile(PAYLOADS, 'factoryCafe24CurrentScopedDetailHtml', {
+    state: { productName: '방울수저집', analysis: {}, sectionContents: {}, sectionImages: {} },
+    factoryCurrentPreviewSectionStatus: () => ({
+      requiredSections: Array.from({ length: 14 }, (_, index) => ({ id: `section-${index + 1}` })),
+      requiredIds: Array.from({ length: 14 }, (_, index) => `section-${index + 1}`),
+      generatedIds: Array.from({ length: 14 }, (_, index) => `section-${index + 1}`),
+      generated: 14,
+      total: 14,
+      complete: true,
+    }),
+    sectionWorkScopeMeta: () => ({ currentRunId: 'detail-run' }),
+    factoryCafe24ResolveSectionScopeCheck: () => ({ ok: true }),
+    buildExportHtml: () => partialHtml,
+    factoryCafe24StripDetailAdminLabels: value => String(value || ''),
+    factoryCafe24DetailHtmlPreflight: html => ({
+      ok: !String(html).includes('data:image/'),
+      hasInlineImage: String(html).includes('data:image/'),
+      hasAdminLabels: false,
+      hasLightPlaceholder: false,
+    }),
+    factoryCafe24DetailForeignProductCheck: () => ({ ok: true }),
+    factoryNormalizeIdentityText: value => String(value || '').replace(/\s+/g, '').toLowerCase(),
+    factoryAssetHasCurrentProductPayload: () => true,
+    factoryAssetDisplayImage: asset => asset.image || '',
+    escAttr: value => String(value),
+    SECTIONS: [{ id: 'material_tech', name: '소재/기술 (Material & Tech)' }],
+  });
+  const factory = {
+    product: { productName: '방울수저집', finalDb: { product_name: '방울수저집' } },
+    assets: [
+      { id: 'partial-newer', stageId: 'detail', type: 'html', used: true, createdAt: 200, html: partialHtml, metadata: { sectionCount: 14 } },
+      { id: 'complete-preserved', stageId: 'detail', type: 'html', used: true, createdAt: 100, html: completeHtml, metadata: { sectionCount: 14 } },
+      { id: 'selected-material', stageId: 'cuts', used: true, rejected: false, placedSectionId: 'material_tech', image: 'http://127.0.0.1:5050/api/local-archive/assets/selected-material/image' },
+    ],
+    detailPlacement: { 'selected-material': 'material_tech' },
+  };
+
+  const result = scopedDetail(factory);
+
+  assert.equal(result.source, 'detail-asset-richer-current');
+  assert.equal(result.asset.id, 'complete-preserved');
+  assert.equal(Array.from(result.html.matchAll(/<img\b/gi)).length, 14);
+  assert.match(result.html, /https:\/\/cdn\.example\/detail-1\.jpg/, '현재 섹션 이미지는 14장 보존본의 같은 섹션에 합성되어야 한다');
+  assert.match(result.html, /local-archive\/assets\/selected-material\/image/, '명시적으로 선택한 A컷은 부분 미리보기에 없어도 보존본보다 우선해야 한다');
+  assert.doesNotMatch(result.html, /OLD_MATERIAL/);
+});
+
+test('현재 미리보기가 14장이면 선택 A컷을 같은 섹션 이미지보다 우선한다', () => {
+  const currentHtml = `<main>방울수저집<img src="data:image/png;base64,OLD_MATERIAL" alt="소재/기술 (Material &amp; Tech)">${Array.from(
+    { length: 13 },
+    (_, index) => `<img src="https://cdn.example/detail-${index + 1}.jpg" alt="섹션 ${index + 1}">`,
+  ).join('')}</main>`;
+  const scopedDetail = compile(PAYLOADS, 'factoryCafe24CurrentScopedDetailHtml', {
+    state: { productName: '방울수저집', analysis: {}, sectionContents: {}, sectionImages: {} },
+    factoryCurrentPreviewSectionStatus: () => ({
+      requiredSections: Array.from({ length: 14 }, (_, index) => ({ id: `section-${index + 1}` })),
+      requiredIds: Array.from({ length: 14 }, (_, index) => `section-${index + 1}`),
+      generatedIds: Array.from({ length: 14 }, (_, index) => `section-${index + 1}`),
+      generated: 14,
+      total: 14,
+      complete: true,
+    }),
+    sectionWorkScopeMeta: () => ({ currentRunId: 'detail-run' }),
+    factoryCafe24ResolveSectionScopeCheck: () => ({ ok: true }),
+    buildExportHtml: () => currentHtml,
+    factoryCafe24StripDetailAdminLabels: value => String(value || ''),
+    factoryCafe24DetailHtmlPreflight: () => ({ ok: true, hasAdminLabels: false, hasLightPlaceholder: false }),
+    factoryCafe24DetailForeignProductCheck: () => ({ ok: true }),
+    factoryNormalizeIdentityText: value => String(value || '').replace(/\s+/g, '').toLowerCase(),
+    factoryAssetHasCurrentProductPayload: () => true,
+    factoryAssetDisplayImage: asset => asset.image || '',
+    escAttr: value => String(value),
+    SECTIONS: [{ id: 'material_tech', name: '소재/기술 (Material & Tech)' }],
+  });
+  const factory = {
+    product: { productName: '방울수저집', finalDb: { product_name: '방울수저집' } },
+    assets: [{
+      id: 'selected-material',
+      stageId: 'cuts',
+      used: true,
+      rejected: false,
+      placedSectionId: 'material_tech',
+      image: 'http://127.0.0.1:5050/api/local-archive/assets/selected-material/image',
+    }],
+    detailPlacement: { 'selected-material': 'material_tech' },
+  };
+
+  const result = scopedDetail(factory);
+
+  assert.equal(result.source, 'current-section-export');
+  assert.match(result.html, /local-archive\/assets\/selected-material\/image/);
+  assert.doesNotMatch(result.html, /OLD_MATERIAL/);
 });
 
 test('큰 로컬 상세 이미지는 등록용 경량 키로 보존해 전송 직전에 원본으로 확장한다', () => {
@@ -287,6 +832,34 @@ test('Cafe24 CDN으로 바뀐 기존 섹션은 alt로 중복을 막고 누락 �
   assert.match(result.html, /<\/div><\/body><\/html>$/i, 'missing image markup must be inserted before the closing body tag');
 });
 
+test('같은 섹션 이미지 후보가 여러 개여도 이미 배치된 14개 섹션 뒤에 중복 추가하지 않는다', () => {
+  const materialLabel = '소재/기술';
+  const html = `<html><body>${Array.from({ length: 14 }, (_, index) => (
+    `<img src="https://cdn.example/section-${index + 1}.jpg" alt="${index === 6 ? materialLabel : `상세 섹션 ${index + 1}`}">`
+  )).join('')}</body></html>`;
+  const ensure = compile(CORE, 'factoryEnsureCurrentDetailHtmlAsset', {
+    state: { analysis: {}, sectionContents: {}, sectionImages: {}, detailImageBlocks: [] },
+    factoryCafe24CurrentScopedDetailHtml: () => ({
+      html,
+      source: 'detail-asset-richer-current',
+      sectionCount: 14,
+    }),
+    factoryCurrentPreviewSectionStatus: () => ({ generated: 14, total: 14 }),
+    factoryRegistrationDetailImageRefs: () => [
+      { src: 'http://127.0.0.1:5050/api/local-archive/assets/material-a/image', label: materialLabel },
+      { src: 'data:image/png;base64,SAME_MATERIAL_A', label: materialLabel },
+    ],
+    orderedSections: () => [{ id: 'material_tech', name: materialLabel }],
+    escAttr: value => String(value),
+  });
+
+  const result = ensure({ product: {}, assets: [], stages: {} });
+
+  assert.equal(Array.from(result.html.matchAll(/<img\b/gi)).length, 14);
+  assert.equal(Array.from(result.html.matchAll(/alt="소재\/기술"/g)).length, 1);
+  assert.doesNotMatch(result.html, /material-a|SAME_MATERIAL_A/, '이미 배치된 섹션은 등록 직전 뒤에 다시 붙지 않아야 한다');
+});
+
 test('신규 최종 등록은 14개 생성 섹션 중 한 장만 확보되면 외부 상품 생성 전에 중단한다', async () => {
   const createCalls = [];
   const statuses = [];
@@ -332,7 +905,7 @@ test('신규 최종 등록은 14개 생성 섹션 중 한 장만 확보되면 �
   assert.match(statuses.join(' | '), /상세 이미지 1\/14장/, 'the operator must see the exact missing-image count');
 });
 
-test('신규 최종 등록은 화면의 판매가와 전체 재고 99를 create 경계에 명시적으로 고정한다', async () => {
+test('신규 최종 등록은 판매가를 고정하되 전체 재고 helper로 행별 재고를 덮지 않는다', async () => {
   const createCalls = [];
   const sync = {};
   const run = compile(CORE, 'factoryRunFinalRegistration', {
@@ -364,6 +937,8 @@ test('신규 최종 등록은 화면의 판매가와 전체 재고 99를 create 
     }),
     factoryUpdateFinalRegistrationStatus() {},
     factoryPatchFinalRegistrationStatusInPlace() {},
+    factoryCafe24BuildRegistrationReceiptPreflight: () => ({ status: 'preflight' }),
+    factoryCafe24FinalizeRegistrationReceipt: async () => ({ status: 'verified' }),
     factoryCreateCafe24ProductFromFinalDb: async options => { createCalls.push(options); return {}; },
     factoryRecordFinalRegistrationHistory: async () => ({}),
   });
@@ -373,7 +948,7 @@ test('신규 최종 등록은 화면의 판매가와 전체 재고 99를 create 
   assert.equal(result, true);
   assert.equal(createCalls.length, 1);
   assert.equal(createCalls[0].forceSalePrice, '4670', 'create must not fall back to a stale cached price');
-  assert.equal(createCalls[0].forceInventoryQuantity, '99', 'the visible all-inventory value must reach post-create inventory sync');
+  assert.equal(createCalls[0].forceInventoryQuantity, '', 'the bulk helper must not override saved per-row inventory');
 });
 
 test('신규 등록 payload는 확정 사이즈를 Cafe24 추가정보에 병합하고 기존 행은 보존한다', () => {
@@ -476,6 +1051,40 @@ test('신규 등록은 기본 제조·공급·브랜드와 대구 서구 원산�
   assert.match(SYNC, /factoryBuildCafe24UpdatePayload\(model\.finalDb, model\.fields, factory, \{[\s\S]{0,360}includeCreateReferenceDefaults:\s*true/);
 });
 
+test('Cafe24 payload는 원산지 표시값 0을 국가코드로 보내지 않는다', () => {
+  const removeInvalid = compile(PAYLOADS, 'factoryRemoveCafe24InvalidReferenceCodePayloadFields', {
+    FACTORY_CAFE24_STRICT_REFERENCE_CODE_FIELDS: new Set(['made_in_code']),
+    factoryCafe24StrictReferenceCodeValid: value => /^[A-Z0-9]+$/.test(String(value || '')),
+    factoryCafe24FieldLabelByApiField: value => value,
+  });
+  const invalid = { made_in_code: '0', origin_classification: 'E', origin_place_code: '1800' };
+  const valid = { made_in_code: 'CN' };
+
+  removeInvalid(invalid);
+  removeInvalid(valid);
+
+  assert.equal(Object.hasOwn(invalid, 'made_in_code'), false);
+  assert.equal(valid.made_in_code, 'CN');
+});
+
+test('Cafe24 상품 echo는 동일한 0퍼센트 적립금 표기를 일치로 판정한다', () => {
+  const normalizePoints = value => (Array.isArray(value) ? value : [])
+    .map(row => ({
+      points_rate: String(row?.points_rate || '').replace('%', ''),
+      points_unit_by_payment: String(row?.points_unit_by_payment || 'P'),
+    }));
+  const equal = compile(PAYLOADS, 'factoryCafe24ProductFieldValuesEqual', {
+    factoryCafe24PointsAmountPayload: normalizePoints,
+    factoryCafe24ValuesRoughlyEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+  });
+
+  assert.equal(equal(
+    'points_amount',
+    [{ points_rate: '0.00', points_unit_by_payment: 'P' }],
+    [{ points_rate: '0.00%' }],
+  ), true);
+});
+
 test('Cafe24 전송 직전 추가정보는 공식 key/value만 남겨 실제 저장되게 한다', () => {
   const normalize = compile(SYNC, 'factoryNormalizeCafe24AdditionalInformationForSave', {
     factoryCafe24AdditionalInformationPayload: value => value.map(row => ({ ...row })),
@@ -492,7 +1101,7 @@ test('Cafe24 전송 직전 추가정보는 공식 key/value만 남겨 실제 저
   ]);
 });
 
-test('직접 Cafe24 새 상품 등록도 로컬 대표이미지를 복원하고 화면의 전체 재고 99를 후속 전송에 고정한다', async () => {
+test('직접 Cafe24 새 상품 등록도 로컬 대표이미지를 복원하고 행별 재고를 후속 전송에 유지한다', async () => {
   const planInputs = [];
   const postInputs = [];
   const createRequests = [];
@@ -620,7 +1229,7 @@ test('직접 Cafe24 새 상품 등록도 로컬 대표이미지를 복원하고 
   assert.equal(createRequests[0].brand_code, 'B00000PU');
   assert.equal(createRequests[0].origin_classification, 'F');
   assert.equal(createRequests[0].origin_place_no, 102);
-  assert.equal(planInputs.every(input => input.forceInventoryQuantity === '99'), true, 'every direct-create plan must use the visible all-inventory quantity');
+  assert.equal(planInputs.every(input => input.forceInventoryQuantity === ''), true, 'direct-create plans must keep saved per-row inventory');
   assert.equal(postInputs.length, 1);
-  assert.equal(postInputs[0].forceInventoryQuantity, '99');
+  assert.equal(postInputs[0].forceInventoryQuantity, '');
 });

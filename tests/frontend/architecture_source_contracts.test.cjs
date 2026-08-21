@@ -358,6 +358,7 @@ test('저장 경계는 장시간 렌더 draft가 아니라 커밋된 Store 스�
   const projectFileExport = functionBlock(runtime, 'exportCurrentProjectFile');
   assert.match(projectFileExport, /factoryRuntimeReadCommittedFactory/);
   assert.doesNotMatch(projectFileExport, /factoryRuntimeReadFactory\(\)/);
+  assert.match(projectFileExport, /revision:\s*Number\(\s*bundle\.persistence\?\.revision\?\.counter\s*\?\?\s*bundle\.persistence\?\.revision\s*\?\?\s*0\s*,?\s*\)/);
   assert.match(
     projectFileExport,
     /indexeddb:\s*\{\s*records:\s*prepared\.records,\s*sessionAssets:\s*prepared\.sessionAssets\s*\}/,
@@ -380,7 +381,12 @@ test('현재 상태 저장은 최신 서버 revision에 재베이스하고 보�
   const saveCurrentProject = runtime.slice(start, end);
 
   assert.match(saveCurrentProject, /rebaseRevision:\s*true/);
-  assert.match(saveCurrentProject, /if \(commitResult\.protectedNoOp\) throw new Error\(/);
+  assert.match(
+    saveCurrentProject,
+    /serverSnapshot:\s*buildFactoryProjectPersistenceServerSnapshot\(\{[\s\S]*snapshot:\s*record\.payload,[\s\S]*scopeId,[\s\S]*\},\s*'project-save'\)/,
+    '현재 상태 저장도 서버 점수·A 상태 보존 검사를 통과할 수 있는 정규 서버 스냅샷을 보내야 합니다.',
+  );
+  assert.match(saveCurrentProject, /if \(commitResult\.protectedNoOp\) \{[\s\S]*throw new Error\(commitResult\.reason \|\|/);
   assert.ok(
     saveCurrentProject.indexOf('if (commitResult.protectedNoOp)')
       < saveCurrentProject.indexOf('markWorkspaceDocumentClean()'),
@@ -632,7 +638,7 @@ test('서버 권위 복원 전 일반 자동저장은 큐에만 넣고 복원된
   );
   assert.match(
     hydrateServer,
-    /shouldFlushPersistentStateAfterHydrate[\s\S]*serverLastWorkHydrated = true;[\s\S]*serverLastWorkHydrating = false;[\s\S]*setTimeout\(\(\) => savePersistentState\(\), 0\)/,
+    /shouldFlushPersistentStateAfterHydrate[\s\S]*serverLastWorkHydrated = true;[\s\S]*serverLastWorkHydrating = false;[\s\S]*setTimeout\(\(\) => savePersistentState\(\{\s*server:\s*shouldResaveAfterHydrate,\s*force:\s*shouldResaveAfterHydrate,\s*\}\), 0\)/,
     'queued startup persistence is not replayed from the restored server state',
   );
   assert.match(

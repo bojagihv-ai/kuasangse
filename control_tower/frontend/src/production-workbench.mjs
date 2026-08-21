@@ -5,8 +5,17 @@ import {
   buildACutSelectionCommand,
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
-} from './factory-sync-model.mjs';
-import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=1';
+  reconcileFactoryProjectionForSameWork,
+} from './factory-sync-model.mjs?selectedId=3';
+import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
+import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=1';
+import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
+import {
+  createWorkfileJobTabRegistry,
+  workfileIdentityMatches,
+  workfileTargetIdentityMatches,
+  workfileTabIdentity,
+} from './workfile-job-tabs-model.mjs?workfileTabs=2';
 
 export {
   buildCandidateReviewActions,
@@ -21,7 +30,10 @@ export {
   buildACutSelectionCommand,
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
-} from './factory-sync-model.mjs';
+  reconcileFactoryProjectionForSameWork,
+} from './factory-sync-model.mjs?selectedId=3';
+export { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
+export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=2';
 
 const STAGE_LABELS = Object.freeze({
   representative: '대표 이미지',
@@ -32,10 +44,11 @@ const STAGE_LABELS = Object.freeze({
   final_detail: '최종 상세페이지',
 });
 const INPUT_LABELS = Object.freeze({
-  product: '제품·DB 입력',
-  requirements: '필수값 스냅샷',
-  source_images: '기본·색상·옵션 이미지',
-  strategy: '전략·정책',
+  product: '제품과 자료 출처',
+  requirements: '필수값',
+  source_images: '제품·색상 이미지',
+  strategy: '자동화 방식',
+  competitors: '경쟁사 후보·상세 분석',
 });
 const AUTOMATION_DECISIONS = Object.freeze({
   sinhwa_db_product: '신화사 DB 제품 후보',
@@ -68,6 +81,7 @@ const STATUS_LABELS = Object.freeze({
   failed: '실패',
   completed: '완료',
   running: '진행 중',
+  queued: '대기',
   paused: '일시정지',
   waiting_manual: 'A컷 결정 필요',
   empty: '아직 생성되지 않음',
@@ -76,8 +90,14 @@ const STATUS_LABELS = Object.freeze({
   executing: '등록 실행 중',
   staged_verified: '등록 검증 완료',
   disconnected: '조립공장 연결 끊김',
+  unlinked: '연결 안 됨',
+  ambiguous: '연결 확인 필요',
+  rebind_required: '승인 파일 연결 필요',
+  target_rebind_required: '선택 작업 연결 승인 필요',
+  stale: '작업파일 갱신 필요',
 });
 const CANDIDATE_PAGE_SIZE = 24;
+const FACTORY_HISTORY_QUERY = 'factoryHistoryJob';
 const WORK_BUNDLE_ROLE_LABELS = Object.freeze({
   base: '기본 입력',
   'cafe24-candidate-image': 'Cafe24 후보',
@@ -96,6 +116,15 @@ const WORK_BUNDLE_ROLE_LABELS = Object.freeze({
   generated: '생성 결과',
   other: '기타',
 });
+const HISTORY_SELECTION_STAGE_LABELS = Object.freeze({
+  general: '일반 컷',
+  representative: '대표',
+  size: '사이즈',
+  option_color: '옵션·색상',
+  sections: '상세 섹션',
+  final_detail: '최종 상세',
+});
+const CAFE24_DEFAULT_MALL_ID = 'bojagi1928';
 
 function record(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -107,6 +136,345 @@ function list(value) {
 
 function text(value) {
   return String(value ?? '').trim();
+}
+
+function firstText(...values) {
+  return values.map(text).find(Boolean) || '';
+}
+
+export function buildWorkfileRebindPayload({ job: jobValue, projection: projectionValue, workfile: workfileValue }) {
+  const job = record(jobValue);
+  const projection = normalizeFactoryProjection(projectionValue);
+  const workfile = record(workfileValue);
+  const jobId = text(job.jobId);
+  const workfileText = typeof workfile.workfileText === 'string' ? workfile.workfileText : '';
+  if (!workfile.file || !workfileText.trim()) {
+    const error = new Error('workfile_reselect_required');
+    error.code = 'workfile_reselect_required';
+    throw error;
+  }
+  if (!jobId || text(projection.registration.jobId) !== jobId) {
+    const error = new Error('factory_job_view_not_current');
+    error.code = 'factory_job_view_not_current';
+    throw error;
+  }
+  const explicitTargetMatch = text(workfile.targetJobId) === jobId
+    && workfileTargetIdentityMatches(projection.session, workfile.identity);
+  if (
+    text(job.status) !== 'blocked'
+    || (!workfileIdentityMatches(projection.session, workfile.identity) && !explicitTargetMatch)
+  ) {
+    const error = new Error('factory_workfile_rebind_identity_mismatch');
+    error.code = 'factory_workfile_rebind_identity_mismatch';
+    throw error;
+  }
+  const current = workfileTabIdentity(projection.session);
+  const incoming = workfileTabIdentity(workfile.identity);
+  const sha256 = text(workfile.sha256).toLowerCase();
+  if (incoming.revision < current.revision || !incoming.runId || !/^[a-f0-9]{64}$/u.test(sha256)) {
+    const error = new Error('stale_workfile_revision');
+    error.code = 'stale_workfile_revision';
+    throw error;
+  }
+  return Object.freeze({
+    fileName: text(workfile.fileName),
+    workfileText,
+    expectedSha256: sha256,
+    expectedWorkspaceId: current.workspaceId,
+    expectedProductId: current.productId,
+    expectedProductKey: current.productKey,
+    expectedRunId: incoming.runId,
+    expectedInputFingerprint: current.inputFingerprint,
+    expectedWorkfileRevision: current.revision,
+    expectedHydratedWorkfileRevision: incoming.revision,
+    expectedCheckpointRevision: current.revision,
+    expectedCheckpointRunId: current.runId,
+    idempotencyKey: `workfile-rebind:${jobId}:${current.revision}:${incoming.revision}:${sha256}`,
+  });
+}
+
+export function buildWorkfileForkPayload({ projection: projectionValue, workfile: workfileValue }) {
+  const projection = normalizeFactoryProjection(projectionValue);
+  const workfile = record(workfileValue);
+  const identity = workfileTabIdentity(workfile.identity);
+  const classification = record(workfile.classification);
+  const workfileText = typeof workfile.workfileText === 'string' ? workfile.workfileText : '';
+  const sha256 = text(workfile.sha256).toLowerCase();
+  if (
+    !workfile.file
+    || !workfileText.trim()
+    || !/^[a-f0-9]{64}$/u.test(sha256)
+    || list(record(workfile.identity).conflicts).length
+    || !identity.workspaceId
+    || !identity.productKey
+    || !identity.runId
+    || !identity.inputFingerprint
+    || identity.revision < 0
+  ) {
+    const error = new Error('workfile_identity_invalid');
+    error.code = 'workfile_identity_invalid';
+    throw error;
+  }
+  if (
+    projection.registration.jobId
+    || ['workspaceId', 'productId', 'productKey', 'runId', 'inputFingerprint'].some(
+      field => text(projection.session[field]),
+    )
+  ) {
+    const error = new Error('factory_workfile_fork_foreign_live_job');
+    error.code = 'factory_workfile_fork_foreign_live_job';
+    throw error;
+  }
+  const requiredAliases = Object.freeze({
+    category: 'category',
+    material: 'material',
+    origin: 'originCountry',
+    originCountry: 'originCountry',
+    dimensions: 'size',
+    size: 'size',
+    sale_price: 'salePrice',
+    salePrice: 'salePrice',
+    stock: 'stock',
+    recommended_use: 'usage',
+    usage: 'usage',
+    optionMode: 'optionMode',
+  });
+  const requiredValues = Object.fromEntries(
+    list(record(classification.inputs).requiredFields)
+      .filter(field => text(record(field).status) === 'confirmed' && requiredAliases[text(record(field).key)])
+      .map(field => [requiredAliases[text(record(field).key)], text(record(field).value)])
+      .filter(([, value]) => value),
+  );
+  const productName = text(record(classification.product).name || workfile.fileName);
+  let hydratedProductId = identity.productId;
+  if (!hydratedProductId) {
+    try {
+      const document = record(JSON.parse(workfileText));
+      const payload = record(record(document.project).payload);
+      const assetPayload = record(payload.assetPayload);
+      const factory = record(Object.keys(record(payload.factory)).length ? payload.factory : assetPayload.factory);
+      const finalDb = record(record(factory.product).finalDb);
+      const productNos = [...new Set([finalDb.cafe24_product_no, finalDb.product_no]
+        .map(value => text(value))
+        .filter(value => /^[1-9]\d*$/u.test(value)))];
+      if (productNos.length > 1) {
+        const error = new Error('workfile_identity_invalid');
+        error.code = 'workfile_identity_invalid';
+        throw error;
+      }
+      if (productNos.length === 1) hydratedProductId = `cafe24:${productNos[0]}`;
+    } catch (error) {
+      if (error?.code === 'workfile_identity_invalid') throw error;
+    }
+  }
+  return Object.freeze({
+    fileName: text(workfile.fileName),
+    workfileText,
+    expectedSha256: sha256,
+    expectedWorkspaceId: identity.workspaceId,
+    expectedProductId: hydratedProductId || `factory:${identity.productKey}`,
+    expectedProductKey: identity.productKey,
+    expectedRunId: identity.runId,
+    expectedInputFingerprint: identity.inputFingerprint,
+    expectedWorkfileRevision: projection.session.revision,
+    expectedHydratedWorkfileRevision: identity.revision,
+    batchId: `workfile:${sha256.slice(0, 16)}`,
+    mode: 'manual',
+    productName,
+    requiredValues,
+    idempotencyKey: `factory-workfile-fork:${sha256}:${identity.revision}:manual`,
+  });
+}
+
+export function buildFactoryResumePayload({ job: jobValue, projection: projectionValue, imageModel = '' }) {
+  const job = record(jobValue);
+  const projection = normalizeFactoryProjection(projectionValue);
+  if (!text(job.jobId) || text(projection.registration.jobId) !== text(job.jobId)) {
+    const error = new Error('factory_job_view_not_current');
+    error.code = 'factory_job_view_not_current';
+    throw error;
+  }
+  if (!projection.session.runId || projection.session.revision < 0) {
+    const error = new Error('factory_product_checkpoint_invalid');
+    error.code = 'factory_product_checkpoint_invalid';
+    throw error;
+  }
+  return Object.freeze({
+    imageModel: text(imageModel),
+    expectedCheckpointRevision: projection.session.revision,
+    expectedCheckpointRunId: projection.session.runId,
+  });
+}
+
+function httpUrl(value) {
+  const candidate = text(value);
+  return /^https?:\/\//i.test(candidate) ? candidate : '';
+}
+
+export function cafe24RegistrationSummary(registrationValue, sessionValue = {}, receiptValue = null) {
+  const registration = record(registrationValue);
+  const session = record(sessionValue);
+  const receipt = record(receiptValue || registration.publicationReceipt);
+  const remote = record(receipt.remoteReadback || registration.remoteReadback);
+  const productNo = firstText(
+    receipt.remoteProductNo,
+    receipt.productNo,
+    receipt.externalProductNo,
+    remote.productNo,
+    registration.remoteProductNo,
+  );
+  const mallId = firstText(receipt.mallId, remote.mallId, registration.mallId, CAFE24_DEFAULT_MALL_ID);
+  const storefrontUrl = httpUrl(
+    firstText(receipt.storefrontUrl, receipt.productUrl, receipt.productLink, remote.storefrontUrl, remote.productUrl),
+  ) || (productNo
+    ? `https://${mallId}.cafe24.com/product/detail.html?product_no=${encodeURIComponent(productNo)}`
+    : '');
+  const adminUrl = httpUrl(firstText(receipt.adminUrl, remote.adminUrl)) || (productNo
+    ? `https://${mallId}.cafe24.com/disp/admin/shop1/product/ProductRegister?product_no=${encodeURIComponent(productNo)}`
+    : '');
+  const status = firstText(receipt.status, registration.status);
+  return Object.freeze({
+    status,
+    registered: status === 'staged_verified' || receipt.schema === 'factory-cafe24-terminal-publication-receipt:v1' || receipt.schema === 'kuasangse.cafe24-publication-receipt',
+    jobId: firstText(receipt.jobId, registration.jobId),
+    productName: firstText(receipt.productName, remote.productName, registration.productKey, session.productKey),
+    productNo,
+    productCode: firstText(receipt.productCode, remote.productCode, registration.productCode),
+    mallId,
+    registrationMode: firstText(receipt.registrationMode, registration.mode),
+    sourceWorkfileName: firstText(receipt.sourceWorkfileName, registration.sourceWorkfileName, session.workfileName),
+    registeredAt: firstText(receipt.registeredAt, remote.updatedAt),
+    representativeImageCount: Number(remote.representativeImageCount || receipt.representativeImageCount || 0),
+    detailImageCount: Number(remote.detailImageCount || receipt.detailImageCount || 0),
+    variantCount: Number(remote.variantCount || receipt.variantCount || 0),
+    storefrontUrl,
+    adminUrl,
+    receiptId: firstText(receipt.receiptId),
+  });
+}
+
+export function buildWorkfilePublicationLedger(projectionValue, receiptValue = null, historyValue = null) {
+  const projection = record(projectionValue);
+  const session = record(projection.session);
+  const registration = record(projection.registration);
+  const history = record(historyValue);
+  const publication = cafe24RegistrationSummary(registration, session, receiptValue);
+  const receiptCandidates = [
+    record(receiptValue),
+    record(registration.publicationReceipt),
+    ...list(projection.receipts).map(record),
+  ];
+  const seen = new Set();
+  const publications = receiptCandidates.flatMap(candidate => {
+    const summary = cafe24RegistrationSummary(candidate, session, candidate);
+    if (!summary.productNo) return [];
+    const key = summary.receiptId || `${summary.jobId}|${summary.productNo}|${summary.productName}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [summary];
+  });
+  const workfileName = firstText(
+    publication.sourceWorkfileName,
+    history.workfileFolderName,
+    history.workfileName,
+    projection.workBundle?.workfileName,
+    session.workfileName,
+  );
+  const workfileSource = publication.sourceWorkfileName
+    ? 'Cafe24 등록 영수증에 기록된 파일명'
+    : history.workfileFolderName || history.workfileName
+      ? 'kuasangse 완료 작업 이력'
+      : session.workfileSource
+        ? `상세페이지 프로그램 저장 · ${session.workfileSource}`
+      : session.workfileName
+        ? '조립공장 session 연결값'
+        : '연결된 작업파일 없음';
+  const workfileExact = Boolean(
+    publication.sourceWorkfileName
+    || /\.kuasangse$/i.test(text(session.workfileName)),
+  );
+  return Object.freeze({
+    workfileName,
+    workfileSource,
+    workfileExact,
+    workfileConnected: Boolean(workfileName),
+    creationMode: workfileExact
+      ? session.workfileSource
+        ? '상세페이지 프로그램 기존 저장 로직으로 제품명 .kuasangse 자동 생성'
+        : '기존 .kuasangse 연결 · 생산관제 자동 새 작업 생성 기록 없음'
+      : workfileName
+        ? '완료 이력 폴더만 확인 · 실제 .kuasangse 파일명·경로 미기록'
+        : '생산관제 자동 새 .kuasangse 생성 기록 없음',
+    workspaceId: text(session.workspaceId),
+    productKey: firstText(session.productKey, registration.productKey),
+    runId: text(session.runId),
+    revision: Number(session.revision || 0),
+    publication,
+    publications: Object.freeze(publications),
+  });
+}
+
+export function factoryHistoryJobFromLocation(search = '') {
+  return text(new URLSearchParams(text(search)).get(FACTORY_HISTORY_QUERY));
+}
+
+export function defaultCompletedHistoryJobId(jobsValue, stateValue = {}) {
+  const state = record(stateValue);
+  if (state.hasSession === true || text(state.historyJobId) || text(state.requestedBundleId)) return '';
+  const jobs = list(jobsValue);
+  if (jobs.length !== 1) return '';
+  const job = record(jobs[0]);
+  return text(job.status) === 'completed' ? text(job.jobId) : '';
+}
+
+export function resolveLocalFactoryJobMode(projectionValue, jobsValue) {
+  const jobId = text(record(record(projectionValue).registration).jobId);
+  if (!jobId.startsWith('factory-job-')) return '';
+  return text(list(jobsValue).find(job => text(record(job).jobId) === jobId)?.mode);
+}
+
+export function resolveLocalFactoryStageMode(projectionValue, jobsValue, stageKey) {
+  const jobId = text(record(record(projectionValue).registration).jobId);
+  if (!jobId.startsWith('factory-job-')) return '';
+  const job = list(jobsValue).find(item => text(record(item).jobId) === jobId);
+  const decisionId = STAGE_DECISIONS[text(stageKey)];
+  const mode = text(record(record(record(job).policy).resolved)[decisionId]);
+  return ['auto', 'manual'].includes(mode) ? mode : text(record(job).mode);
+}
+
+export function manualACutDecisionIds(jobValue) {
+  const resolved = record(record(record(jobValue).policy).resolved);
+  return Object.freeze(Object.entries(resolved)
+    .filter(([decision]) => Object.values(STAGE_DECISIONS).includes(decision))
+    .filter(([, mode]) => mode === 'manual')
+    .map(([decision]) => decision));
+}
+
+export function waitingManualJobAction(jobValue, stageValue) {
+  return Boolean(stageValue?.selectedId) ? 'resume' : 'open';
+}
+
+export function projectQueueProducts(projectionValue) {
+  const current = normalizeFactoryProjection(projectionValue);
+  if (current.products.length) return current.products;
+  if (!current.connected || (!text(current.session.productId) && !text(current.session.productKey))) return [];
+  return [{
+    productId: current.session.productId,
+    productKey: current.session.productKey,
+    progress: current.progress,
+  }];
+}
+
+export function cafe24RegistrationTargetLabel(registrationValue, sessionValue) {
+  const registration = record(registrationValue);
+  const session = record(sessionValue);
+  const target = text(registration.productId || session.productId);
+  if (text(registration.mode) === 'update' && target.startsWith('cafe24:')) {
+    return `기존 상품 #${target.slice('cafe24:'.length)} 수정`;
+  }
+  return target.startsWith('cafe24:')
+    ? `새 상품 등록 · 참고 상품 #${target.slice('cafe24:'.length)}`
+    : '새 상품 등록';
 }
 
 export function normalizeWorkBundle(value) {
@@ -290,24 +658,30 @@ export function createAutomaticSelectionScheduler({ submit }) {
     projection,
     workBundle,
     policySnapshot = {},
+    localJob = null,
     isAutomatic = () => false,
   }) {
     const current = normalizeFactoryProjection(projection);
     const bundle = normalizeWorkBundle(workBundle);
+    const jobId = text(current.registration.jobId);
     if (
       current.connected !== true
       || record(policySnapshot).locked !== true
-      || !bundle.id
-      || !bundleMatchesBinding(bundle, current.session)
+      || (jobId.startsWith('factory-job-') && (
+        text(record(localJob).jobId) !== jobId
+        || text(record(localJob).status) !== 'waiting_manual'
+      ))
+      || (!text(current.registration.jobId).startsWith('factory-job-') && !bundle.id)
+      || (!text(current.registration.jobId).startsWith('factory-job-') && !bundleMatchesBinding(bundle, current.session))
       || !text(current.registration.jobId)
     ) return null;
     const stage = current.stages.find(item => (
       !item.selectedId
       && item.candidates.length > 0
       && isAutomatic(item) === true
-      && item.candidates.every(candidate => (
+      && (text(current.registration.jobId).startsWith('factory-job-') || item.candidates.every(candidate => (
         resolveCandidateAsset(candidate, bundle.assets, item.key).status === 'matched'
-      ))
+      )))
     ));
     if (!stage) return null;
     const key = [
@@ -327,9 +701,13 @@ export function createAutomaticSelectionScheduler({ submit }) {
   };
 }
 
-export function workBundleAssetPage(value, phase, page = 0) {
+export function workBundleAssetPage(value, phase, page = 0, factoryStageKey = '') {
   const bundle = normalizeWorkBundle(value);
-  const items = bundle.assets.filter(asset => asset.phase === phase);
+  const stageKey = text(factoryStageKey);
+  const items = bundle.assets.filter(asset => (
+    asset.phase === phase
+    && (!stageKey || text(asset.factoryStageKey) === stageKey)
+  ));
   const pageCount = Math.max(1, Math.ceil(items.length / CANDIDATE_PAGE_SIZE));
   const current = Math.max(0, Math.min(Number(page) || 0, pageCount - 1));
   return Object.freeze({
@@ -377,21 +755,36 @@ export function projectFactoryConnectivity(projectionValue, {
   transport = 'connecting',
   lastEventAt = '',
   apiError = '',
+  hasDurableQueue = false,
 } = {}) {
   const projection = record(projectionValue);
   const reason = text(projection.reason || projection.blockReason);
+  const apiErrorText = text(apiError);
   const streamState = ['live', 'reconnecting', 'connecting'].includes(transport) ? transport : 'connecting';
   const transportLabel = streamState === 'live'
     ? '상태 스트림 연결됨'
     : streamState === 'reconnecting'
       ? '상태 스트림 재연결 중'
       : '상태 스트림 연결 중';
-  if (text(apiError)) {
+  if (apiErrorText && (projection.connected === true || hasDurableQueue)) {
+    const queueRetained = projection.connected !== true && hasDurableQueue;
+    return Object.freeze({
+      state: 'degraded',
+      factoryLabel: queueRetained ? '생산관제 상태 조회 실패' : '생산관제 상태 갱신 지연',
+      transportLabel,
+      detail: queueRetained
+        ? `상태 조회 실패 · 마지막 작업 큐 유지: ${apiErrorText}`
+        : `마지막 정상 상태 유지 · 상태 갱신 실패: ${apiErrorText}`,
+      observedAt: text(lastEventAt || projection.capturedAt),
+      tone: 'warn',
+    });
+  }
+  if (apiErrorText) {
     return Object.freeze({
       state: 'backend-error',
       factoryLabel: '생산관제 서버 오류',
       transportLabel,
-      detail: `상태 조회 실패 · ${text(apiError)}`,
+      detail: `상태 조회 실패 · ${apiErrorText}`,
       observedAt: text(lastEventAt || projection.capturedAt),
       tone: 'error',
     });
@@ -414,6 +807,45 @@ export function projectFactoryConnectivity(projectionValue, {
     observedAt: text(lastEventAt || projection.capturedAt),
     tone: 'error',
   });
+}
+
+export function projectFactoryQueueRenderModel(projectionValue, jobsValue, {
+  transport = 'connecting',
+  lastEventAt = '',
+  apiError = '',
+} = {}) {
+  const projection = normalizeFactoryProjection(projectionValue);
+  const queue = Object.freeze(list(jobsValue)
+    .filter(job => job && typeof job === 'object' && !Array.isArray(job) && typeof job.jobId === 'string' && job.jobId.trim())
+    .map(job => Object.freeze({ ...job })));
+  const projectionJobId = text(projection.registration.jobId);
+  const resumableJobs = queue.filter(job => ['waiting_manual', 'running', 'blocked'].includes(text(job.status)));
+  const activeJob = queue.find(job => text(job.jobId) === projectionJobId)
+    || (resumableJobs.length === 1 ? resumableJobs[0] : null)
+    || (queue.length === 1 ? queue[0] : null)
+    || null;
+  const connectivity = projectFactoryConnectivity(projection, {
+    transport,
+    lastEventAt,
+    apiError,
+    hasDurableQueue: queue.length > 0,
+  });
+  const detail = activeJob && Object.freeze({
+    root: 'operator-queue-selection',
+    job: activeJob,
+    status: text(activeJob.status),
+    active: text(activeJob.jobId) === projectionJobId,
+    copy: connectivity.state === 'degraded' ? '상태 조회 실패 · 저장된 작업 큐 정보를 표시합니다.' : '',
+  });
+  return Object.freeze({ queue, activeJob, connectivity, detail });
+}
+
+export function currentFactoryProductLabel(stateValue, activeJobValue) {
+  const state = record(stateValue);
+  const session = record(state.session || state);
+  const registration = record(state.registration);
+  const activeJob = record(activeJobValue);
+  return firstText(state.productKey, session.productKey, registration.productKey, activeJob.productKey, activeJob.productName);
 }
 
 export function applyFactorySseMessage(currentValue, factoryEventCursor, event) {
@@ -453,7 +885,7 @@ export function applyFactorySseMessage(currentValue, factoryEventCursor, event) 
         throw new FactorySyncConflict('stale_event_sequence');
       }
     } else {
-      next = normalizeFactoryProjection({
+      next = reconcileFactoryProjectionForSameWork(current, {
         ...candidate,
         receipts: payload.receipt
           ? [...current.receipts, payload.receipt]
@@ -466,12 +898,20 @@ export function applyFactorySseMessage(currentValue, factoryEventCursor, event) 
       schema: FACTORY_CONTROL_EVENT_VERSION,
       eventId: text(event.lastEventId),
     });
-  } else if (payload.type !== 'factory.worker.failed') {
+  } else if (![
+    'factory.worker.failed',
+    'factory.product.queued',
+    'factory.product.updated',
+    'factory.product.checkpoint.rebound',
+  ].includes(payload.type)) {
     throw new FactorySyncConflict('factory_event_payload_invalid');
   }
   return Object.freeze({
     projection: next,
     factoryEventCursor: text(event.lastEventId),
+    job: payload.job && typeof payload.job === 'object' && !Array.isArray(payload.job)
+      ? Object.freeze({ ...payload.job })
+      : null,
   });
 }
 
@@ -482,22 +922,112 @@ function element(tag, className = '', value = '') {
   return node;
 }
 
-export function createWorkBundleAssetCard(asset, assetUrl = value => value) {
+export function renderWorkfileJobTabs(root, snapshotValue, onActivate = () => {}) {
+  const snapshot = record(snapshotValue);
+  const tabs = list(snapshot.tabs);
+  root.replaceChildren();
+  root.setAttribute('role', 'tablist');
+  if (!tabs.length) {
+    root.append(element('p', 'status-message', '작업 큐 또는 .kuasangse 파일을 열면 작업 탭이 표시됩니다.'));
+    return;
+  }
+  const buttons = tabs.map((tabValue, index) => {
+    const tab = record(tabValue);
+    const button = element('button', 'workfile-job-tab');
+    const active = tab.active === true;
+    button.type = 'button';
+    button.id = `workfile-job-tab-${index + 1}`;
+    button.dataset.tabKey = text(tab.key);
+    button.dataset.linkState = text(tab.linkState);
+    button.dataset.status = text(tab.status);
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(active));
+    button.setAttribute('aria-controls', 'workfile-job-tabpanel');
+    button.tabIndex = active ? 0 : -1;
+    button.title = text(tab.workfileName || tab.productName);
+    const identity = element('span', 'workfile-job-tab-copy');
+    identity.append(
+      element('strong', '', text(tab.productName || tab.workfileName || '제품 이름 없음')),
+      element('span', 'workfile-job-tab-file', text(tab.workfileName || '작업파일 연결 필요')),
+    );
+    const meta = element('span', 'workfile-job-tab-meta');
+    meta.append(
+      element('span', 'factory-pill', STAGE_LABELS[text(tab.stageKey)] || text(tab.stageKey) || '공정 대기'),
+      element('span', 'factory-pill', statusLabel(tab.mode)),
+      element('span', 'factory-pill', statusLabel(tab.status)),
+      element('span', 'factory-pill', `누락 ${Number(tab.missingCount || 0)}`),
+      element('span', 'factory-pill', `선택 ${Number(tab.selectedCount || 0)} · 남음 ${Number(tab.remainingCount || 0)}`),
+      element('span', 'factory-pill workfile-link-pill', ({
+        linked: '연결됨',
+        rebind_required: '승인 파일 연결 필요',
+        target_rebind_required: '선택 작업 연결 승인 필요',
+        ambiguous: '연결 모호',
+        stale: '현재 작업과 불일치',
+        unlinked: '연결 필요',
+      })[text(tab.linkState)] || '연결 확인'),
+    );
+    button.append(identity, meta);
+    const focusRenderedTab = key => queueMicrotask(() => {
+      [...root.children].find(child => text(child.dataset?.tabKey) === key)?.focus();
+    });
+    const activate = () => {
+      const key = text(tab.key);
+      onActivate(key);
+      focusRenderedTab(key);
+    };
+    button.addEventListener('click', activate);
+    button.addEventListener('keydown', event => {
+      const key = String(event.key ?? '');
+      if (key === 'Enter' || key === ' ') {
+        event.preventDefault();
+        activate();
+        return;
+      }
+      const targetIndex = key === 'Home'
+        ? 0
+        : key === 'End'
+          ? buttons.length - 1
+          : key === 'ArrowLeft' || key === 'ArrowUp'
+            ? (index - 1 + buttons.length) % buttons.length
+            : key === 'ArrowRight' || key === 'ArrowDown'
+              ? (index + 1) % buttons.length
+              : -1;
+      if (targetIndex < 0) return;
+      event.preventDefault();
+      const targetKey = text(tabs[targetIndex].key);
+      buttons[targetIndex].focus();
+      onActivate(targetKey);
+      focusRenderedTab(targetKey);
+    });
+    return button;
+  });
+  root.append(...buttons);
+}
+
+export function createWorkBundleAssetCard(asset, assetUrl = value => value, display = {}) {
+  const displayTitle = text(display.title) || asset.displayName || asset.assetKey;
+  const displayDetail = text(display.detail);
   const card = element('article', 'a-cut-candidate work-bundle-asset');
   card.dataset.assetId = asset.id;
   card.dataset.assetKey = asset.assetKey;
   card.dataset.role = asset.role;
   card.dataset.factoryStageKey = asset.factoryStageKey;
-  const frame = element('div', 'a-cut-thumb');
+  card.dataset.selectionState = asset.selectionState;
+  const frame = element('button', 'a-cut-thumb work-bundle-image-trigger');
+  frame.type = 'button';
+  frame.dataset.assetId = asset.id;
   const placeholder = element('p', 'factory-empty-state', '미리보기 없음');
   if (asset.thumbnailReference) {
     const image = element('img');
-    image.src = assetUrl(asset.thumbnailReference);
-    image.alt = asset.displayName || `${asset.role} 자산`;
-    image.loading = 'lazy';
+    const imageUrl = assetUrl(asset.thumbnailReference);
+    image.src = imageUrl;
+    image.alt = displayTitle || `${asset.role} 자산`;
+    image.loading = 'eager';
     image.decoding = 'async';
     image.width = 160;
     image.height = 120;
+    frame.dataset.action = 'view-work-bundle-image';
+    frame.setAttribute('aria-label', `${image.alt} 크게 보기`);
     image.addEventListener('error', () => {
       placeholder.textContent = '이미지 불러오기 실패';
       placeholder.dataset.broken = 'true';
@@ -508,11 +1038,18 @@ export function createWorkBundleAssetCard(asset, assetUrl = value => value) {
     frame.append(placeholder);
   }
   const meta = element('div', 'a-cut-candidate-meta');
+  const selectionLabel = ({ selected: '선택됨', confirmed: '확정됨', candidate: '후보' })[asset.selectionState] || '작업 자료';
+  const roleLabel = WORK_BUNDLE_ROLE_LABELS[asset.role] || '작업 자료';
+  const stageLabel = STAGE_LABELS[asset.factoryStageKey] || STAGE_LABELS[asset.stage] || roleLabel;
+  const selectionEvidence = text(record(asset.metadata).selectionEvidence);
   meta.append(
-    element('strong', '', asset.displayName || asset.assetKey),
-    element('span', 'factory-pill', asset.selectionState || 'contract'),
-    element('small', 'status-message', `role ${asset.role} · stage ${asset.stage || '—'}`),
+    element('strong', 'asset-card-title', displayTitle),
+    element('span', 'factory-pill', selectionLabel),
+    element('small', 'status-message asset-card-detail', displayDetail || `${roleLabel} · ${stageLabel}${selectionEvidence ? ' · 최종 선택 연결' : ''}`),
   );
+  if (displayDetail && asset.displayName && displayDetail !== asset.displayName) {
+    meta.append(element('small', 'status-message asset-archive-name', asset.displayName));
+  }
   card.append(frame, meta);
   return card;
 }
@@ -528,11 +1065,47 @@ function statusLabel(value) {
   return STATUS_LABELS[text(value).toLowerCase()] || text(value) || '상태 없음';
 }
 
+function policySourceLabel(value) {
+  return ({
+    stage: '현재 단계 설정',
+    product: '현재 제품 설정',
+    batch: '생산 묶음 설정',
+    batch_preset: '자동화 방식',
+    auto_default: '조립공장 기본값',
+    policy_snapshot: '실행 시작 때 확정한 설정',
+  })[text(value)] || '현재 설정';
+}
+
+function registrationBlockerLabel(value) {
+  const key = text(value);
+  const fixed = {
+    product_id: 'Cafe24 등록 방식을 선택해 주세요.',
+    product_key: '제품명을 확인해 주세요.',
+    run_id: '조립공장 작업 회차를 확인해 주세요.',
+    input_fingerprint: '입력 제품 이미지를 확인해 주세요.',
+    category_id: 'Cafe24 상품분류를 확인해 주세요.',
+    html_digest: '최종 상세페이지를 완성해 주세요.',
+    image_digests: '등록할 이미지를 확정해 주세요.',
+  };
+  if (fixed[key]) return fixed[key];
+  const stageMatch = /^(.+)_a_cut$/.exec(key);
+  if (stageMatch) return `${STAGE_LABELS[stageMatch[1]] || '현재 단계'} 선택 결과를 확정해 주세요.`;
+  return key.replaceAll('_', ' ') || '등록 준비 상태를 확인해 주세요.';
+}
+
 function elapsedLabel(value) {
   const totalSeconds = Math.max(0, Math.floor(Number(value || 0) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes ? `${minutes}분 ${seconds}초` : `${seconds}초`;
+}
+
+function visibleFactoryMessage(value, stageKey = '') {
+  const message = text(value);
+  if (!message) return '';
+  if (/selection required/i.test(message)) return `${STAGE_LABELS[text(stageKey)] || '현재 단계'} A컷 선택 필요`;
+  if (/factory worker failed/i.test(message)) return '조립공장 실행 실패';
+  return message;
 }
 
 function selectedStage(projection, stageKey) {
@@ -585,7 +1158,9 @@ export function buildCafe24StagingPayload(projectionValue) {
     categoryId: text(registration.categoryId),
     htmlDigest: text(registration.htmlDigest),
     imageDigests,
-    expectedWorkfileRevision: session.revision,
+    expectedWorkfileRevision: Number.isInteger(registration.expectedWorkfileRevision)
+      ? registration.expectedWorkfileRevision
+      : session.revision,
     expectedRunId: session.runId,
     expectedInputFingerprint: session.inputFingerprint,
     idempotencyKey: text(registration.idempotencyKey),
@@ -608,8 +1183,54 @@ export function buildCafe24StagingPayload(projectionValue) {
   return Object.freeze(payload);
 }
 
+export async function acquireControlSession({ assetUrl = value => value, fetchImpl = globalThis.fetch } = {}) {
+  const response = await fetchImpl(assetUrl('/api/session'), { credentials: 'include', cache: 'no-store' });
+  const session = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(String(session.error?.code || `HTTP_${response.status}`));
+    error.status = response.status;
+    error.code = String(session.error?.code || '');
+    throw error;
+  }
+  return session;
+}
+
+export function createCsrfRetryingApiRequest({ apiRequest, assetUrl = value => value, fetchImpl = globalThis.fetch }) {
+  return async (path, options = {}) => {
+    try {
+      return await apiRequest(path, options);
+    } catch (error) {
+      if (text(options.method).toUpperCase() === 'GET' || error?.status !== 428 || error?.code !== 'csrf_required') throw error;
+      const session = await acquireControlSession({ assetUrl, fetchImpl });
+      const headers = {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+        'X-Control-Tower-Session': text(session.sessionId),
+        'X-Control-Tower-CSRF': text(session.csrfToken),
+      };
+      const response = await fetchImpl(assetUrl(path), { ...options, cache: 'no-store', headers, credentials: 'include' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const retryError = new Error(String(body.error?.code || `HTTP_${response.status}`));
+        retryError.status = response.status;
+        retryError.code = String(body.error?.code || '');
+        throw retryError;
+      }
+      return body;
+    }
+  };
+}
+
+export function coalesceRefreshState(refreshState) {
+  let inFlight = null;
+  return () => {
+    if (!inFlight) inFlight = Promise.resolve(refreshState()).finally(() => { inFlight = null; });
+    return inFlight;
+  };
+}
+
 export function mountProductionWorkbench({
-  apiRequest,
+  apiRequest: baseApiRequest,
   assetUrl = value => value,
   setStatus = () => {},
   EventSourceImpl = globalThis.EventSource,
@@ -624,22 +1245,37 @@ export function mountProductionWorkbench({
     sync: document.getElementById('factory-sync-bar'),
     syncSummary: document.getElementById('sync-disclosure-summary-text'),
     product: document.getElementById('factory-product-progress'),
+    ledger: document.getElementById('workfile-report-ledger'),
     map: document.getElementById('io-progress-map'),
     candidates: document.getElementById('a-cut-contact-sheet'),
     inspector: document.getElementById('artifact-inspector'),
     registration: document.getElementById('factory-registration-panel'),
     queue: document.getElementById('product-list'),
+    queueTotal: document.getElementById('operator-queue-total'),
+    queueSelection: document.getElementById('operator-queue-selection'),
     policy: document.getElementById('automation-policy-matrix'),
     policySummary: document.getElementById('automation-policy-summary'),
     overview: document.getElementById('overview-stage-summary'),
     stageSubnav: document.getElementById('stage-subnav'),
+    resultWorkspace: document.getElementById('production-result-workspace'),
     competitors: document.getElementById('competitor-source-summary'),
     audit: document.getElementById('audit-sync-summary'),
     bundleInputs: document.getElementById('work-bundle-input-assets'),
     bundleOutputs: document.getElementById('work-bundle-output-assets'),
+    workfileTabs: document.getElementById('workfile-job-tabs'),
+    workfileTabPanel: document.getElementById('workfile-job-tabpanel'),
+    imageDialog: document.getElementById('work-bundle-image-dialog'),
+    imageDialogImage: document.getElementById('work-bundle-image-dialog-image'),
+    imageDialogTitle: document.getElementById('work-bundle-image-dialog-title'),
+    imageDialogMeta: document.getElementById('work-bundle-image-dialog-meta'),
   };
-  const requiredRoots = ['sync', 'product', 'map', 'candidates', 'inspector', 'registration', 'queue', 'policy', 'policySummary', 'bundleInputs', 'bundleOutputs'];
-  if (typeof apiRequest !== 'function' || requiredRoots.some(key => !roots[key])) return () => {};
+  const requiredRoots = ['sync', 'product', 'ledger', 'map', 'candidates', 'inspector', 'registration', 'queue', 'policy', 'policySummary', 'bundleInputs', 'bundleOutputs', 'workfileTabs', 'workfileTabPanel'];
+  if (typeof baseApiRequest !== 'function' || requiredRoots.some(key => !roots[key])) return () => {};
+  const apiRequest = createCsrfRetryingApiRequest({ apiRequest: baseApiRequest, assetUrl });
+  roots.imageDialog?.addEventListener('click', event => {
+    if (event.target === roots.imageDialog) closeWorkBundleImagePreview();
+  });
+  roots.imageDialog?.addEventListener('close', closeWorkBundleImagePreview);
 
   let projection = normalizeFactoryProjection(disconnectedFactoryProjection());
   let selectedStageKey = '';
@@ -654,13 +1290,26 @@ export function mountProductionWorkbench({
   let fallbackTimer = 0;
   let stopped = false;
   let registrationMessage = '';
+  let registrationRenderKey = '';
   let lastAutomationReceipt = null;
   let workBundle = normalizeWorkBundle({});
   let workBundleStatus = 'loading';
   let workBundleError = '';
+  let workBundleHistory = null;
+  const initialHistoryJobId = factoryHistoryJobFromLocation(window.location.search);
+  let archivedJobId = initialHistoryJobId;
   let workBundleInputPage = 0;
   let workBundleOutputPage = 0;
+  let workBundleOutputStageKey = '';
   let workBundleGeneration = 0;
+  let productJobs = [];
+  const workfileTabs = createWorkfileJobTabRegistry();
+  const workfileInput = document.getElementById('workfile-input');
+  let pendingWorkfileTargetJobId = '';
+  let queueApiError = '';
+  const pendingResumeByStage = new Map();
+  const resumeInFlight = new Set();
+  const workfileForkInFlight = new Set();
   const heldDecisions = new Set();
   let approval = {
     preview: null,
@@ -668,9 +1317,41 @@ export function mountProductionWorkbench({
     status: 'missing',
     receipt: null,
   };
+  let registrationTargetConfirmed = false;
   const fixtureCount = Math.max(0, Number.parseInt(new URLSearchParams(window.location.search).get('fixtureCount') || '0', 10) || 0);
   const fixtureMode = fixtureCount > 0;
   const requestedWorkBundleId = text(new URLSearchParams(window.location.search).get('bundleId'));
+
+  function rememberActiveTabView() {
+    workfileTabs.rememberView({ selectedStageKey, inspectedCandidateId });
+  }
+
+  function viewedProjection() {
+    const active = workfileTabs.active();
+    return active?.key ? workfileTabs.projectionFor(active.key) || projection : projection;
+  }
+
+  function viewedJob() {
+    const active = workfileTabs.active();
+    return active?.jobId ? workfileTabs.jobFor(active.key) : null;
+  }
+
+  function viewMatchesLiveProjection() {
+    const active = workfileTabs.active();
+    return Boolean(active?.jobId && active.jobId === text(projection.registration.jobId));
+  }
+
+  function activateWorkfileTab(key) {
+    rememberActiveTabView();
+    if (!workfileTabs.activate(key)) return;
+    const active = workfileTabs.active();
+    const current = viewedProjection();
+    const stage = selectedStage(current, active?.selectedStageKey || active?.stageKey);
+    selectedStageKey = stage?.key || active?.selectedStageKey || '';
+    inspectedCandidateId = active?.inspectedCandidateId || stage?.selectedId || stage?.candidates[0]?.id || '';
+    candidatePage = 0;
+    render();
+  }
 
   function savingKey(stageKey, productId = projection.session.productId) {
     return `${text(productId)}:${text(stageKey)}`;
@@ -678,6 +1359,14 @@ export function mountProductionWorkbench({
 
   function stageSaving(stageKey) {
     return savingByTarget.get(savingKey(stageKey)) || null;
+  }
+
+  function automaticDecisionHeld(job, stageKey) {
+    const mode = text(record(record(record(job).policy).resolved)[STAGE_DECISIONS[stageKey]]) || text(job?.mode);
+    return mode === 'auto' && (
+      job.decisionStatus === 'manual_required'
+      || heldDecisions.has(STAGE_DECISIONS[stageKey])
+    );
   }
 
   function policyPreset() {
@@ -726,9 +1415,9 @@ export function mountProductionWorkbench({
     select.dataset.policyLevel = level;
     select.setAttribute('aria-label', `${AUTOMATION_DECISIONS[decisionId]} ${level}`);
     select.append(
-      new Option('상속', ''),
-      new Option('자동 ON', 'auto'),
-      new Option('자동 OFF', 'manual'),
+      new Option('위 설정 따르기', ''),
+      new Option('자동 판단', 'auto'),
+      new Option('직접 선택', 'manual'),
     );
     select.value = text(record(automationState[`${level}Override`])[decisionId]);
     select.addEventListener('change', () => setOverride(level, decisionId, select.value));
@@ -756,14 +1445,14 @@ export function mountProductionWorkbench({
         overrideSelect('batch', decisionId),
         overrideSelect('product', decisionId),
         overrideSelect('stage', decisionId),
-        element('span', 'automation-effective', `${statusLabel(effective.mode)} · ${effective.source}`),
+        element('span', 'automation-effective', `${statusLabel(effective.mode)} · ${policySourceLabel(effective.source)}`),
       );
       root.append(row);
     }
     const snapshot = record(automationState.snapshot);
     roots.policySummary.textContent = snapshot.locked
-      ? `policy lock ${text(snapshot.snapshotId)}${automationState.draftDirty ? ' · 다음 실행 변경 대기' : ''} · stage > product > batch > batch_preset > auto_default`
-      : '실행 전 미잠금 · stage > product > batch > batch_preset > auto_default';
+      ? `현재 실행 설정 확정${automationState.draftDirty ? ' · 바꾼 값은 다음 실행부터 적용' : ''} · 단계 설정이 가장 먼저 적용됩니다.`
+      : '실행 전 설정 확인 중 · 단계 → 제품 → 생산 묶음 순서로 적용됩니다.';
     roots.policySummary.dataset.locked = String(snapshot.locked === true);
     globalThis.controlTowerMenu?.updateBadges?.(projectMenuBadges(projection, automationState));
   }
@@ -810,37 +1499,226 @@ export function mountProductionWorkbench({
 
   function setProjection(nextValue) {
     const previousSession = projection.session;
-    projection = normalizeFactoryProjection(nextValue);
+    projection = reconcileFactoryProjectionForSameWork(projection, nextValue);
     const stage = selectedStage(projection, selectedStageKey);
     selectedStageKey = stage?.key || '';
     for (const [key, pending] of savingByTarget) {
       if (pending.productId !== projection.session.productId) continue;
       const savedStage = projection.stages.find(item => item.key === pending.stageKey);
-      if (savedStage?.selectedId === pending.candidateId) savingByTarget.delete(key);
+      if (savedStage?.selectedId !== pending.candidateId) continue;
+      savingByTarget.delete(key);
+      workfileTabs.rememberRecentSelection({
+        tabKey: `job:${text(projection.registration.jobId)}`,
+        stageKey: pending.stageKey,
+        candidateId: pending.candidateId,
+      });
+      const nextStage = unresolvedStage(projection, pending.stageKey);
+      if (nextStage && viewMatchesLiveProjection()) {
+        selectedStageKey = nextStage.key;
+        inspectedCandidateId = nextStage.candidates[0]?.id || '';
+        candidatePage = 0;
+      }
+    }
+    for (const [stageKey, pending] of pendingResumeByStage) {
+      const savedStage = projection.stages.find(item => item.key === stageKey);
+      if (savedStage?.selectedId !== pending.candidateId) continue;
+      pendingResumeByStage.delete(stageKey);
+      void resumeFactoryJob(pending.jobId);
     }
     globalThis.controlTowerMenu?.updateBadges?.(projectMenuBadges(projection, automationState));
-    if (workBundleIdentityChanged(previousSession, projection.session, {
+    const identityChanged = workBundleIdentityChanged(previousSession, projection.session, {
       requestedId: requestedWorkBundleId,
-    })) void loadWorkBundle();
-    else if (!requestedWorkBundleId) void scheduleAutomaticSelection();
+    });
+    if (
+      archivedJobId
+      && !factoryHistoryJobFromLocation(window.location.search)
+      && identityChanged
+      && (projection.session.workspaceId || projection.session.productKey)
+    ) {
+      archivedJobId = '';
+      workBundleHistory = null;
+      replaceFactoryHistoryRoute('');
+    }
+    if (identityChanged) void loadWorkBundle();
+    else if (!requestedWorkBundleId && !archivedJobId) void scheduleAutomaticSelection();
+    workfileTabs.syncJobs(productJobs, projection);
+    rememberActiveTabView();
   }
 
   function connectivity() {
-    return projectFactoryConnectivity(projection, {
+    return projectFactoryQueueRenderModel(projection, productJobs, {
       transport: syncTransport,
       lastEventAt,
       apiError: factoryApiError,
-    });
+    }).connectivity;
+  }
+
+  async function rebindActiveWorkfile() {
+    const active = workfileTabs.active();
+    const job = active?.key ? workfileTabs.jobFor(active.key) : null;
+    const workfile = active?.key ? workfileTabs.workfileFor(active.key) : null;
+    if (!job || !workfile) return;
+    try {
+      const payload = buildWorkfileRebindPayload({ job, projection, workfile });
+      setStatus('live-status', `${text(workfile.fileName)} 승인 파일 연결 요청 중`);
+      const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(job.jobId)}/workfile-rebind`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (text(result.status) === 'rebound') {
+        setStatus('live-status', `${text(workfile.fileName)} 연결 완료 · 저장된 checkpoint 확인 중`, 'ok');
+        await Promise.allSettled([refreshState(), refreshQueue()]);
+      } else {
+        setStatus('live-status', `${text(workfile.fileName)} 연결 요청 접수 · 저장 완료 확인 대기`, 'warning');
+        await refreshQueue();
+      }
+    } catch (error) {
+      setStatus('live-status', `승인 파일 연결 실패 · ${error.message}`, 'error');
+      if ([409, 422].includes(error.status)) await Promise.allSettled([refreshState(), refreshQueue()]);
+    }
+    render();
+  }
+
+  async function createJobFromActiveWorkfile() {
+    const active = workfileTabs.active();
+    const workfile = active?.key ? workfileTabs.workfileFor(active.key) : null;
+    const sha256 = text(workfile?.sha256).toLowerCase();
+    if (!active?.key || active.jobId || !workfile || workfileForkInFlight.has(sha256)) return;
+    workfileForkInFlight.add(sha256);
+    let forkCompleted = false;
+    setStatus('live-status', '작업파일 검증 중', 'warning');
+    renderWorkfileTabs();
+    try {
+      const payload = buildWorkfileForkPayload({ projection, workfile });
+      const accepted = await apiRequest('/api/factory/jobs/from-workfile', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      if (text(accepted.status) !== 'hydrating') throw new Error('factory_workfile_fork_receipt_invalid');
+      let durableJob = null;
+      for (let attempt = 0; attempt < 80 && !durableJob && !stopped; attempt += 1) {
+        const result = await apiRequest('/api/factory/jobs');
+        const jobs = Array.isArray(result.jobs) ? result.jobs : [];
+        durableJob = jobs.find(job => (
+          text(job.sourceSha256).toLowerCase() === sha256
+          && Number(job.sourceRevision) === Number(payload.expectedHydratedWorkfileRevision)
+          && text(job.sourceRunId) === text(payload.expectedRunId)
+        )) || null;
+        if (durableJob) {
+          productJobs = jobs;
+          workfileTabs.syncJobs(productJobs, projection);
+          workfileTabs.activate(`job:${text(durableJob.jobId)}`);
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      if (!durableJob) throw new Error('factory_workfile_fork_durable_readback_timeout');
+      setStatus('live-status', '새 작업 생성 완료', 'ok');
+      await refreshState();
+      forkCompleted = true;
+    } catch (error) {
+      setStatus('live-status', `새 작업 생성 실패 · ${text(error.code || error.message || error)}`, 'error');
+    } finally {
+      workfileForkInFlight.delete(sha256);
+      render();
+      if (forkCompleted) setStatus('live-status', '새 작업 생성 완료', 'ok');
+    }
+  }
+
+  function renderWorkfileTabs() {
+    workfileTabs.syncJobs(productJobs, projection);
+    const snapshot = workfileTabs.snapshot();
+    renderWorkfileJobTabs(roots.workfileTabs, snapshot, activateWorkfileTab);
+    const active = workfileTabs.active();
+    const panel = roots.workfileTabPanel;
+    panel.replaceChildren();
+    const activeIndex = snapshot.tabs.findIndex(tab => tab.key === snapshot.activeKey);
+    if (activeIndex >= 0) panel.setAttribute('aria-labelledby', `workfile-job-tab-${activeIndex + 1}`);
+    else panel.removeAttribute('aria-labelledby');
+    if (!active) {
+      panel.append(element('p', 'status-message', '작업 큐 또는 .kuasangse 파일을 열면 제품별 작업대가 표시됩니다.'));
+      return;
+    }
+    const copy = element('div', 'workfile-job-tab-panel-copy');
+    const linkLabel = ({
+      linked: '현재 checkpoint와 승인 작업파일이 일치합니다.',
+      rebind_required: '현재 checkpoint와 승인 작업파일의 run/revision이 달라 연결 승인이 필요합니다.',
+      target_rebind_required: '선택한 작업과 파일의 제품 신원이 일치합니다. 이 작업에 연결하려면 명시적으로 승인하세요.',
+      ambiguous: '여러 작업이 같은 신원을 주장합니다. 자동으로 고르지 않습니다.',
+      stale: '진행 중인 작업과 파일 revision이 달라 연결할 수 없습니다.',
+      unlinked: '정확히 일치하는 작업 식별값이 없어 연결이 필요합니다.',
+    })[active.linkState] || '작업 연결 상태를 확인하고 있습니다.';
+    copy.append(
+      element('strong', '', text(active.productName || active.workfileName || '제품 이름 없음')),
+      element('span', 'status-message', `${text(active.workfileName || '작업파일 다시 선택 필요')} · ${linkLabel}`),
+    );
+    const actions = element('div', 'workfile-job-tab-panel-actions');
+    const workfile = workfileTabs.workfileFor(active.key);
+    const job = workfileTabs.jobFor(active.key);
+    if (!workfile?.file) {
+      const reselect = element('button', 'button-secondary', '작업파일 다시 선택');
+      reselect.type = 'button';
+      reselect.dataset.action = 'reselect-workfile';
+      reselect.addEventListener('click', () => {
+        pendingWorkfileTargetJobId = text(active.jobId);
+        if (workfileInput) workfileInput.value = '';
+        workfileInput?.click();
+      });
+      actions.append(reselect);
+    } else if (!job && active.linkState === 'unlinked') {
+      const create = element('button', '', '이 파일로 새 작업 만들기');
+      create.type = 'button';
+      create.dataset.action = 'create-job-from-workfile';
+      create.disabled = workfileForkInFlight.has(text(workfile.sha256).toLowerCase());
+      create.addEventListener('click', () => void createJobFromActiveWorkfile());
+      actions.append(create);
+    } else if (['rebind_required', 'target_rebind_required'].includes(active.linkState)) {
+      const rebind = element(
+        'button',
+        '',
+        active.linkState === 'target_rebind_required'
+          ? `선택한 ${text(active.productName || '작업')} 작업에 이 파일 연결 승인`
+          : '승인 파일로 연결',
+      );
+      rebind.type = 'button';
+      rebind.dataset.action = 'rebind-workfile';
+      rebind.disabled = !job || active.jobId !== text(projection.registration.jobId);
+      rebind.addEventListener('click', () => void rebindActiveWorkfile());
+      actions.append(rebind);
+    }
+    if (job && ['blocked', 'waiting_manual', 'completed'].includes(text(job.status))) {
+      const resume = element('button', 'button-secondary', '작업 재개');
+      resume.type = 'button';
+      resume.dataset.action = 'resume-factory-job';
+      resume.disabled = !workfileTabs.projectionFor(active.key) || active.linkState !== 'linked';
+      resume.addEventListener('click', () => void resumeFactoryJob(active.jobId));
+      actions.append(resume);
+    }
+    const inspect = element('button', 'button-secondary', '후보 작업대 열기');
+    inspect.type = 'button';
+    inspect.dataset.action = 'open-active-candidates';
+    inspect.disabled = !workfileTabs.projectionFor(active.key) || active.linkState !== 'linked';
+    inspect.addEventListener('click', () => openFactoryStage(active.selectedStageKey || active.stageKey));
+    actions.append(inspect);
+    panel.append(copy, actions);
   }
 
   function renderSyncBar() {
     const root = roots.sync;
     const state = connectivity();
     const progress = record(projection.progress);
-    const productLabel = projection.session.productKey || '현재 제품 없음';
+    const activeJob = activeProductJob();
+    const productLabel = currentFactoryProductLabel(projection, activeJob) || '현재 제품 없음';
     const stageLabel = progress.stageLabel || progress.stageKey || '공정 대기';
+    const jobStatus = text(activeJob?.status || progress.status || projection.status);
+    const queuedCount = productJobs.filter(job => text(job.status) === 'queued').length;
+    let actionLabel = `${stageLabel} ${Number(progress.percent || 0)}%`;
+    if (jobStatus === 'waiting_manual') actionLabel = 'A컷 선택 필요';
+    else if (jobStatus === 'blocked') actionLabel = '작업 차단 확인 필요';
+    else if (jobStatus === 'queued') actionLabel = '생산 순서 대기';
+    else if (jobStatus === 'completed') actionLabel = registrationStatus() === 'staged_verified' ? 'Cafe24 검증 완료' : 'Cafe24 승인 필요';
     if (roots.syncSummary) {
-      roots.syncSummary.textContent = `${state.factoryLabel} · ${productLabel} · ${stageLabel} ${Number(progress.percent || 0)}%`;
+      roots.syncSummary.textContent = `${state.factoryLabel} · 대기 ${queuedCount} · ${productLabel} · ${actionLabel}`;
     }
     root.replaceChildren();
     root.dataset.connected = String(state.state === 'connected');
@@ -850,12 +1728,10 @@ export function mountProductionWorkbench({
     identity.append(
       labelledValue('조립공장', state.factoryLabel, 'connected'),
       labelledValue('연결 상세', state.detail, 'factory-detail'),
-      labelledValue('capability', projection.capabilityVersion, 'capability'),
       labelledValue('제품', projection.session.productKey, 'product-key'),
-      labelledValue('run', projection.session.runId, 'run-id'),
-      labelledValue('revision', projection.session.revision, 'revision'),
-      labelledValue('SSE cursor', factoryEventCursor || '초기 연결', 'event-cursor'),
-      labelledValue('마지막 event', state.observedAt, 'last-event'),
+      labelledValue('작업파일', projection.session.workfileName, 'workfile-name'),
+      labelledValue('저장 차수', projection.session.revision, 'revision'),
+      labelledValue('마지막 확인', state.observedAt, 'last-event'),
     );
     const actions = element('div', 'button-row factory-sync-actions');
     const refresh = element('button', '', '새로고침');
@@ -865,7 +1741,7 @@ export function mountProductionWorkbench({
       refresh.disabled = true;
       try {
         await apiRequest('/api/factory/refresh', { method: 'POST', body: '{}' });
-        await refreshState();
+        await Promise.allSettled([refreshState(), refreshQueue()]);
       } finally {
         refresh.disabled = false;
       }
@@ -875,7 +1751,7 @@ export function mountProductionWorkbench({
     reconnect.dataset.action = 'factory-reconnect';
     reconnect.addEventListener('click', () => {
       connectEvents(true);
-      void refreshState();
+      void Promise.allSettled([refreshState(), refreshQueue()]);
     });
     const transport = element('span', 'factory-pill');
     transport.dataset.syncTransport = syncTransport;
@@ -920,24 +1796,250 @@ export function mountProductionWorkbench({
     root.append(row);
   }
 
+  function openMenu(menuKey) {
+    globalThis.controlTowerMenu?.activate?.(menuKey, { focus: true });
+  }
+
+  function openFactoryStage(stageKey) {
+    if (stageKey === 'competitors') {
+      openMenu('competitors');
+      document.getElementById('competitor-heading')?.focus?.();
+      return;
+    }
+    if (!stageKey || stageKey === 'db') {
+      openMenu('input-source');
+      document.getElementById('intake-heading')?.focus?.();
+      return;
+    }
+    if (stageKey === 'cafe24') {
+      openMenu('cafe24');
+      document.getElementById('factory-registration-panel')?.focus?.();
+      return;
+    }
+    const stage = viewedProjection().stages.find(item => item.key === stageKey);
+    selectedStageKey = stageKey;
+    inspectedCandidateId = stage?.selectedId || stage?.candidates[0]?.id || '';
+    rememberActiveTabView();
+    candidatePage = 0;
+    render();
+    openMenu('production-acut');
+    roots.candidates.querySelector('button')?.focus();
+  }
+
+  function activeProductJob() {
+    return viewedJob() || projectFactoryQueueRenderModel(projection, productJobs).activeJob;
+  }
+
   function renderOverviewSummary() {
     if (!roots.overview) return;
     roots.overview.replaceChildren();
-    const progress = record(projection.progress);
-    const state = connectivity();
-    const missing = projection.inputs.reduce((total, input) => total + input.missing.length, 0);
-    const unresolved = projection.stages.filter(stage => !stage.selectedId).length;
-    const cards = [
-      ['현재 제품', projection.session.productKey || '조립공장 session 없음', projection.session.productId || '제품 ID 없음'],
-      ['현재 공정', progress.stageLabel || progress.stageKey || '아직 시작되지 않음', `${Number(progress.percent || 0)}% · ${statusLabel(progress.status || projection.status)}`],
-      ['차단/미결정', `${missing + unresolved}건`, `Input 누락 ${missing} · A컷 미결정 ${unresolved}`],
-      ['동기화', state.factoryLabel, `${state.transportLabel} · ${state.detail} · ${factoryEventCursor ? `cursor ${factoryEventCursor}` : '초기 snapshot 대기'}`],
-    ];
-    for (const [label, title, detail] of cards) {
-      const card = element('article', 'menu-summary-card');
-      card.append(element('p', 'label', label), element('h3', '', title), element('p', 'status-message', detail));
-      roots.overview.append(card);
+    const current = viewedProjection();
+    const progress = record(current.progress);
+    const activeJob = activeProductJob();
+    const projectionJobId = text(current.registration.jobId);
+    const sameJob = Boolean(activeJob && text(activeJob.jobId) === projectionJobId);
+    const inputMissing = current.inputs.reduce((total, input) => total + input.missing.length, 0);
+    const counts = {
+      queued: productJobs.filter(job => text(job.status) === 'queued').length,
+      running: productJobs.filter(job => text(job.status) === 'running').length,
+      waiting: productJobs.filter(job => text(job.status) === 'waiting_manual').length,
+      completed: productJobs.filter(job => text(job.status) === 'completed').length,
+    };
+    const summary = element('section', 'operator-summary-strip');
+    for (const [label, value, tone] of [
+      ['대기', counts.queued, ''],
+      ['진행 중', counts.running, 'active'],
+      ['선택 필요', counts.waiting, 'warn'],
+      ['완료', counts.completed, 'ok'],
+    ]) {
+      const metric = element('article', 'operator-metric');
+      metric.dataset.tone = tone;
+      metric.append(element('span', 'label', label), element('strong', '', String(value)));
+      summary.append(metric);
     }
+    roots.overview.append(summary);
+
+    if (!activeJob && !current.session.productKey) {
+      const empty = element('article', 'operator-empty-state');
+      empty.append(
+        element('p', 'eyebrow', 'START HERE'),
+        element('h3', '', '먼저 제품을 투입하세요'),
+        element('p', 'status-message', '신화사 DB 제품을 선택하거나 신규 제품 자료를 직접 입력하면 조립공장 작업 큐에 등록됩니다.'),
+      );
+      const action = element('button', '', '제품 투입 열기');
+      action.type = 'button';
+      action.dataset.action = 'open-intake';
+      action.addEventListener('click', () => openFactoryStage('db'));
+      empty.append(action);
+      roots.overview.append(empty);
+      if (roots.queueSelection) roots.overview.append(roots.queueSelection);
+      return;
+    }
+
+    const jobStatus = text(activeJob?.status || progress.status || current.status || 'queued');
+    const productName = text(activeJob?.productName || current.session.productKey || activeJob?.jobId);
+    const sourceLabel = activeJob?.sourceKind === 'sinhwa-db'
+      ? `신화사 DB · 품번 ${text(activeJob.jcode) || '없음'}`
+      : activeJob
+        ? `직접 입력 · 이미지 ${Number(activeJob.imageCount || 0)}장`
+        : '조립공장 projection';
+    const manualStages = manualACutDecisionIds(activeJob)
+      .map(decision => AUTOMATION_DECISIONS[decision] || decision);
+    const modeLabel = manualStages.length
+      ? `후보 생성 자동 · A컷 직접 선택 ${manualStages.length}공정`
+      : activeJob?.mode === 'auto' ? 'GPT 자동판단' : '단계별 수동';
+    const stageLabel = text(activeJob?.stageLabel || STAGE_LABELS[activeJob?.stageKey] || progress.stageLabel || STAGE_LABELS[progress.stageKey] || progress.stageKey || '투입 대기');
+    const percent = sameJob ? Math.max(0, Math.min(100, Number(progress.percent || 0))) : 0;
+    const focus = element('article', 'operator-focus-card');
+    focus.dataset.status = jobStatus;
+    const focusHeading = element('div', 'operator-focus-heading');
+    const identity = element('div');
+    identity.append(element('p', 'eyebrow', '현재 제품'), element('h3', '', productName || '제품 식별자 없음'));
+    focusHeading.append(identity, element('span', 'factory-pill', statusLabel(jobStatus)));
+    const meta = element('div', 'operator-focus-meta');
+    meta.append(
+      element('span', 'factory-pill', sourceLabel),
+      element('span', 'factory-pill', modeLabel),
+      element('span', 'factory-pill', stageLabel),
+    );
+    const progressText = sameJob
+      ? `${stageLabel} · ${percent}% · ${visibleFactoryMessage(progress.message || activeJob?.message, activeJob?.stageKey || progress.stageKey) || statusLabel(jobStatus)}`
+      : `${stageLabel} · ${visibleFactoryMessage(activeJob?.message, activeJob?.stageKey) || '작업 순서를 기다리는 중'}`;
+    const progressCopy = element('p', 'status-message', progressText);
+    const track = element('div', 'progress-track');
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', String(percent));
+    const bar = element('div', 'progress-value');
+    bar.style.inlineSize = `${percent}%`;
+    track.append(bar);
+    focus.append(focusHeading, meta, progressCopy, track);
+    roots.overview.append(focus);
+
+    const stagePanel = element('section', 'operator-stage-panel');
+    const stageHeading = element('div', 'operator-panel-heading');
+    stageHeading.append(
+      element('div', '', ''),
+      element('span', 'factory-pill', sameJob ? `${percent}%` : '작업 대기'),
+    );
+    stageHeading.firstElementChild.append(element('p', 'eyebrow', '조립공장 진행 순서'), element('h3', '', '입력부터 Cafe24까지'));
+    const stageList = element('ol', 'operator-stage-list');
+    const stageEntries = [
+      ['db', '제품·입력'],
+      ...Object.entries(STAGE_LABELS),
+      ['cafe24', 'Cafe24'],
+    ];
+    const registrationState = registrationStatus();
+    for (const [index, [key, label]] of stageEntries.entries()) {
+      let stageState = 'pending';
+      let stateText = '대기';
+      if (sameJob && key === 'db') {
+        stageState = inputMissing ? 'blocked' : 'done';
+        stateText = inputMissing ? `누락 ${inputMissing}` : '준비 완료';
+      } else if (sameJob && key === 'cafe24') {
+        if (registrationState === 'staged_verified') [stageState, stateText] = ['done', '검증 완료'];
+        else if (['ready', 'approval_required', 'executing'].includes(registrationState)) [stageState, stateText] = ['active', statusLabel(registrationState)];
+        else if (jobStatus === 'completed' && registrationState === 'blocked') [stageState, stateText] = ['blocked', '사전점검 필요'];
+      } else if (sameJob) {
+        const stage = current.stages.find(item => item.key === key);
+        if (jobStatus === 'completed') [stageState, stateText] = ['done', stage?.selectedId ? 'A컷 완료' : '완료'];
+        else if (stage?.selectedId) [stageState, stateText] = ['done', 'A컷 완료'];
+        else if (jobStatus === 'blocked' && text(activeJob?.stageKey || progress.stageKey) === key) [stageState, stateText] = ['blocked', '차단'];
+        else if (jobStatus === 'waiting_manual' && text(activeJob?.stageKey || progress.stageKey) === key) [stageState, stateText] = ['manual', `선택 필요 · ${stage?.candidates.length || 0}`];
+        else if (text(progress.stageKey) === key && jobStatus === 'running') [stageState, stateText] = ['active', '진행 중'];
+        else if (stage?.candidates.length) [stageState, stateText] = ['manual', `후보 ${stage.candidates.length}`];
+      }
+      const item = element('li');
+      const button = element('button', 'operator-stage-step');
+      button.type = 'button';
+      button.dataset.stageKey = key;
+      button.dataset.state = stageState;
+      button.setAttribute('aria-label', `${index + 1}단계 ${label} · ${stateText}`);
+      button.append(
+        element('span', 'operator-stage-number', String(index + 1).padStart(2, '0')),
+        element('strong', '', label),
+        element('span', 'operator-stage-state', stateText),
+      );
+      button.addEventListener('click', () => openFactoryStage(key));
+      item.append(button);
+      stageList.append(item);
+    }
+    stagePanel.append(stageHeading, stageList);
+
+    let nextTitle = `${stageLabel} 진행 상태를 확인하세요`;
+    let nextDetail = visibleFactoryMessage(progress.message || activeJob?.message, activeJob?.stageKey || progress.stageKey) || '조립공장 event를 실시간으로 반영하고 있습니다.';
+    let nextLabel = '생산 화면 열기';
+    let nextStage = text(activeJob?.stageKey || progress.stageKey || 'representative');
+    let nextTone = 'active';
+    let directAction = null;
+    if (jobStatus === 'waiting_manual') {
+      const waitingStage = current.stages.find(stage => stage.key === nextStage);
+      const automaticHeld = automaticDecisionHeld(activeJob, nextStage);
+      if (automaticHeld) {
+        nextTitle = 'GPT가 수동 확인으로 넘겼습니다';
+        nextDetail = '판단 근거가 충분하지 않아 자동 선택하지 않았습니다. 후보와 근거를 보고 A컷을 직접 확정하세요.';
+        nextLabel = '후보를 직접 선택';
+        nextTone = 'warn';
+      } else if (resolveLocalFactoryStageMode(current, productJobs, nextStage) === 'auto') {
+        nextTitle = stageSaving(nextStage)
+          ? 'GPT 자동판단 결과를 저장하고 있습니다'
+          : 'GPT 자동판단을 준비하고 있습니다';
+        nextDetail = 'GPT가 후보와 근거를 비교해 A컷을 고릅니다. 실패하면 같은 화면에서 수동으로 전환할 수 있습니다.';
+        nextLabel = '자동 판단 상태 열기';
+        nextTone = 'active';
+      } else if (waitingStage?.selectedId) {
+        nextTitle = `${STAGE_LABELS[nextStage] || stageLabel} A컷이 저장됐습니다`;
+        nextDetail = '저장된 선택을 유지한 채 같은 제품의 다음 공정을 이어서 실행합니다.';
+        nextLabel = '다음 단계 실행';
+        nextTone = 'ok';
+        directAction = () => void resumeFactoryJob(activeJob.jobId);
+      } else {
+        nextTitle = `${STAGE_LABELS[nextStage] || stageLabel} A컷을 선택하세요`;
+        nextDetail = '후보를 확인한 뒤 A컷을 저장하면 같은 제품의 다음 공정이 자동으로 이어집니다.';
+        nextLabel = '후보와 근거 열기';
+        nextTone = 'warn';
+      }
+    } else if (jobStatus === 'blocked') {
+      nextTitle = '이 제품이 멈췄습니다';
+      nextDetail = visibleFactoryMessage(activeJob?.message, activeJob?.stageKey) || '차단 사유를 확인한 뒤 같은 입력 상태로 다시 실행합니다.';
+      nextLabel = '같은 상태로 다시 실행';
+      nextTone = 'error';
+      directAction = () => void resumeFactoryJob(activeJob.jobId);
+    } else if (jobStatus === 'queued') {
+      nextTitle = '조립공장 실행 순서를 기다립니다';
+      nextDetail = '앞 제품이 끝나거나 수동 선택 대기로 넘어가면 이 제품을 이어서 시작합니다.';
+      nextLabel = '입력 자료 확인';
+      nextStage = 'db';
+    } else if (jobStatus === 'completed') {
+      nextTitle = registrationState === 'staged_verified' ? 'Cafe24 등록 검증이 끝났습니다' : 'Cafe24 사전점검과 승인을 확인하세요';
+      nextDetail = registrationState === 'staged_verified'
+        ? '등록 결과 재확인 영수증까지 확인된 상태입니다.'
+        : '외부 등록은 자동 실행하지 않으며 고정 대상과 일회 승인을 거쳐야 합니다.';
+      nextLabel = 'Cafe24 게이트 열기';
+      nextStage = 'cafe24';
+      nextTone = registrationState === 'staged_verified' ? 'ok' : 'warn';
+    }
+    const now = element('aside', 'operator-now-card');
+    now.dataset.tone = nextTone;
+    const nowHeading = element('div', 'operator-now-heading');
+    const nowIdentity = element('div');
+    nowIdentity.append(element('p', 'eyebrow', '현재 상태와 다음 작업'), element('h3', '', nextTitle));
+    nowHeading.append(nowIdentity, element('span', 'factory-pill', statusLabel(jobStatus)));
+    const nowActions = element('div', 'operator-now-actions');
+    const primary = element('button', '', nextLabel);
+    primary.type = 'button';
+    primary.dataset.action = directAction ? 'retry-factory-job' : `open-${nextStage}`;
+    primary.addEventListener('click', directAction || (() => openFactoryStage(nextStage)));
+    const intake = element('button', 'button-secondary', '제품 추가 투입');
+    intake.type = 'button';
+    intake.dataset.action = 'open-intake';
+    intake.addEventListener('click', () => openFactoryStage('db'));
+    nowActions.append(primary, intake);
+    now.append(nowHeading, element('p', 'status-message', nextDetail), nowActions);
+    roots.overview.insertBefore(now, focus);
+    roots.overview.append(stagePanel);
+    if (roots.queueSelection) roots.overview.append(roots.queueSelection);
   }
 
   function renderCompetitors() {
@@ -945,30 +2047,60 @@ export function mountProductionWorkbench({
     roots.competitors.replaceChildren();
     const inputs = projection.inputs.filter(input => ['competitors', 'competitor_sources', 'competitor'].includes(input.key));
     if (!inputs.length) {
-      roots.competitors.append(element('article', 'menu-summary-card', '경쟁사 source/candidates가 현재 factory projection에 없습니다.'));
+      roots.competitors.append(element('article', 'menu-summary-card', '아직 수집된 경쟁사 후보가 없습니다. 제품 작업을 시작하면 후보 수집부터 표시됩니다.'));
       return;
     }
     for (const input of inputs) {
       const card = element('article', 'menu-summary-card');
       const missing = input.missing.length;
       card.append(
-        element('p', 'label', input.key),
+        element('p', 'label', INPUT_LABELS[input.key] || '경쟁사 자료'),
         element('h3', '', `${input.count}개 후보`),
-        element('p', 'status-message', missing ? `누락 ${missing} · ${input.missing.join(' · ')}` : '현재 projection에서 수집 상태 확인됨'),
+        element('p', 'status-message', missing ? `다음 작업: ${input.missing.join(' → ')}` : '후보 선택·상세수집·이미지 분석 완료'),
       );
+      const candidateList = element('div', 'candidate-list');
+      for (const item of list(input.items)) {
+        const candidate = element('article', 'review-candidate');
+        candidate.dataset.preview = String(item.selected === true);
+        if (text(item.thumbnailUrl)) {
+          const image = document.createElement('img');
+          image.src = item.thumbnailUrl;
+          image.alt = text(item.name) || '경쟁사 후보';
+          image.loading = 'eager';
+          candidate.append(image);
+        } else {
+          candidate.append(element('span', 'product-thumb', '사진 없음'));
+        }
+        candidate.append(
+          element('span', 'factory-pill', item.selected ? '상세수집 선택' : '후보'),
+          element('span', '', [item.name, item.market, item.price].map(text).filter(Boolean).join(' · ')),
+          element('span', 'factory-pill', item.analysisReady ? '분석 완료' : item.detailImageCount ? '상세수집 완료' : '수집 대기'),
+        );
+        candidateList.append(candidate);
+      }
+      if (candidateList.childElementCount) card.append(candidateList);
       roots.competitors.append(card);
     }
   }
 
   function renderStageSubnav() {
     if (!roots.stageSubnav) return;
-    const currentKey = selectedStageKey || projection.stages[0]?.key || '';
+    const current = viewedProjection();
+    const currentKey = selectedStageKey || current.stages[0]?.key || '';
     for (const button of roots.stageSubnav.querySelectorAll('[data-stage-key]')) {
       const stageKey = text(button.dataset.stageKey);
+      const historyStageCount = workBundleHistory && workBundleStatus === 'ready'
+        ? workBundle.assets.filter(asset => (
+          asset.phase === 'output' && text(asset.factoryStageKey) === stageKey
+        )).length
+        : 0;
       button.dataset.selected = String(stageKey === currentKey);
       button.dataset.state = stageKey === 'db'
         ? 'input'
-        : factoryStageUiState(projection.stages.find(stage => stage.key === stageKey), projection.connected).state;
+        : workBundleHistory && workBundleStatus === 'ready'
+          ? (historyStageCount ? 'selected' : 'empty')
+        : factoryStageUiState(current.stages.find(stage => stage.key === stageKey), current.connected).state;
+      button.dataset.historyCount = String(historyStageCount);
       if (button.dataset.bound === 'true') continue;
       button.dataset.bound = 'true';
       button.addEventListener('click', () => {
@@ -978,9 +2110,18 @@ export function mountProductionWorkbench({
           return;
         }
         selectedStageKey = stageKey;
-        const stage = projection.stages.find(item => item.key === stageKey);
+        if (workBundleHistory) {
+          workBundleOutputStageKey = stageKey;
+          candidatePage = 0;
+          workBundleOutputPage = 0;
+          render();
+          roots.candidates.querySelector('button')?.focus();
+          return;
+        }
+        const stage = current.stages.find(item => item.key === stageKey);
         inspectedCandidateId = stage?.selectedId || stage?.candidates[0]?.id || '';
         candidatePage = 0;
+        rememberActiveTabView();
         render();
         roots.candidates.querySelector('button')?.focus();
       });
@@ -994,23 +2135,72 @@ export function mountProductionWorkbench({
     const state = connectivity();
     const card = element('article', 'menu-summary-card');
     card.append(
-      element('p', 'label', 'SSE / WORKER IDENTITY'),
+      element('p', 'label', '조립공장 연결 기록'),
       element('h3', '', state.factoryLabel),
       element('p', 'status-message', `${state.transportLabel} · ${state.detail}`),
-      element('p', 'status-message', `event cursor ${factoryEventCursor || '초기 연결'} · sequence ${projection.sequence || 0}`),
-      element('p', 'status-message', `${session.productKey || '제품 없음'} · run ${session.runId || '없음'} · revision ${session.revision || '없음'} · 마지막 event ${lastEventAt || projection.capturedAt || '없음'}`),
+      element('p', 'status-message', `${session.productKey || '제품 없음'} · 저장 차수 ${session.revision || 0} · 마지막 확인 ${lastEventAt || projection.capturedAt || '없음'}`),
     );
     roots.audit.append(card);
   }
 
+  function replaceFactoryHistoryRoute(jobId) {
+    const url = new URL(window.location.href);
+    if (text(jobId)) url.searchParams.set(FACTORY_HISTORY_QUERY, text(jobId));
+    else url.searchParams.delete(FACTORY_HISTORY_QUERY);
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function closeWorkBundleImagePreview() {
+    if (roots.imageDialog?.open && typeof roots.imageDialog.close === 'function') roots.imageDialog.close();
+    roots.imageDialogImage?.removeAttribute('src');
+    if (roots.imageDialogTitle) roots.imageDialogTitle.textContent = '작업자료 크게 보기';
+    if (roots.imageDialogMeta) roots.imageDialogMeta.textContent = '';
+  }
+
+  function openWorkBundleImagePreview(asset) {
+    const source = text(asset?.contentReference || asset?.thumbnailReference);
+    const imageUrl = source ? text(assetUrl(source)) : '';
+    if (!roots.imageDialog || !roots.imageDialogImage || !imageUrl) return;
+    const imageLabel = text(asset.displayName) || '작업자료';
+    roots.imageDialogImage.src = imageUrl;
+    roots.imageDialogImage.alt = imageLabel;
+    if (roots.imageDialogTitle) roots.imageDialogTitle.textContent = imageLabel;
+    if (roots.imageDialogMeta) {
+      const roleLabel = WORK_BUNDLE_ROLE_LABELS[asset.role] || '작업 자료';
+      const stageLabel = STAGE_LABELS[asset.factoryStageKey] || STAGE_LABELS[asset.stage] || roleLabel;
+      const selectionLabel = ({ selected: '선택됨', confirmed: '확정됨', candidate: '후보' })[asset.selectionState] || '작업 자료';
+      roots.imageDialogMeta.textContent = `${roleLabel} · ${stageLabel} · ${selectionLabel}`;
+    }
+    if (typeof roots.imageDialog.showModal === 'function' && !roots.imageDialog.open) roots.imageDialog.showModal();
+    else roots.imageDialog.setAttribute('open', '');
+  }
+
+  function bindWorkBundleImagePreview(root) {
+    if (!root || root.dataset.imagePreviewBound === 'true') return;
+    root.dataset.imagePreviewBound = 'true';
+    root.addEventListener('click', event => {
+      const trigger = event.target?.closest?.('[data-action="view-work-bundle-image"]');
+      if (!trigger) return;
+      const asset = workBundle.assets.find(item => item.id === text(trigger.dataset.assetId));
+      if (asset) openWorkBundleImagePreview(asset);
+    });
+  }
+
   function renderProgressMap() {
     const root = roots.map;
+    const current = viewedProjection();
+    if (archivedJobId) {
+      root.hidden = true;
+      root.replaceChildren();
+      return;
+    }
+    root.hidden = false;
     const state = connectivity();
     root.replaceChildren();
-    const inputHeading = element('h3', '', 'Input');
+    const inputHeading = element('h3', '', '입력 자료');
     root.append(inputHeading);
     const inputList = element('div', 'io-progress-group');
-    for (const input of projection.inputs) {
+    for (const input of current.inputs) {
       const item = element('article', 'io-progress-item');
       item.dataset.inputKey = input.key;
       item.dataset.missingCount = String(input.missing.length);
@@ -1021,14 +2211,14 @@ export function mountProductionWorkbench({
       if (input.missing.length) item.append(element('p', 'status-message', input.missing.join(' · ')));
       inputList.append(item);
     }
-    if (!projection.inputs.length) {
-      inputList.append(element('p', 'status-message', projection.connected ? 'Input snapshot이 비어 있습니다.' : state.factoryLabel));
+    if (!current.inputs.length) {
+      inputList.append(element('p', 'status-message', current.connected ? '아직 전달된 입력 자료가 없습니다.' : state.factoryLabel));
     }
-    root.append(inputList, element('h3', '', 'Output'));
+    root.append(inputList, element('h3', '', '생성 결과'));
     const stageList = element('div', 'io-progress-group');
-    for (const stage of projection.stages) {
+    for (const stage of current.stages) {
       const button = element('button', 'io-progress-item io-stage-button');
-      const stageUi = factoryStageUiState(stage, projection.connected);
+      const stageUi = factoryStageUiState(stage, current.connected);
       button.type = 'button';
       button.dataset.stageKey = stage.key;
       button.dataset.selected = String(stage.key === selectedStageKey);
@@ -1046,19 +2236,43 @@ export function mountProductionWorkbench({
         selectedStageKey = stage.key;
         inspectedCandidateId = stage.selectedId || stage.candidates[0]?.id || '';
         candidatePage = 0;
+        rememberActiveTabView();
         render();
         roots.candidates.querySelector('button')?.focus();
       });
       stageList.append(button);
     }
-    if (!projection.stages.length) stageList.append(element('p', 'status-message', state.factoryLabel));
+    if (!current.stages.length) stageList.append(element('p', 'status-message', state.factoryLabel));
     root.append(stageList);
   }
 
-  function renderCandidates() {
-    const root = roots.candidates;
+  function renderCandidateContactSheet(root, {
+    stageKey = selectedStageKey,
+    summary = '',
+    selectionEnabled = true,
+    blockedDetail = '',
+    degradedQueueDetail = false,
+    projectionValue = viewedProjection(),
+  } = {}) {
+    const current = normalizeFactoryProjection(projectionValue);
+    if (archivedJobId) {
+      root.hidden = true;
+      root.replaceChildren();
+      return;
+    }
+    root.hidden = false;
     root.replaceChildren();
-    const stage = selectedStage(projection, selectedStageKey);
+    const stage = selectedStage(current, stageKey);
+    const recentSelection = workfileTabs.active()?.recentSelection;
+    if (recentSelection && recentSelection.stageKey !== stage?.key) {
+      const recent = element('article', 'recent-a-cut-summary');
+      recent.append(
+        element('span', 'factory-pill', '방금 선택'),
+        element('strong', '', STAGE_LABELS[recentSelection.stageKey] || recentSelection.stageKey),
+        element('span', 'status-message', recentSelection.candidateId),
+      );
+      root.append(recent);
+    }
     const heading = element('div', 'section-heading compact-heading');
     heading.append(element('div', '', ''), element('span', 'factory-pill', stage ? `${stage.candidates.length}개 후보` : '0개 후보'));
     heading.firstElementChild.append(
@@ -1066,11 +2280,23 @@ export function mountProductionWorkbench({
       element('h3', '', stage ? STAGE_LABELS[stage.key] : '출력 단계 선택'),
     );
     root.append(heading);
-    if (!projection.connected) {
+    if (summary) root.append(element('p', 'status-message', summary));
+    if (!current.connected && !degradedQueueDetail) {
       root.append(element('p', 'factory-empty-state', connectivity().factoryLabel));
       return;
     }
     if (!stage || !stage.candidates.length) {
+      if (blockedDetail) {
+        const blocked = element('article', 'operator-empty-state');
+        blocked.dataset.state = 'blocked';
+        blocked.append(
+          element('p', 'eyebrow', 'BLOCKED DETAIL'),
+          element('h3', '', '차단된 작업의 후보가 없습니다'),
+          element('p', 'factory-empty-state', blockedDetail),
+        );
+        root.append(blocked);
+        return;
+      }
       root.append(element('p', 'factory-empty-state', '아직 생성되지 않음'));
       return;
     }
@@ -1102,7 +2328,7 @@ export function mountProductionWorkbench({
         const image = element('img');
         image.src = thumbnail.url;
         image.alt = `${STAGE_LABELS[stage.key]} 후보 ${candidate.id}`;
-        image.loading = 'lazy';
+        image.loading = 'eager';
         image.decoding = 'async';
         image.width = 160;
         image.height = 120;
@@ -1125,15 +2351,28 @@ export function mountProductionWorkbench({
         ));
       }
       if (stage.selectedId === candidate.id) meta.append(element('span', 'factory-pill selected-badge', '선택 A컷'));
-      const view = element('button', 'button-secondary', '보기');
+      const actions = element('div', 'a-cut-candidate-actions');
+      const select = element('button', '', stage.selectedId === candidate.id ? '선택됨' : '이 컷 선택');
+      select.type = 'button';
+      select.dataset.action = 'select-a-cut-direct';
+      select.disabled = !current.connected
+        || !selectionEnabled
+        || Boolean(stageSaving(stage.key))
+        || stage.selectedId === candidate.id
+        || (!text(current.registration.jobId).startsWith('factory-job-')
+          && resolveCandidateAsset(candidate, workBundle.assets, stage.key).status !== 'matched');
+      select.addEventListener('click', () => void selectACut(stage, candidate));
+      const view = element('button', 'button-secondary', '근거 보기');
       view.type = 'button';
       view.dataset.action = 'view-candidate';
       view.addEventListener('click', () => {
         inspectedCandidateId = candidate.id;
+        rememberActiveTabView();
         render();
         roots.inspector.querySelector('[data-action="select-a-cut"]')?.focus();
       });
-      card.append(frame, meta, view);
+      actions.append(select, view);
+      card.append(frame, meta, actions);
       grid.append(card);
     }
     root.append(grid);
@@ -1160,62 +2399,254 @@ export function mountProductionWorkbench({
     }
   }
 
-  function renderWorkBundleAssets(root, phase, pageValue) {
+  function renderCandidates() {
+    renderCandidateContactSheet(roots.candidates, {
+      selectionEnabled: viewMatchesLiveProjection(),
+      projectionValue: viewedProjection(),
+    });
+  }
+
+  function renderQueueSelectionWorkbench() {
+    const root = roots.queueSelection;
+    if (!root) return;
+    const current = viewedProjection();
+    const job = viewedJob();
+    const connection = projectFactoryQueueRenderModel(current, job ? [job] : [], {
+      transport: syncTransport,
+      lastEventAt,
+      apiError: factoryApiError,
+    });
+    if (!job) {
+      root.hidden = false;
+      root.replaceChildren(
+        element('p', 'eyebrow', 'BATCH CUT PICKER'),
+        element('h3', '', '현재 선택할 컷이 없습니다'),
+        element('p', 'factory-empty-state', '제품이 자동 공정을 시작하거나 수동 선택 대기에 들어오면 이곳에 후보가 표시됩니다.'),
+      );
+      return;
+    }
+    const active = viewMatchesLiveProjection();
+    const stageKey = selectedStageKey || text(job.stageKey);
+    const row = buildOperatorQueueRow(job, Math.max(0, productJobs.findIndex(item => text(item.jobId) === text(job.jobId))));
+    const stageMode = resolveLocalFactoryStageMode(current, productJobs, stageKey);
+    const automaticHeld = automaticDecisionHeld(job, stageKey);
+    const selectionEnabled = active
+      && text(job.status) === 'waiting_manual'
+      && (stageMode === 'manual' || automaticHeld);
+    const blockedDetail = text(job.status) === 'blocked'
+      ? `작업 차단 · ${visibleFactoryMessage(job.message, job.stageKey) || '후보가 아직 없어 선택할 수 없습니다.'}`
+      : '';
+    const summary = [connection.detail?.copy, !active
+      ? `${row.stepLabel} · ${row.stateLabel} · 보기 전용입니다. 명시적으로 작업 재개한 뒤에만 선택을 저장할 수 있습니다.`
+      : selectionEnabled
+        ? `${text(job.productName || current.session.productKey)} · ${row.stepLabel} · 이 제품의 후보 중 A컷 하나를 고르세요.`
+        : `${text(job.productName || current.session.productKey)} · ${row.stepLabel} · ${row.stateLabel}`]
+      .filter(Boolean)
+      .join(' · ');
+    root.dataset.jobId = text(job.jobId);
+    root.dataset.state = text(job.status);
+    renderCandidateContactSheet(root, {
+      stageKey,
+      summary,
+      selectionEnabled,
+      blockedDetail,
+      degradedQueueDetail: connection.connectivity.state === 'degraded',
+      projectionValue: current,
+    });
+  }
+
+  function detailSectionTitle(group) {
+    return `${String(group.order).padStart(2, '0')} ${group.label}`;
+  }
+
+  function appendDetailSectionGroup(root, group, visibleAssets = group.assets) {
+    const isPreview = visibleAssets.length < group.assets.length;
+    const section = element('section', 'detail-section-group');
+    section.dataset.detailSection = group.key;
+    const heading = element('div', 'detail-section-group-heading');
+    const copy = element('div');
+    copy.append(
+      element('p', 'eyebrow', `${String(group.order).padStart(2, '0')} · 상세페이지 섹션`),
+      element('h4', '', group.label),
+      element('p', 'status-message', isPreview
+        ? `최신 보관본 1장 · 전체 ${group.assets.length}장 · 이미지를 누르면 크게 볼 수 있습니다.`
+        : '실제 보관 결과 · 이미지를 누르면 크게 볼 수 있습니다.'),
+    );
+    heading.append(copy, element('span', 'factory-pill', `${group.assets.length}장`));
+    const gallery = element('div', 'detail-section-gallery');
+    for (const asset of visibleAssets) {
+      const card = createWorkBundleAssetCard(asset, assetUrl, {
+        title: detailSectionTitle(group),
+        detail: isPreview ? `섹션 최신 보관본 · 전체 ${group.assets.length}장` : '섹션 결과 · 원본 보관 연결',
+      });
+      card.dataset.detailSection = group.key;
+      gallery.append(card);
+    }
+    section.append(heading, gallery);
+    root.append(section);
+  }
+
+  function appendHistoryOutputPresentation(root, page, stageFilter) {
+    if (stageFilter !== 'sections' && stageFilter !== 'final_detail') return false;
+    const currentGroups = groupWorkBundleSectionAssets(page.items);
+    if (stageFilter === 'sections') {
+      root.dataset.presentation = 'detail-sections';
+      root.append(element('p', 'history-result-callout', '상세페이지 제작 순서대로 정리했습니다. 파일명 대신 섹션과 이미지로 확인하세요.'));
+      const allSectionAssets = workBundle.assets.filter(asset => (
+        asset.phase === 'output' && text(asset.factoryStageKey) === 'sections'
+      ));
+      for (const group of groupWorkBundleSectionAssets(allSectionAssets).filter(group => group.key !== 'other')) {
+        if (group.latest) appendDetailSectionGroup(root, group, [group.latest]);
+      }
+      const archive = element('details', 'history-archive-disclosure');
+      archive.append(element('summary', '', `보관된 섹션 결과 ${page.total}장 모두 보기`));
+      archive.append(element('p', 'status-message', `현재 페이지 ${page.page + 1}의 ${page.items.length}장을 섹션별로 표시합니다.`));
+      for (const group of currentGroups) appendDetailSectionGroup(archive, group);
+      root.append(archive);
+      return true;
+    }
+    root.dataset.presentation = 'final-detail-storyboard';
+    const allFinalAssets = workBundle.assets.filter(asset => (
+      asset.phase === 'output' && text(asset.factoryStageKey) === 'final_detail'
+    ));
+    const storyboard = element('section', 'final-detail-storyboard');
+    const heading = element('div', 'detail-section-group-heading');
+    const copy = element('div');
+    copy.append(
+      element('p', 'eyebrow', '최종 선택 연결 미리보기'),
+      element('h4', '', '상세페이지로 이어지는 최종 컷'),
+      element('p', 'status-message', '각 섹션의 실제 최종 선택 보관본을 상세페이지 순서로 이어서 표시합니다.'),
+    );
+    heading.append(copy, element('span', 'factory-pill', `${allFinalAssets.length}장 보관`));
+    storyboard.append(heading);
+    for (const group of groupWorkBundleSectionAssets(allFinalAssets).filter(group => group.key !== 'other')) {
+      if (!group.latest) continue;
+      const card = createWorkBundleAssetCard(group.latest, assetUrl, {
+        title: detailSectionTitle(group),
+        detail: `최종 선택 보관본 · ${group.assets.length}장 중 최신`,
+      });
+      card.classList.add('final-detail-page-card');
+      card.dataset.detailSection = group.key;
+      storyboard.append(card);
+    }
+    root.append(storyboard);
+    const archive = element('details', 'history-archive-disclosure');
+    archive.append(element('summary', '', `보관된 최종 결과 ${page.total}장 모두 보기`));
+    archive.append(element('p', 'status-message', `현재 페이지 ${page.page + 1}의 ${page.items.length}장을 섹션별로 표시합니다.`));
+    for (const group of currentGroups) appendDetailSectionGroup(archive, group);
+    root.append(archive);
+    return true;
+  }
+
+  function renderWorkBundleAssets(root, phase, pageValue, stageFilterOverride = '') {
     root.replaceChildren();
+    bindWorkBundleImagePreview(root);
+    const history = record(workBundleHistory);
+    const historyActive = Boolean(workBundleHistory);
+    const stageFilter = historyActive && phase === 'output'
+      ? text(stageFilterOverride || workBundleOutputStageKey)
+      : '';
+    const totalForHeading = workBundleStatus === 'ready'
+      ? workBundle.assets.filter(asset => (
+        asset.phase === phase && (!stageFilter || text(asset.factoryStageKey) === stageFilter)
+      )).length
+      : 0;
     const heading = element('div', 'section-heading compact-heading');
     heading.append(element('div'), element(
       'span',
       'factory-pill',
       workBundleStatus === 'ready'
-        ? `${workBundle.assets.filter(asset => asset.phase === phase).length}개 자산`
+        ? `${totalForHeading}개 ${historyActive ? '자료' : '자산'}`
         : statusLabel(workBundleStatus),
     ));
     heading.firstElementChild.append(
-      element('p', 'eyebrow', phase === 'input' ? 'PDP WORK-BUNDLE INPUT' : 'PDP WORK-BUNDLE OUTPUT'),
-      element('h3', '', phase === 'input' ? '실제 Input 자산' : '실제 Output 자산'),
+      element('p', 'eyebrow', historyActive ? 'kuasangse 완료 작업 이력' : (phase === 'input' ? '조립공장 입력 자료' : '조립공장 생성 결과')),
+      element('h3', '', historyActive
+        ? (phase === 'input'
+          ? '완료 작업에 넣은 입력'
+          : stageFilter === 'sections'
+            ? '상세페이지 섹션 결과'
+            : stageFilter === 'final_detail'
+              ? '최종 상세페이지 선택 결과'
+              : `${STAGE_LABELS[stageFilter] || '생산'} 결과`)
+        : (phase === 'input' ? '실제 입력 자료' : '실제 생성 결과')),
     );
+    if (historyActive && root === roots.bundleOutputs) {
+      const close = element('button', 'button-secondary', '현재 작업자료로 돌아가기');
+      close.type = 'button';
+      close.dataset.action = 'close-history';
+      close.addEventListener('click', closeHistoricalWorkBundle);
+      heading.append(close);
+    }
     root.append(heading);
     if (workBundleStatus !== 'ready') {
       root.append(element(
         'p',
         'factory-empty-state',
         workBundleStatus === 'loading'
-          ? '신화사 PDP work-bundle을 불러오는 중입니다.'
-          : `work-bundle 조회 실패 · ${workBundleError || 'blocked_external'}`,
+          ? '신화사 작업 자료를 불러오는 중입니다.'
+          : `작업 자료를 불러오지 못했습니다 · ${workBundleError || '연결 상태를 확인해 주세요.'}`,
       ));
       return;
     }
-    const page = workBundleAssetPage(workBundle, phase, pageValue);
+    const page = workBundleAssetPage(workBundle, phase, pageValue, stageFilter);
     root.dataset.bundleId = workBundle.id;
     root.dataset.total = String(page.total);
     root.dataset.rendered = String(page.items.length);
     root.dataset.page = String(page.page + 1);
+    root.dataset.historyJobId = historyActive ? archivedJobId : '';
     const contract = element(
       'p',
       'status-message',
-      `${workBundle.workfileName || workBundle.bundleKey} · bundle ${workBundle.id} · revision ${workBundle.version}`,
+      historyActive
+        ? `${history.productName || workBundle.bundleKey} · 완료된 생산 결과 · ${stageFilter ? `${STAGE_LABELS[stageFilter] || stageFilter} 순서` : '작업 순서'}로 확인 · 원본 보관 기록 유지`
+        : `${workBundle.workfileName || workBundle.bundleKey} · 저장 차수 ${workBundle.version}`,
     );
     root.append(contract);
+    if (historyActive) {
+      const input = record(history.input);
+      const output = record(history.output);
+      const summary = element('div', 'status-message history-readback-summary');
+      if (phase === 'input') {
+        const required = Object.entries(record(input.requiredValues))
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(' · ') || '필수값 기록 없음';
+        summary.textContent = `입력 ${Number(input.count || 0)}장 · 출처 ${input.sourceKind || '확인 필요'} · 실행 방식 ${input.mode || '확인 필요'} · ${required}`;
+      } else {
+        const selected = Object.entries(record(output.selectedByStage))
+          .map(([key, value]) => `${HISTORY_SELECTION_STAGE_LABELS[key] || key} ${value}개`)
+          .join(' · ') || '선택 분류 기록 없음';
+        const resultCount = Number(output.selectedResultCount ?? output.selectedCount ?? 0);
+        const sourceCount = Number(output.selectedSourceCount || 0);
+        summary.textContent = `출력 ${Number(output.count || 0)}개 · 선택 표시 ${Number(output.selectedCount || 0)}개 · 후보 ${Number(output.candidateCount || 0)}개 · 최종 선택 결과 ${resultCount}개 · 원본 연결 ${sourceCount}개 · ${selected}`;
+      }
+      root.append(summary);
+    }
     if (!page.total) {
-      root.append(element('p', 'factory-empty-state', `${phase === 'input' ? 'Input' : 'Output'} 자산이 없습니다.`));
+      root.append(element('p', 'factory-empty-state', `${phase === 'input' ? '입력' : '생성 결과'} 자료가 없습니다.`));
       return;
     }
-    const grid = element('div', 'a-cut-contact-sheet work-bundle-contact-sheet');
-    let previousRole = '';
-    for (const asset of page.items) {
-      if (asset.role !== previousRole) {
-        const role = element(
-          'h4',
-          'work-bundle-role',
-          WORK_BUNDLE_ROLE_LABELS[asset.role] || asset.role,
-        );
-        role.dataset.role = asset.role;
-        grid.append(role);
-        previousRole = asset.role;
+    root.dataset.presentation = 'grid';
+    const usesDetailPresentation = historyActive && phase === 'output'
+      && appendHistoryOutputPresentation(root, page, stageFilter);
+    if (!usesDetailPresentation) {
+      const grid = element('div', 'a-cut-contact-sheet work-bundle-contact-sheet');
+      let previousRole = '';
+      for (const asset of page.items) {
+        if (asset.role !== previousRole) {
+          const role = element(
+            'h4',
+            'work-bundle-role',
+            WORK_BUNDLE_ROLE_LABELS[asset.role] || asset.role,
+          );
+          role.dataset.role = asset.role;
+          grid.append(role);
+          previousRole = asset.role;
+        }
+        grid.append(createWorkBundleAssetCard(asset, assetUrl));
       }
-      grid.append(createWorkBundleAssetCard(asset, assetUrl));
+      root.append(grid);
     }
-    root.append(grid);
     if (page.pageCount > 1) {
       const pagination = element('nav', 'button-row candidate-pagination');
       pagination.setAttribute('aria-label', `${phase} 자산 페이지`);
@@ -1241,11 +2672,78 @@ export function mountProductionWorkbench({
     }
   }
 
+  function closeHistoricalWorkBundle() {
+    replaceFactoryHistoryRoute('');
+    archivedJobId = '';
+    workBundleHistory = null;
+    workBundleOutputStageKey = '';
+    workBundleError = '';
+    workBundleStatus = 'loading';
+    workBundle = normalizeWorkBundle({});
+    void loadWorkBundle();
+  }
+
+  async function loadHistoricalWorkBundle(jobId) {
+    const generation = ++workBundleGeneration;
+    archivedJobId = text(jobId);
+    replaceFactoryHistoryRoute(archivedJobId);
+    openMenu('production-acut');
+    workBundleHistory = null;
+    workBundleOutputStageKey = '';
+    workBundleStatus = 'loading';
+    workBundleError = '';
+    workBundle = normalizeWorkBundle({});
+    renderWorkBundleAssets(roots.bundleInputs, 'input', workBundleInputPage);
+    renderWorkBundleAssets(roots.bundleOutputs, 'output', workBundleOutputPage);
+    try {
+      const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(archivedJobId)}/history`);
+      if (generation !== workBundleGeneration || archivedJobId !== text(jobId)) return;
+      workBundle = normalizeWorkBundle(result.workBundle);
+      workBundleHistory = record(result.history);
+      workBundleStatus = 'ready';
+      workBundleError = '';
+      const archivedOutputStages = new Set(workBundle.assets
+        .filter(asset => asset.phase === 'output')
+        .map(asset => text(asset.factoryStageKey)));
+      const initialHistoryStage = [
+        'sections',
+        'final_detail',
+        'representative',
+        'size',
+        'option_color',
+        'general',
+      ].find(stageKey => archivedOutputStages.has(stageKey)) || '';
+      workBundleOutputStageKey = initialHistoryStage;
+      selectedStageKey = initialHistoryStage || selectedStageKey;
+      workBundleInputPage = 0;
+      workBundleOutputPage = 0;
+    } catch (error) {
+      if (generation !== workBundleGeneration) return;
+      workBundleStatus = 'blocked';
+      workBundleError = text(error.code || error.message || 'factory_history_unavailable');
+      workBundle = normalizeWorkBundle({});
+    }
+    render();
+  }
+
   async function loadWorkBundle() {
+    if (archivedJobId) {
+      await loadHistoricalWorkBundle(archivedJobId);
+      return;
+    }
     const generation = ++workBundleGeneration;
     const workspaceId = requestedWorkBundleId ? '' : text(projection.session.workspaceId);
     const productKey = requestedWorkBundleId ? '' : text(projection.session.productKey);
+    workBundleHistory = null;
     workBundleStatus = 'loading';
+    workBundleError = '';
+    if (!requestedWorkBundleId && !workspaceId && !productKey) {
+      workBundleStatus = 'blocked';
+      workBundleError = '현재 작업 세션이 없습니다. 완료 작업에서 입력·출력·선택 보기를 누르세요.';
+      workBundle = normalizeWorkBundle({});
+      render();
+      return;
+    }
     renderWorkBundleAssets(roots.bundleInputs, 'input', workBundleInputPage);
     renderWorkBundleAssets(roots.bundleOutputs, 'output', workBundleOutputPage);
     try {
@@ -1269,16 +2767,33 @@ export function mountProductionWorkbench({
       workBundle = nextBundle;
       workBundleStatus = 'ready';
       workBundleError = '';
+      workBundleHistory = null;
+      workBundleOutputStageKey = '';
       workBundleInputPage = 0;
       workBundleOutputPage = 0;
     } catch (error) {
       if (generation !== workBundleGeneration || error.code === 'stale_work_bundle_response') return;
       workBundleStatus = 'blocked';
-      workBundleError = text(error.code || error.message);
+      workBundleError = text(error.code || error.message) === 'work_bundle_target_required'
+        ? '현재 작업 세션에 연결된 작업자료가 없습니다.'
+        : text(error.code || error.message);
       workBundle = normalizeWorkBundle({});
     }
     render();
     if (!requestedWorkBundleId) void scheduleAutomaticSelection();
+  }
+
+  async function restoreInitialWorkBundle() {
+    const defaultJobId = defaultCompletedHistoryJobId(productJobs, {
+      hasSession: Boolean(text(projection.session.workspaceId) || text(projection.session.productKey)),
+      historyJobId: archivedJobId,
+      requestedBundleId: requestedWorkBundleId,
+    });
+    if (defaultJobId) {
+      await loadHistoricalWorkBundle(defaultJobId);
+      return;
+    }
+    await loadWorkBundle();
   }
 
   function judgementOptions() {
@@ -1291,8 +2806,13 @@ export function mountProductionWorkbench({
   }
 
   async function submitSelection(stage, candidate, decisionMode) {
+    if (!viewMatchesLiveProjection()) {
+      setStatus('live-status', '보기 전용 작업입니다. 작업 재개 후 A컷을 저장해 주세요.', 'error');
+      return null;
+    }
     const jobId = text(projection.registration.jobId);
-    if (!workBundle.id || !jobId) {
+    const localFactoryJob = jobId.startsWith('factory-job-');
+    if ((!localFactoryJob && !workBundle.id) || !jobId) {
       setStatus('live-status', 'A컷 선택 대상 bundle과 PDP job 연결이 필요합니다.', 'error');
       return;
     }
@@ -1317,9 +2837,15 @@ export function mountProductionWorkbench({
           expectedInputFingerprint: projection.session.inputFingerprint,
           idempotencyKey: `a-cut-auto:${projection.session.productKey}:${stage.key}:${projection.session.revision}`,
         };
-      const response = await apiRequest('/api/factory/a-cuts/select', {
-        method: 'POST',
-        body: JSON.stringify(buildCompositeSelectionPayload({
+      const selectionPayload = localFactoryJob
+        ? {
+          ...command,
+          jobId,
+          expectedProjectionCursor: text(projection.cursor),
+          decisionMode,
+          judgementOptions: judgementOptions(),
+        }
+        : buildCompositeSelectionPayload({
           projection,
           command,
           workBundle,
@@ -1327,18 +2853,31 @@ export function mountProductionWorkbench({
           decisionMode,
           policySnapshot: automationState.snapshot,
           judgementOptions: judgementOptions(),
-        })),
+        });
+      const response = await apiRequest(localFactoryJob
+        ? `/api/factory/jobs/${encodeURIComponent(jobId)}/select`
+        : '/api/factory/a-cuts/select', {
+        method: 'POST',
+        body: JSON.stringify(selectionPayload),
       });
       lastAutomationReceipt = response.decisionReceipt || null;
       if (response.selectionStatus !== 'saving') {
         savingByTarget.delete(savingKey(stage.key));
         heldDecisions.add(STAGE_DECISIONS[stage.key]);
-        setStatus('live-status', `판단 기록 완료 · ${text(response.selectionStatus)}`, 'error');
+        setStatus(
+          'live-status',
+          response.selectionStatus === 'manual_required'
+            ? 'GPT 자동판단 보류 · 후보를 직접 확인해 주세요.'
+            : `판단 기록 완료 · ${text(response.selectionStatus)}`,
+          'error',
+        );
       } else {
         const selectedId = text(record(response.decisionReceipt).selectedCandidateId || candidate?.id);
         savingByTarget.set(savingKey(stage.key), { ...pending, candidateId: selectedId });
+        if (localFactoryJob && selectedId) pendingResumeByStage.set(stage.key, { jobId, candidateId: selectedId });
         setStatus('live-status', `${STAGE_LABELS[stage.key]} PDP 판단 기록 후 factory 명령을 전달했습니다.`, 'ok');
       }
+      render();
       return response;
     } catch (error) {
       savingByTarget.delete(savingKey(stage.key));
@@ -1357,7 +2896,8 @@ export function mountProductionWorkbench({
     const decisionType = STAGE_DECISIONS[stage.key];
     const snapshot = record(automationState.snapshot);
     const jobId = text(projection.registration.jobId);
-    if (!decisionType || snapshot.locked !== true || !jobId) return;
+    const localFactoryJob = jobId.startsWith('factory-job-');
+    if (!decisionType || !jobId || (!localFactoryJob && snapshot.locked !== true)) return;
     await submitSelection(stage, null, 'auto');
   }
 
@@ -1366,42 +2906,72 @@ export function mountProductionWorkbench({
   });
 
   function scheduleAutomaticSelection() {
+    const jobId = text(projection.registration.jobId);
+    const localFactoryJob = jobId.startsWith('factory-job-');
+    const localJob = productJobs.find(job => text(job.jobId) === jobId);
+    const waitingStage = projection.stages.find(stage => stage.key === localJob?.stageKey);
+    if (
+      localFactoryJob
+      && resolveLocalFactoryStageMode(projection, productJobs, waitingStage?.key) === 'auto'
+      && localJob?.status === 'waiting_manual'
+      && waitingManualJobAction(localJob, waitingStage) === 'resume'
+      && !automaticDecisionHeld(localJob, waitingStage.key)
+    ) return resumeFactoryJob(jobId);
     return automaticScheduler({
       projection,
       workBundle,
-      policySnapshot: automationState.snapshot,
+      policySnapshot: localFactoryJob ? { locked: true } : automationState.snapshot,
+      localJob,
       isAutomatic: stage => (
-        effectiveDecision(STAGE_DECISIONS[stage.key]).mode === 'auto'
+        localFactoryJob
+          ? resolveLocalFactoryStageMode(projection, productJobs, stage.key) === 'auto'
+            && !automaticDecisionHeld(localJob, stage.key)
+          : effectiveDecision(STAGE_DECISIONS[stage.key]).mode === 'auto'
       ),
     });
   }
 
   function renderInspector() {
     const root = roots.inspector;
+    const current = viewedProjection();
+    if (archivedJobId) {
+      root.hidden = true;
+      root.replaceChildren();
+      return;
+    }
+    root.hidden = false;
     root.replaceChildren();
-    const stage = selectedStage(projection, selectedStageKey);
+    const stage = selectedStage(current, selectedStageKey);
     const candidate = stage?.candidates.find(item => item.id === inspectedCandidateId)
       || stage?.candidates.find(item => item.id === stage.selectedId)
       || stage?.candidates[0]
       || null;
     root.append(element('p', 'eyebrow', 'ARTIFACT INSPECTOR'), element('h3', '', '후보 근거와 선택'));
     if (!candidate) {
-      root.append(element('p', 'factory-empty-state', projection.connected ? '확인할 후보가 없습니다.' : '조립공장 연결 끊김'));
+      root.append(element('p', 'factory-empty-state', current.connected ? '확인할 후보가 없습니다.' : '조립공장 연결 끊김'));
       return;
     }
     const fields = element('dl', 'factory-inspector-fields');
     const decisionType = STAGE_DECISIONS[stage.key];
     const effective = effectiveDecision(decisionType);
+    const jobId = text(current.registration.jobId);
+    const localFactoryJob = jobId.startsWith('factory-job-');
+    const automatic = localFactoryJob
+      ? resolveLocalFactoryStageMode(projection, productJobs, stage.key) === 'auto'
+      : effective.mode === 'auto';
+    const localJob = productJobs.find(job => text(job.jobId) === jobId);
+    const automaticHeld = automatic && (localJob?.status === 'completed' || automaticDecisionHeld(localJob, stage.key));
     fields.append(
-      labelledValue('candidate', candidate.id, 'candidate-id'),
-      labelledValue('asset', candidate.assetId, 'asset-id'),
-      labelledValue('source', candidate.source, 'source'),
-      labelledValue('digest', candidate.digest, 'digest'),
-      labelledValue('model', candidate.model, 'model'),
-      labelledValue('confidence', candidate.confidence === null ? '' : candidate.confidence, 'confidence'),
-      labelledValue('rationale', candidate.rationale, 'rationale'),
+      labelledValue('생성 출처', candidate.source, 'source'),
+      labelledValue('판단 모델', candidate.model, 'model'),
+      labelledValue('판단 점수', candidate.confidence === null ? '' : candidate.confidence, 'confidence'),
+      labelledValue('선택 이유', candidate.rationale, 'rationale'),
       labelledValue('갱신', stage.updatedAt, 'updated-at'),
-      labelledValue('자동화', `${statusLabel(effective.mode)} · ${effective.source}`, 'automation-policy'),
+      labelledValue(
+        '자동화',
+        `${statusLabel(automatic ? 'auto' : 'manual')} · ${localFactoryJob ? '현재 제품 설정' : policySourceLabel(effective.source)}`,
+        'automation-policy',
+      ),
     );
     root.append(fields);
     const visibleReceipt = (
@@ -1409,45 +2979,42 @@ export function mountProductionWorkbench({
         ? lastAutomationReceipt
         : candidate.receipt
     );
-    if (visibleReceipt) {
-      const receipt = element('pre', 'artifact-receipt');
-      receipt.textContent = JSON.stringify(visibleReceipt, null, 2);
-      root.append(receipt);
-    }
+    if (visibleReceipt) root.append(element('p', 'status-message', '조립공장 선택 저장 기록이 확인됐습니다.'));
     const result = element('p', 'status-message');
     result.setAttribute('role', 'status');
     const saving = stageSaving(stage.key);
     if (saving?.candidateId === candidate.id || saving?.candidateId === 'oauth-pending') {
-      result.textContent = 'saving · factory receipt와 revision을 기다리는 중';
+      result.textContent = '선택 결과를 조립공장 작업파일에 저장하는 중입니다.';
     } else if (stage.selectedId === candidate.id) {
-      result.textContent = `selected · revision ${projection.session.revision}`;
+      result.textContent = `선택 완료 · 저장 차수 ${current.session.revision}`;
       result.dataset.tone = 'ok';
     } else {
       result.textContent = '보기 상태 · 아직 A컷으로 선택하지 않음';
     }
     const actions = element('div', 'button-row inspector-actions');
-    const automatic = effective.mode === 'auto';
-    const select = element('button', '', saving ? '저장 중' : automatic ? '자동 판단 ON' : 'A컷 선택');
+    const select = element('button', '', saving ? '저장 중' : automaticHeld ? '이 후보를 수동 선택' : automatic ? '자동 판단 ON' : 'A컷 선택');
     select.type = 'button';
     select.dataset.action = 'select-a-cut';
-    select.disabled = !projection.connected
+    select.disabled = !current.connected
+      || !viewMatchesLiveProjection()
       || Boolean(saving)
       || stage.selectedId === candidate.id
-      || resolveCandidateAsset(candidate, workBundle.assets, stage.key).status !== 'matched'
-      || (automatic && record(automationState.snapshot).locked !== true);
+      || (!localFactoryJob && resolveCandidateAsset(candidate, workBundle.assets, stage.key).status !== 'matched')
+      || (automatic && !localFactoryJob && record(automationState.snapshot).locked !== true);
     select.addEventListener('click', () => (
-      automatic ? void selectAutomatically(stage) : void selectACut(stage, candidate)
+      automatic && !automaticHeld ? void selectAutomatically(stage) : void selectACut(stage, candidate)
     ));
     const next = element('button', 'button-secondary', '다음 미결정');
     next.type = 'button';
     next.dataset.action = 'next-unresolved';
-    const unresolved = unresolvedStage(projection, stage.key);
+    const unresolved = unresolvedStage(current, stage.key);
     next.disabled = !unresolved || (automatic && !heldDecisions.has(decisionType));
     next.addEventListener('click', () => {
       if (!unresolved) return;
       selectedStageKey = unresolved.key;
       inspectedCandidateId = unresolved.candidates[0]?.id || '';
       candidatePage = 0;
+      rememberActiveTabView();
       render();
       roots.candidates.querySelector('button')?.focus();
     });
@@ -1480,6 +3047,7 @@ export function mountProductionWorkbench({
         body: JSON.stringify(payload),
       });
       approval = { preview, token: '', status: 'approval_required', receipt: null };
+      registrationTargetConfirmed = false;
       registrationMessage = `일회 승인 대상 고정 · ${preview.approvalRequestId}`;
     } catch (error) {
       registrationMessage = `승인 대상 생성 실패 · ${error.message}`;
@@ -1507,23 +3075,33 @@ export function mountProductionWorkbench({
   }
 
   async function executeRegistration(confirmInput) {
-    if (!approval.token || !confirmInput.checked) return;
+    registrationTargetConfirmed = confirmInput.checked;
+    if (!approval.token || !registrationTargetConfirmed) return;
     const jobId = text(projection.registration.jobId);
     if (!jobId) {
       registrationMessage = '등록 실행 차단 · job_id 없음';
       renderRegistration();
       return;
     }
-    if (!window.confirm('고정된 승인 대상으로 Cafe24 등록을 한 번 실행할까요?')) return;
     approval = { ...approval, status: 'executing' };
     renderRegistration();
     try {
+      const binding = approvalBinding(approval.preview);
+      const confirmation = await apiRequest('/api/cafe24/confirm', {
+        method: 'POST',
+        body: JSON.stringify({
+          approvalToken: approval.token,
+          confirmed: true,
+          ...binding,
+        }),
+      });
       const result = await apiRequest('/api/cafe24/publish', {
         method: 'POST',
         body: JSON.stringify({
           jobId,
           approvalToken: approval.token,
-          ...approvalBinding(approval.preview),
+          confirmationNonce: confirmation.confirmationNonce,
+          ...binding,
         }),
       });
       approval = {
@@ -1532,34 +3110,197 @@ export function mountProductionWorkbench({
         status: text(result.status || 'staged_verified'),
         receipt: result.publicationReceipt || result,
       };
-      registrationMessage = 'Cafe24 staged_verified · remote readback 영수증 확인';
+      registrationTargetConfirmed = false;
+      registrationMessage = 'Cafe24 등록 검증 완료 · 등록 결과 재확인 영수증 확인';
     } catch (error) {
       approval = { ...approval, token: '', status: 'failed' };
+      registrationTargetConfirmed = false;
       registrationMessage = `Cafe24 등록 실패 · ${error.message}`;
     }
     renderRegistration();
   }
 
+  async function reconcileRegistration() {
+    const registration = record(projection.registration);
+    const jobId = text(registration.jobId);
+    if (!jobId) return;
+    approval = { ...approval, status: 'executing' };
+    registrationMessage = 'Cafe24 재등록 없이 원격 결과 재확인 중';
+    renderRegistration();
+    try {
+      const payload = buildCafe24StagingPayload(projection);
+      const preview = await apiRequest('/api/cafe24/staging-preview', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      const result = await apiRequest('/api/cafe24/reconcile', {
+        method: 'POST',
+        body: JSON.stringify({ jobId, payloadDigest: preview.payloadDigest, ...payload }),
+      });
+      approval = {
+        preview,
+        token: '',
+        status: text(result.status || 'staged_verified'),
+        receipt: result.publicationReceipt || result,
+      };
+      registrationMessage = 'Cafe24 등록 검증 완료 · 재등록 없이 원격 결과 재확인';
+    } catch (error) {
+      approval = { ...approval, status: 'failed' };
+      registrationMessage = `Cafe24 결과 재확인 실패 · ${error.message}`;
+    }
+    renderRegistration();
+  }
+
+  function externalLink(label, href) {
+    const link = element('a', 'button-secondary ledger-link', label);
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    return link;
+  }
+
+  function renderWorkfileReportLedger() {
+    const root = roots.ledger;
+    const registration = record(projection.registration);
+    const ledger = buildWorkfilePublicationLedger(projection, approval.receipt, workBundleHistory);
+    const publication = ledger.publication;
+    root.replaceChildren();
+    root.dataset.workfileState = ledger.workfileConnected ? 'connected' : 'missing';
+    root.dataset.cafe24State = publication.productNo ? 'registered' : 'unconfirmed';
+
+    const heading = element('div', 'status-row');
+    heading.append(
+      element('h3', '', '작업파일 ↔ Cafe24 인계 요약'),
+      element('span', 'factory-pill', publication.productNo ? '등록 상품 확인됨' : '등록 영수증 확인 필요'),
+    );
+    const fields = element('dl', 'factory-sync-fields handoff-ledger-fields');
+    fields.append(
+      labelledValue(
+        ledger.workfileExact ? '.kuasangse 작업파일' : ledger.workfileName ? '완료 이력 폴더' : '작업파일·이력',
+        ledger.workfileName || '연결된 파일 없음',
+        'handoff-workfile-name',
+      ),
+      labelledValue('작업파일 근거', ledger.workfileSource, 'handoff-workfile-source'),
+      labelledValue('파일 생성 방식', ledger.creationMode, 'handoff-workfile-creation'),
+      labelledValue('제품명', publication.productName || ledger.productKey, 'handoff-product-name'),
+      labelledValue('Cafe24 상품', publication.productNo ? `#${publication.productNo}` : '등록 영수증 없음', 'handoff-cafe24-product'),
+      labelledValue('Cafe24 상품코드', publication.productCode, 'handoff-cafe24-code'),
+      labelledValue('작업 범위', [ledger.workspaceId, ledger.runId ? `run ${ledger.runId}` : '', `저장 차수 ${ledger.revision}`].filter(Boolean).join(' · '), 'handoff-scope'),
+      labelledValue('원격 결과', publication.productNo ? `${publication.representativeImageCount || 0}장 대표 · ${publication.detailImageCount || 0}장 상세 · ${publication.variantCount || 0}개 옵션` : '원격 read-back 없음', 'handoff-readback'),
+    );
+    root.append(heading, fields);
+
+    const message = element(
+      'p',
+      'status-message handoff-ledger-message',
+      ledger.workfileExact
+        ? `${ledger.workfileName} 연결을 확인했습니다. ${ledger.creationMode}.`
+        : ledger.workfileConnected
+          ? `${ledger.workfileName} 완료 이력 폴더만 확인했습니다. 실제 .kuasangse 파일명·경로와 생산관제 자동 새 작업 생성 기록은 없습니다.`
+        : '생산관제 투입 시 제품명으로 새 .kuasangse를 자동 생성한 기록이 없습니다. Cafe24 등록 전에 작업파일을 연결하고 저장 결과를 확인해야 합니다.',
+    );
+    message.dataset.tone = ledger.workfileExact ? 'ok' : 'error';
+    root.append(message);
+
+    const actions = element('div', 'button-row handoff-ledger-actions');
+    const chooseWorkfile = element('button', 'button-secondary', '작업파일 선택 창 열기');
+    chooseWorkfile.type = 'button';
+    chooseWorkfile.addEventListener('click', () => document.getElementById('workfile-input')?.click());
+    const openCafe24Panel = element('button', 'button-secondary', 'Cafe24 등록 목록 보기');
+    openCafe24Panel.type = 'button';
+    openCafe24Panel.addEventListener('click', () => openMenu('cafe24'));
+    actions.append(chooseWorkfile, openCafe24Panel);
+    if (publication.storefrontUrl) actions.append(externalLink('Cafe24 상품 바로가기', publication.storefrontUrl));
+    if (publication.adminUrl) actions.append(externalLink('Cafe24 관리자 바로가기', publication.adminUrl));
+    const jobId = firstText(publication.jobId, registration.jobId, activeProductJob()?.jobId);
+    const currentJob = productJobs.find(job => text(job.jobId) === jobId);
+    if (jobId && currentJob?.checkpointAvailable) {
+      const history = element('button', 'button-secondary', '입력·출력·선택 이력 보기');
+      history.type = 'button';
+      history.addEventListener('click', () => void loadHistoricalWorkBundle(jobId));
+      actions.append(history);
+    }
+    root.append(actions);
+
+    const listHeading = element('div', 'handoff-ledger-list-heading');
+    listHeading.append(
+      element('h4', '', 'Cafe24 등록 목록'),
+      element('span', 'factory-pill', `${ledger.publications.length}건`),
+    );
+    root.append(listHeading);
+    const listRoot = element('div', 'publication-ledger-list');
+    if (!ledger.publications.length) {
+      listRoot.append(element('p', 'factory-empty-state', '현재 생산관제 세션에서 확인된 Cafe24 등록 영수증이 없습니다. 등록 상태가 완료여도 원격 상품번호와 영수증이 없으면 등록 목록에 넣지 않습니다.'));
+    } else {
+      for (const item of ledger.publications) {
+        const card = element('article', 'publication-ledger-item');
+        const title = element('div', 'publication-ledger-title');
+        title.append(
+          element('strong', '', item.productName || '상품명 미확인'),
+          element('span', 'factory-pill', `#${item.productNo}`),
+        );
+        card.append(
+          title,
+          element('p', 'status-message', `${item.productCode || '상품코드 없음'} · ${item.sourceWorkfileName || ledger.workfileName || '작업파일명 미기록'}`),
+        );
+        const links = element('div', 'button-row');
+        if (item.storefrontUrl) links.append(externalLink('상품 바로가기', item.storefrontUrl));
+        if (item.adminUrl) links.append(externalLink('관리자 바로가기', item.adminUrl));
+        card.append(links);
+        listRoot.append(card);
+      }
+    }
+    root.append(listRoot);
+  }
+
   function renderRegistration() {
     const root = roots.registration;
-    root.replaceChildren();
     const registration = record(projection.registration);
-    const blockers = list(registration.blockers).map(text).filter(Boolean);
+    const blockers = list(registration.blockers).map(registrationBlockerLabel).filter(Boolean);
+    const nextRenderKey = JSON.stringify([
+      projection.connected,
+      registration,
+      approval.status,
+      text(approval.preview?.approvalRequestId),
+      Boolean(approval.token),
+      Boolean(approval.receipt),
+      registrationMessage,
+    ]);
+    if (root.childElementCount && registrationRenderKey === nextRenderKey) return;
+    registrationRenderKey = nextRenderKey;
+    root.replaceChildren();
     const status = registrationStatus();
     root.dataset.status = status;
     const heading = element('div', 'status-row');
     heading.append(element('h3', '', 'Cafe24 등록'), element('span', 'factory-pill', statusLabel(status)));
     const fields = element('dl', 'factory-sync-fields registration-fields');
+    const cafe24RegistrationLabel = cafe24RegistrationTargetLabel(registration, projection.session);
+    const publication = cafe24RegistrationSummary(registration, projection.session, approval.receipt);
     fields.append(
-      labelledValue('productId', registration.productId || projection.session.productId, 'product-id'),
-      labelledValue('productKey', registration.productKey || projection.session.productKey, 'product-key'),
-      labelledValue('categoryId', registration.categoryId, 'category-id'),
-      labelledValue('HTML digest', registration.htmlDigest, 'html-digest'),
-      labelledValue('image digests', list(registration.imageDigests).join(', '), 'image-digests'),
-      labelledValue('selling / display / market_sync', `${registration.selling || 'F'} / ${registration.display || 'F'} / ${registration.market_sync || 'F'}`, 'safe-defaults'),
-      labelledValue('idempotencyKey', registration.idempotencyKey, 'idempotency-key'),
-      labelledValue('approval token', approval.token ? '발급됨 · 메모리 보관' : registration.approvalTokenState || approval.status, 'approval-state'),
-      labelledValue('remote readback', approval.receipt?.remoteReadbackDigest || registration.remoteReadbackDigest, 'readback'),
+      labelledValue('Cafe24 등록 방식', cafe24RegistrationLabel, 'product-id'),
+      labelledValue('제품명', registration.productKey || projection.session.productKey, 'product-key'),
+      labelledValue('Cafe24 상품번호', publication.productNo ? `#${publication.productNo}` : '등록 영수증 없음', 'remote-product-no'),
+      labelledValue('Cafe24 상품코드', publication.productCode, 'remote-product-code'),
+      labelledValue('Cafe24 상품분류', registration.categoryLabel || registration.categoryId, 'category-id'),
+      labelledValue('상세페이지', registration.htmlDigest ? '완성본 확인됨' : '미완성', 'html-digest'),
+      labelledValue('등록 이미지', `${list(registration.imageDigests).length}장 확인`, 'image-digests'),
+      labelledValue(
+        '옵션 구성',
+        list(registration.optionValues).length
+          ? `${text(registration.optionName) || '색상'} · ${list(registration.optionValues).length}개 · ${list(registration.optionValues).map(text).join(', ')}`
+          : '옵션 없음',
+        'option-values',
+      ),
+      labelledValue(
+        '품목별 재고',
+        list(registration.optionValues).length
+          ? `${Number(registration.variantCount || 0)}개 품목 · 각 ${text(registration.inventoryQuantity) || '99'}`
+          : '해당 없음',
+        'variant-inventory',
+      ),
+      labelledValue('등록 직후 상태', '진열 안 함 · 판매 안 함 · 마켓 전송 안 함', 'safe-defaults'),
+      labelledValue('일회 승인', approval.token ? '승인됨' : statusLabel(registration.approvalTokenState || approval.status), 'approval-state'),
+      labelledValue('Cafe24 재확인', approval.receipt?.remoteReadbackDigest || registration.remoteReadbackDigest ? '등록 결과 재확인 완료' : '실행 전', 'readback'),
     );
     root.append(heading, fields);
     const blockerList = element('ul', 'registration-blockers');
@@ -1567,7 +3308,7 @@ export function mountProductionWorkbench({
     if (blockers.length) {
       for (const blocker of blockers) blockerList.append(element('li', '', blocker));
     } else {
-      blockerList.append(element('li', '', '필수 Input과 모든 단계 A컷이 확정되었습니다.'));
+      blockerList.append(element('li', '', '필수값과 모든 단계 선택 결과가 확정되었습니다.'));
     }
     root.append(blockerList);
     const actions = element('div', 'button-row registration-actions');
@@ -1590,16 +3331,29 @@ export function mountProductionWorkbench({
     const confirmInput = element('input');
     confirmInput.type = 'checkbox';
     confirmInput.dataset.action = 'confirm-cafe24-target';
+    confirmInput.checked = registrationTargetConfirmed;
     confirmLabel.append(confirmInput, document.createTextNode(' 고정된 대상 1건 실행 확인'));
     const execute = element('button', 'button-danger', 'Cafe24 등록 실행');
     execute.type = 'button';
     execute.dataset.action = 'cafe24-execute';
-    execute.disabled = !approval.token || !confirmInput.checked || !text(registration.jobId);
+    execute.disabled = !approval.token || !registrationTargetConfirmed || !text(registration.jobId);
     confirmInput.addEventListener('change', () => {
-      execute.disabled = !approval.token || !confirmInput.checked || !text(registration.jobId);
+      registrationTargetConfirmed = confirmInput.checked;
+      execute.disabled = !approval.token || !registrationTargetConfirmed || !text(registration.jobId);
     });
     execute.addEventListener('click', () => void executeRegistration(confirmInput));
     actions.append(preflight, preview, approve, confirmLabel, execute);
+    if (publication.storefrontUrl) actions.append(externalLink('등록 상품 바로가기', publication.storefrontUrl));
+    if (publication.adminUrl) actions.append(externalLink('Cafe24 관리자 바로가기', publication.adminUrl));
+    const readbackVerified = Boolean(approval.receipt?.remoteReadbackDigest || registration.remoteReadbackDigest);
+    if (registration.status === 'staged_verified' && !readbackVerified) {
+      const reconcile = element('button', 'button-secondary', '등록 결과 재확인 · 재등록 없음');
+      reconcile.type = 'button';
+      reconcile.dataset.action = 'cafe24-reconcile';
+      reconcile.disabled = !projection.connected || blockers.length > 0 || !text(registration.jobId) || approval.status === 'executing';
+      reconcile.addEventListener('click', () => void reconcileRegistration());
+      actions.append(reconcile);
+    }
     root.append(actions);
     const message = element('p', 'status-message', registrationMessage || (
       blockers.length ? `차단 사유 ${blockers.length}개` : '사전점검 준비 완료 · 등록에는 일회 승인이 필요합니다.'
@@ -1611,33 +3365,160 @@ export function mountProductionWorkbench({
   function renderQueue() {
     if (fixtureMode) return;
     const root = roots.queue;
+    if (root.contains(document.activeElement)) return;
     root.replaceChildren();
-    const products = projection.products.length
-      ? projection.products
-      : projection.connected
-        ? [{
-          productId: projection.session.productId,
-          productKey: projection.session.productKey,
-          progress: projection.progress,
-        }]
-        : [];
+    const focusJobId = text(workfileTabs.active()?.jobId || activeProductJob()?.jobId);
+    const projectionJobId = text(projection.registration.jobId);
+    if (roots.queueTotal) roots.queueTotal.replaceChildren(document.createTextNode(`${productJobs.length || projection.products.length}건`));
+    if (productJobs.length) {
+      for (const [index, job] of productJobs.entries()) {
+        const jobId = text(job.jobId);
+        const queueRow = buildOperatorQueueRow(job, index);
+        const linkedTab = workfileTabs.snapshot().tabs.find(tab => tab.jobId === jobId && tab.linkState === 'linked');
+        const jobMessage = linkedTab && job.status === 'blocked'
+          ? '승인 파일 연결 완료 · 작업 재개 대기'
+          : visibleFactoryMessage(job.message, job.stageKey);
+        const row = element('article', 'operator-job-row');
+        row.dataset.jobId = text(job.jobId);
+        row.dataset.status = text(job.status);
+        row.dataset.current = String(jobId === focusJobId);
+        row.dataset.needsSelection = String(queueRow.needsSelection);
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-label', `${text(job.productName || job.jobId)} 작업 보기 · ${queueRow.stageLabel} · ${queueRow.stateLabel}`);
+        const activateRow = () => activateWorkfileTab(`job:${jobId}`);
+        row.addEventListener('click', event => {
+          if (event.target?.closest?.('button, a')) return;
+          activateRow();
+        });
+        row.addEventListener('keydown', event => {
+          if (!['Enter', ' '].includes(event.key)) return;
+          event.preventDefault();
+          activateRow();
+        });
+        const main = element('div', 'operator-job-main');
+        const title = element('div', 'operator-job-title');
+        title.append(
+          element('strong', '', text(job.productName || job.jobId)),
+          element('span', 'factory-pill', queueRow.stateLabel),
+        );
+        const source = job.sourceKind === 'sinhwa-db'
+          ? `신화사 DB · 품번 ${text(job.jcode) || '없음'}`
+          : `직접 입력 · 이미지 ${Number(job.imageCount || 0)}장`;
+        main.append(
+          title,
+          element('p', 'status-message', `${source} · ${queueRow.stepLabel} · ${queueRow.modeLabel}`),
+          element('p', 'status-message', `${queueRow.stageLabel} · ${queueRow.stateLabel}${jobMessage ? ` · ${jobMessage}` : ''}`),
+        );
+        row.append(element('span', 'operator-job-index', queueRow.orderLabel), main);
+
+        const actions = element('div', 'operator-job-actions');
+        if (job.status === 'waiting_manual') {
+          if (jobId === projectionJobId) {
+            const stage = projection.stages.find(item => item.key === job.stageKey);
+            const selected = Boolean(stage?.selectedId);
+            const actionKind = waitingManualJobAction(job, stage);
+            const automaticHeld = automaticDecisionHeld(job, job.stageKey);
+            const stageMode = resolveLocalFactoryStageMode(projection, productJobs, job.stageKey);
+            const action = element(
+              'button',
+              'button-secondary',
+              automaticHeld
+                ? 'GPT 보류 · 수동 선택'
+                : stageMode === 'auto'
+                  ? '자동 판단 상태 열기'
+                  : (selected ? '다음 단계 실행' : queueRow.actionLabel),
+            );
+            action.type = 'button';
+            action.addEventListener('click', () => (actionKind === 'resume'
+              ? void resumeFactoryJob(job.jobId)
+              : openFactoryStage(job.stageKey || projection.progress.stageKey)));
+            actions.append(action);
+          }
+        } else if (job.status === 'blocked' && (jobId === projectionJobId || job.checkpointAvailable)) {
+          if (job.checkpointAvailable) {
+            const historyAction = element('button', 'button-secondary', '입력·출력·선택 보기');
+            historyAction.type = 'button';
+            historyAction.dataset.action = 'open-blocked-history';
+            historyAction.addEventListener('click', () => void loadHistoricalWorkBundle(job.jobId));
+            actions.append(historyAction);
+          }
+          if (jobId === projectionJobId) {
+            const action = element('button', 'button-secondary', '같은 상태로 다시 실행');
+            action.type = 'button';
+            action.addEventListener('click', () => void resumeFactoryJob(job.jobId));
+            actions.append(action);
+          }
+        } else if (job.status === 'running' && jobId === projectionJobId) {
+          const action = element('button', 'button-secondary', '현재 공정 열기');
+          action.type = 'button';
+          action.addEventListener('click', () => openFactoryStage(job.stageKey || projection.progress.stageKey));
+          actions.append(action);
+        } else if (job.status === 'completed' && jobId === projectionJobId) {
+          if (job.checkpointAvailable) {
+            const historyAction = element('button', 'button-secondary', '입력·출력·선택 보기');
+            historyAction.type = 'button';
+            historyAction.dataset.action = 'open-completed-history';
+            historyAction.addEventListener('click', () => void loadHistoricalWorkBundle(job.jobId));
+            actions.append(historyAction);
+          }
+          const restoreCheckpoint = text(projection.registration.status) === 'blocked' && job.checkpointAvailable;
+          const action = element('button', 'button-secondary', restoreCheckpoint ? '체크포인트 복원' : 'Cafe24 확인');
+          action.type = 'button';
+          action.dataset.action = restoreCheckpoint ? 'restore-completed-factory-job' : 'open-cafe24';
+          action.addEventListener('click', () => (restoreCheckpoint
+            ? void resumeFactoryJob(job.jobId)
+            : openFactoryStage('cafe24')));
+          actions.append(action);
+        } else if (job.status === 'completed' && job.checkpointAvailable) {
+          const historyAction = element('button', 'button-secondary', '입력·출력·선택 보기');
+          historyAction.type = 'button';
+          historyAction.dataset.action = 'open-completed-history';
+          historyAction.addEventListener('click', () => void loadHistoricalWorkBundle(job.jobId));
+          actions.append(historyAction);
+        }
+        if (actions.childElementCount) row.append(actions);
+        root.append(row);
+      }
+      root.dataset.apiTotal = String(productJobs.length);
+      root.dataset.apiRendered = String(productJobs.length);
+      return;
+    }
+    const products = projectQueueProducts(projection);
     for (const product of products.slice(0, 15)) {
-      const row = element('article', 'factory-card virtual-row');
+      const row = element('article', 'operator-job-row');
       row.dataset.productId = text(product.productId);
+      row.dataset.current = String(text(product.productId) === text(projection.session.productId));
       const productProgress = record(product.progress);
-      row.append(
+      const main = element('div', 'operator-job-main');
+      const title = element('div', 'operator-job-title');
+      title.append(
         element('strong', '', text(product.productKey || product.productId)),
         element('span', 'factory-pill', statusLabel(productProgress.status || projection.status)),
-        element('p', 'status-message', `${text(productProgress.stageLabel || productProgress.stageKey)} · ${Number(productProgress.percent || 0)}% · ${elapsedLabel(productProgress.elapsedMs)}`),
       );
+      main.append(title, element('p', 'status-message', `${text(productProgress.stageLabel || productProgress.stageKey)} · ${Number(productProgress.percent || 0)}% · ${elapsedLabel(productProgress.elapsedMs)}`));
+      row.append(element('span', 'operator-job-index', '01'), main);
       root.append(row);
     }
-    if (!products.length) root.append(element('p', 'status-message', '조립공장 session에 제품이 없습니다.'));
+    if (!products.length) {
+      const empty = element('article', 'operator-empty-state');
+      empty.append(
+        element('strong', '', queueApiError ? '작업 큐를 불러오지 못했습니다' : '대기 중인 제품이 없습니다'),
+        element('p', 'status-message', queueApiError ? `작업 큐 조회 실패 · ${queueApiError}` : '신화사 DB 제품을 선택하거나 신규 제품 자료를 직접 입력하세요.'),
+      );
+      const action = element('button', 'button-secondary', '제품 투입 열기');
+      action.type = 'button';
+      action.addEventListener('click', () => openFactoryStage('db'));
+      empty.append(action);
+      root.append(empty);
+    }
     root.dataset.apiTotal = String(products.length);
     root.dataset.apiRendered = String(Math.min(products.length, 15));
   }
 
   function render() {
+    if (roots.resultWorkspace) roots.resultWorkspace.dataset.historyActive = String(Boolean(archivedJobId));
+    renderWorkfileTabs();
     renderSyncBar();
     renderProductProgress();
     renderOverviewSummary();
@@ -1647,25 +3528,88 @@ export function mountProductionWorkbench({
     renderWorkBundleAssets(roots.bundleInputs, 'input', workBundleInputPage);
     renderWorkBundleAssets(roots.bundleOutputs, 'output', workBundleOutputPage);
     renderInspector();
+    renderWorkfileReportLedger();
     renderRegistration();
     renderCompetitors();
     renderAuditSummary();
     renderQueue();
+    renderQueueSelectionWorkbench();
   }
 
   async function refreshState() {
     try {
       const next = await apiRequest(`/api/factory/state${fixtureCount ? `?fixtureCount=${fixtureCount}` : ''}`);
       factoryApiError = '';
+      const snapshotCursor = text(next.eventCursor);
+      if (snapshotCursor && (!factoryEventCursor || Number(snapshotCursor) >= Number(factoryEventCursor))) {
+        factoryEventCursor = snapshotCursor;
+      }
       setProjection(next);
       if (!selectedStageKey) selectedStageKey = projection.stages[0]?.key || '';
       syncTransport = projection.connected ? syncTransport : 'reconnecting';
       render();
     } catch (error) {
       factoryApiError = text(error.code || error.message || 'factory_state_unavailable');
-      setProjection(disconnectedFactoryProjection(text(error.code || error.message)));
+      if (!projection.connected) setProjection(disconnectedFactoryProjection(factoryApiError));
       syncTransport = 'reconnecting';
       render();
+    }
+  }
+
+  async function refreshQueue() {
+    try {
+      const result = await apiRequest('/api/factory/jobs');
+      productJobs = Array.isArray(result.jobs) ? result.jobs : [];
+      queueApiError = '';
+    } catch (error) {
+      queueApiError = text(error.code || error.message || 'factory_queue_unavailable');
+    }
+    render();
+    void scheduleAutomaticSelection();
+  }
+
+  const refreshAfterEventError = coalesceRefreshState(refreshState);
+  const recoverEventStream = coalesceRefreshState(async () => {
+    let renewed = false;
+    try {
+      await acquireControlSession({ assetUrl });
+      renewed = true;
+    } catch {}
+    await refreshAfterEventError();
+    if (renewed && !stopped) connectEvents(true);
+  });
+
+  async function resumeFactoryJob(jobId) {
+    const key = text(jobId);
+    if (!key || resumeInFlight.has(key)) return;
+    const job = productJobs.find(item => text(item.jobId) === key);
+    const checkpointProjection = text(projection.registration.jobId) === key
+      ? projection
+      : workfileTabs.projectionFor(`job:${key}`);
+    if (!job || !checkpointProjection) {
+      setStatus('live-status', '저장된 checkpoint 신원을 확인할 수 없습니다. 작업파일을 다시 선택해 주세요.', 'error');
+      return;
+    }
+    resumeInFlight.add(key);
+    try {
+      const payload = buildFactoryResumePayload({
+        job,
+        projection: checkpointProjection,
+        imageModel: text(document.getElementById('image-model-select')?.value),
+      });
+      const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(key)}/resume`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      const next = result.job;
+      if (next) productJobs = productJobs.map(job => job.jobId === next.jobId ? next : job);
+      setStatus('live-status', `${text(next?.productName || key)} · 재개 요청 접수 · 저장된 작업 상태 확인 중`, 'warning');
+    } catch (error) {
+      setStatus('live-status', `다음 단계 실행 실패 · ${error.message}`, 'error');
+    } finally {
+      resumeInFlight.delete(key);
+      if (roots.queue?.contains(document.activeElement)) document.activeElement.blur();
+      await Promise.allSettled([refreshState(), refreshQueue()]);
     }
   }
 
@@ -1673,6 +3617,13 @@ export function mountProductionWorkbench({
     if (stopped) return;
     try {
       const accepted = applyFactorySseMessage(projection, factoryEventCursor, event);
+      if (accepted.job) {
+        const incoming = accepted.job;
+        const index = productJobs.findIndex(job => job.jobId === incoming.jobId);
+        productJobs = index < 0
+          ? [...productJobs, incoming]
+          : productJobs.map((job, jobIndex) => jobIndex === index ? incoming : job);
+      }
       setProjection(accepted.projection);
       factoryEventCursor = accepted.factoryEventCursor;
       lastEventAt = new Date().toISOString();
@@ -1681,6 +3632,11 @@ export function mountProductionWorkbench({
     } catch (error) {
       if (!(error instanceof FactorySyncConflict)) setStatus('live-status', `factory event 해석 실패 · ${error.message}`, 'error');
     }
+  }
+
+  function consumeCheckpointRebound(event) {
+    consumeFactoryEvent(event);
+    void Promise.allSettled([refreshState(), refreshQueue()]);
   }
 
   function connectEvents(force = false) {
@@ -1692,25 +3648,61 @@ export function mountProductionWorkbench({
       render();
       return;
     }
-    eventSource = new EventSourceImpl(assetUrl(factoryEventsUrl(factoryEventCursor)));
+    eventSource = new EventSourceImpl(assetUrl(factoryEventsUrl(factoryEventCursor)), { withCredentials: true });
     eventSource.onopen = () => {
       syncTransport = 'live';
       renderSyncBar();
     };
-    for (const type of ['factory.snapshot', 'factory.stage.updated', 'factory.a_cut.selected', 'factory.worker.failed', 'factory.session.disconnected']) {
-      eventSource.addEventListener(type, consumeFactoryEvent);
+    for (const type of ['factory.snapshot', 'factory.stage.updated', 'factory.a_cut.selected', 'factory.product.queued', 'factory.product.updated', 'factory.product.checkpoint.rebound', 'factory.worker.failed', 'factory.session.disconnected']) {
+      eventSource.addEventListener(type, type === 'factory.product.checkpoint.rebound' ? consumeCheckpointRebound : consumeFactoryEvent);
     }
     eventSource.onerror = () => {
       syncTransport = 'reconnecting';
+      void recoverEventStream();
       renderSyncBar();
     };
   }
 
+  const registerClassifiedWorkfile = event => {
+    const targetJobId = pendingWorkfileTargetJobId;
+    pendingWorkfileTargetJobId = '';
+    try {
+      const detail = record(event.detail);
+      const result = workfileTabs.registerWorkfile({
+        fileName: text(detail.fileName),
+        file: detail.file || null,
+        workfileText: typeof detail.workfileText === 'string' ? detail.workfileText : '',
+        sha256: text(detail.sha256),
+        identity: record(detail.identity),
+        classification: record(detail.classification),
+      }, targetJobId);
+      const status = result.status === 'linked'
+        ? '작업파일을 exact 작업 탭에 연결했습니다.'
+        : result.status === 'target_rebind_required'
+          ? '선택한 작업과 파일 신원을 확인했습니다. 연결 승인 버튼을 눌러야 변경됩니다.'
+        : result.status === 'ambiguous'
+          ? '여러 작업과 일치해 자동 연결하지 않았습니다.'
+          : '일치하는 작업이 없어 연결 필요 탭으로 열었습니다.';
+      setStatus('live-status', status, result.status === 'linked' ? 'ok' : 'warning');
+      const active = workfileTabs.active();
+      selectedStageKey = active?.selectedStageKey || active?.stageKey || selectedStageKey;
+      inspectedCandidateId = active?.inspectedCandidateId || inspectedCandidateId;
+      render();
+    } catch (error) {
+      setStatus('live-status', `작업파일 탭 등록 실패 · ${error.message}`, 'error');
+    }
+  };
+
   render();
   renderAutomationPolicy();
   void loadAutomationPolicy();
-  void refreshState().finally(() => {
-    if (requestedWorkBundleId) void loadWorkBundle();
+  const refreshCreatedJob = () => void refreshQueue();
+  const clearPendingWorkfileTarget = () => { pendingWorkfileTargetJobId = ''; };
+  window.addEventListener('control-tower:job-created', refreshCreatedJob);
+  window.addEventListener('control-tower:workfile-classified', registerClassifiedWorkfile);
+  workfileInput?.addEventListener('cancel', clearPendingWorkfileTarget);
+  void Promise.allSettled([refreshState(), refreshQueue()]).finally(() => {
+    void restoreInitialWorkBundle();
     connectEvents();
   });
   return () => {
@@ -1718,6 +3710,9 @@ export function mountProductionWorkbench({
     eventSource?.close?.();
     window.clearInterval(fallbackTimer);
     window.removeEventListener('control-tower:policy-locked', renderLockedPolicy);
+    window.removeEventListener('control-tower:job-created', refreshCreatedJob);
+    window.removeEventListener('control-tower:workfile-classified', registerClassifiedWorkfile);
+    workfileInput?.removeEventListener('cancel', clearPendingWorkfileTarget);
   };
 }
 

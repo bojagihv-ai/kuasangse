@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from typing import Protocol
@@ -46,16 +46,24 @@ class _QueuedExecution:
     completed: Event = field(default_factory=Event)
     status: str = "pending"
     worker_id: str = ""
+    target_worker_id: str = ""
+    target_session_id: str = ""
     event_sequence: int = 0
     result: JsonObject | None = None
     error: str = ""
 
 
 class QueuedCafe24CommandBridge:
-    def __init__(self, *, execution_timeout_seconds: float = 900.0) -> None:
+    def __init__(
+        self,
+        *,
+        execution_timeout_seconds: float = 900.0,
+        worker_target: Callable[[], Mapping[str, JsonValue]] | None = None,
+    ) -> None:
         if execution_timeout_seconds <= 0:
             raise ValueError("execution_timeout_seconds must be positive")
         self._execution_timeout_seconds = execution_timeout_seconds
+        self._worker_target = worker_target
         self._lock = RLock()
         self._executions: dict[str, _QueuedExecution] = {}
         self._active_by_idempotency: dict[str, str] = {}
@@ -78,10 +86,16 @@ class QueuedCafe24CommandBridge:
                 if execution.payload_digest != payload_digest:
                     raise Cafe24BridgeError("idempotency_conflict")
             else:
+                target_worker_id, target_session_id = self._current_worker_target()
+                if target_worker_id:
+                    order["targetWorkerId"] = target_worker_id
+                    order["workerSessionId"] = target_session_id
                 execution = _QueuedExecution(
                     order=order,
                     payload_digest=payload_digest,
                     idempotency_key=idempotency_key,
+                    target_worker_id=target_worker_id,
+                    target_session_id=target_session_id,
                 )
                 order_id = str(order["orderId"])
                 self._executions[order_id] = execution
@@ -92,15 +106,31 @@ class QueuedCafe24CommandBridge:
         order = _build_preflight_work_order()
         payload_digest = str(order["payloadDigest"])
         idempotency_key = str(order["idempotencyKey"])
+        target_worker_id, target_session_id = self._current_worker_target()
+        if target_worker_id:
+            order["targetWorkerId"] = target_worker_id
+            order["workerSessionId"] = target_session_id
         execution = _QueuedExecution(
             order=order,
             payload_digest=payload_digest,
             idempotency_key=idempotency_key,
+            target_worker_id=target_worker_id,
+            target_session_id=target_session_id,
         )
         with self._lock:
             self._executions[str(order["orderId"])] = execution
             self._active_by_idempotency[idempotency_key] = str(order["orderId"])
         return self._await_execution(execution)
+
+    def _current_worker_target(self) -> tuple[str, str]:
+        if self._worker_target is None:
+            return "", ""
+        target = self._worker_target()
+        worker_id = str(target.get("workerId") or "")
+        session_id = str(target.get("sessionId") or "")
+        if not worker_id or not session_id:
+            raise Cafe24BridgeError("factory_session_missing")
+        return worker_id, session_id
 
     def _await_execution(self, execution: _QueuedExecution) -> JsonObject:
         idempotency_key = execution.idempotency_key
@@ -118,7 +148,11 @@ class QueuedCafe24CommandBridge:
         return dict(execution.result)
 
     def claim(self, payload: JsonObject) -> JsonObject:
+        with self._lock:
+            if not any(execution.status == "pending" for execution in self._executions.values()):
+                return {"claimed": False, "order": None}
         worker_id = _required_text(payload, "workerId")
+        session_id = str(payload.get("sessionId") or "")
         if payload.get("contractVersion") != WORK_ORDER_VERSION:
             raise Cafe24BridgeError("contract_version_unsupported")
         if payload.get("capabilityVersion") != WORKER_CAPABILITY_VERSION:
@@ -126,6 +160,14 @@ class QueuedCafe24CommandBridge:
         with self._lock:
             for execution in self._executions.values():
                 if execution.status != "pending":
+                    continue
+                if (
+                    execution.target_worker_id
+                    and (
+                        execution.target_worker_id != worker_id
+                        or execution.target_session_id != session_id
+                    )
+                ):
                     continue
                 execution.status = "claimed"
                 execution.worker_id = worker_id
@@ -145,6 +187,8 @@ class QueuedCafe24CommandBridge:
             worker_id = _required_text(payload, "workerId")
             if execution.worker_id != worker_id:
                 raise Cafe24BridgeError("lease_conflict")
+            if execution.target_session_id and payload.get("workerSessionId") != execution.target_session_id:
+                raise Cafe24BridgeError("stale_factory_session")
             sequence = payload.get("eventSequence")
             if not isinstance(sequence, int) or sequence < 0:
                 raise Cafe24BridgeError("stale_event_sequence")
@@ -227,7 +271,7 @@ def build_cafe24_reconcile_command(preview: Mapping[str, JsonValue], *, job_id: 
             "payload": {**payload, "jobId": job_id.strip()},
         },
         "payloadDigest": preview.get("payloadDigest"),
-        "idempotencyKey": preview.get("idempotencyKey"),
+        "idempotencyKey": f"{_required_text(preview, 'idempotencyKey')}:reconcile",
     }
 
 
@@ -339,13 +383,49 @@ def _validate_result(execution: _QueuedExecution, result: Mapping[str, JsonValue
         raise Cafe24BridgeError("idempotency_conflict")
     remote_digest = _required_text(result, "remoteReadbackDigest")
     external_product_no = _required_text(result, "externalProductNo")
-    product_id = str(execution.order.get("productId") or "")
-    if product_id.startswith("cafe24:") and external_product_no != product_id.partition(":")[2]:
-        raise Cafe24BridgeError("factory_cafe24_target_mismatch")
+    remote_readback = result.get("remoteReadback")
+    if not isinstance(remote_readback, dict):
+        raise Cafe24BridgeError("factory_cafe24_readback_missing")
+    option_values = remote_readback.get("optionValues")
+    inventory_by_option = remote_readback.get("inventoryByOption")
+    variant_count = remote_readback.get("variantCount")
+    image_digests = remote_readback.get("imageDigests")
+    if (
+        str(remote_readback.get("productNo") or "").strip() != external_product_no
+        or not str(remote_readback.get("productCode") or "").strip()
+        or not str(remote_readback.get("productName") or "").strip()
+        or any(remote_readback.get(field) != "F" for field in ("display", "selling", "marketSync"))
+        or not isinstance(option_values, list)
+        or any(not isinstance(value, str) or not value.strip() for value in option_values)
+        or type(variant_count) is not int
+        or variant_count < 0
+        or not isinstance(inventory_by_option, dict)
+        or not isinstance(image_digests, list)
+        or not image_digests
+        or any(not isinstance(value, str) or not value.strip() for value in image_digests)
+        or type(remote_readback.get("representativeImageCount")) is not int
+        or int(remote_readback["representativeImageCount"]) < 1
+        or type(remote_readback.get("detailImageCount")) is not int
+        or int(remote_readback["detailImageCount"]) < 1
+        or not str(remote_readback.get("detailHtmlDigest") or "").strip()
+    ):
+        raise Cafe24BridgeError("factory_cafe24_readback_invalid")
+    if option_values and (
+        variant_count != len(option_values)
+        or set(inventory_by_option) != set(option_values)
+        or any(
+            not isinstance(inventory_by_option[value], dict)
+            or str(inventory_by_option[value].get("quantity") or "").strip() != "99"
+            or str(inventory_by_option[value].get("useInventory") or "").strip().upper() != "T"
+            for value in option_values
+        )
+    ):
+        raise Cafe24BridgeError("factory_cafe24_options_readback_mismatch")
     return {
         "status": "staged_verified",
         "payloadDigest": execution.payload_digest,
         "remoteReadbackDigest": remote_digest,
+        "remoteReadback": dict(remote_readback),
         "externalProductNo": external_product_no,
         "idempotencyKey": execution.idempotency_key,
     }

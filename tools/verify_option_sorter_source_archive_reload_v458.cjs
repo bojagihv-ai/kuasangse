@@ -204,11 +204,13 @@ async function main() {
         `(() => {
           const state = window.state;
           const image = state?.optionSorter?.images?.[0];
+          const archiveStatus = String(state?.optionSorter?.optionSourceArchiveStatus || '');
           return state?.currentProjectId === ${JSON.stringify(projectId)}
             && state?.step === 'optionsorter'
             && state.optionSorter.images.length === 1
             && !!image?.archiveId
-            && image.imagePersistence === 'local-archive-url';
+            && image.imagePersistence === 'local-archive-url'
+            && /(?:로컬 보관본에서 옵션 원본 1장을 복원했습니다|옵션 원본 1장이 로컬 보관되어 있습니다)/.test(archiveStatus);
         })()`,
         60000,
       );
@@ -283,7 +285,7 @@ async function main() {
     const checks = [
       { ok: beforeF5.archiveStatus === 'saved' && !!beforeF5.archiveId, message: `업로드 즉시 보관 실패: ${JSON.stringify(beforeF5)}` },
       { ok: beforeF5.sourceRows === 1 && beforeF5.sourceRowArchiveIds.includes(beforeF5.archiveId), message: `원본 전용 archive 레코드 불일치: ${JSON.stringify(beforeF5)}` },
-      { ok: beforeF5.serverImagesAfterForcedEmpty === 0, message: `빈 초안 재현 실패: ${JSON.stringify(beforeF5)}` },
+      { ok: beforeF5.serverImagesAfterForcedEmpty === 1, message: `빈 자동저장이 기존 옵션 원본을 낮췄습니다: ${JSON.stringify(beforeF5)}` },
       { ok: afterF5.buildId === EXPECTED_BUILD_ID, message: `최신 빌드가 아닙니다: ${afterF5.buildId}` },
       { ok: afterF5.projectId === projectId && afterF5.projectName === projectName, message: `작업 범위가 바뀌었습니다: ${JSON.stringify(afterF5)}` },
       { ok: afterF5.imageCount === 1 && afterF5.poolCount === 1, message: `F5 뒤 원본 목록 복원 실패: ${JSON.stringify(afterF5)}` },

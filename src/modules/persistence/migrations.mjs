@@ -217,19 +217,23 @@ export function migrateIndexedDbV4Record(value) {
 }
 
 export function migrateServerSnapshot(value) {
-  const nested = alreadyCurrent(value?.snapshot?.persistenceEnvelope)
-    ? value.snapshot.persistenceEnvelope
+  const stored = value?.snapshot && typeof value.snapshot === 'object' ? value.snapshot : {};
+  const nested = alreadyCurrent(stored.persistenceEnvelope) ? stored.persistenceEnvelope
     : (alreadyCurrent(value?.snapshot) ? value.snapshot : value);
   const source = nested && typeof nested === 'object' ? nested : {};
   const snapshotRef = text(source.snapshotRef);
   if (snapshotRef) {
-    const stored = value?.snapshot && typeof value.snapshot === 'object' ? value.snapshot : {};
     const referenced = snapshotRef === '$'
       ? Object.fromEntries(Object.entries(stored).filter(([key]) => key !== 'persistenceEnvelope'))
       : (snapshotRef === '$.lightweight' ? stored.lightweight : (snapshotRef === '$.assets' ? stored.assets : null));
     if (referenced && typeof referenced === 'object') return envelope(source, referenced, 'server-last-work');
   }
-  const serverSnapshot = source.snapshot && source.snapshot.snapshot ? source.snapshot : (source.snapshot || source);
+  const outerPayload = nested === stored.persistenceEnvelope
+    ? (stored.assets && typeof stored.assets === 'object'
+      ? stored.assets
+      : (stored.lightweight && typeof stored.lightweight === 'object' ? stored.lightweight : null))
+    : null;
+  const serverSnapshot = outerPayload || (source.snapshot && source.snapshot.snapshot ? source.snapshot : (source.snapshot || source));
   return envelope(source, serverSnapshot.snapshot || serverSnapshot.assets || serverSnapshot, 'server-last-work');
 }
 

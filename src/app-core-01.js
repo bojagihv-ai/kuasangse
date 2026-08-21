@@ -150,6 +150,7 @@ function normalizeGptOAuthServiceTier(value, modelId = null) {
 
 // 이미지 생성 모델 목록 (OpenAI + Gemini)
 const IMAGE_MODELS = [
+  { id: 'api-hub-openai-image', label: 'OpenAI 이미지 생성 (API Hub)', desc: 'API Hub에 저장된 OpenAI 연결 사용', inputPerM: 0, imageInputPerM: 0, outputPerM: 0, imageOut: 0, provider: 'api_hub_openai' },
   { id: 'gpt-image-2', label: 'OpenAI GPT Image 2', desc: 'OpenAI latest image generation/editing model', inputPerM: 5.00, imageInputPerM: 8.00, outputPerM: 30.00, imageOut: 0, provider: 'openai' },
   { id: 'gpt-image-1.5', label: 'OpenAI GPT Image 1.5', desc: 'High-quality OpenAI image model', inputPerM: 5.00, imageInputPerM: 8.00, outputPerM: 32.00, textOutputPerM: 10.00, imageOut: 0, provider: 'openai' },
   { id: 'gpt-image-1', label: 'OpenAI GPT Image 1', desc: 'Stable OpenAI image generation/editing model', inputPerM: 5.00, imageInputPerM: 10.00, outputPerM: 40.00, imageOut: 0, provider: 'openai' },
@@ -300,15 +301,17 @@ function getImageProvider(modelId = null) {
 }
 
 function isOpenAIImageModel(modelId = null) {
-  return getImageProvider(modelId) === 'openai';
+  return ['openai', 'api_hub_openai'].includes(getImageProvider(modelId));
 }
 
 function hasImageConnection(modelId = null) {
+  if (getImageProvider(modelId) === 'api_hub_openai') return true;
   return isOpenAIImageModel(modelId) ? !!getRuntimeOpenAIKey() : hasGeminiConnection();
 }
 
 function createImageClient(modelId = null) {
   const imgModel = modelId || getImageModel();
+  if (getImageProvider(imgModel) === 'api_hub_openai') return new ApiHubOpenAIImageAPI();
   if (isOpenAIImageModel(imgModel)) {
     const openaiKey = getRuntimeOpenAIKey();
     if (!openaiKey) throw new Error('OpenAI image API 키가 설정되지 않았습니다.');
@@ -426,8 +429,11 @@ async function compactGptOAuthVisionImage(img, index = 0, options = {}) {
   const target = gptOAuthVisionImageScale(dimensions.width, dimensions.height, options);
   if (!target.changed) return img;
   try {
-    const resizedDataUrl = await resizeImageDataUrl(dataUrl, target.width, target.height);
-    const resized = normalizeImagePayloadForApi(resizedDataUrl, 'image/png');
+    const resizedDataUrl = await resizeImageDataUrl(dataUrl, target.width, target.height, {
+      mime: options.outputMime || 'image/png',
+      quality: options.quality,
+    });
+    const resized = normalizeImagePayloadForApi(resizedDataUrl, options.outputMime || 'image/png');
     if (!resized.base64) return img;
     return {
       ...img,
@@ -1329,7 +1335,7 @@ IMPORTANT:
 // ════════════════════════════════════════════════════════════════
 // IMAGE RESIZE HELPER (Canvas API — 정확한 픽셀 강제)
 // ════════════════════════════════════════════════════════════════
-function resizeImageDataUrl(dataUrl, targetW, targetH) {
+function resizeImageDataUrl(dataUrl, targetW, targetH, options = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -1352,7 +1358,9 @@ function resizeImageDataUrl(dataUrl, targetW, targetH) {
         } else {
           ctx.drawImage(img, 0, 0, w, h);
         }
-        resolve(canvas.toDataURL('image/png'));
+        const mime = String(options.mime || 'image/png').toLowerCase();
+        const quality = Number(options.quality);
+        resolve(canvas.toDataURL(mime, Number.isFinite(quality) ? quality : undefined));
       } catch(e) {
         // 리사이즈 실패 시 원본 반환
         console.warn('resizeImageDataUrl failed, using original:', e);
@@ -1369,6 +1377,64 @@ async function applyImageSizeConfig(dataUrl) {
   const cfg = state.modelConfig;
   if (!dataUrl || cfg.imageSizeMode !== 'custom' || !cfg.imageWidth) return dataUrl;
   return resizeImageDataUrl(dataUrl, cfg.imageWidth, cfg.imageHeight || null);
+}
+
+class ApiHubOpenAIImageAPI {
+  async generateImage(prompt, productImageBase64, mimeType, imageModel, extraImages = [], options = {}) {
+    const activeDirectives = getEffectiveImageDirectives();
+    const directiveStr = activeDirectives.length > 0
+      ? `\n\nCRITICAL CONSTRAINTS - follow exactly:\n${activeDirectives.map((directive, index) => `${index + 1}. ${directive}`).join('\n')}`
+      : '';
+    const promptIntro = options.promptIntro || 'Create a professional Korean e-commerce product detail page section image.';
+    const sizeHint = options.sizeHintText ? `\n${options.sizeHintText}` : '';
+    const fullPrompt = `${promptIntro} ${prompt}${sizeHint}${directiveStr}\n${buildBrandPromptBlock()}\n${buildLayoutPromptBlock()}`;
+    const content = [{ type: 'input_text', text: fullPrompt }];
+    const refs = [];
+    if (productImageBase64) refs.push(normalizeImagePayloadForApi(productImageBase64, mimeType || 'image/png'));
+    for (const image of extraImages || []) {
+      if (image?.base64) refs.push(normalizeImagePayloadForApi(image.base64, image.mime || image.mimeType || 'image/png'));
+    }
+    for (const image of refs) {
+      content.push({
+        type: 'input_image',
+        image_url: `data:${image.mime};base64,${image.base64}`,
+        detail: 'high',
+      });
+    }
+
+    const response = await fetch('http://127.0.0.1:4321/api/invoke/openai_chatgpt/responses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        body: {
+          model: 'gpt-5.6',
+          input: [{ role: 'user', content }],
+          tools: [{
+            type: 'image_generation',
+            action: 'generate',
+            quality: 'medium',
+            size: getRequestedImageSize('gpt-image-2'),
+          }],
+          tool_choice: { type: 'image_generation' },
+        },
+      }),
+      signal: options.signal,
+    });
+    const envelope = await response.json().catch(() => ({}));
+    const upstream = envelope?.response?.body || {};
+    if (!response.ok || envelope?.ok !== true) {
+      const message = upstream?.error?.message
+        || (typeof envelope?.error === 'string' ? envelope.error : envelope?.error?.message)
+        || 'API Hub OpenAI 이미지 생성 실패';
+      throw new Error(String(message).slice(0, 500));
+    }
+    const generated = Array.isArray(upstream.output)
+      ? upstream.output.find(item => item?.type === 'image_generation_call' && item.result)?.result
+      : '';
+    if (!generated) throw new Error('API Hub OpenAI 이미지 결과가 비어 있습니다.');
+    tokenTracker.record('api-hub-openai-image', null, null, true, '이미지생성');
+    return await applyImageSizeConfig(`data:image/png;base64,${generated}`);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2056,8 +2122,16 @@ async function refreshGptOAuthStatus(options = {}) {
     state.gptOAuthStatus = data;
     try {
       const optionsRes = await fetch(`${GPT_OAUTH_API_BASE}/api/llm/options`, { cache: 'no-store' });
-      if (optionsRes.ok) state.gptOAuthOptions = normalizeGptOAuthOptions(await optionsRes.json());
-    } catch (optionsError) {}
+      if (!optionsRes.ok) throw new Error(`API Hub HTTP ${optionsRes.status}`);
+      state.gptOAuthOptions = normalizeGptOAuthOptions(await optionsRes.json());
+      clearRuntimeDegraded('gpt-oauth-options');
+    } catch (optionsError) {
+      reportRuntimeDegradedOnce(
+        'gpt-oauth-options',
+        'GPT OAuth 모델 목록 갱신 저하 · 기존 목록을 유지합니다',
+        optionsError,
+      );
+    }
     state.gptOAuthLastCheckedAt = Date.now();
     state.gptOAuthStatusError = '';
     return data;
@@ -2073,6 +2147,31 @@ async function refreshGptOAuthStatus(options = {}) {
   } finally {
     state.gptOAuthStatusLoading = false;
     if (!options.silent) render();
+  }
+}
+
+// 부팅 시 1회 조회가 실패하면 gptOAuthStatusError가 세션 내내 남아,
+// 실제 연결이 정상이어도 getLLMClient() 게이트가 계속 막는다.
+// 실행 직전에 낡거나 실패한 캐시만 다시 확인해 그 오탐을 없앤다.
+const GPT_OAUTH_STATUS_STALE_MS = 5 * 60 * 1000;
+
+async function ensureGptOAuthStatusFresh(options = {}) {
+  if (!state) return null;
+  let provider = '';
+  try { provider = normalizeModelConfig(state.modelConfig).llmProvider; } catch (_) { provider = ''; }
+  if (provider !== 'gpt_oauth') return state.gptOAuthStatus || null;
+  if (state.gptOAuthStatusLoading) return state.gptOAuthStatus || null;
+  const checkedAt = Number(state.gptOAuthLastCheckedAt || 0);
+  const stale = !checkedAt || (Date.now() - checkedAt) > GPT_OAUTH_STATUS_STALE_MS;
+  const needsRecheck = !!state.gptOAuthStatusError
+    || !state.gptOAuthStatus
+    || !isGptOAuthConnected()
+    || stale;
+  if (!needsRecheck) return state.gptOAuthStatus;
+  try {
+    return await refreshGptOAuthStatus({ silent: options.silent !== false });
+  } catch (_) {
+    return state.gptOAuthStatus || null;
   }
 }
 
@@ -2604,7 +2703,12 @@ ${currentTargetText || JSON.stringify(currentTargetValue, null, 2)}
   }
 
   async analyzeCompetitorImages(imagesArray) {
-    const preparedImages = await prepareGptOAuthVisionImages(imagesArray);
+    const preparedImages = await prepareGptOAuthVisionImages(imagesArray, {
+      maxDimension: 2048,
+      maxPixels: 2_000_000,
+      outputMime: 'image/jpeg',
+      quality: 0.82,
+    });
     const images = buildGptOAuthImagePayloads(null, null, preparedImages, {
       label: '경쟁사 상세페이지 이미지',
       limit: 8,
@@ -2706,7 +2810,9 @@ function getLLMClient() {
   state.modelConfig = cfg;
   if (cfg.llmProvider === 'gpt_oauth') {
     if ((state.gptOAuthStatus || state.gptOAuthStatusError) && !isGptOAuthConnected()) {
-      throw new Error('GPT OAuth 연결 상태를 확인할 수 없습니다. 모델 설정에서 상태 새로고침 또는 Chrome 로그인을 진행해주세요.');
+      // 조회 자체가 실패한 경우에는 원인 메시지(API Hub 미기동 등)를 그대로 보여준다.
+      throw new Error(state.gptOAuthStatusError
+        || 'GPT OAuth 연결 상태를 확인할 수 없습니다. 모델 설정에서 상태 새로고침 또는 Chrome 로그인을 진행해주세요.');
     }
     return new GptOAuthAPI(cfg.llmModel, {
       reasoningEffort: cfg.gptOAuthReasoningEffort,
@@ -2735,7 +2841,9 @@ function getAnalysisEngineClient(engine, settings = null) {
   if (selected === 'current') return getLLMClient();
   if (selected === 'gpt_oauth') {
     if ((state.gptOAuthStatus || state.gptOAuthStatusError) && !isGptOAuthConnected()) {
-      throw new Error('GPT OAuth 연결 상태를 확인할 수 없습니다. 모델 설정에서 상태 새로고침 또는 Chrome 로그인을 진행해주세요.');
+      // 조회 자체가 실패한 경우에는 원인 메시지(API Hub 미기동 등)를 그대로 보여준다.
+      throw new Error(state.gptOAuthStatusError
+        || 'GPT OAuth 연결 상태를 확인할 수 없습니다. 모델 설정에서 상태 새로고침 또는 Chrome 로그인을 진행해주세요.');
     }
     return new GptOAuthAPI(getAnalysisEngineModel('gpt_oauth', s), {
       reasoningEffort: state.modelConfig.gptOAuthReasoningEffort,
@@ -2992,6 +3100,7 @@ function apiKeyForProvider(providerId) {
   if (providerId === 'gpt_oauth') return 'gpt-oauth';
   if (providerId === 'gemini') return 'gemini';
   if (providerId === 'openai') return 'openai';
+  if (providerId === 'api_hub_openai') return 'api-hub';
   return '';
 }
 
@@ -3115,12 +3224,15 @@ function getImageModelLabel(modelId) {
 function getCurrentImageRunInfo(modelId = null) {
   const imageModelId = modelId || getImageModel();
   const providerId = getImageProvider(imageModelId);
+  const apiHubOpenAI = providerId === 'api_hub_openai';
   return {
     providerId,
-    providerLabel: providerId === 'openai' ? 'OpenAI' : 'Google Gemini',
+    providerLabel: apiHubOpenAI ? 'OpenAI API Hub' : providerId === 'openai' ? 'OpenAI' : 'Google Gemini',
     modelId: imageModelId,
     modelLabel: getImageModelLabel(imageModelId),
-    route: providerId === 'openai'
+    route: apiHubOpenAI
+      ? 'API Hub 저장 연결'
+      : providerId === 'openai'
       ? 'OpenAI API 연결'
       : (state.backendBaseUrl ? '백엔드/Vertex 연결' : 'Gemini API Key 연결'),
   };

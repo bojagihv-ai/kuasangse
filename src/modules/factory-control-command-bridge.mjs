@@ -1,3 +1,8 @@
+import {
+  validateProductCheckpoint,
+  validateProductRunPayload,
+} from './batch-control-contract.mjs';
+
 export const FACTORY_CONTROL_COMMAND_BRIDGE_VERSION = 'factory-control-command-bridge:v1';
 export const FACTORY_CONTROL_COMMAND_VERSION = 'factory-control-command:v1';
 export const FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION = 'factory-workfile-hydration-command:v1';
@@ -36,6 +41,14 @@ function selectionPayload(value) {
     throw new FactoryControlCommandError('factory_control_revision_invalid');
   }
   return Object.freeze({ ...value });
+}
+
+function productRunPayload(value) {
+  try {
+    return validateProductRunPayload(value);
+  } catch (error) {
+    throw new FactoryControlCommandError(text(error?.code || 'factory_product_payload_invalid'));
+  }
 }
 
 function hydrationPayload(value, order) {
@@ -112,6 +125,33 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     return Object.freeze(result);
   }
 
+  async function runProduct(payloadValue) {
+    const payload = productRunPayload(payloadValue);
+    const result = await requestClassicRuntime(Object.freeze({
+      capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION,
+      command: 'runFactoryProduct',
+      payload,
+    }));
+    if (
+      !record(result)
+      || result.schema !== 'factory-product-run-receipt:v1'
+      || text(result.jobId) !== text(payload.jobId)
+      || !['waiting_manual', 'completed', 'blocked'].includes(result.status)
+    ) {
+      throw new FactoryControlCommandError('factory_product_receipt_invalid');
+    }
+    let checkpoint;
+    try {
+      checkpoint = validateProductCheckpoint(result.checkpoint, payload.jobId);
+    } catch {
+      throw new FactoryControlCommandError('factory_product_checkpoint_invalid');
+    }
+    if (checkpoint.status !== result.status || checkpoint.stageKey !== text(result.stageKey)) {
+      throw new FactoryControlCommandError('factory_product_checkpoint_invalid');
+    }
+    return Object.freeze(result);
+  }
+
   async function hydrateFactoryWorkfile(payloadValue, order) {
     if (typeof hydrateWorkfile !== 'function') {
       throw new FactoryControlCommandError('factory_workfile_bridge_missing');
@@ -119,7 +159,15 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     const payload = hydrationPayload(payloadValue, order);
     const currentProjection = await getProjection();
     const currentSession = record(currentProjection.session) ? currentProjection.session : {};
-    if (currentSession.revision !== payload.expectedWorkfileRevision) {
+    const blankRebind = text(order.workerSessionId)
+      && currentSession.revision === 0
+      && !text(currentSession.workspaceId)
+      && !text(currentSession.productId)
+      && !text(currentSession.productKey)
+      && !text(currentSession.runId)
+      && !text(currentSession.inputFingerprint)
+      && text(payload.expectedInputFingerprint);
+    if (currentSession.revision !== payload.expectedWorkfileRevision && !blankRebind) {
       throw new FactoryControlCommandError('stale_workfile_revision');
     }
     const receipt = await hydrateWorkfile(payload);
@@ -167,6 +215,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     }
     if (name === 'getFactoryProjection') return getProjection();
     if (name === 'selectFactoryACut') return selectACut(payload);
+    if (name === 'runFactoryProduct') return runProduct(payload);
     throw new FactoryControlCommandError('factory_control_command_unsupported');
   }
 
@@ -174,6 +223,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     version: FACTORY_CONTROL_COMMAND_BRIDGE_VERSION,
     getProjection,
     hydrateFactoryWorkfile,
+    runProduct,
     selectACut,
     run,
   });

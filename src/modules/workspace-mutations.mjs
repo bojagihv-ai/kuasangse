@@ -9,7 +9,10 @@ import { scopedSessionAssetId } from './persistence/indexeddb-adapter.mjs';
 const APP_GLOBAL_AUTHORITY = Object.freeze({
   scopeId: 'app-global', leaseId: '', fencingToken: 0, revision: 0,
 });
-const APP_GLOBAL_RECOVERY_KEYS = new Set(['pdp_last_work_draft_scope_v1']);
+const APP_GLOBAL_RECOVERY_KEYS = new Set([
+  'pdp_last_work_draft_scope_v1',
+  'pdp_option_sorter_live_v1',
+]);
 
 function projectRecordScope(value) {
   return normalizeProjectScope(

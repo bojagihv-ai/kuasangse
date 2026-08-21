@@ -99,19 +99,20 @@ export function createFactoryCafe24CommandBridge({ requestClassicRuntime } = {})
       throw new FactoryCafe24CommandError('factory_cafe24_result_unverified');
     }
     const externalProductNo = text(result.externalProductNo);
-    const expectedProductNo = text(payload.productId).startsWith('cafe24:')
-      ? text(payload.productId).slice('cafe24:'.length)
-      : '';
-    if (!externalProductNo || expectedProductNo && externalProductNo !== expectedProductNo) {
+    if (!externalProductNo) {
       throw new FactoryCafe24CommandError('factory_cafe24_target_mismatch');
     }
     if (!text(result.remoteReadbackDigest)) {
+      throw new FactoryCafe24CommandError('factory_cafe24_readback_missing');
+    }
+    if (!record(result.remoteReadback)) {
       throw new FactoryCafe24CommandError('factory_cafe24_readback_missing');
     }
     return Object.freeze({
       status: 'staged_verified',
       payloadDigest: order.payloadDigest,
       remoteReadbackDigest: result.remoteReadbackDigest,
+      remoteReadback: Object.freeze({ ...result.remoteReadback }),
       externalProductNo,
       idempotencyKey: payload.idempotencyKey,
     });
@@ -132,19 +133,20 @@ export function createFactoryCafe24CommandBridge({ requestClassicRuntime } = {})
       throw new FactoryCafe24CommandError('factory_cafe24_result_unverified');
     }
     const externalProductNo = text(result.externalProductNo);
-    const expectedProductNo = text(payload.productId).startsWith('cafe24:')
-      ? text(payload.productId).slice('cafe24:'.length)
-      : '';
-    if (!externalProductNo || expectedProductNo && externalProductNo !== expectedProductNo) {
+    if (!externalProductNo) {
       throw new FactoryCafe24CommandError('factory_cafe24_target_mismatch');
     }
     if (!text(result.remoteReadbackDigest)) {
+      throw new FactoryCafe24CommandError('factory_cafe24_readback_missing');
+    }
+    if (!record(result.remoteReadback)) {
       throw new FactoryCafe24CommandError('factory_cafe24_readback_missing');
     }
     return Object.freeze({
       status: 'staged_verified',
       payloadDigest: order.payloadDigest,
       remoteReadbackDigest: result.remoteReadbackDigest,
+      remoteReadback: Object.freeze({ ...result.remoteReadback }),
       externalProductNo,
       idempotencyKey: payload.idempotencyKey,
     });

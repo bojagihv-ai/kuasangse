@@ -1,5 +1,14 @@
 ﻿# Detail Page AI Launcher (stable v3)
 # Save as UTF-8 with BOM for Windows PowerShell 5.1
+param(
+  [switch]$WorkerOnly,
+  [ValidateRange(1, 65535)]
+  [int]$BackendPort = 5050,
+  [ValidateRange(1, 65535)]
+  [int]$ControlTowerPort = 5062,
+  [string]$ExpectedWorkerBuildId = ''
+)
+
 $ErrorActionPreference = 'SilentlyContinue'
 try { $Host.UI.RawUI.WindowTitle = 'Detail Page AI - starting' } catch {}
 
@@ -7,10 +16,11 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Root) { $Root = $PSScriptRoot }
 if (-not $Root) { $Root = (Get-Location).Path }
 $Backend = Join-Path $Root 'backend'
-$ControlTowerBase = 'http://127.0.0.1:5062'
+$ControlTowerBase = 'http://127.0.0.1:' + $ControlTowerPort
 $EncodedControlTowerBase = [uri]::EscapeDataString($ControlTowerBase)
 $NormalAppUrl = 'http://127.0.0.1:8081/app.html'
 $WorkerAppUrl = 'http://127.0.0.1:8081/app.html?batchWorker=1&controlTowerBase=' + $EncodedControlTowerBase
+$BackendBaseUrl = 'http://127.0.0.1:' + $BackendPort
 $SinhwaHubRoot = if ($env:SINHWA_HUB_ROOT) {
   $env:SINHWA_HUB_ROOT
 } else {
@@ -18,6 +28,14 @@ $SinhwaHubRoot = if ($env:SINHWA_HUB_ROOT) {
 }
 $SinhwaHubManager = Join-Path $SinhwaHubRoot 'manage_sinhwa_servers.ps1'
 $PdpServiceKeyPath = Join-Path $SinhwaHubRoot '.runtime\pdp-control-service-key.dpapi'
+$RuntimeManifestPath = Join-Path $Root 'src\runtime-manifest.json'
+if (-not $ExpectedWorkerBuildId) {
+  $ExpectedWorkerBuildId = [string](Get-Content -LiteralPath $RuntimeManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).buildId
+}
+if ($ExpectedWorkerBuildId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+  Write-Host '  ERROR: runtime manifest build ID is invalid.'
+  exit 1
+}
 
 $SachyApi = $env:SACHYOSANGSE_API_DIR
 if (-not $SachyApi) {
@@ -60,23 +78,6 @@ if (-not (Test-Path $Waitress)) {
   exit 1
 }
 
-function Stop-PortListeners {
-  param([int[]]$Ports)
-  foreach ($port in $Ports) {
-    try {
-      $pattern = ':' + $port + ' '
-      $pids = (netstat -ano | Select-String $pattern | Where-Object { $_ -match 'LISTENING' }) | ForEach-Object {
-        ($_ -split '\s+')[-1]
-      } | Where-Object { $_ -match '^\d+$' } | Select-Object -Unique
-      foreach ($p in $pids) {
-        if ($p -and $p -ne '0') {
-          Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-        }
-      }
-    } catch {}
-  }
-}
-
 function Wait-HttpReady {
   param([string]$Url, [int]$MaxTries = 40, [int]$DelaySec = 1)
   for ($i = 1; $i -le $MaxTries; $i++) {
@@ -96,6 +97,14 @@ function Test-HttpReady {
     return $r.StatusCode -lt 500
   } catch {}
   return $false
+}
+
+function Test-PortListening {
+  param([int]$Port)
+  $pattern = '^\s*TCP\s+\S+:' + $Port + '\s+\S+\s+LISTENING\s+\d+\s*$'
+  return @(
+    netstat.exe -ano -p TCP | Where-Object { [regex]::IsMatch([string]$_, $pattern) }
+  ).Count -gt 0
 }
 
 function Restore-EnvironmentVariable {
@@ -181,9 +190,9 @@ function Ensure-SinhwaHubReady {
 
 function Test-SinhwaBridgeConfigured {
   try {
-    $status = Invoke-RestMethod -Uri 'http://127.0.0.1:5050/api/sinhwa-pdp/status' -TimeoutSec 2 -ErrorAction Stop
+    $status = Invoke-RestMethod -Uri ($BackendBaseUrl + '/api/sinhwa-pdp/status') -TimeoutSec 2 -ErrorAction Stop
     $activity = Invoke-WebRequest `
-      -Uri 'http://127.0.0.1:5050/api/sinhwa-pdp/work-bundles/activity' `
+      -Uri ($BackendBaseUrl + '/api/sinhwa-pdp/work-bundles/activity') `
       -Method Options `
       -TimeoutSec 2 `
       -UseBasicParsing `
@@ -196,17 +205,21 @@ function Test-SinhwaBridgeConfigured {
   return $false
 }
 
-if ($SachyApi -and (Test-Path $SachyApi)) {
-  Stop-PortListeners -Ports @(4000)
-}
+$sachyApiOk = Test-HttpReady -Url 'http://127.0.0.1:4000/v1/health'
 
-$sinhwaHubOk = Ensure-SinhwaHubReady
-$backendOk = Test-HttpReady -Url 'http://127.0.0.1:5050/api/sections'
+$backendOk = Test-HttpReady -Url ($BackendBaseUrl + '/api/sections')
 $frontOk = Test-HttpReady -Url 'http://127.0.0.1:8081/app.html'
-if ($backendOk -and -not (Test-SinhwaBridgeConfigured)) {
-  Stop-PortListeners -Ports @(5050)
-  $backendOk = $false
+if (-not $backendOk -and (Test-PortListening -Port $BackendPort)) {
+  Write-Host ('  ERROR: port ' + $BackendPort + ' is occupied but is not a ready Detail Page AI backend.')
+  Write-Host '  It was left running. Stop only the known owning process, then run this launcher again.'
+  exit 1
 }
+if ($backendOk -and -not (Test-SinhwaBridgeConfigured)) {
+  Write-Host ('  ERROR: port ' + $BackendPort + ' is not the required Detail Page AI backend.')
+  Write-Host '  It was left running. Stop only the known owning process, then run this launcher again.'
+  exit 1
+}
+$sinhwaHubOk = Ensure-SinhwaHubReady
 
 # [0] API Hub (4321) - required for GPT OAuth / Cafe24 Control / connectors
 $hubAlready = $false
@@ -231,7 +244,9 @@ if ($hubAlready) {
   Write-Host '  [0/4] API Hub path missing (C:\api-hub) - GPT OAuth may show Failed to fetch'
 }
 
-if ($SachyApi -and (Test-Path $SachyApi)) {
+if ($sachyApiOk) {
+  Write-Host '  [1/4] sachyosangse API (4000) already running'
+} elseif ($SachyApi -and (Test-Path $SachyApi)) {
   Write-Host '  [1/4] sachyosangse API (4000)...'
   $apiArgs = '/k cd /d "' + $SachyApi + '" && pnpm dev'
   Start-Process -FilePath 'cmd.exe' -ArgumentList $apiArgs -WindowStyle Minimized
@@ -240,10 +255,10 @@ if ($SachyApi -and (Test-Path $SachyApi)) {
 }
 
 if ($backendOk) {
-  Write-Host '  [2/4] Backend (5050) already running'
+  Write-Host ('  [2/4] Backend (' + $BackendPort + ') already running')
 } else {
-  Write-Host '  [2/4] Backend (5050, threads=16) starting...'
-  $backendCmd = 'cd /d "' + $Backend + '" && set SSL_CERT_FILE=' + $CertFile + ' && "' + $Waitress + '" --call --listen=127.0.0.1:5050 --threads=16 app:create_app'
+  Write-Host ('  [2/4] Backend (' + $BackendPort + ', threads=16) starting...')
+  $backendCmd = 'cd /d "' + $Backend + '" && set SSL_CERT_FILE=' + $CertFile + ' && "' + $Waitress + '" --call --listen=127.0.0.1:' + $BackendPort + ' --threads=16 app:create_app'
   $serviceKey = Get-PdpControlServiceKey
   $serviceKeyWasPresent = Test-Path -LiteralPath 'Env:SINHWA_PDP_SERVICE_KEY'
   $originalServiceKey = [Environment]::GetEnvironmentVariable(
@@ -272,7 +287,7 @@ Write-Host ''
 Write-Host '  Waiting for servers (health check)...'
 $hubOk = Wait-HttpReady -Url 'http://127.0.0.1:4321/api/status' -MaxTries 30 -DelaySec 1
 if (-not $backendOk) {
-  $backendOk = Wait-HttpReady -Url 'http://127.0.0.1:5050/api/sections' -MaxTries 45 -DelaySec 1
+  $backendOk = Wait-HttpReady -Url ($BackendBaseUrl + '/api/sections') -MaxTries 45 -DelaySec 1
 }
 if (-not $frontOk) {
   $frontOk = Wait-HttpReady -Url 'http://127.0.0.1:8081/app.html' -MaxTries 20 -DelaySec 1
@@ -283,14 +298,40 @@ if ($sinhwaHubOk) { Write-Host '  Sinhwa asset hub ready' } else { Write-Host ' 
 if ($backendOk) { Write-Host '  Backend ready' } else { Write-Host '  Backend slow - opening browser anyway' }
 if ($frontOk) { Write-Host '  Frontend ready' } else { Write-Host '  Frontend slow' }
 
-Write-Host '  Opening background worker and normal editor...'
+Write-Host $(if ($WorkerOnly) { '  Opening background worker...' } else { '  Opening background worker and normal editor...' })
 if ($Chrome) {
   Start-Process -FilePath $Chrome -ArgumentList @('--new-window', '--start-minimized', $WorkerAppUrl)
-  Start-Sleep -Milliseconds 300
-  Start-Process -FilePath $Chrome -ArgumentList @('--new-window', $NormalAppUrl)
+  if (-not $WorkerOnly) {
+    Start-Sleep -Milliseconds 300
+    Start-Process -FilePath $Chrome -ArgumentList @('--new-window', $NormalAppUrl)
+  }
 } else {
   Start-Process $WorkerAppUrl
-  Start-Process $NormalAppUrl
+  if (-not $WorkerOnly) {
+    Start-Process $NormalAppUrl
+  }
+}
+
+if ($WorkerOnly) {
+  $workerReady = $false
+  for ($attempt = 0; $attempt -lt 40; $attempt++) {
+    try {
+      $factoryState = Invoke-RestMethod -Uri ($ControlTowerBase + '/api/factory/state') -TimeoutSec 2 -ErrorAction Stop
+      if (
+        $factoryState.connected -eq $true -and
+        $factoryState.expectedWorkerBuildId -eq $ExpectedWorkerBuildId -and
+        $factoryState.workerSession.buildId -eq $ExpectedWorkerBuildId
+      ) {
+        $workerReady = $true
+        break
+      }
+    } catch {}
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $workerReady) {
+    Write-Host ('  ERROR: worker build admission failed. expected=' + $ExpectedWorkerBuildId)
+    exit 1
+  }
 }
 
 Write-Host ''

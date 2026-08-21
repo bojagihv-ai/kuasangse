@@ -70,6 +70,7 @@ function startupSeedScript(seed, origins = {}) {
   const appOrigin = String(origins.appOrigin || 'http://127.0.0.1:8081');
   const backendOrigin = String(origins.backendOrigin || 'http://127.0.0.1:5050');
   const apiHubOrigin = 'http://127.0.0.1:4321';
+  const testOnlyNativeApiHubTransport = origins.testOnlyNativeApiHubTransport === true;
   return `(() => {
     const tabEntries = ${JSON.stringify(seed.tabStorage)};
     const sharedEntries = ${JSON.stringify(seed.sharedStorage)};
@@ -89,24 +90,43 @@ function startupSeedScript(seed, origins = {}) {
       `POST ${apiHubOrigin}/api/invoke/cafe24_control_tower/refresh-token`,
       `POST ${apiHubOrigin}/api/invoke/cafe24_control_tower/setup-status`,
     ])});
-    const probe = { requests: [], mutations: [], unexpected: [], authorityExpected: null, console: [] };
+    const probe = { requests: [], mutations: [], unexpected: [], nativeApiHubTransportCount: 0, authorityExpected: null, console: [] };
     Object.defineProperty(globalThis, '__DB05_NETWORK_PROBE__', { value: probe, configurable: true });
     const nativeWarn = console.warn.bind(console);
     console.warn = (...args) => {
       probe.console.push(args.map(value => value instanceof Error ? (value.stack || value.message) : String(value)).join(' '));
       nativeWarn(...args);
     };
+    const nativeTransport = (input, init, url) => {
+      if (url.origin === ${JSON.stringify(apiHubOrigin)}) probe.nativeApiHubTransportCount += 1;
+      return nativeFetch(input, init);
+    };
     window.fetch = async (input, init = {}) => {
       const request = input instanceof Request ? input : null;
       const url = new URL(typeof input === 'string' ? input : request?.url, location.href);
       const method = String(init.method || request?.method || 'GET').toUpperCase();
-      const bodyText = typeof init.body === 'string' ? init.body : (request ? await request.clone().text() : '');
-      const body = (() => { try { return JSON.parse(bodyText || '{}'); } catch (_) { return {}; } })();
       const record = { method, origin: url.origin, path: url.pathname };
       const signature = [method, url.origin + url.pathname].join(' ');
       probe.requests.push(record);
       const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
-      if (method === 'GET' || method === 'HEAD') return nativeFetch(input, init);
+      if (${testOnlyNativeApiHubTransport} && url.origin === ${JSON.stringify(apiHubOrigin)} && method === 'GET' && url.pathname === '/__db05_test_native_api_hub_transport') {
+        return nativeTransport(input, init, url);
+      }
+      if (url.origin === ${JSON.stringify(apiHubOrigin)} && method === 'GET') {
+        if (url.pathname === '/api/playbooks/gpt-oauth/status') {
+          return json({ connectorId: 'chatgpt_login_oauth', mode: 'chatgpt-login-oauth', authMode: 'chatgpt', chatGptLoginReady: true });
+        }
+        if (url.pathname === '/api/llm/options') {
+          return json({ latestModel: 'gpt-5.6-sol', modelOptions: [{ id: 'gpt-5.6-sol' }], reasoningOptions: [{ id: 'medium' }], serviceTierOptions: [{ id: 'standard' }] });
+        }
+      }
+      if (url.origin === ${JSON.stringify(apiHubOrigin)} && (method === 'GET' || method === 'HEAD')) {
+        probe.unexpected.push(record);
+        return json({ ok: false, blockedByHarness: true, code: 'DB05_UNEXPECTED_API_HUB_READ' }, 409);
+      }
+      if (method === 'GET' || method === 'HEAD') {
+        return nativeTransport(input, init, url);
+      }
       if (!allowed.has(signature)) {
         probe.unexpected.push(record);
         return json({ ok: false, blockedByHarness: true, code: 'DB05_UNEXPECTED_MUTATION' }, 409);
@@ -153,7 +173,6 @@ function same(left, right, keys) {
 
 function mutationSignatures(expected) {
   return [
-    `POST ${expected.backendOrigin}/api/sinhwa-pdp/work-bundles/activity`,
     'POST http://127.0.0.1:4321/api/invoke/cafe24_control_tower/refresh-token',
     'POST http://127.0.0.1:4321/api/invoke/cafe24_control_tower/setup-status',
   ].sort();
@@ -174,7 +193,7 @@ function mutationBoundaryMatches(actualMutations, expected) {
     && count(`POST ${expected.backendOrigin}/api/workspace-lock/acquire`) === 0
     && count(`POST ${expected.backendOrigin}/api/last-work`) === 0
     && count(`POST ${expected.backendOrigin}/api/local-archive/workfiles/${encodeURIComponent(expected.projectId)}/recover-latest`) === 0
-    && count(`POST ${expected.backendOrigin}/api/sinhwa-pdp/work-bundles/activity`) === 1;
+    && count(`POST ${expected.backendOrigin}/api/sinhwa-pdp/work-bundles/activity`) === 0;
 }
 
 function check(code, ok, message) {

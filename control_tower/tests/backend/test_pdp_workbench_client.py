@@ -177,3 +177,38 @@ def test_workbench_client_lists_bundles_and_fetches_only_allowlisted_asset_bytes
         with pytest.raises(PdpHttpError, match="asset_reference_forbidden"):
             client.get_work_bundle_asset(reference)
     assert len(calls) == 3
+
+
+def test_workbench_client_materializes_catalog_images_as_worker_data_urls() -> None:
+    calls: list[JsonObject] = []
+
+    def request(method: str, url: str, **kwargs: JsonValue) -> FakeResponse:
+        calls.append({"method": method, "url": url, **kwargs})
+        if url.endswith("/products/930001"):
+            return FakeResponse(
+                200,
+                {"catalog": {"images": [{"id": 7, "path": "930001/front.jpg", "primary": True}]}},
+            )
+        return FakeResponse(
+            200,
+            {},
+            content=b"fixture",
+            headers={"Content-Type": "image/jpeg", "Cache-Control": "private, max-age=300"},
+        )
+
+    client = PdpWorkbenchHttpApi(
+        "http://assets/api/pdp-assets/v1",
+        "http://control/api/pdp-control/v1",
+        "server-only-key",
+        request_fn=request,
+    )
+
+    result = client.get_product_source_images(930001)
+
+    assert [call["url"] for call in calls] == [
+        "http://assets/api/pdp-assets/v1/products/930001",
+        "http://assets/media/product-images/930001/front.jpg",
+    ]
+    assert result["images"][0]["dataUrl"] == "data:image/jpeg;base64,Zml4dHVyZQ=="
+    assert result["images"][0]["role"] == "base"
+    assert calls[-1]["headers"]["Accept"] == "image/*"

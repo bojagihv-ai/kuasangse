@@ -44,9 +44,9 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
 
   function restoreCandidateMatchesAuthority(record, rawRecord, source) {
     if (!authorityRuntime.hasSnapshot()) return true;
+    if (source === 'server') return true;
     const current = authorityRuntime.snapshot();
     if (!current || current.scopeId !== record.scopeId) return false;
-    if (source === 'server') return true;
     const rawEnvelope = rawRecord?.workspaceEnvelope
       || rawRecord?.persistenceEnvelope
       || rawRecord

@@ -152,7 +152,13 @@ async function main() {
         globalThis.factoryCafe24CreatePostSyncPlan = () => ({ imageSlotCount: 0, readyActions: [] });
         globalThis.factoryRunCafe24PostCreateSync = async () => true;
         globalThis.fetchCafe24ProductFullByNo = async () => ({
-          raw: { description: completeDetailHtml, detail_image: '/mock-detail.jpg' },
+          raw: {
+            product_no: '999',
+            product_name: seed.registrationProductName,
+            price: '4000',
+            description: completeDetailHtml,
+            detail_image: '/mock-detail.jpg',
+          },
         });
         globalThis.factoryRecordFinalRegistrationHistory = async () => true;
         globalThis.factoryUpdateFromInputs = () => {};
@@ -177,6 +183,14 @@ async function main() {
         globalThis.ensureCafe24Modules = original.ensureModules;
       }
       const afterFailureAndSuccess = snapshot();
+      const terminalFactory = readFactory();
+      const terminalReceipt = terminalFactory.product?.cafe24RegistrationReceipt || null;
+      const terminalRegistration = {
+        status: terminalReceipt?.status || '',
+        error: terminalReceipt?.error || '',
+        mismatches: terminalReceipt?.mismatches || [],
+        finalStatus: terminalFactory.openMarketSync?.finalRegistrationStatus || '',
+      };
       container.remove();
       const evidence = document.createElement('section');
       evidence.id = 'finalRegistrationPreservationEvidence';
@@ -187,7 +201,7 @@ async function main() {
         + '<div>후보 DB/Cafe24: <strong>' + after.dbCandidates + ' / ' + after.cafe24Candidates + '</strong></div>'
         + '<div>활성/격리 이미지: <strong>' + after.activeAssets + ' / ' + after.rejectedAssets + '</strong></div>';
       document.body.replaceChildren(evidence);
-      return { before, after, failureResult, successResult, externalCalls, afterFailureAndSuccess };
+      return { before, after, failureResult, successResult, externalCalls, afterFailureAndSuccess, terminalRegistration };
     }`);
     const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(screenshot.data, 'base64'));

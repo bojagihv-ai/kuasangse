@@ -484,6 +484,64 @@ test('registration-only preview recovery preserves current section copy without 
   assert.equal(rendered, 0);
 });
 
+test('registration-only preview recovery does not overwrite a currently selected section image', async () => {
+  const source = sourceBetween(
+    CORE,
+    'async function factoryRecoverPreviewSectionsFromLocalArchive(',
+    'function queueSectionContentLocalArchive(',
+  );
+  const restored = [];
+  const state = {
+    sectionImages: { material_tech: 'http://archive.test/image/selected-a-cut' },
+    sectionContents: { material_tech: { headline: '현재 선택 컷 유지' } },
+  };
+  const record = {
+    archiveId: 'material-old',
+    stageId: 'section_material_tech',
+    productKey: '방울수저집',
+    workspaceId: 'same-project',
+    inputImageFingerprint: 'same-input',
+    files: { imagePath: 'old.png' },
+  };
+  const context = {
+    URLSearchParams,
+    Date,
+    Map,
+    state,
+    assertRuntimeOperationContextCurrent() {},
+    factoryRuntimeReadFactory: () => ({ product: { productName: '방울수저집' } }),
+    factoryLocalArchiveSearchProductName: () => '방울수저집',
+    factoryCurrentProductKey: () => '방울수저집',
+    factoryCurrentInputImageFingerprint: () => 'same-input',
+    factoryNormalizeIdentityText: value => String(value || '').trim(),
+    factoryBackendBaseUrl: () => 'http://archive.test',
+    workspaceArchiveFetch: async url => ({
+      ok: true,
+      json: async () => url.includes('?')
+        ? { ok: true, assets: [record] }
+        : { ok: true, record, asset: {}, metadata: {} },
+    }),
+    factorySectionIdFromLocalArchiveStage: stage => String(stage).replace(/^section_/, ''),
+    factoryLocalArchiveItemHasImageFile: item => !!item?.files?.imagePath,
+    orderedSections: () => [{ id: 'material_tech' }],
+    displayableImageSrc: value => /^https?:/.test(String(value || '')) ? value : '',
+    factoryLocalArchiveImageUrl: () => 'http://archive.test/image/material-old',
+    factoryImageOnlySectionContent: () => ({ headline: '대체 문구' }),
+    applySectionContent(sectionId, content, image) { restored.push({ sectionId, content, image }); },
+    savePersistentState() {},
+    saveLastWorkNow() {},
+    render() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source}\nthis.recover = factoryRecoverPreviewSectionsFromLocalArchive;`, context);
+
+  const outcome = await context.recover({ render: false, persist: false });
+
+  assert.equal(outcome.restored, 0);
+  assert.deepEqual(restored, []);
+  assert.equal(state.sectionImages.material_tech, 'http://archive.test/image/selected-a-cut');
+});
+
 test('preview entry automatically recovers non-displayable stored section image markers', () => {
   assert.match(PREVIEW_MENU, /function snapshotNeedsArchiveImageRecovery\(/);
   assert.match(

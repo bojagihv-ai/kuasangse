@@ -60,8 +60,6 @@ DECISION_TYPE_ALIASES = {
     "section_variant": "section_variant_a_cut",
     "final_detail": "final_detail_candidate",
 }
-
-
 def normalize_decision_type(decision_type: str) -> str:
     normalized = DECISION_TYPE_ALIASES.get(decision_type, decision_type)
     if normalized not in DECISION_TYPES:
@@ -90,18 +88,28 @@ def build_evidence_bundle(input_refs: Iterable[Mapping[str, JsonValue]], candida
         seen_digest.add(content_digest)
         if near_key:
             seen_near.add(near_key)
-        refs.append({
+        candidate_ref: JsonObject = {
             "candidateId": candidate_id,
             "source": source,
             "thumbnailRef": thumbnail_ref,
             "contentDigest": content_digest,
             "nearDuplicateKey": near_key,
-        })
+        }
+        for key in ("model", "rationale"):
+            value = str(raw.get(key, "")).strip()
+            if value:
+                candidate_ref[key] = value
+        confidence = raw.get("confidence")
+        if not isinstance(confidence, bool) and isinstance(confidence, (int, float)):
+            candidate_ref["confidence"] = float(confidence)
+        refs.append(candidate_ref)
         if len(refs) >= max_candidates:
             break
     if not refs:
         raise GptOAuthError("evidence_empty")
-    inputs = [dict(item) for item in input_refs]
+    inputs: list[JsonObject] = []
+    for _raw in input_refs:
+        raise GptOAuthError("evidence_input_reference_invalid")
     return {
         "schemaVersion": JUDGE_SCHEMA_VERSION,
         "inputRefs": inputs,

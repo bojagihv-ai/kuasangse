@@ -49,6 +49,48 @@ test('IDB v4, server, archive, v1 workfile and raw payload migrate without known
   for (const item of fixtures) assert.deepEqual(migrations.migrateWorkfilePayload(item), item);
 });
 
+test('server outer assets outrank an unreferenced stale persistence-envelope snapshot', async () => {
+  const { migrateServerSnapshot } = await load('src/modules/persistence/migrations.mjs');
+  const migrated = migrateServerSnapshot({
+    workspaceId: 'project:alpha',
+    snapshot: {
+      workspaceId: 'project:alpha',
+      assets: {
+        currentProjectId: 'alpha',
+        productName: 'A',
+        optionSorter: {
+          images: [{ id: 'red-image' }],
+          optionResults: [{ id: 'result-1' }],
+          slots: [{ id: 'slot-red', name: '1.빨강', imgIds: ['red-image'] }],
+        },
+        compPage: {
+          analysisResult: { title: '보존할 분석' },
+          sectionPlan: { header: { id: 'header' } },
+          marketScrape: {
+            selectedIds: ['candidate-1'],
+            detailResults: { 'candidate-1': { title: '보존할 상세' } },
+          },
+        },
+      },
+      persistenceEnvelope: {
+        schema: 'kuasangse.workspace',
+        version: 2,
+        scopeId: 'project:alpha',
+        snapshot: {
+          currentProjectId: 'alpha',
+          productName: 'A',
+          optionSorter: { slots: [{ id: 'old-slot', name: '1번', imgIds: [] }] },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(migrated.snapshot.optionSorter.slots.map(slot => slot.name), ['1.빨강']);
+  assert.equal(migrated.snapshot.optionSorter.optionResults.length, 1);
+  assert.equal(migrated.snapshot.compPage.analysisResult.title, '보존할 분석');
+  assert.equal(migrated.snapshot.compPage.marketScrape.detailResults['candidate-1'].title, '보존할 상세');
+});
+
 test('migrations are deterministic without wall-clock or random fallbacks', async () => {
   const migrations = await load('src/modules/persistence/migrations.mjs');
   const legacy = { currentProjectId: 'alpha', productName: 'A', extensionEnvelope: { keep: true } };

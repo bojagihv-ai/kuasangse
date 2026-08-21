@@ -10,6 +10,14 @@ const STAGE_KEYS = Object.freeze([
   'sections',
   'final_detail',
 ]);
+const PROJECTION_WORK_IDENTITY_FIELDS = Object.freeze([
+  'workspaceId',
+  'productId',
+  'productKey',
+  'runId',
+  'inputFingerprint',
+  'workfileSha256',
+]);
 
 export class FactorySyncConflict extends Error {
   constructor(code) {
@@ -70,7 +78,7 @@ function normalizeStage(value) {
   const key = text(source.key || source.stageKey);
   if (!STAGE_KEYS.includes(key)) throw new TypeError(`factory stage key unsupported:${key}`);
   const candidates = list(source.candidates).map(normalizeCandidate);
-  const selectedId = text(source.selectedId || source.selectedCandidateId);
+  const selectedId = text(source.selectedId || source.selectedCandidateId || list(source.selectedIds)[0]);
   if (selectedId && !candidates.some(candidate => candidate.id === selectedId)) {
     throw new TypeError(`factory selected candidate missing:${key}:${selectedId}`);
   }
@@ -93,6 +101,9 @@ function normalizeSession(value) {
     inputFingerprint: text(source.inputFingerprint || source.expectedInputFingerprint),
     revision: integer(source.revision ?? source.workfileRevision),
     workfileName: text(source.workfileName),
+    workfileSource: text(source.workfileSource),
+    workfileSha256: text(source.workfileSha256),
+    workfileBytes: integer(source.workfileBytes),
   };
 }
 
@@ -125,6 +136,47 @@ export function normalizeFactoryProjection(value) {
     products: list(source.products).map(clone),
   };
   return freezeTree(projection);
+}
+
+function sameFactoryProjectionWork(current, incoming) {
+  return current.connected === true
+    && incoming.connected === true
+    && PROJECTION_WORK_IDENTITY_FIELDS.every(field => {
+      const currentValue = text(current.session[field]);
+      return currentValue && currentValue === text(incoming.session[field]);
+    });
+}
+
+function preserveFactoryProjectionStage(incoming, current) {
+  if (!current || incoming.candidates.length >= current.candidates.length) {
+    if (incoming.selectedId || !current?.selectedId) return incoming;
+    const selected = current.candidates.find(candidate => candidate.id === current.selectedId);
+    return {
+      ...incoming,
+      selectedId: current.selectedId,
+      candidates: selected && !incoming.candidates.some(candidate => candidate.id === selected.id)
+        ? [...incoming.candidates, clone(selected)]
+        : incoming.candidates,
+    };
+  }
+  const candidates = clone(current.candidates);
+  const selectedId = incoming.selectedId || current.selectedId;
+  const selected = incoming.candidates.find(candidate => candidate.id === selectedId);
+  if (selected && !candidates.some(candidate => candidate.id === selected.id)) candidates.push(clone(selected));
+  return { ...incoming, candidates, selectedId };
+}
+
+export function reconcileFactoryProjectionForSameWork(currentValue, incomingValue) {
+  const current = normalizeFactoryProjection(currentValue);
+  const incoming = normalizeFactoryProjection(incomingValue);
+  if (!sameFactoryProjectionWork(current, incoming)) return incoming;
+  const currentStages = new Map(current.stages.map(stage => [stage.key, stage]));
+  const stages = incoming.stages.map(stage => preserveFactoryProjectionStage(stage, currentStages.get(stage.key)));
+  for (const stage of current.stages) {
+    if (incoming.stages.some(candidate => candidate.key === stage.key)) continue;
+    if (stage.candidates.length || stage.selectedId) stages.push(clone(stage));
+  }
+  return normalizeFactoryProjection({ ...incoming, stages });
 }
 
 export function disconnectedFactoryProjection(reason = 'factory_session_missing') {
@@ -182,7 +234,7 @@ export function applyFactoryDelta(currentValue, eventValue) {
       next.receipts.push(clone(event.receipt));
     }
   }
-  return normalizeFactoryProjection(next);
+  return reconcileFactoryProjectionForSameWork(current, next);
 }
 
 export function resumeFactoryEvents(initial, events, cursor = '') {

@@ -69,6 +69,48 @@ test('VM service start requires confirmation when health is unavailable', async 
   assert.equal(startCalls, 0);
 });
 
+test('production-control VM service start reuses its command approval without a hidden confirm', async () => {
+  let startCalls = 0;
+  let confirmCalls = 0;
+  const sandbox = {
+    Error,
+    JSON,
+    JEPUM_MARKET_API: { endpoints: { health: '/health' } },
+    compMarketInvokeV1: async () => {
+      if (!startCalls) throw new Error('connection refused');
+      return { ok: true };
+    },
+    compMarketRunningSearchCountFromHealth: () => null,
+    compMarketCreateJepumServiceError: message => new Error(message),
+    compMarketNormalizeJepumApiError: () => 'connection refused',
+    compMarketShouldAutoStartJepum: () => true,
+    compMarketLog: () => {},
+    compMarketSetStatus: () => {},
+    compMarketStartLocalJepumApi: async () => {
+      startCalls += 1;
+      return { running: true };
+    },
+    render: () => {},
+    window: {
+      confirm: () => {
+        confirmCalls += 1;
+        return false;
+      },
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(
+    `${sourceSlice('async function compMarketEnsureJepumApiReady(', 'function compMarketSetSiteSearchStatus(')}\nthis.run = compMarketEnsureJepumApiReady;`,
+    sandbox,
+  );
+
+  const status = await sandbox.run(25, { skipConfirm: true });
+
+  assert.equal(status.ok, true);
+  assert.equal(confirmCalls, 0);
+  assert.equal(startCalls, 1);
+});
+
 test('VM service preflight trusts the backend status used by the shared-folder bridge', async () => {
   // Given: the backend confirms the exact JepumScraper process used by VM candidate collection.
   let directStatusCalls = 0;
@@ -224,6 +266,7 @@ test('explicit VM collection choice holds a lease and runs the VM path regardles
 
   assert.match(vmStart, /factoryRuntimeWithOperationLease\(/);
   assert.match(vmStart, /factoryRunVmCompetitorCollectionForSelection\(\{[^]*forceCollect: true/);
+  assert.match(vmStart, /skipConfirm: payload\.skipConfirm === true/);
   assert.doesNotMatch(vmStart, /runCompMarketScrape\('local'\)/);
 });
 

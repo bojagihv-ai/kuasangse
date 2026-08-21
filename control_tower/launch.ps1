@@ -36,6 +36,7 @@ $SinhwaHubFrontendUrl = "http://127.0.0.1:5173/"
 $BackendHealthUrl = "http://127.0.0.1:$BackendPort/api/health"
 $BackendJobsUrl = "http://127.0.0.1:$BackendPort/api/jobs"
 $BackendReviewsUrl = "http://127.0.0.1:$BackendPort/api/reviews"
+$BackendFactoryStateUrl = "http://127.0.0.1:$BackendPort/api/factory/state"
 $FrontendUrl = "http://127.0.0.1:$FrontendPort/control-tower.html"
 $FrontendReadyMarker = if ($BackendPort -eq 5062) {
     'const healthUrl = "http://127.0.0.1:5062/api/health";'
@@ -50,6 +51,12 @@ else {
     $FrontendRootOverride
 }
 $PythonPath = Join-Path $RepositoryRoot "backend\venv311\Scripts\python.exe"
+$FactoryLauncherPath = Join-Path $RepositoryRoot "launcher.ps1"
+$RuntimeManifestPath = Join-Path $RepositoryRoot "src\runtime-manifest.json"
+$ExpectedWorkerBuildId = [string](Get-Content -LiteralPath $RuntimeManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).buildId
+if ($ExpectedWorkerBuildId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+    throw "조립공장 runtime manifest build ID가 올바르지 않습니다."
+}
 $RuntimeRoot = if ([string]::IsNullOrWhiteSpace($RuntimeRootOverride)) {
     Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "KuaSangse\ProductionControl"
 }
@@ -145,6 +152,10 @@ function Test-ControlTowerBackend {
     try {
         $health = Invoke-RestMethod -Uri $BackendHealthUrl -Method Get -TimeoutSec 2
         if ($health.service -ne "batch-production-control" -or $health.status -ne "ready") {
+            return $false
+        }
+        $factoryState = Invoke-RestMethod -Uri $BackendFactoryStateUrl -Method Get -TimeoutSec 2
+        if ($factoryState.expectedWorkerBuildId -ne $ExpectedWorkerBuildId) {
             return $false
         }
         $jobs = Invoke-WebRequest -Uri $BackendJobsUrl -Method Get -UseBasicParsing -TimeoutSec 4
@@ -478,6 +489,29 @@ function Start-ControlTowerBrowser {
     }
 }
 
+function Start-FactoryWorkerBrowser {
+    if ($NoBrowser -or $BackendPort -ne 5062 -or $FrontendPort -ne 8082) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $FactoryLauncherPath -PathType Leaf)) {
+        throw "조립공장 작업자 실행 파일이 없습니다: $FactoryLauncherPath"
+    }
+
+    $process = Start-Process -FilePath "powershell.exe" `
+        -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $FactoryLauncherPath,
+            "-WorkerOnly", "-ExpectedWorkerBuildId", $ExpectedWorkerBuildId,
+            "-ControlTowerPort", [string]$BackendPort
+        ) `
+        -WorkingDirectory $RepositoryRoot `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "현재 runtime build의 조립공장 작업자를 확인하지 못했습니다."
+    }
+}
+
 function Stop-ManagedProcess {
     param(
         [int]$ProcessId,
@@ -582,6 +616,7 @@ function Invoke-StartControlTower {
     $backendOwner = [int](@(Get-PortOwners -Port $BackendPort)[0])
     $frontendOwner = [int](@(Get-PortOwners -Port $FrontendPort)[0])
     Write-LauncherState -BackendProcessId $backendOwner -FrontendProcessId $frontendOwner -Status "ready"
+    Start-FactoryWorkerBrowser
     if (-not $NoBrowser) {
         Start-ControlTowerBrowser
     }

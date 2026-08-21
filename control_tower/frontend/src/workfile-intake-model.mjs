@@ -1,3 +1,5 @@
+import { resolveWorkfileIdentity } from './workfile-identity-model.mjs?actualB=1';
+
 const FIELD_LABELS = Object.freeze({
   product_name: '상품명',
   representative_image: '대표 입력 이미지',
@@ -246,21 +248,13 @@ function numericJcode(...values) {
   return null;
 }
 
-function numericRevision(...values) {
-  for (const value of values) {
-    const revision = typeof value === 'object' ? record(value).counter : value;
-    const normalized = Number(revision);
-    if (Number.isInteger(normalized) && normalized >= 0) return normalized;
-  }
-  return 0;
-}
-
 export function classifyKuasangseWorkfile(value) {
   const root = record(value);
   if (root.format !== 'kuasangse.factory.project' || Number(root.version) !== 1) {
     throw new WorkfileIntakeError('workfile_format_invalid');
   }
   const project = record(root.project);
+  const identity = resolveWorkfileIdentity(root);
   const payload = record(project.payload);
   const assetPayload = record(payload.assetPayload);
   const factory = record(Object.keys(record(payload.factory)).length ? payload.factory : assetPayload.factory);
@@ -269,6 +263,30 @@ export function classifyKuasangseWorkfile(value) {
   const fields = requiredFields(payload, factoryProduct, images);
   const outputs = outputStages(payload, factory);
   const summary = record(root.summary);
+  const resultReport = record(root.resultReport);
+  const reportStatus = record(resultReport.status);
+  const reportWorkfile = record(resultReport.workfile);
+  const reportCafe24 = record(resultReport.cafe24);
+  const embeddedReceipt = record(factoryProduct.cafe24PublicationReceipt);
+  const publication = Object.freeze({
+    schema: text(resultReport.schema),
+    registered: reportCafe24.registered === true || text(reportStatus.code) === 'cafe24_registered',
+    status: text(reportStatus.label || reportStatus.code),
+    productNo: text(reportCafe24.productNo || embeddedReceipt.productNo),
+    productCode: text(reportCafe24.productCode || embeddedReceipt.productCode),
+    productName: text(reportCafe24.productName || embeddedReceipt.productName),
+    mallId: text(reportCafe24.mallId || embeddedReceipt.mallId),
+    sourceWorkfileName: text(
+      reportCafe24.sourceWorkfileName || reportWorkfile.name || embeddedReceipt.sourceWorkfileName,
+    ),
+    registrationMode: text(reportCafe24.registrationMode || embeddedReceipt.registrationMode),
+    registeredAt: Number(reportCafe24.registeredAt || embeddedReceipt.registeredAt || 0),
+    adminUrl: text(reportCafe24.adminUrl || embeddedReceipt.adminUrl),
+    storefrontUrl: text(reportCafe24.storefrontUrl || embeddedReceipt.storefrontUrl),
+    optionGroupCount: Number(reportCafe24.optionGroupCount || embeddedReceipt.optionGroupCount || 0),
+    optionValueCount: Number(reportCafe24.optionValueCount || embeddedReceipt.optionValueCount || 0),
+    variantCount: Number(reportCafe24.variantCount || embeddedReceipt.variantCount || 0),
+  });
   const jcode = numericJcode(
     record(factoryProduct.finalDb).jcode,
     record(factoryProduct.confirmedDb).jcode,
@@ -284,7 +302,8 @@ export function classifyKuasangseWorkfile(value) {
   const missingFieldCount = fields.filter(field => field.status === 'missing').length;
   if (missingFieldCount) warnings.push(`필수값 ${missingFieldCount}개가 비어 있습니다.`);
   if (!images.length) warnings.push('기본 입력 이미지를 찾지 못했습니다.');
-  if (!jcode) warnings.push('연결할 신화사 jcode를 찾지 못했습니다.');
+  if (!jcode) warnings.push('연결할 신화사 품번을 찾지 못했습니다.');
+  if (identity.conflicts.length) warnings.push('작업 신원 값이 서로 달라 자동 연결할 수 없습니다.');
   const unresolvedStages = outputs.stages.filter(
     stage => stage.candidateCount > 0 && stage.selectedCount === 0,
   );
@@ -293,18 +312,19 @@ export function classifyKuasangseWorkfile(value) {
   }
 
   return Object.freeze({
+    identity,
     file: Object.freeze({
       format: root.format,
       version: Number(root.version),
       exportedAt: text(root.exportedAt),
-      workspaceId: text(root.workspaceId || project.id),
-      revision: numericRevision(record(root.persistence).revision, record(factory).workspaceRevision),
+      workspaceId: identity.workspaceId,
+      revision: identity.revision,
     }),
     product: Object.freeze({
       name: text(summary.productName || project.name || payload.productName || factoryProduct.productName) || '제품명 미확인',
       jcode,
-      productKey: text(factoryProduct.productKey || factoryProduct.currentProductKey),
-      runId: text(factoryProduct.currentRunId || factoryProduct.generationRunId),
+      productKey: identity.productKey,
+      runId: identity.runId,
       naturalHint: text(factoryProduct.naturalHint),
     }),
     inputs: Object.freeze({
@@ -325,6 +345,7 @@ export function classifyKuasangseWorkfile(value) {
         || list(payload.detailImageBlocks).length > 0
         || Object.keys(record(payload.sectionAssembly)).length > 0,
     }),
+    publication,
     warnings: Object.freeze(warnings),
   });
 }

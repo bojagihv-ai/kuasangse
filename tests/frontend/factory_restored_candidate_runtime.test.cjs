@@ -77,7 +77,7 @@ test('restored candidate runtime clears only dead progress and preserves results
   assert.equal(context.clearRestoredCandidateRuntime(factory, { log: false }), false);
 });
 
-test('candidate runtime cleanup persists only after server hydration wins', () => {
+test('candidate runtime cleanup stays read-only when a draft branch hydrates a project receipt', () => {
   const persistenceHydration = sourceSlice(
     source(CORE_02),
     'async function hydratePersistentSessionAssets(',
@@ -85,8 +85,8 @@ test('candidate runtime cleanup persists only after server hydration wins', () =
   );
   const startupHydration = sourceSlice(
     source(CORE_06),
-    'async function runClassicRuntimeHydration(',
-    '\nfunction hydrateClassicRuntime(',
+    'async function continueClassicRuntimeHydrationInBackground(',
+    '\nasync function runClassicRuntimeHydration(',
   );
 
   assert.match(
@@ -95,6 +95,6 @@ test('candidate runtime cleanup persists only after server hydration wins', () =
   );
   assert.match(
     startupHydration,
-    /await hydrateServerLastWorkSnapshot\(\{[\s\S]*factoryClearRestoredCandidateRuntime\(\{\s*save:\s*true,/,
+    /const persistRuntimeCleanup = !shouldRetryProjectServerSnapshot;[\s\S]*factoryClearRestoredCandidateRuntime\(\{\s*save:\s*persistRuntimeCleanup,/,
   );
 });

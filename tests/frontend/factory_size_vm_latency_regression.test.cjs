@@ -366,6 +366,139 @@ test('asset preview hydrates its large image once and does not rescan every asse
   );
 });
 
+test('GENERATE-03: size preview keeps a preserved current-source archive visible when its canonical asset was pruned', () => {
+  const factory = { assets: [], product: { productName: '낙지발노리개' } };
+  let currentProductKey = '낙지발노리개';
+  let currentSourceKey = 'input-image-1';
+  const core5 = source('src/app-core-05.js');
+  const helperSource = sourceSlice(
+    core5,
+    'function factoryPreviewOnlySizeAssets(',
+    'function renderFactoryStageCard(',
+  );
+  const context = vm.createContext({
+    state: {
+      cuts: {
+        sizePrompts: [{
+          id: 'size-cut-1',
+          label: '사이즈 안내컷 1',
+          prompt: '현재 제품 사이즈 안내',
+          result: 'http://127.0.0.1:5050/api/local-archive/assets/archive-size-1/image',
+          assetId: 'factory-size-1',
+          resultAssetId: 'factory-size-1',
+          productKey: '낙지발노리개',
+          sourceImageKey: 'input-image-1',
+        }],
+      },
+    },
+    factoryRuntimeReadFactory: () => factory,
+    factoryCutPromptMatchesStage: (_cut, stageId) => stageId === 'size',
+    cutsCurrentSourceImageKey: () => currentSourceKey,
+    cutPromptSourceImageKey: cut => cut.sourceImageKey || '',
+    cutPromptProductKey: cut => cut.productKey || '',
+    factoryCurrentProductKey: () => currentProductKey,
+    factoryJobProductKeysCompatible: (left, right) => left === right,
+    factoryCutPromptResultDisplaySrc(cut, stageId, options) {
+      assert.equal(stageId, 'size');
+      assert.equal(options.requireCurrent, true);
+      assert.equal(options.requireJob, false);
+      assert.equal(options.factory, factory);
+      return cut.result;
+    },
+  });
+  vm.runInContext(`${helperSource}\nthis.previewOnlySizeAssets = factoryPreviewOnlySizeAssets;`, context);
+
+  const assets = context.previewOnlySizeAssets(factory);
+  assert.equal(assets.length, 1);
+  assert.equal(assets[0].id, 'factory-size-1');
+  assert.equal(assets[0].previewOnly, true);
+  assert.equal(assets[0].image, 'http://127.0.0.1:5050/api/local-archive/assets/archive-size-1/image');
+  assert.equal(factory.assets.length, 0, 'preview fallback must not mutate canonical factory assets');
+
+  currentSourceKey = '';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'missing current input identity must reject the preserved result');
+  currentSourceKey = 'input-image-2';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'another input image must not reuse the preserved result');
+  currentSourceKey = 'input-image-1';
+  context.state.cuts.sizePrompts[0].sourceImageKey = '';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'missing prompt input identity must reject the preserved result');
+  context.state.cuts.sizePrompts[0].sourceImageKey = 'input-image-1';
+
+  currentProductKey = '';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'missing current product identity must reject the preserved result');
+  currentProductKey = '다른상품';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'another product must not reuse the preserved result');
+  currentProductKey = '낙지발노리개';
+  context.state.cuts.sizePrompts[0].productKey = '';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 0, 'missing prompt product identity must reject the preserved result');
+  context.state.cuts.sizePrompts[0].productKey = '낙지발노리개';
+  assert.equal(context.previewOnlySizeAssets(factory).length, 1, 'matching product and input identities restore preview access');
+
+  const cardContext = vm.createContext({
+    FACTORY_LIGHT_IMAGE_PRIORITY_LIMIT: 4,
+    factoryVisibleAssetTitle: value => value,
+    factoryAssetDisplayImage: asset => asset.image || '',
+    renderFactoryLightImage: () => '<img>',
+    escapeHtml: value => String(value ?? ''),
+    escAttr: value => String(value ?? ''),
+  });
+  const cardSource = sourceSlice(
+    core5,
+    'function renderFactoryStageResults(',
+    'function renderFactoryAssetCard(',
+  );
+  vm.runInContext(`${cardSource}\nthis.renderResults = renderFactoryStageResults;`, cardContext);
+  const cardMarkup = cardContext.renderResults({ id: 'size', label: '사이즈이미지' }, factory, assets, 0);
+  assert.match(cardMarkup, /draggable="false"/);
+  assert.match(cardMarkup, /data-factory-preview-asset="factory-size-1"/);
+  assert.match(cardMarkup, /disabled[^>]*>보기 전용<\/button>/);
+  assert.doesNotMatch(cardMarkup, /data-factory-asset-use=/);
+  assert.doesNotMatch(cardMarkup, /data-factory-send=/);
+
+  let appendedOverlay = null;
+  let keyHandler = null;
+  let confirmed = 0;
+  let sent = 0;
+  let rendered = 0;
+  const previewContext = vm.createContext({
+    document: {
+      getElementById: () => null,
+      createElement: () => ({ id: '', className: '', innerHTML: '', onclick: null, remove() {} }),
+      body: { appendChild: overlay => { appendedOverlay = overlay; } },
+      addEventListener: (type, handler) => { if (type === 'keydown') keyHandler = handler; },
+      removeEventListener() {},
+    },
+    factoryRuntimeReadFactory: () => factory,
+    factoryPreviewOnlySizeAssets: () => assets,
+    factoryPreviewableAssetImage: asset => asset?.image || '',
+    factoryStageLabel: () => '사이즈이미지',
+    renderFactoryLightImage: () => '<img>',
+    escapeHtml: value => String(value ?? ''),
+    escAttr: value => String(value ?? ''),
+    factoryLog() {},
+    factoryConfirmAssetFromPreview: () => { confirmed += 1; },
+    factorySendAssetToStage: () => { sent += 1; },
+    render: () => { rendered += 1; },
+  });
+  const previewSource = sourceSlice(
+    source('src/app-core-06.js'),
+    'function factoryOpenAssetPreview(',
+    'function factoryAutomationCustomCutPrompts(',
+  );
+  vm.runInContext(`${previewSource}\nthis.openPreview = factoryOpenAssetPreview;`, previewContext);
+  previewContext.openPreview('factory-size-1');
+  assert.ok(appendedOverlay, 'preview-only modal must render');
+  assert.match(appendedOverlay.innerHTML, /보관 원본 보기 전용/);
+  assert.doesNotMatch(appendedOverlay.innerHTML, /factoryAssetPreviewConfirm/);
+  assert.doesNotMatch(appendedOverlay.innerHTML, /factoryAssetPreviewSend/);
+  assert.equal(typeof keyHandler, 'function');
+  keyHandler({ key: 'Enter', preventDefault() {} });
+  assert.equal(confirmed, 0, 'Enter must not confirm a preview-only asset');
+  assert.equal(sent, 0, 'preview-only modal must not send an asset to another stage');
+  assert.equal(rendered, 0, 'preview-only modal must not change stage status or selection');
+  assert.equal(factory.assets.length, 0, 'preview-only interaction must not persist a canonical asset');
+});
+
 test('goal heartbeat stops quietly when its owned draft proxy has been revoked', () => {
   const core = source('src/app-core-06.js');
   let tick = null;

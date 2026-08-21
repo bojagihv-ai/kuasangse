@@ -12,6 +12,7 @@ const {
 
 const APP_URL = process.env.KUASANGSE_URL || 'http://127.0.0.1:8081/app.html';
 const CDP_URL = process.env.KUASANGSE_CDP_URL || 'http://127.0.0.1:9333';
+const BACKEND_BASE = process.env.KUASANGSE_BACKEND_BASE || process.env.KUASANGSE_BACKEND_URL || 'http://127.0.0.1:5050';
 const OUT_DIR = path.join(process.cwd(), 'output', 'debug-evidence');
 const SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-usage-ctrl-f5-persistence-v218.png');
 const RESULT_PATH = path.join(OUT_DIR, 'factory-usage-ctrl-f5-persistence-v218.json');
@@ -96,7 +97,7 @@ async function main() {
       const scopeId = getCurrentLastWorkWorkspaceScope();
       const localSession = JSON.parse(sessionStorage.getItem('pdp_session') || '{}');
       const indexedEnvelope = await workspaceGet('sessionAssets', 'workspace-envelope:' + scopeId);
-      const serverRecord = await fetch('http://127.0.0.1:5050/api/last-work?workspaceId=' + encodeURIComponent(scopeId), { cache: 'no-store' }).then(response => response.json());
+      const serverRecord = await fetch(${JSON.stringify(`${BACKEND_BASE}/api/last-work?workspaceId=`)} + encodeURIComponent(scopeId), { cache: 'no-store' }).then(response => response.json());
       return {
         projectId,
         productName,

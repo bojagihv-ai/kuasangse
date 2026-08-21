@@ -27,10 +27,16 @@ test('product intake exposes DB selection and manual image entry without raw man
     'required-origin',
     'required-size',
     'required-sale-price',
+    'required-stock',
+    'required-usage',
+    'required-option-mode',
+    'image-model-select',
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`), `${id} must be rendered`);
   }
   assert.doesNotMatch(html, /id=["']manifest-json["']/);
+  assert.doesNotMatch(html, /id=["']manual-jcode["']/);
+  assert.doesNotMatch(html, />full_auto</);
 });
 
 test('DB intake builds the exact immutable snapshot source contract', async () => {
@@ -52,12 +58,25 @@ test('DB intake builds the exact immutable snapshot source contract', async () =
   );
 });
 
-test('execution start locks the automation policy into the PDP job payload', () => {
+test('execution start locks automation policy for the factory queue without widening the PDP job contract', async () => {
   const source = fs.readFileSync(path.join(FRONTEND, 'src', 'product-intake.mjs'), 'utf8');
+  const moduleUrl = `${pathToFileURL(MODULE).href}?job=${Date.now()}-${Math.random()}`;
+  const { buildPdpJobRequest } = await import(moduleUrl);
   assert.match(source, /\/api\/automation\/policy\/snapshot/);
   assert.match(source, /policySnapshot/);
   assert.match(source, /control-tower:policy-locked/);
   assert.match(source, /cafe24ApprovalMode:\s*'existing_one_time_target_gate'/);
+  assert.match(source, /imageModel:\s*text\(document\.getElementById\('image-model-select'\)\.value\)/);
+  assert.match(source, /\/api\/factory\/jobs/);
+  assert.deepEqual(buildPdpJobRequest({
+    inputSnapshotId: 'snapshot-1',
+    idempotencyKey: 'job-snapshot-1',
+    actor: 'operator',
+  }), {
+    inputSnapshotId: 'snapshot-1',
+    idempotencyKey: 'job-snapshot-1',
+    actor: 'operator',
+  });
 });
 
 test('manual image entries require one base image and keep color images optional', async () => {
@@ -70,17 +89,28 @@ test('manual image entries require one base image and keep color images optional
   );
 
   const manifest = createManualManifest({
-    jcode: 900002,
+    jcode: '',
     productName: '신제품',
     category: '주방',
-    requiredValues: { material: '스테인리스', originCountry: '대한민국' },
-    baseImages: [{ name: '정면', fileName: 'front.png', sha256: 'abc' }],
+    requiredValues: {
+      material: '스테인리스',
+      originCountry: '대한민국',
+      stock: '99',
+      usage: '주방용',
+      optionMode: 'none',
+    },
+    baseImages: [{ name: '정면', fileName: 'front.png', sha256: 'abc', dataUrl: 'data:image/png;base64,aGVsbG8=' }],
     colorImages: [],
   });
 
   assert.equal(manifest.inputImages.length, 1);
   assert.equal(manifest.inputImages[0].role, 'base');
+  assert.equal(manifest.inputImages[0].dataUrl, 'data:image/png;base64,aGVsbG8=');
+  assert.equal(manifest.jcode, null);
   assert.equal(manifest.requiredValues.material, '스테인리스');
+  assert.equal(manifest.requiredValues.stock, '99');
+  assert.equal(manifest.requiredValues.usage, '주방용');
+  assert.equal(manifest.requiredValues.optionMode, 'none');
 
   assert.throws(
     () => createManualManifest({

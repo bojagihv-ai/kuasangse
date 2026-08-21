@@ -61,6 +61,13 @@ def test_default_backend_port_is_browser_safe_without_chrome_bypass() -> None:
     assert "explicitly-allowed-ports" not in frontend_source
 
 
+def test_frontend_dynamic_api_requests_never_reuse_stale_browser_cache() -> None:
+    # Given: 운영 화면의 공통 API 요청 경계를 준비한다.
+    frontend_source = (Path(__file__).parents[2] / "frontend" / "control-tower.html").read_text(encoding="utf-8")
+    # When/Then: 재시작 전 factory 상태가 다시 그려지지 않도록 모든 동적 요청은 browser cache를 우회해야 한다.
+    assert 'fetch(`${API_BASE}${path}`, { ...options, cache: "no-store", headers, credentials: "include" })' in frontend_source
+
+
 def test_frontend_live_css_rejects_raw_values_outside_semantic_token_root() -> None:
     # Given: production control 화면의 전체 CSS와 token root를 준비한다.
     frontend_source = (Path(__file__).parents[2] / "frontend" / "control-tower.html").read_text(encoding="utf-8")
@@ -69,7 +76,12 @@ def test_frontend_live_css_rejects_raw_values_outside_semantic_token_root() -> N
     root = re.search(r":root\s*\{(?P<body>.*?)\}", style.group("css"), flags=re.DOTALL)
     assert root is not None
     consumer_css = style.group("css")[: root.start()] + style.group("css")[root.end() :]
-    media_thresholds = re.findall(r"@media\s*\(\s*max-width:\s*(\d+px)\s*\)", consumer_css)
+    media_conditions = re.findall(r"@media\s*([^\{]+)\{", consumer_css)
+    media_thresholds = {
+        threshold
+        for condition in media_conditions
+        for threshold in re.findall(r"(?:min|max)-width:\s*(\d+px)", condition)
+    }
     css_without_media_threshold = re.sub(
         r"(@media\s*\(\s*max-width:)\s*\d+px",
         r"\1 <documented-threshold>",
@@ -95,11 +107,11 @@ def test_frontend_live_css_rejects_raw_values_outside_semantic_token_root() -> N
             "radius-card radius-circle radius-pill space-page-bottom status-dot-size status-mark-size tracking-kicker"
         ).split()
     )
-    # Then: 유일한 raw px는 주석으로 설명된 media threshold이고 나머지는 모두 의미 token을 사용해야 한다.
+    # Then: raw px는 주석으로 설명된 반응형 threshold뿐이고 나머지는 모두 의미 token을 사용해야 한다.
     assert raw_visual_values == [], f"raw visual consumer declarations: {raw_visual_values}"
     assert non_tokenized_properties == [], f"non-tokenized visual properties: {non_tokenized_properties}"
-    assert media_thresholds == ["720px"]
-    assert "CSS custom properties are not supported in media conditions; 720px is the sole raw threshold exception." in consumer_css
+    assert media_thresholds == {"720px", "721px", "960px", "1100px"}
+    assert "CSS custom properties are not supported in media conditions; use only documented 720px, 721px, 960px, and 1100px responsive thresholds." in consumer_css
     assert required_token_names <= token_names
 
 
@@ -150,7 +162,7 @@ def test_frontend_keeps_short_korean_meaning_units_together() -> None:
     # When/Then: 공통 helper와 각 의미 단위가 명시적으로 연결되어야 한다.
     assert ".keep-together" in frontend_source
     assert "white-space: nowrap;" in frontend_source
-    assert '<span class="keep-together">등록된 versioned command bridge로</span>' in frontend_source
+    assert '<span class="keep-together">생산관제에서 확정한 명령만</span>' in frontend_source
     assert '<span class="keep-together">시작하거나 종료하지 않습니다.</span>' in frontend_source
     assert '<span class="keep-together">표시 기준: 백엔드 health 응답.</span>' in frontend_source
     assert '<span class="keep-together">연결 대상 카드의 URL은 설정값이며</span>' in frontend_source
@@ -271,8 +283,8 @@ def test_allowed_local_origin_get_and_options_return_precise_cors_headers() -> N
     assert options_response.headers["Access-Control-Allow-Origin"] == allowed_origin
     assert options_response.headers["Access-Control-Allow-Methods"] == "GET, HEAD, OPTIONS"
     assert options_response.headers["Access-Control-Allow-Headers"] == "Content-Type"
-    assert "Access-Control-Allow-Credentials" not in get_response.headers
-    assert "Access-Control-Allow-Credentials" not in options_response.headers
+    assert get_response.headers["Access-Control-Allow-Credentials"] == "true"
+    assert options_response.headers["Access-Control-Allow-Credentials"] == "true"
     assert "*" not in get_response.headers.get("Access-Control-Allow-Origin", "")
 
 

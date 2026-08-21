@@ -71,3 +71,60 @@ test('candidate confirmation changes the canonical session asset fingerprint', (
     'candidate list identity must participate in the persistence boundary',
   );
 });
+
+test('new-work product identity changes the canonical session asset fingerprint', () => {
+  const source = fs.readFileSync(CORE, 'utf8');
+  const fingerprintSource = extractFunction(source, 'sessionAssetSaveFingerprint');
+  const state = {
+    productName: '',
+    currentProjectId: '',
+    currentProjectName: '',
+    step: 'factory',
+    factory: { product: {}, assets: [] },
+    analysisImages: [], sectionImages: {}, detailImageBlocks: [], sectionVariants: {},
+    aiRepairUndoStack: {}, cuts: {}, optionSorter: {}, compPage: {},
+  };
+  const context = vm.createContext({
+    IMAGE_STORED_MARKER: '__stored_in_indexeddb__',
+    state,
+    factoryRuntimeReadCommittedFactory: () => state.factory,
+  });
+  vm.runInContext(`${fingerprintSource}\n    globalThis.fingerprint = sessionAssetSaveFingerprint;\n  `, context);
+
+  const before = context.fingerprint();
+  state.productName = '새 작업 상품';
+  const after = context.fingerprint();
+
+  assert.notEqual(after, before, 'product-only edits must not reuse an empty session asset record');
+  assert.equal(JSON.parse(after).productIdentity.productName, '새 작업 상품');
+});
+
+test('option slot label and assignment changes change the canonical session asset fingerprint', () => {
+  const source = fs.readFileSync(CORE, 'utf8');
+  const fingerprintSource = extractFunction(source, 'sessionAssetSaveFingerprint');
+  const state = {
+    productName: '옵션 상품',
+    currentProjectId: '',
+    currentProjectName: '',
+    step: 'optionsorter',
+    factory: { product: {}, assets: [] },
+    analysisImages: [], sectionImages: {}, detailImageBlocks: [], sectionVariants: [],
+    aiRepairUndoStack: {}, cuts: {},
+    optionSorter: { slots: [{ id: 'slot_1', name: '1번', imgIds: [] }], images: [], optionResults: [] },
+    compPage: {},
+  };
+  const context = vm.createContext({
+    IMAGE_STORED_MARKER: '__stored_in_indexeddb__',
+    state,
+    factoryRuntimeReadCommittedFactory: () => state.factory,
+  });
+  vm.runInContext(`${fingerprintSource}\n    globalThis.fingerprint = sessionAssetSaveFingerprint;\n  `, context);
+
+  const before = context.fingerprint();
+  state.optionSorter.slots[0].name = '1.빨강';
+  state.optionSorter.slots[0].imgIds = ['img-red'];
+  const after = context.fingerprint();
+
+  assert.notEqual(after, before, 'slot labels and assignments must reach the session asset save boundary');
+  assert.deepEqual(JSON.parse(after).optionSorter.slots[0], ['slot_1', '1.빨강', ['img-red']]);
+});

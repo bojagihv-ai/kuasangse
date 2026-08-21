@@ -1,5 +1,6 @@
 export const MENU_REGISTRY = Object.freeze([
   Object.freeze({ key: 'overview', label: '개요', panelId: 'menu-panel-overview', tabId: 'menu-tab-overview' }),
+  Object.freeze({ key: 'queue', label: '작업 큐', panelId: 'menu-panel-queue', tabId: 'menu-tab-queue' }),
   Object.freeze({ key: 'input-source', label: '입력·소스', panelId: 'menu-panel-input-source', tabId: 'menu-tab-input-source' }),
   Object.freeze({ key: 'competitors', label: '경쟁사', panelId: 'menu-panel-competitors', tabId: 'menu-tab-competitors' }),
   Object.freeze({ key: 'production-acut', label: '생산·A컷', panelId: 'menu-panel-production-acut', tabId: 'menu-tab-production-acut' }),
@@ -76,6 +77,10 @@ export function menuKeyForKeyboard(key, currentKey = 'overview') {
   return '';
 }
 
+export function menuKeyForTabKeyboard(key, tabKey, currentKey = 'overview') {
+  return menuKeyForKeyboard(key, key === 'Enter' || key === ' ' ? tabKey : currentKey);
+}
+
 export function applyMenuAction(state, key) {
   const current = createMenuState(record(state).activeKey);
   return createMenuState(MENU_KEYS.includes(key) ? key : current.activeKey);
@@ -93,6 +98,7 @@ export function projectMenuBadges(projection = {}, automation = {}) {
   const policySnapshot = record(automation.snapshot);
   return {
     overview: { count: unresolvedStages + missingInputs, status: String(record(current.progress).status || (current.connected ? 'ready' : 'disconnected')) },
+    queue: { count: unresolvedStages, status: String(record(current.progress).status || (current.connected ? 'ready' : 'disconnected')) },
     'input-source': { count: missingInputs, status: missingInputs ? 'missing' : (current.connected ? 'ready' : 'disconnected') },
     competitors: { count: countCandidates(competitorInput), status: competitorInput ? 'ready' : (current.connected ? 'empty' : 'disconnected') },
     'production-acut': { count: unresolvedStages, status: unresolvedStages ? 'manual' : (current.connected ? 'completed' : 'disconnected') },
@@ -125,7 +131,7 @@ export function bindMenuShell({ documentRef = globalThis.document, onChange = ()
   for (const tab of tabs) {
     tab.addEventListener('click', () => activate(tab.dataset.menuKey, { focus: false }));
     tab.addEventListener('keydown', event => {
-      const nextKey = menuKeyForKeyboard(event.key, state.activeKey);
+      const nextKey = menuKeyForTabKeyboard(event.key, tab.dataset.menuKey, state.activeKey);
       if (!nextKey) return;
       event.preventDefault();
       activate(nextKey, { focus: event.key !== 'Enter' && event.key !== ' ' });

@@ -5,7 +5,7 @@
   const CLASSIC_RUNTIME_RESPONSE_EVENT = 'kuasangse:classic-runtime-response';
   const CLASSIC_RUNTIME_RESPONSE_TIMEOUT_MS = 5000;
   const CLASSIC_RUNTIME_HYDRATION_TIMEOUT_MS = 120000;
-  const CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS = 900000;
+  const CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS = 3600000;
   const RUNTIME_BUILD_CHECK_INTERVAL_MS = 15000;
   const loadErrors = [];
   let classicRuntimeRequestSequence = 0;
@@ -164,7 +164,7 @@
 
   function requestClassicRuntime(command, payload = null) {
     const requestId = `loader-${Date.now()}-${classicRuntimeRequestSequence += 1}`;
-    const timeoutMs = command === 'factory-cafe24-command'
+    const timeoutMs = ['factory-cafe24-command', 'factory-control-command'].includes(command)
       ? CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS
       : command === 'hydrate' || command === 'workspace-reload'
         ? CLASSIC_RUNTIME_HYDRATION_TIMEOUT_MS
@@ -317,6 +317,7 @@
           authorityNamespace.installWorkspaceLock(window, {
             reloadAccepted: accepted => requestClassicRuntime('workspace-reload', accepted),
             serverBases: workspaceAuthorityServerBases,
+            ttlMs: isBatchWorker ? 120_000 : undefined,
           });
         },
         modules: async () => {
@@ -356,7 +357,7 @@
         const workerRoot = document.getElementById('app');
         if (workerRoot) {
           workerRoot.innerHTML = `
-            <main class="batch-worker-shell" aria-live="polite">
+            <main class="batch-worker-shell" aria-live="polite" style="box-sizing:border-box;padding-inline-start:var(--space-2, 8px);padding-inline-end:var(--space-2, 8px);">
               <strong>생산관제 워커 실행 중</strong>
               <span>백그라운드 명령·상태 동기화만 수행합니다.</span>
             </main>
@@ -404,10 +405,11 @@
         });
         const workerReceipt = workerNamespace.installBatchControlWorker(window, {
           apiBase: workerApiUrl.origin,
-          workerId: `factory-worker-${buildId}`,
+          workerId: `factory-worker-${buildId}-${RUNTIME_BOOT_CACHE_TOKEN}`,
           runtimeBuildId: buildId,
           commandBridge,
           projectionBridge: factoryControlCommandBridge,
+          authorityHeartbeat: () => window.__KUASANGSE_WORKSPACE_LOCK__?.heartbeat?.(),
           fetchImpl: window.fetch.bind(window),
           setIntervalImpl: window.setInterval.bind(window),
           clearIntervalImpl: window.clearInterval.bind(window),

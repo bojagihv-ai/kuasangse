@@ -79,6 +79,12 @@ export function createRouteController({ registry, renderLifecycle, routeGate } =
 
     revision += 1;
     const navigationRevision = revision;
+    if (typeof menu.prepare === 'function') {
+      await menu.prepare(snapshot);
+      if (request !== requestSequence || disposed || navigationRevision !== revision) {
+        return Object.freeze({ ignored: true, reason: 'stale-navigation' });
+      }
+    }
     const selected = await menu.select(snapshot);
     if (request !== requestSequence || disposed || navigationRevision !== revision) {
       return Object.freeze({ ignored: true, reason: 'stale-navigation' });

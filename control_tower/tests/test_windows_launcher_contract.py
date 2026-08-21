@@ -158,6 +158,30 @@ def test_launcher_opens_the_visible_default_browser_after_readiness() -> None:
     assert "if (-not $NoBrowser)" in source
 
 
+def test_launcher_starts_the_real_factory_worker_before_opening_production_control() -> None:
+    source = _read_required(LAUNCHER_PATH)
+    start_body = source[source.index("function Invoke-StartControlTower") :]
+
+    assert 'Join-Path $RepositoryRoot "launcher.ps1"' in source
+    assert '"-WorkerOnly"' in source
+    assert "-WindowStyle Hidden" in source
+    assert start_body.index("Start-FactoryWorkerBrowser") < start_body.index("Start-ControlTowerBrowser")
+
+
+def test_launcher_waits_for_the_exact_manifest_worker_build_before_opening_control_tower() -> None:
+    source = _read_required(LAUNCHER_PATH)
+    worker_start = source.index("function Start-FactoryWorkerBrowser")
+    worker_body = source[
+        worker_start : source.index("function Stop-ManagedProcess", worker_start)
+    ]
+
+    assert 'Join-Path $RepositoryRoot "src\\runtime-manifest.json"' in source
+    assert "$factoryState.expectedWorkerBuildId -ne $ExpectedWorkerBuildId" in source
+    assert '"-ExpectedWorkerBuildId", $ExpectedWorkerBuildId' in worker_body
+    assert "-Wait" in worker_body
+    assert "$process.ExitCode -ne 0" in worker_body
+
+
 def test_launcher_requires_business_api_readiness_and_replaces_only_owned_stale_backend() -> None:
     # Given: health와 process ownership을 함께 판단하는 launcher 원문을 준비한다.
     source = _read_required(LAUNCHER_PATH)

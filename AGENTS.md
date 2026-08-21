@@ -68,6 +68,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_workspace_roo
 - 한 작업에서는 에이전트가 만든 최신 앱 탭 하나만 제어합니다. 시간 초과나 커널 재시작 뒤의 기존 탭 핸들은 재사용하거나 개별 조작하지 않고 폐기 대상으로 표시합니다.
 - 새 Chrome 탭은 `tabs.new()`로 만든 뒤 반드시 같은 탭에서 `tab.goto(url)`을 호출해 이동합니다. `tabs.new({url})`의 `about:blank` 상태나 그 뒤 selector 실패를 확장 통신 실패로 오판하지 않습니다.
 - 로드된 조립공장 화면에서는 전체 `domSnapshot()`을 요청하지 않습니다. 필요한 selector의 `count`, 짧은 텍스트, 상태 필드만 제한적으로 읽습니다.
+- `button, a`, `*`, 전체 role처럼 넓은 locator의 `evaluateAll`·목록 열거는 금지합니다. 화면 전환과 검증은 고유 ID 또는 정확한 텍스트의 한 locator, 한 상태값만 사용합니다.
 - 사용자 포인터를 움직이지 않아도 되는 로컬 앱 버튼은 고유 locator인지 확인한 뒤 `press("Enter")`로 활성화합니다. 실제 포인터 클릭은 포인터 hit-test 회귀 검증에서만 사용합니다.
 - 브라우저 명령이 시간 초과되면 같은 핸들에 재시도를 쌓지 않습니다. 연결을 새로 확인하고 새 앱 탭 하나에서 마지막 안전 checkpoint부터 재개합니다.
 - selector 실패는 먼저 `tabs.list`와 새 탭의 URL·짧은 로드 상태로 분류합니다. 이 연결 왕복이 통과하면 페이지 렌더/탭 수명 문제로 기록하고 Native Messaging·확장 미설치 문제로 보고하지 않습니다.

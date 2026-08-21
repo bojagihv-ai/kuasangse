@@ -9,24 +9,34 @@ const PROTECTED_SERVER_NOOP_REASONS = new Set([
 
 function protectedServerNoop(result, envelope, context = {}) {
   if (result?.accepted !== false || result?.keptExisting !== true || result?.protectedNoOp !== true) return null;
-  if (!PROTECTED_SERVER_NOOP_REASONS.has(String(result.reason || ''))) return null;
-  const scopeId = normalizeWorkspaceScope(result.scopeId || envelope.scopeId);
-  const revision = Number(result.revision);
-  const expectedRevision = Number(context.expectedRevision);
-  if (scopeId !== envelope.scopeId || !Number.isInteger(revision)
-    || !Number.isInteger(expectedRevision) || revision !== expectedRevision) return null;
+  const reason = String(result.reason || '');
+  if (![...PROTECTED_SERVER_NOOP_REASONS].some(value => reason === value || reason.startsWith(`${value}: `))) return null;
+  const scopeId = result.scopeId;
+  const revision = result.revision;
+  const expectedRevision = context.expectedRevision;
+  if (typeof scopeId !== 'string' || !scopeId.trim() || scopeId !== envelope.scopeId
+    || !Number.isSafeInteger(revision) || revision < 0
+    || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || revision !== expectedRevision) return null;
   return Object.freeze({
     protectedNoOp: true,
     scopeId,
     revision,
     acceptedRevision: revision,
-    reason: String(result.reason || ''),
+    reason,
   });
 }
 
 function defaultBases(root) {
   const origin = String(root.location?.origin || '').replace(/\/$/, '');
-  return [...new Set([origin, 'http://127.0.0.1:5050'].filter(Boolean))];
+  let configured = '';
+  try {
+    configured = String(root.localStorage?.getItem('gemini_backend_url') || '').trim();
+  } catch (_) {}
+  return [...new Set([
+    configured.replace(/\/$/, ''),
+    origin,
+    'http://127.0.0.1:5050',
+  ].filter(Boolean))];
 }
 
 function compactServerPersistenceEnvelope(envelope, serverSnapshot) {

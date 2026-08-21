@@ -1,10 +1,42 @@
+import { resolveWorkfileIdentity } from './workfile-identity-model.mjs?actualB=1';
+
 const text = value => String(value ?? '').trim();
+const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function workfileEventIdentity(value, classification) {
+  const identity = resolveWorkfileIdentity(value);
+  return Object.freeze({
+    ...identity,
+    workspaceId: text(identity.workspaceId || classification.file.workspaceId),
+    productKey: text(identity.productKey || classification.product.productKey),
+    runId: text(identity.runId || classification.product.runId),
+    revision: Number(identity.revision),
+  });
+}
+
+function httpUrl(value) {
+  const candidate = text(value);
+  return /^https?:\/\//i.test(candidate) ? candidate : '';
+}
 
 function element(tag, className = '', value = '') {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (value) node.textContent = value;
   return node;
+}
+
+function externalLink(label, href) {
+  const link = element('a', 'button-secondary ledger-link', label);
+  link.href = href;
+  link.target = '_blank';
+  link.rel = 'noreferrer';
+  return link;
 }
 
 function pill(value, tone = '') {
@@ -61,9 +93,8 @@ function outputStage(stage) {
     const listRoot = element('div', 'workfile-asset-list');
     for (const asset of stage.assets) {
       const row = element('div', 'workfile-asset-row');
-      const label = asset.sectionId ? `${asset.title} · ${asset.sectionId}` : asset.title;
       row.append(
-        element('span', '', label),
+        element('span', '', asset.title),
         pill(asset.selected ? 'A컷' : '후보', asset.selected ? 'ok' : ''),
       );
       listRoot.append(row);
@@ -94,7 +125,7 @@ function renderClassification(root, file, result) {
     element(
       'p',
       'status-message',
-      `${file.name} · ${fileSizeLabel(file.size)} · revision ${result.file.revision}`,
+      `${file.name} · ${fileSizeLabel(file.size)} · 저장 차수 ${result.file.revision}`,
     ),
   );
   const identity = element('div', 'workfile-identity');
@@ -110,7 +141,7 @@ function renderClassification(root, file, result) {
     document.getElementById('intake-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   identity.append(
-    pill(result.product.jcode ? `신화사 jcode ${result.product.jcode}` : '신화사 제품 미연결', result.product.jcode ? 'ok' : 'error'),
+    pill(result.product.jcode ? `신화사 품번 ${result.product.jcode}` : '신화사 제품 미연결', result.product.jcode ? 'ok' : 'error'),
     pill(result.product.runId ? '생성 run 있음' : '생성 run 없음', result.product.runId ? 'ok' : ''),
     linkStatus,
     jumpButton,
@@ -128,6 +159,44 @@ function renderClassification(root, file, result) {
     metric('상세 섹션', result.outputs.sectionCount),
   );
   root.append(metrics);
+
+  const publication = result.publication || {};
+  const publicationCard = element('article', 'factory-card publication-summary');
+  publicationCard.append(
+    element('p', 'eyebrow', 'CAFE24 RESULT REPORT'),
+    element('h3', '', 'Cafe24 등록 결과 · 작업파일에 저장된 영수증'),
+  );
+  if (publication.registered && publication.productNo) {
+    publicationCard.append(
+      pill('Cafe24 등록 완료', 'ok'),
+      element(
+        'p',
+        'card-copy',
+        `${publication.productName || result.product.name} · 상품번호 ${publication.productNo}${publication.productCode ? ` · 상품코드 ${publication.productCode}` : ''}`,
+      ),
+      element('p', 'status-message', `저장된 작업파일: ${publication.sourceWorkfileName || file.name}`),
+    );
+    const links = element('div', 'button-row');
+    const storefrontUrl = httpUrl(publication.storefrontUrl);
+    const adminUrl = httpUrl(publication.adminUrl);
+    if (storefrontUrl) links.append(externalLink('쇼핑몰 상품 보기', storefrontUrl));
+    if (adminUrl) links.append(externalLink('Cafe24 관리자 보기', adminUrl));
+    if (links.childElementCount) publicationCard.append(links);
+    publicationCard.append(
+      element(
+        'p',
+        'status-message',
+        `옵션 그룹 ${publication.optionGroupCount}개 · 옵션값 ${publication.optionValueCount}개 · 조합 ${publication.variantCount}개`,
+      ),
+    );
+  } else {
+    publicationCard.append(
+      pill('Cafe24 등록 영수증 없음', 'warning'),
+      element('p', 'status-message', '이 .kuasangse 파일에는 Cafe24 등록 결과가 저장되어 있지 않습니다.'),
+      element('p', 'status-message', '생산관제의 Cafe24 등록 회차와 파일을 먼저 연결한 뒤 저장해야 이 영역에 상품번호와 바로가기가 남습니다.'),
+    );
+  }
+  root.append(publicationCard);
 
   const lanes = element('div', 'workfile-lanes');
   const inputLane = element('section', 'factory-card workfile-lane');
@@ -183,7 +252,7 @@ function renderClassification(root, file, result) {
   const linkDetail = element(
     'strong',
     '',
-    result.product.jcode ? `신화사 제품 ${result.product.jcode} 연결을 확인하고 있습니다.` : '신화사 제품 연결이 필요합니다.',
+    result.product.jcode ? `신화사 품번 ${result.product.jcode} 연결을 확인하고 있습니다.` : '신화사 제품 연결이 필요합니다.',
   );
   linkDetail.id = 'workfile-link-detail';
   next.append(
@@ -193,7 +262,7 @@ function renderClassification(root, file, result) {
       'status-message',
       result.product.jcode
         ? '아래 대량 제품 투입에서 같은 제품을 자동 검색합니다. 검색 결과와 작업파일 제품명이 맞는지 확인한 뒤 컨베이어에 투입하세요.'
-        : '아래 대량 제품 투입에서 제품명이나 jcode를 검색해 이 작업파일과 연결할 제품을 선택하세요.',
+        : '아래 대량 제품 투입에서 제품명이나 신화사 품번을 검색해 이 작업파일과 연결할 제품을 선택하세요.',
     ),
   );
   if (result.warnings.length) {
@@ -237,8 +306,9 @@ export function mountWorkfileIntake() {
       return;
     }
     setImportStatus(`${file.name} 읽는 중 · ${fileSizeLabel(file.size)}`);
+    const sourcePromise = file.text();
     worker = new Worker(new URL('./workfile-intake-worker.mjs', import.meta.url), { type: 'module' });
-    worker.addEventListener('message', event => {
+    worker.addEventListener('message', async event => {
       const message = event.data || {};
       if (message.type === 'progress') {
         setImportStatus(
@@ -260,12 +330,22 @@ export function mountWorkfileIntake() {
         `${message.result.product.name} 분류 완료${followUpCount ? ` · 보완 필요 ${followUpCount}건` : ' · 생산 준비 완료'} · Input ${message.result.inputs.images.length}장 · Output ${message.result.outputs.totalAssetCount}개`,
         followUpCount ? 'warning' : 'ok',
       );
-      window.dispatchEvent(new CustomEvent('control-tower:workfile-classified', {
-        detail: {
-          fileName: file.name,
-          classification: message.result,
-        },
-      }));
+      try {
+        const workfileText = await sourcePromise;
+        const value = JSON.parse(workfileText);
+        window.dispatchEvent(new CustomEvent('control-tower:workfile-classified', {
+          detail: {
+            fileName: file.name,
+            file,
+            workfileText,
+            sha256: await sha256Hex(workfileText),
+            identity: workfileEventIdentity(value, message.result),
+            classification: message.result,
+          },
+        }));
+      } catch (error) {
+        setImportStatus(`${file.name} 연결 신원 확인 실패 · ${text(error?.message || error)}`, 'error');
+      }
       stopWorker();
     });
     worker.addEventListener('error', () => {
@@ -286,14 +366,14 @@ export function mountWorkfileIntake() {
         : '제품 연결 완료 · 원장 보완 필요';
       linkStatus.dataset.tone = detail.ready ? 'ok' : 'warning';
       linkDetail.textContent = detail.ready
-        ? `${detail.productName} (jcode ${detail.jcode}) 선택 완료. 작업파일 제품명과 맞는지 확인한 뒤 컨베이어에 투입하세요.`
-        : `${detail.productName} (jcode ${detail.jcode}) 연결 완료. 원장 누락·경고를 먼저 보완하세요.`;
+        ? `${detail.productName} (신화사 품번 ${detail.jcode}) 선택 완료. 작업파일 제품명과 맞는지 확인한 뒤 컨베이어에 투입하세요.`
+        : `${detail.productName} (신화사 품번 ${detail.jcode}) 연결 완료. 원장 누락·경고를 먼저 보완하세요.`;
       return;
     }
     linkStatus.textContent = detail.status === 'not_found' ? '신화사 제품 검색 결과 없음' : '신화사 제품 연결 실패';
     linkStatus.dataset.tone = 'error';
     linkDetail.textContent = detail.status === 'not_found'
-      ? `jcode ${detail.jcode} 검색 결과가 없습니다. 대량 제품 투입에서 제품을 직접 찾아 연결하세요.`
+      ? `신화사 품번 ${detail.jcode} 검색 결과가 없습니다. 대량 제품 투입에서 제품을 직접 찾아 연결하세요.`
       : '신화사 제품 연결 중 오류가 발생했습니다. 대량 제품 투입에서 다시 검색하세요.';
   };
 

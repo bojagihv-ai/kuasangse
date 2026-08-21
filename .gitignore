@@ -46,6 +46,21 @@ test-results/
 NUL
 *.log
 
+# 대용량 로컬 디버그 산출물 (VM 디스크 이미지 등). 실수로 커밋되면 저장소가 GB 단위로 불어난다.
+.debug-artifacts/
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.codegraph/
+
+# 루트에 쌓이는 수동 QA 스크린샷·산출물
+production-control-*.png
+task-*-manual-qa-*.png
+task-*-performance-surface-qa.html
+local-competitor-controls-*.png
+test-results-*.txt
+output.csv
+
 # Temporary, corrupted, and backup files
 *.bak
 *.backup

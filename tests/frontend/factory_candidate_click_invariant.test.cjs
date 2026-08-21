@@ -218,8 +218,13 @@ test('candidate review cards stay within a narrow DB panel without horizontal sc
   assert.match(html, /\.factory-candidate-card-top\{[^}]*grid-template-columns:24px 64px minmax\(0,1fr\)/);
   assert.match(html, /\.factory-candidate-actions\{[^}]*min-width:0/);
   assert.match(html, /\.factory-candidate-actions \.btn-sm\{[^}]*flex:1 1 120px/);
+  assert.match(html, /\[data-factory-cafe24-oauth\]\{[^}]*word-break:keep-all/);
+  assert.match(html, /@media\(max-width:900px\)\{[\s\S]{0,2400}?\.factory-candidate-review\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(html, /@media\(max-width:480px\)\{[\s\S]{0,1200}?\.factory-candidate-card-top\{[^}]*grid-template-columns:48px minmax\(0,1fr\)/);
+  assert.match(html, /@media\(max-width:480px\)\{[\s\S]{0,1400}?\.factory-candidate-text\{[^}]*grid-row:1\s*\/\s*span 2/);
   assert.match(html, /@media\(max-height:640px\)\{[\s\S]{0,1000}?\.main\{padding-bottom:152px\}/);
   assert.match(html, /@media\(max-height:640px\)\{[\s\S]{0,1000}?\.work-identity-float\{[^}]*top:calc\(var\(--token-bar-height\) \+ var\(--space-2\)\)[^}]*bottom:auto/);
+  assert.match(html, /@media\(max-height:640px\)\{[\s\S]{0,1000}?\.work-identity-float\{[^}]*left:var\(--space-2\);right:auto/);
   assert.match(html, /--work-identity-short-width:190px/);
   assert.match(html, /\.work-identity-copy\{[^}]*gap:var\(--work-identity-copy-gap\)/);
 });

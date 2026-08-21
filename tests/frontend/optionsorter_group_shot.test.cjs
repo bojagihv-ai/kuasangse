@@ -90,6 +90,140 @@ test('group-shot state defaults to all source colors and normalizes stale custom
   assert.equal(normalized.optionGroupShotRunning, false);
 });
 
+test('compact archive-backed option source keeps its durable restore marker', () => {
+  const sandbox = {
+    uid: prefix => `${prefix}_1`,
+    clampOptionSheetCount: value => Number(value || 2),
+    clampOptionSheetPixels: value => Number(value || 1246),
+    optSyncSlotCountToImages() {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext([
+    extractFunction(APP_CORE_02, 'defaultOptionSorterState'),
+    extractFunction(APP_CORE_02, 'normalizeOptionSorterState'),
+  ].join('\n'), sandbox);
+
+  const normalized = sandbox.normalizeOptionSorterState({
+    ...sandbox.defaultOptionSorterState(),
+    images: [{
+      id: 'source-1',
+      archiveId: 'archive-source-1',
+      imageUrl: '/api/local-archive/assets/archive-source-1/image',
+      imagePersistence: 'session-recent-inline',
+      localArchive: { archiveId: 'archive-source-1', saved: true },
+    }],
+  });
+
+  assert.equal(normalized.images.length, 1);
+  assert.equal(normalized.images[0].archiveId, 'archive-source-1');
+  assert.equal(normalized.images[0].imagePersistence, 'local-archive-url');
+});
+
+test('legacy same-work snapshot with mapped options reopens the matching stage', () => {
+  // Given: an older snapshot kept the initial screen marker although matching work exists.
+  const sandbox = {
+    uid: prefix => `${prefix}_1`,
+    clampOptionSheetCount: value => Number(value || 2),
+    clampOptionSheetPixels: value => Number(value || 1246),
+    optSyncSlotCountToImages() {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext([
+    extractFunction(APP_CORE_02, 'defaultOptionSorterState'),
+    extractFunction(APP_CORE_02, 'normalizeOptionSorterState'),
+  ].join('\n'), sandbox);
+
+  // When: the legacy same-work state is normalized during hydration.
+  const normalized = sandbox.normalizeOptionSorterState({
+    ...sandbox.defaultOptionSorterState(),
+    images: [{ id: 'red' }],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['red'] }],
+    optionResults: [{ id: 'result_1', imageUrl: '/saved-result.png' }],
+    subStep: 'input',
+  });
+
+  // Then: the richer matching stage is shown instead of hiding completed work.
+  assert.equal(normalized.subStep, 'sort');
+});
+
+test('newer explicit image-change request keeps the option input stage', () => {
+  // Given: the user explicitly chose to return to the image input stage after matching.
+  const sandbox = {
+    uid: prefix => `${prefix}_1`,
+    clampOptionSheetCount: value => Number(value || 2),
+    clampOptionSheetPixels: value => Number(value || 1246),
+    optSyncSlotCountToImages() {},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext([
+    extractFunction(APP_CORE_02, 'defaultOptionSorterState'),
+    extractFunction(APP_CORE_02, 'normalizeOptionSorterState'),
+  ].join('\n'), sandbox);
+
+  // When: the explicitly timestamped input state is normalized.
+  const normalized = sandbox.normalizeOptionSorterState({
+    ...sandbox.defaultOptionSorterState(),
+    images: [{ id: 'red' }],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['red'] }],
+    optionResults: [{ id: 'result_1', imageUrl: '/saved-result.png' }],
+    subStep: 'input',
+    subStepUpdatedAt: 200,
+  });
+
+  // Then: automatic recovery does not override the user's newer explicit choice.
+  assert.equal(normalized.subStep, 'input');
+});
+
+test('same-work merge does not let an older input marker hide the matching stage', () => {
+  // Given: the current tab is in matching, while a thin incoming snapshot still says input.
+  const sandbox = {
+    optionSorterSlotNameIsGeneric: value => /^\d+번$/.test(String(value || '').trim()),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFunction(APP_CORE_02, 'mergeOptionSorterStoredImages'), sandbox);
+
+  // When: same-work option state is merged.
+  const merged = sandbox.mergeOptionSorterStoredImages({
+    images: [{ id: 'red' }],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['red'] }],
+    optionResults: [{ id: 'result_1' }],
+    subStep: 'sort',
+    subStepUpdatedAt: 100,
+  }, {
+    images: [{ id: 'red' }],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['red'] }],
+    optionResults: [{ id: 'result_1' }],
+    subStep: 'input',
+  });
+
+  // Then: the older stage marker cannot hide the matching workspace.
+  assert.equal(merged.subStep, 'sort');
+  assert.equal(merged.subStepUpdatedAt, 100);
+});
+
+test('same archived option source keeps one image identity across archive and snapshot restore', () => {
+  const sandbox = {
+    optionSorterSlotNameIsGeneric: value => /^\d+번$/.test(String(value || '').trim()),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(extractFunction(APP_CORE_02, 'mergeOptionSorterStoredImages'), sandbox);
+
+  const merged = sandbox.mergeOptionSorterStoredImages({
+    images: [{ id: 'oi_archive_1', archiveId: 'archive-1', imageUrl: '/archive-1' }],
+    pool: ['oi_archive_1'],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['oi_archive_1'] }],
+  }, {
+    images: [{ id: 'oi_saved_1', archiveId: 'archive-1', imageUrl: '/archive-1' }],
+    pool: ['oi_saved_1'],
+    slots: [{ id: 'slot_1', name: '1.빨강', imgIds: ['oi_saved_1'] }],
+  });
+
+  assert.deepEqual(Array.from(merged.images, image => image.id), ['oi_archive_1']);
+  assert.deepEqual(Array.from(merged.pool), ['oi_archive_1']);
+  assert.deepEqual(Array.from(merged.slots[0].imgIds), ['oi_archive_1']);
+  assert.equal(merged.images[0].imagePersistence, 'local-archive-url');
+});
+
 test('group-shot generation is one result archived as options and linked to hero', () => {
   // Given/When: inspect the production generation and archive path.
   const generator = extractFunction(APP_CORE_06, 'optGenerateOptionGroupShot');

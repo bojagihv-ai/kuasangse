@@ -108,6 +108,7 @@ export function createPersistenceCommitEngine({ adapters, authorityRuntime, oper
             clean: true,
             partial: false,
             protectedNoOp: true,
+            reason: String(serverOutcome.reason || ''),
             acceptedRevision: Number(serverOutcome.acceptedRevision ?? serverOutcome.revision) || 0,
             envelope,
             failures: [],

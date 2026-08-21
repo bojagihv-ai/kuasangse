@@ -6,15 +6,21 @@ const { URL } = require('node:url');
 
 const API_PORT = Number(process.env.CONTROL_TOWER_QA_API_PORT || 19062);
 const FRONTEND_PORT = Number(process.env.CONTROL_TOWER_QA_FRONTEND_PORT || 19082);
+const JOB_COUNT = Math.min(200, Math.max(2, Number(process.env.CONTROL_TOWER_QA_JOB_COUNT || 2)));
+const ACTIVE_PRODUCT_B = process.env.CONTROL_TOWER_QA_ACTIVE_PRODUCT === 'B';
 const FRONTEND = path.resolve(__dirname, '../../frontend');
 const requests = [];
 const sseClients = new Set();
 const selectionCommands = [];
+const resumeCommands = [];
+const rebindCommands = [];
 const pendingTimers = new Set();
 let eventId = 41;
 let sourceSequence = 41;
 let revision = 9;
 let approvalIssued = false;
+let productBRebound = false;
+let productBResumed = false;
 const workBundleId = '965fe15f-88de-4b61-9421-e1ee29eeb58f';
 const automationDecisions = [];
 const policySnapshots = [];
@@ -59,8 +65,8 @@ let stages = [
   stage('size', 'size-a', 5),
   stage('option_color', 'option_color-a', 6),
   stage('general', 'general-a', 7),
-  stage('sections', 'sections-a', 5),
-  stage('final_detail', 'final_detail-a', 3),
+  stage('sections', '', 5),
+  stage('final_detail', '', 3),
 ];
 
 const roleByStage = {
@@ -100,7 +106,9 @@ const workBundle = () => ({
       displayName: `${stageValue.key} 계약 후보 ${index + 1}`,
       sourceChecksum: candidate.digest,
       selectionState: stageValue.selectedId === candidate.id ? 'selected' : 'candidate',
-      thumbnailReference: `/api/pdp/work-bundles/${workBundleId}/assets/${encodeURIComponent(candidate.assetId)}/thumbnail`,
+      thumbnailReference: stageValue.key === 'final_detail' && index === 2
+        ? '/api/assets/missing/final-detail-3.svg'
+        : `/api/pdp/work-bundles/${workBundleId}/assets/${encodeURIComponent(candidate.assetId)}/thumbnail`,
       version: 1,
     }))),
   ],
@@ -119,7 +127,7 @@ const products = count => Array.from({ length: count }, (_, index) => ({
   },
 }));
 
-const projection = fixtureCount => ({
+const projectionA = fixtureCount => ({
   schema: 'factory-control-projection:v1',
   capabilityVersion: 'factory-control-command:v1',
   cursor: String(sourceSequence),
@@ -179,7 +187,7 @@ const projection = fixtureCount => ({
   registration: {
     status: 'approval_required',
     blockers: [],
-    jobId: 'job-qa-2994',
+    jobId: 'factory-job-qa-2994',
     batchId: 'batch-qa-13',
     productId: 'cafe24:2994',
     productKey: '방울수저집',
@@ -198,10 +206,61 @@ const projection = fixtureCount => ({
   products: fixtureCount ? products(fixtureCount) : [],
 });
 
+const projectionB = fixtureCount => ({
+  schema: 'factory-control-projection:v1',
+  capabilityVersion: 'factory-control-command:v1',
+  cursor: String(sourceSequence),
+  sequence: sourceSequence,
+  connected: true,
+  status: productBResumed ? 'connected' : 'blocked',
+  blockReason: productBResumed ? '' : 'approved_workfile_required',
+  capturedAt: new Date().toISOString(),
+  session: {
+    workspaceId: 'qa:other-workspace',
+    productId: 'cafe24:3102',
+    productKey: '미니 데스크 오거나이저 B',
+    runId: productBRebound ? 'run-b-87' : 'run-b-old',
+    inputFingerprint: 'sha256:other-input',
+    revision: productBRebound ? 87 : 20,
+    workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
+  },
+  inputs: [{ key: 'requirements', count: 3, missing: ['recommended_use'], items: [] }],
+  stages: [stage('option_color', '', 2), stage('final_detail', '', 2)],
+  progress: {
+    stageKey: 'option_color',
+    stageLabel: '옵션·색상',
+    percent: productBResumed ? 52 : 48,
+    elapsedMs: 22400,
+    mode: 'manual',
+    status: productBResumed ? 'running' : 'blocked',
+    message: productBResumed ? '승인된 작업파일로 생산 재개됨' : '승인된 작업파일 연결 필요',
+  },
+  registration: {
+    status: productBResumed ? 'approval_required' : 'blocked',
+    blockers: productBResumed ? [] : ['approved_workfile_required'],
+    jobId: 'job-qa-3102',
+    batchId: 'batch-qa-13',
+    productId: 'cafe24:3102',
+    productKey: '미니 데스크 오거나이저 B',
+    categoryId: '71',
+    htmlDigest: 'sha256:b-html',
+    imageDigests: [],
+    selling: 'F',
+    display: 'F',
+    market_sync: 'F',
+  },
+  receipts: [],
+  products: fixtureCount ? products(fixtureCount) : [],
+});
+
+const projection = fixtureCount => ACTIVE_PRODUCT_B ? projectionB(fixtureCount) : projectionA(fixtureCount);
+
 const json = (response, status, payload, extra = {}) => {
   response.writeHead(status, {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': `http://127.0.0.1:${FRONTEND_PORT}`,
+    'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Headers': 'Content-Type, X-Control-Tower-CSRF, X-Control-Tower-Session',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Content-Type': 'application/json; charset=utf-8',
     ...extra,
   });
@@ -395,6 +454,71 @@ const api = http.createServer(async (request, response) => {
     requestedFixtureCount = fixtureCount;
     return json(response, 200, projection(fixtureCount));
   }
+  if (url.pathname === '/api/factory/jobs' && request.method === 'GET') {
+    const jobs = [
+      {
+        schema: 'factory-product-job:v1',
+        jobId: 'factory-job-qa-2994',
+        batchId: 'batch-qa-13',
+        sourceKind: 'sinhwa-db',
+        productName: '방울수저집',
+        workfileName: '방울수저집.kuasangse',
+        jcode: '2994',
+        mode: 'manual',
+        status: 'waiting_manual',
+        stageKey: 'sections',
+        message: '섹션 A컷 선택 대기',
+        decisionStatus: 'waiting_manual',
+        imageCount: 7,
+        attempts: 1,
+        checkpointAvailable: true,
+      },
+      {
+        schema: 'factory-product-job:v1',
+        jobId: 'job-qa-3102',
+        batchId: 'batch-qa-13',
+        sourceKind: 'direct',
+        productName: '긴 한글 제품명 검증용 미니 데스크 오거나이저 B',
+        workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
+        jcode: '3102',
+        mode: 'auto',
+        status: productBResumed ? 'running' : 'blocked',
+        stageKey: productBResumed ? 'final_detail' : 'option_color',
+        message: productBResumed
+          ? '승인된 작업파일로 생산 재개됨'
+          : productBRebound
+            ? '승인 파일 연결 완료 · 작업 재개 대기'
+            : '승인된 작업파일 연결 필요',
+        decisionStatus: productBResumed ? 'running' : productBRebound ? 'resume_required' : 'blocked',
+        imageCount: 11,
+        attempts: 2,
+        checkpointAvailable: true,
+      },
+    ];
+    for (let index = 3; index <= JOB_COUNT; index += 1) {
+      jobs.push({
+        schema: 'factory-product-job:v1',
+        jobId: `job-qa-${index}`,
+        batchId: 'batch-qa-13',
+        sourceKind: index % 2 ? 'sinhwa-db' : 'direct',
+        productName: `대량 생산 제품 ${String(index).padStart(3, '0')}`,
+        workfileName: `대량 생산 제품 ${String(index).padStart(3, '0')}.kuasangse`,
+        jcode: String(3000 + index),
+        mode: index % 3 ? 'auto' : 'manual',
+        status: index % 5 ? 'queued' : 'completed',
+        stageKey: index % 5 ? 'representative' : 'final_detail',
+        message: index % 5 ? '생산 대기' : '생산 완료',
+        decisionStatus: index % 5 ? 'queued' : 'completed',
+        imageCount: index % 12,
+        attempts: 0,
+        checkpointAvailable: index % 5 === 0,
+      });
+    }
+    return json(response, 200, {
+      jobs,
+      total: jobs.length,
+    });
+  }
   if (url.pathname === '/api/pdp/work-bundles' && request.method === 'GET') {
     const bundle = workBundle();
     return json(response, 200, {
@@ -416,11 +540,15 @@ const api = http.createServer(async (request, response) => {
     url.pathname.startsWith(`/api/pdp/work-bundles/${workBundleId}/assets/`)
     && url.pathname.endsWith('/thumbnail')
   ) {
+    if (decodeURIComponent(url.pathname).includes('asset:final_detail:3')) {
+      return json(response, 404, { error: { code: 'qa_broken_thumbnail' } });
+    }
     return thumbnail(response, decodeURIComponent(url.pathname.split('/').at(-2)));
   }
   if (url.pathname === '/api/factory/events') {
     response.writeHead(200, {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': `http://127.0.0.1:${FRONTEND_PORT}`,
+      'Access-Control-Allow-Credentials': 'true',
       'Cache-Control': 'no-cache',
       'Content-Type': 'text/event-stream; charset=utf-8',
       Connection: 'keep-alive',
@@ -434,7 +562,120 @@ const api = http.createServer(async (request, response) => {
   if (url.pathname === '/api/factory/refresh' && request.method === 'POST') {
     return json(response, 202, { accepted: true, order: { command: { kind: 'factory-control', name: 'getFactoryProjection' } } });
   }
-  if (url.pathname === '/api/factory/a-cuts/select' && request.method === 'POST') {
+  if (url.pathname === '/api/factory/jobs/job-qa-3102/workfile-rebind' && request.method === 'POST') {
+    const payload = await body(request);
+    const workfileText = String(payload.workfileText || '');
+    const workfileTextSha256 = crypto.createHash('sha256').update(workfileText).digest('hex');
+    rebindCommands.push({
+      ...payload,
+      workfileText: undefined,
+      workfileTextLength: workfileText.length,
+      workfileTextSha256,
+    });
+    const valid = payload.expectedWorkspaceId === 'qa:other-workspace'
+      && payload.expectedProductId === 'cafe24:3102'
+      && payload.expectedProductKey === '미니 데스크 오거나이저 B'
+      && payload.expectedRunId === 'run-b-87'
+      && payload.expectedInputFingerprint === 'sha256:other-input'
+      && payload.expectedWorkfileRevision === 20
+      && payload.expectedHydratedWorkfileRevision === 87
+      && payload.expectedCheckpointRevision === 20
+      && payload.expectedCheckpointRunId === 'run-b-old'
+      && workfileText.trim().length > 0
+      && /^[a-f0-9]{64}$/u.test(String(payload.expectedSha256 || ''))
+      && payload.expectedSha256 === workfileTextSha256;
+    if (!valid) return json(response, 409, { error: { code: 'factory_workfile_rebind_identity_mismatch' } });
+    const timer = setTimeout(() => {
+      pendingTimers.delete(timer);
+      productBRebound = true;
+      sourceSequence += 1;
+      sendEvent(eventPayload('factory.product.checkpoint.rebound', {
+        receipt: {
+          schema: 'factory-product-checkpoint-rebind-receipt:v1',
+          jobId: 'job-qa-3102',
+          oldRevision: 20,
+          oldRunId: 'run-b-old',
+          newRevision: 87,
+          newRunId: 'run-b-87',
+        },
+        job: {
+          jobId: 'job-qa-3102',
+          productName: '긴 한글 제품명 검증용 미니 데스크 오거나이저 B',
+          workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
+          mode: 'manual',
+          status: 'blocked',
+          stageKey: 'option_color',
+          message: '승인 파일 연결 완료 · 작업 재개 대기',
+          decisionStatus: 'resume_required',
+          checkpointAvailable: true,
+        },
+      }));
+    }, 350);
+    pendingTimers.add(timer);
+    return json(response, 202, {
+      accepted: true,
+      status: 'queued',
+      job: { jobId: 'job-qa-3102', status: 'blocked', stageKey: 'option_color', checkpointAvailable: true },
+    });
+  }
+  if (url.pathname === '/api/factory/jobs/job-qa-3102/resume' && request.method === 'POST') {
+    const payload = await body(request);
+    resumeCommands.push(payload);
+    if (!productBRebound || payload.expectedCheckpointRevision !== 87 || payload.expectedCheckpointRunId !== 'run-b-87') {
+      return json(response, 409, { error: { code: 'factory_product_checkpoint_stale' } });
+    }
+    const timer = setTimeout(() => {
+      pendingTimers.delete(timer);
+      productBResumed = true;
+      sourceSequence += 1;
+      sendEvent(eventPayload('factory.product.updated', {
+        projection: projection(0),
+        job: {
+          jobId: 'job-qa-3102',
+          productName: '긴 한글 제품명 검증용 미니 데스크 오거나이저 B',
+          workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
+          mode: 'manual',
+          status: 'running',
+          stageKey: 'final_detail',
+          checkpointAvailable: true,
+        },
+      }));
+    }, 350);
+    pendingTimers.add(timer);
+    return json(response, 202, {
+      accepted: true,
+      status: 'queued',
+      job: { jobId: 'job-qa-3102', status: 'blocked', stageKey: 'option_color', checkpointAvailable: true },
+    });
+  }
+  if (url.pathname === '/api/factory/jobs/factory-job-qa-2994/resume' && request.method === 'POST') {
+    const payload = await body(request);
+    resumeCommands.push(payload);
+    if (
+      payload.expectedCheckpointRevision !== revision
+      || payload.expectedCheckpointRunId !== 'run-qa-13'
+    ) {
+      return json(response, 409, { error: { code: 'factory_product_checkpoint_stale' } });
+    }
+    return json(response, 202, {
+      accepted: true,
+      status: 'queued',
+      job: {
+        jobId: 'factory-job-qa-2994',
+        productName: '방울수저집',
+        workfileName: '방울수저집.kuasangse',
+        mode: 'manual',
+        status: 'waiting_manual',
+        stageKey: 'final_detail',
+        checkpointAvailable: true,
+      },
+    });
+  }
+  if (
+    (url.pathname === '/api/factory/a-cuts/select'
+      || url.pathname === '/api/factory/jobs/factory-job-qa-2994/select')
+    && request.method === 'POST'
+  ) {
     const payload = await body(request);
     selectionCommands.push(payload);
     if (
@@ -506,6 +747,9 @@ const api = http.createServer(async (request, response) => {
         command: { kind: 'factory-control', version: 'factory-control-command:v1', name: 'selectFactoryACut' },
       },
     });
+  }
+  if (url.pathname === '/api/assets/thumbnail/final_detail-3.svg') {
+    return json(response, 404, { error: { code: 'qa_broken_thumbnail' } });
   }
   if (url.pathname.startsWith('/api/assets/thumbnail/')) return thumbnail(response, path.basename(url.pathname, '.svg'));
   if (url.pathname.includes('/content')) return json(response, 500, { error: 'original_content_must_not_be_requested' });
@@ -588,8 +832,11 @@ const api = http.createServer(async (request, response) => {
     return json(response, 200, {
       requests,
       factoryStateRequests: requests.filter(item => item.path === '/api/factory/state').length,
+      factoryJobsRequests: requests.filter(item => item.path === '/api/factory/jobs').length,
       sseConnections: requests.filter(item => item.path === '/api/factory/events').length,
       selectionCommands,
+      resumeCommands,
+      rebindCommands,
       originalContentRequests: requests.filter(item => item.path.includes('/content')).length,
       thumbnailRequests: requests.filter(item => item.path.includes('/thumbnail/')).length,
       activeSseClients: sseClients.size,

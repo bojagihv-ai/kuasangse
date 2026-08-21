@@ -56,7 +56,6 @@ export function createOptionSorterMenu(capabilities = {}) {
   });
   const onEnter = () => {
     lifecycle.onEnter();
-    restoreArchivedSourceImages().catch(reportError);
   };
   return createOptionSorterContract({
     getSnapshot,
@@ -73,6 +72,7 @@ export function createOptionSorterMenu(capabilities = {}) {
       }
       bind(root || activeBinding.root);
     },
+    prepare: restoreArchivedSourceImages,
     onEnter,
     onLeave: lifecycle.onLeave,
   });

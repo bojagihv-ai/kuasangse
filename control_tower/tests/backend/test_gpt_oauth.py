@@ -49,9 +49,19 @@ def test_evidence_bundle_deduplicates_exact_and_near_duplicates() -> None:
     assert [item["candidateId"] for item in bundle["candidateRefs"]] == ["a", "d"]
 
 
+def test_evidence_bundle_rejects_all_untrusted_input_references() -> None:
+    candidates = [candidate("a", "digest-a")]
+    with pytest.raises(GptOAuthError, match="evidence_input_reference_invalid"):
+        build_evidence_bundle([{"inputId": "input-a", "accessToken": "fixture-only"}], candidates)
+    with pytest.raises(GptOAuthError, match="evidence_input_reference_invalid"):
+        build_evidence_bundle([{"inputId": {"secret": "fixture-only"}}], candidates)
+    with pytest.raises(GptOAuthError, match="evidence_input_reference_invalid"):
+        build_evidence_bundle([{"inputId": "fixture-token-hidden-in-allowed-field"}], candidates)
+
+
 def test_judge_returns_schema_bound_receipt_without_secrets() -> None:
     transport, calls = fake_transport_factory(valid_judgement())
-    receipt = GptOAuthJudge(request_fn=transport).judge(decision_type="representative_a_cut", input_refs=[{"inputId": "input-a"}], candidates=[candidate("candidate-a", "digest-a")])
+    receipt = GptOAuthJudge(request_fn=transport).judge(decision_type="representative_a_cut", input_refs=[], candidates=[candidate("candidate-a", "digest-a")])
     assert receipt["receipt"]["judgement"]["selectedCandidateId"] == "candidate-a"
     assert receipt["receipt"]["judgement"]["scoreGap"] == 0.21
     assert receipt["receipt"]["evidence"]["candidateRefs"][0]["candidateId"] == "candidate-a"

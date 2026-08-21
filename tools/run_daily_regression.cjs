@@ -12,6 +12,8 @@ const {
 
 const ROOT = path.resolve(__dirname, '..');
 const PROFILE_RANK = { fast: 0, daily: 1, full: 2 };
+const DETAIL_04_FIXTURE_MANIFEST_PATH = path.join(ROOT, 'tests', 'fixtures', 'detail-04', 'manifest.json');
+const DETAIL_04_SOURCE_IMAGE_REL = 'output/local-archive/workfiles/draft_lastwork_mrj2stm7_g44a9b__28f7940b4c65/assets/슬라브나비수저집/factory_work_run_mrlatnkr_mwj9f6/4314552_9j_4UFYRXhpZgAASUkqAAgAAAAMAA8BAgAGAAAAngAAABABAgAPAAAAp/section-images/section_competitive_edge/160540_비교_우위_(Competitive_Edge)_섹션_결과_section_archive_co/image.jpg';
 
 function argumentValue(name, fallback = '') {
   const index = process.argv.indexOf(name);
@@ -79,6 +81,83 @@ function retriesDisabled() {
     || ['1', 'true', 'yes', 'on'].includes(String(process.env.KUASANGSE_DISABLE_RETRY || '').toLowerCase());
 }
 
+function sha256(filePath) {
+  return require('node:crypto').createHash('sha256').update(fs.readFileSync(filePath)).digest('hex').toUpperCase();
+}
+
+function samePath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function taskOwnedRuntimeRoot(root, runDir) {
+  if (!String(root || '').trim() || !String(runDir || '').trim()) {
+    throw new Error('DETAIL-04 fixture requires an explicit task-owned runtime root');
+  }
+  const resolvedRoot = path.resolve(root);
+  const expectedRoot = path.resolve(runDir, 'task-owned-runtime');
+  if (samePath(resolvedRoot, ROOT) || !samePath(resolvedRoot, expectedRoot)) {
+    throw new Error(`invalid DETAIL-04 task-owned runtime root: ${resolvedRoot}`);
+  }
+  return resolvedRoot;
+}
+
+function taskOwnedPath(root, relativePath, label) {
+  const resolved = path.resolve(root, ...String(relativePath || '').split('/'));
+  if (resolved === root || !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`invalid DETAIL-04 ${label}: ${relativePath}`);
+  }
+  return resolved;
+}
+
+function prepareDetail04Fixture({
+  root,
+  runDir,
+  fixtureRoot = path.dirname(DETAIL_04_FIXTURE_MANIFEST_PATH),
+  env = process.env,
+} = {}) {
+  if (String(env.KUASANGSE_TASK_OWNED_RUNTIME || '') !== '1') {
+    throw new Error('DETAIL-04 fixture requires KUASANGSE_TASK_OWNED_RUNTIME=1');
+  }
+  const runtimeRoot = taskOwnedRuntimeRoot(root, runDir);
+  const manifestPath = path.join(fixtureRoot, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (
+    manifest.schema !== 'kuasangse.detail-04.fixture.v1'
+    || manifest.targetRelativePath !== DETAIL_04_SOURCE_IMAGE_REL
+    || !/^[A-F0-9]{64}$/.test(String(manifest.fixtureSha256 || ''))
+    || manifest.sourceArchiveSha256 !== manifest.fixtureSha256
+  ) {
+    throw new Error(`invalid DETAIL-04 fixture manifest: ${manifestPath}`);
+  }
+  const sourcePath = taskOwnedPath(fixtureRoot, manifest.fixtureRelativePath, 'fixture path');
+  const targetPath = taskOwnedPath(runtimeRoot, manifest.targetRelativePath, 'target path');
+  const sourceFixtureSha256 = sha256(sourcePath);
+  if (sourceFixtureSha256 !== manifest.fixtureSha256) {
+    throw new Error(`DETAIL-04 fixture SHA-256 mismatch: ${sourcePath}`);
+  }
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(sourcePath, targetPath);
+  fs.chmodSync(targetPath, 0o444);
+  const copiedFixtureSha256 = sha256(targetPath);
+  if (copiedFixtureSha256 !== manifest.fixtureSha256) {
+    throw new Error(`DETAIL-04 copied fixture SHA-256 mismatch: ${targetPath}`);
+  }
+  const receipt = {
+    schema: 'kuasangse.detail-04.isolated-fixture.v1',
+    targetRelativePath: manifest.targetRelativePath,
+    sourceFixtureSha256,
+    copiedFixtureSha256,
+    readOnly: true,
+  };
+  fs.writeFileSync(path.join(runDir, 'detail04-fixture-manifest.json'), `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+  return receipt;
+}
+
+function prepareTaskOwnedDailyFixture({ runDir, runtime, env = process.env } = {}) {
+  if (String(env.KUASANGSE_TASK_OWNED_RUNTIME || '') !== '1') return null;
+  return prepareDetail04Fixture({ root: runtime?.runtimeRoot, runDir, env });
+}
+
 function safeTimestamp(date = new Date()) {
   return date.toISOString().replace(/[:.]/g, '-');
 }
@@ -142,20 +221,24 @@ const STATIC_CONTENT_TYPES = Object.freeze({
   '.webp': 'image/webp',
 });
 
-function staticFileForRequest(requestUrl) {
+function staticFileForRequest(requestUrl, runtimeRoot = '') {
   const pathname = decodeURIComponent(new URL(requestUrl || '/', 'http://127.0.0.1').pathname)
     .replace(/\\/g, '/');
   const relativePath = pathname.replace(/^\/+/, '') || 'app.html';
+  if (runtimeRoot && relativePath.startsWith('output/local-archive/')) {
+    const runtimeFile = taskOwnedPath(runtimeRoot, relativePath, 'static archive path');
+    if (fs.existsSync(runtimeFile)) return runtimeFile;
+  }
   const filePath = path.resolve(ROOT, relativePath);
   if (filePath !== ROOT && !filePath.startsWith(`${ROOT}${path.sep}`)) return null;
   return filePath;
 }
 
-async function startTaskOwnedStaticServer(runDir, requestedPort = 0) {
+async function startTaskOwnedStaticServer(runDir, requestedPort = 0, runtimeRoot = '') {
   const stdout = fs.createWriteStream(path.join(runDir, 'task-owned-daily-frontend.out.log'));
   const stderr = fs.createWriteStream(path.join(runDir, 'task-owned-daily-frontend.err.log'));
   const server = http.createServer((request, response) => {
-    const filePath = staticFileForRequest(request.url);
+    const filePath = staticFileForRequest(request.url, runtimeRoot);
     if (!filePath) {
       response.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Forbidden');
@@ -229,12 +312,17 @@ async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePor
   const stateRoot = path.join(runtimeRoot, 'state');
   fs.mkdirSync(archiveRoot, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
+  const detail04Fixture = prepareTaskOwnedDailyFixture({
+    runDir,
+    runtime: { runtimeRoot },
+    env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
+  });
   const requestedFrontendPort = process.env.KUASANGSE_DAILY_FRONTEND_PORT
     ? servicePort('KUASANGSE_DAILY_FRONTEND_PORT', 0)
     : 0;
   const services = [];
   try {
-    const frontend = await startTaskOwnedStaticServer(runDir, requestedFrontendPort);
+    const frontend = await startTaskOwnedStaticServer(runDir, requestedFrontendPort, runtimeRoot);
     services.push(frontend);
     const frontendPort = frontend.port;
     const appUrl = `http://127.0.0.1:${frontendPort}/app.html`;
@@ -248,6 +336,8 @@ async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePor
     KUASANGSE_CDP_BASE_PORT: String(selectedCdpBasePort),
     KUASANGSE_LOCAL_ARCHIVE_FOLDER: archiveRoot,
     KUASANGSE_LOCAL_STATE_FOLDER: stateRoot,
+    KUASANGSE_TASK_OWNED_RUNTIME: '1',
+    KUASANGSE_DETAIL_04_RUNTIME_ROOT: runtimeRoot,
   };
   delete env.SSL_CERT_FILE;
     services.push(startService('task-owned-daily-backend', pythonExe, ['backend/app.py'], {
@@ -264,7 +354,7 @@ async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePor
     process.stdout.write(
       `[daily-runtime] frontend=${appUrl} backend=${apiBase} archive=${archiveRoot} state=${stateRoot}\n`,
     );
-    return { services, env };
+    return { services, env, runtimeRoot, detail04Fixture };
   } catch (error) {
     await stopServices(services);
     throw error;
@@ -476,6 +566,7 @@ async function main() {
   const selectedCdpBasePort = await findAvailableCdpBasePort(steps.length);
   const runtime = await startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePort);
   const results = [];
+  const detail04Fixture = runtime.detail04Fixture;
   try {
     for (let index = 0; index < steps.length; index += 1) {
       const beforeStep = compareRuntimeSourceSnapshots(
@@ -512,6 +603,7 @@ async function main() {
     finishedAt: finishedAt.toISOString(),
     runtimeSourceSnapshot: sourceBaseline,
     runtimeSourceDigest: runtimeSourceDigest(sourceBaseline),
+    detail04Fixture,
     summary: {
       total: results.length,
       passed,
@@ -544,5 +636,9 @@ module.exports = {
   findAvailableCdpBasePort,
   isBrowserStep,
   isRetryableInfrastructureFailure,
+  prepareDetail04Fixture,
+  prepareTaskOwnedDailyFixture,
+  startTaskOwnedDailyServices,
   startTaskOwnedStaticServer,
+  stopServices,
 };

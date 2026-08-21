@@ -143,6 +143,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('RUNTIME-BUILD-01', '공통/실행 기준', '구버전 탭 클릭 차단·새 빌드 적용 게이트', 'tests/frontend/runtime_build_stale_guard.test.cjs', 'fast'),
     nodeFile('RUNTIME-BUILD-03', '공통/실행 기준', 'ESM 런타임 모듈 변경의 build ID·캐시 무효화', 'tests/frontend/runtime_bundle_build_id.test.cjs', 'fast'),
     nodeFile('ANALYSIS-LLM-01', 'AI 분석 연동', '모델 설정 저장·경쟁사 분석 LLM 선택 계약', 'tests/frontend/competitor_analysis_model_selection.test.cjs', 'fast'),
+    nodeFile('MARKET-ANALYZE-01', '4 경쟁사', '분석 시작 실패 시 분석 중 고착 해제·실행 직전 OAuth 재확인', 'tests/frontend/competitor_analyze_start_failure_recovery.test.cjs', 'fast'),
     nodeFile('DETAIL-05', '6 상세페이지', '일괄 생성 실행 예정 기준·방식 가시성', 'tests/frontend/section_batch_execution_preview.test.cjs', 'fast'),
     nodeFile('DETAIL-06', '6 상세페이지', '섹션 2장 병렬 실행·로컬 아카이브 이미지 주소', 'tests/frontend/section_batch_parallel_archive_url.test.cjs', 'fast'),
     nodeFile('DETAIL-07', '6 상세페이지', '지시문 반영 재생성 버튼 이벤트 전파', 'tests/frontend/preview_instruction_regeneration.test.cjs', 'fast'),
@@ -161,6 +162,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('DB-13', '4 경쟁사', '격리 Chrome 후보 실제 선택·반복 해제·PSD 탭 브랜치 격리·VM 상세수집 활성화', 'tools/verify_factory_competitor_candidate_pointer_v588.cjs'),
     nodeFile('DB-11', '1 제품/DB', '신화사DB API Hub 전용 후보·상세 요청은 PDP 인증 상태와 분리', 'tests/frontend/sinhwa_api_hub_only_contract.test.cjs', 'fast'),
     nodeFile('DB-12', '1 제품/DB', '후보 수집 임시 복제본의 중복 DB 탭 렌더 방지', 'tests/frontend/factory_db_render_coalescing.test.cjs', 'fast'),
+    nodeTestPattern('DB-15', '1 제품/DB', 'OAuth 확인 뒤 두 번째 후보 재수집 busy 잠금 해제', 'tests/frontend/factory_db_render_coalescing.test.cjs', '^DB-15:'),
     {
       id: 'ARCH-LIFECYCLE-01', area: '공통/구조', title: '메뉴·탭 listener와 disposer 독립 수명주기', tier: 'fast',
       command: process.execPath,
@@ -295,6 +297,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('PERF-03', '공통/성능', 'VM 후보 폴링은 DB 화면을 전체 다시 그리지 않음', 'tools/verify_factory_vm_poll_render_stability_cdp_v002.cjs'),
     nodeFile('GENERATE-01', '2~6 생성 공정', '생성 중·완료·실패 상태 전이', 'tools/verify_factory_generation_status_cdp_v119.cjs'),
     nodeFile('GENERATE-02', '3 필수값/5 생성', '완료 사이즈 결과의 후보 확정 후 보존·확대·선택', 'tools/verify_factory_size_preview_confirm_cdp_v545.cjs'),
+    nodeTestPattern('GENERATE-03', '3 필수값/5 생성', 'canonical 자산에서 빠진 보존 사이즈컷 원본 확대', 'tests/frontend/factory_size_vm_latency_regression.test.cjs', '^GENERATE-03:'),
     nodeFile('PERF-01', '공통/성능', '96개 후보 렌더·메모리 기준', 'tools/measure_factory_perf_cdp_v79.cjs'),
     nodeFile('SAVE-01', '7 저장/내보내기', '로컬 아카이브 비삭제 보존', 'tools/verify_local_archive_preservation_v123.cjs'),
     nodeFile('SAVE-02', '7 저장/내보내기', '작업파일 저장·열기 전체 상태', 'tools/verify_factory_project_file_cdp_v84.cjs'),

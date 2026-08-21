@@ -57,9 +57,42 @@ def _snapshot_digest(value: JsonObject) -> str:
 
 
 def validate_policy_snapshot(snapshot: Mapping[str, object]) -> None:
+    if set(snapshot) != {
+        "snapshotVersion",
+        "batchId",
+        "productId",
+        "preset",
+        "resolved",
+        "effectiveSources",
+        "precedence",
+        "locked",
+        "snapshotId",
+    }:
+        raise PolicyError("policy_snapshot_invalid")
     snapshot_id = snapshot.get("snapshotId")
     if snapshot.get("locked") is not True or not isinstance(snapshot_id, str):
         raise PolicyError("policy_snapshot_unlocked")
+    resolved = snapshot.get("resolved")
+    effective_sources = snapshot.get("effectiveSources")
+    if (
+        snapshot.get("snapshotVersion") != 2
+        or not isinstance(snapshot.get("batchId"), str)
+        or not str(snapshot["batchId"]).strip()
+        or not isinstance(snapshot.get("productId"), str)
+        or not str(snapshot["productId"]).strip()
+        or snapshot.get("preset") not in {*POLICY_PRESETS, "custom"}
+        or not isinstance(resolved, dict)
+        or set(resolved) != set(DECISION_POINT_IDS)
+        or any(mode not in POLICY_MODES for mode in resolved.values())
+        or not isinstance(effective_sources, dict)
+        or set(effective_sources) != set(DECISION_POINT_IDS)
+        or any(
+            source not in {"stage", "product", "batch", "batch_preset", "auto_default"}
+            for source in effective_sources.values()
+        )
+        or snapshot.get("precedence") != ["stage", "product", "batch", "batch_preset", "auto_default"]
+    ):
+        raise PolicyError("policy_snapshot_invalid")
     unsigned = dict(snapshot)
     del unsigned["snapshotId"]
     if snapshot_id != f"policy:{_snapshot_digest(unsigned)}":

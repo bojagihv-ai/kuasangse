@@ -73,6 +73,7 @@ test('ARCH-PERSISTENCE-01: browser persistence primitive는 승인된 authority�
     'src/modules/workspace-lock.mjs',
     'src/modules/persistence/indexeddb-driver.mjs',
     'src/modules/persistence/session-storage-adapter.mjs',
+    'src/modules/persistence/server-last-work-adapter.mjs',
     'src/modules/persistence/workfile-adapter.mjs',
   ]);
   const fetchAllowed = new Set([

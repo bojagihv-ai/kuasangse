@@ -286,8 +286,10 @@ test('async hydration keeps the starting workspace scope until the response is a
   assert.ok(backupStart >= 0 && backupEnd > backupStart, 'product image backup hydrate body is required');
   const backupBody = core02.slice(backupStart, backupEnd);
   assert.match(serverBody, /const requestedScopeId = getCurrentLastWorkWorkspaceScope\(\)/);
-  assert.match(serverBody, /scopeId:\s*hydrateScopeId/);
-  assert.match(serverBody, /lastWorkSnapshotMatchesWorkspaceScope\(snapshot, hydrateScopeId\)/);
+  assert.match(serverBody, /const restoreScopeId = documentScopeId \|\| hydrateScopeId/);
+  assert.match(serverBody, /scopeId:\s*restoreScopeId/);
+  assert.match(serverBody, /lastWorkSnapshotMatchesWorkspaceScope\(snapshot, restoreScopeId\)/);
+  assert.match(serverBody, /workspaceHydrationScopeIsCurrent\(\s*hydrateScopeId/);
   assert.match(assetBody, /const hydrateScopeId = getCurrentLastWorkWorkspaceScope\(\)/);
   assert.match(assetBody, /workspaceGetSessionAssets\(hydrateScopeId\)/);
   assert.match(assetBody, /expectedWorkspaceScope:\s*hydrateScopeId/);

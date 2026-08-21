@@ -15,12 +15,22 @@ test('launcher keeps healthy 8081 and 5050 services running', () => {
 });
 
 test('launcher foregrounds the normal detail page and keeps the live batch worker minimized', () => {
-  assert.match(launcher, /\$ControlTowerBase\s*=\s*'http:\/\/127\.0\.0\.1:5062'/);
+  assert.match(launcher, /\$ControlTowerBase\s*=\s*'http:\/\/127\.0\.0\.1:' \+ \$ControlTowerPort/);
   assert.match(launcher, /\[uri\]::EscapeDataString\(\$ControlTowerBase\)/);
   assert.match(launcher, /\$NormalAppUrl\s*=\s*'http:\/\/127\.0\.0\.1:8081\/app\.html'/);
   assert.match(launcher, /\$WorkerAppUrl\s*=\s*'http:\/\/127\.0\.0\.1:8081\/app\.html\?batchWorker=1&controlTowerBase=/);
   assert.match(launcher, /Start-Process -FilePath \$Chrome -ArgumentList @\('--new-window', '--start-minimized', \$WorkerAppUrl\)/);
   assert.match(launcher, /Start-Process -FilePath \$Chrome -ArgumentList @\('--new-window', \$NormalAppUrl\)/);
+});
+
+test('worker-only launch never opens the normal editor', () => {
+  assert.match(launcher, /param\([\s\S]*\[switch\]\$WorkerOnly[\s\S]*\)/);
+  assert.match(launcher, /if \(-not \$WorkerOnly\) \{[\s\S]*Start-Process -FilePath \$Chrome -ArgumentList @\('--new-window', \$NormalAppUrl\)/);
+  assert.match(launcher, /if \(\$sachyApiOk\) \{[\s\S]*sachyosangse API \(4000\) already running/);
+  assert.match(launcher, /\[string\]\$ExpectedWorkerBuildId/);
+  assert.match(launcher, /\$factoryState\.expectedWorkerBuildId -eq \$ExpectedWorkerBuildId/);
+  assert.match(launcher, /\$factoryState\.workerSession\.buildId -eq \$ExpectedWorkerBuildId/);
+  assert.match(launcher, /if \(-not \$workerReady\) \{[\s\S]*exit 1/);
 });
 
 test('launcher starts Sinhwa Hub first and injects the encrypted service key into backend child only', () => {

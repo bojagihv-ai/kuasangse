@@ -18,6 +18,8 @@ Pretendard와 Noto Sans KR을 사용한다. 제목은 18-26px 범위에서 굵�
 ## 4. 간격과 레이아웃
 기본 간격은 8px 단위로 잡는다. 주요 패널은 12-16px padding, 큰 섹션은 16-20px padding을 사용한다. 화면 높이가 작아도 오른쪽 메인 스크롤로 모든 기능에 도달해야 하며, 컨트롤 바는 줄바꿈을 허용한다.
 
+생산관제 작업자 콘솔은 `--operator-queue-min` 19rem, `--operator-stage-min` 7rem을 사용한다. 대기열은 최소 19rem을 유지하고 나머지 너비를 현재 작업에 배분하며, 공정 관문은 최소 7rem 단위로 자동 줄바꿈한다. 720px 이하에서는 한 열로 바뀐다.
+
 ## 5. 컴포넌트
 - `factory-section`: 큰 작업 단위 카드
 - `factory-card`: 단계 또는 보조 패널
@@ -41,11 +43,18 @@ Pretendard와 Noto Sans KR을 사용한다. 제목은 18-26px 범위에서 굵�
 - `factory-sync-bar`: 거절된 정적 I/O 카드 scaffold를 대체하는 조립공장 연결 헤더다. 등록된 `factory-control-command:v1` projection과 control-tower SSE만 사용해 session 연결 여부, capability version, productKey, run, revision, 마지막 event 시각을 표시한다. `다시 연결`은 cursor 이후 SSE를 재개하고 `새로고침`은 versioned worker snapshot 명령만 큐에 넣는다. 연결이 끊기면 마지막 값을 성공처럼 유지하지 않고 `blocked / factory_session_missing`을 표시한다.
 - `io-progress-map`: 현재 factory projection의 `inputs[]`, `stages[]`, `progress`만으로 Input과 Output 상태를 압축해 보여주는 master 영역이다. Input은 제품·DB/수동 입력, requirements 불변 snapshot, 기본·색상·옵션 이미지와 이름, 전략·정책을 실제 count/missing으로 표시한다. Output은 대표·사이즈·옵션/색상·일반 컷·섹션 변형·최종 상세 단계의 실제 후보 수와 선택 A컷을 표시한다. 단계 진행률·현재 단계·경과·자동/수동·차단·실패·완료는 factory event 값이며 시간 추정이나 planned 카드로 만들지 않는다.
 - `a-cut-contact-sheet`: 선택한 실제 Output 단계의 후보 참조만 보여주는 detail 영역이다. 한 페이지에 최대 24개만 렌더링하고 thumbnail URL은 `loading="lazy"`로 불러오며 원본·로컬 보관함을 스캔하지 않는다. `보기`는 inspector 대상만 바꾸고 A컷을 변경하지 않는다. 명시적 `A컷 선택`만 productId/productKey/stageKey/candidateId/run/fingerprint/revision/idempotencyKey를 묶은 versioned command를 전송하며, saving → receipt/revision → selected 순서를 지킨다.
+- `production-result-workbench`: 완료 작업 이력은 파일명 카드 목록이 아니라 상세페이지 프로그램의 15개 제작 순서로 읽는다. 데스크톱에서는 왼쪽 sticky 공정 레일에 1~7 생산 단계를 두고, `섹션` 결과는 `01 헤더·대표 → 02 훅 사진 → 03 핵심 특징 → 04 상세 스펙 → … → 15 CTA 푸터`의 큰 이미지 그룹으로 렌더한다. `최종 상세`는 실제 최종 선택 보관본 중 상세 섹션 자산만 같은 순서로 연결 미리보기로 보여주되, 새로 합성된 최종 이미지라고 주장하지 않는다. 원본 파일명·보관 정보는 카드의 보조 정보와 확대보기에서만 보이며, 이미지를 누르면 기존 확대 dialog를 연다. 완료 이력에서는 live 후보 contact sheet와 inspector를 중복 렌더하지 않고, 기존 보관 자산 전체는 페이지/접힘 목록으로 계속 접근 가능해야 한다. 좁은 화면에서는 sticky를 해제해 공정 레일·결과·보관 목록을 한 문서 흐름으로 쌓고 주 스크롤 하나로 끝까지 도달한다.
 - `artifact-inspector`: contact sheet에서 본 후보의 asset id, digest, source, model, confidence, rationale, generation receipt를 간결하게 표시하는 inspector다. 데스크톱에서는 문서 흐름 안의 sticky 보조 열, 좁은 화면에서는 contact sheet 아래 일반 블록으로 쌓인다. `다음 미결정`은 후보가 있으나 selectedId가 없는 다음 stage로 이동하고 키보드 focus도 해당 작업면으로 옮긴다.
 - `automation-policy-matrix`: `full_auto`를 기본 preset으로 사용하되 신화사 DB, Cafe24, 5개 경쟁 마켓, 필수값, 대표·사이즈·옵션/색상·일반·섹션·최종 A컷 판단을 각각 배치/제품/단계에서 `auto|manual|inherit`로 제어한다. 유효값은 `stage > product > batch > batch_preset > auto_default` 순서와 출처를 함께 표시하고 실행 시작 시 `policySnapshotId`, `resolved`, `effectiveSources`, `locked=true`인 불변 snapshot으로 PDP job에 저장한다. snapshot 이후 UI 변경은 진행 중 실행에 소급 적용하지 않는다.
 - 자동 판단은 API Hub의 `chatgpt_login_oauth` 상태와 `/api/llm/options`, `/api/gpt-oauth/exec`만 사용한다. 화면은 API 응답의 model/reasoning/service tier를 표시하며 기본은 latest model·`medium`·`standard`다. 후보가 정확히 하나면 모델을 호출하지 않고 후보 집합 digest가 있는 결정론적 receipt를 만들며, 복수 후보는 first/recent/random fallback 없이 단일 판단 또는 dual review를 수행한다. dual 불일치나 임계값 미달은 `waiting_manual`로 worker를 반납하고 다음 자동 제품을 진행한다.
 - 모든 자동 판단 receipt는 후보 ID/digest 집합, 선택 ID, rationale, model, reasoning, service tier, confidence/threshold/hold reason, policy snapshot, product/run/fingerprint/revision/event identity를 포함해 기존 신화사 PDP decision API로 저장한다. 생산관제 SQLite나 브라우저 저장소는 판단 원장으로 사용하지 않는다. A컷 자동 판단이 확정되면 기존 `selectFactoryACut` worker command로만 저장하고, Cafe24는 기존 일회 승인 target gate와 F/F/F versioned bridge를 재사용한다. 승인 token이 없거나 stale/tampered이면 `approval_required`에서 멈추며 자동 우회하지 않는다.
 - `factory-registration-panel`: 모든 필수 Input과 단계별 A컷이 확정된 뒤 기존 Task15 Cafe24 preflight/one-time approval/versioned execution bridge를 그대로 연결한다. productId/productKey/categoryId/htmlDigest/imageDigests, F/F/F, idempotencyKey, approval token 상태, remote readback/publication receipt를 표시하고 정확한 blocker를 나열한다. 실행은 고정된 승인 대상, 일회 token, 별도 확인 체크와 최종 확인을 모두 통과해야 하며 UI는 sender나 승인 gate를 중복 구현하지 않는다.
+- `operator-console-shell`: 개요 첫 화면을 `제품 대기열 → 현재 조립 제품 → 실제 공정선 → 지금 할 일` 순서로 읽는 작업자 콘솔이다. 서버·토폴로지 설명 카드는 개요에서 제거하고 `감사·동기화`의 접힌 진단 영역으로 이동한다. 데스크톱에서는 대기열 1열과 현재 작업 2열의 비대칭 grid, 좁은 화면에서는 대기열·현재 작업·행동 순으로 한 열에 쌓이며 문서 루트만 세로 스크롤한다.
+- `operator-queue-row`: 전체 제품 작업을 접지 않고 순서, 제품명, 입력 출처, 자동/수동 모드, 현재 공정, 실제 상태로 표시한다. 현재 조립공장 projection과 jobId가 같은 행만 활성 상태로 강조하고, 대기·차단·완료를 색만으로 구분하지 않고 한국어 상태 문구를 함께 둔다.
+- `operator-queue-row`의 정책 요약은 실행용 후보 생성 모드가 아니라 잠긴 `policySnapshot.resolved`를 기준으로 `직접 선택 N공정`과 현재 공정의 자동·수동 상태를 보여준다. 수동 A컷 대기 행의 기본 행동은 `컷 고르기`이며, 선택 저장 뒤에만 동일 작업을 재개한다.
+- `workfile-job-tab-strip`: durable `productJobs`를 PSD 문서 탭처럼 전환하는 가로 `reel`이다. `role=tablist/tab/tabpanel`, roving `tabindex`, Arrow/Home/End를 사용하며 탭은 제품·작업파일, 현재 공정, 자동/수동, 상태, 실제 누락 필수값 수, 선택/남은 공정 수를 표시한다. `active`는 현재 보고 있는 작업, `linked`는 exact identity와 현재 checkpoint가 일치한 작업, `rebind_required`는 exact stable identity는 같지만 승인 작업파일의 run/revision이 다른 차단 작업, `target_rebind_required`는 productId가 없는 파일을 사용자가 특정 작업 탭에서 다시 골랐고 workspace/productKey/fingerprint와 새 run/revision/SHA가 정확히 검증되어 별도 연결 승인을 기다리는 상태, `unlinked`와 `ambiguous`는 각각 일치 없음과 복수 일치로 표시한다. 자동 연결은 productId까지 모두 있는 exact identity만 허용하고, `target_rebind_required`도 `선택한 … 작업에 이 파일 연결 승인`을 명시적으로 누르기 전에는 어떤 변경 요청도 보내지 않는다. 탭·대기열 행 전환은 보기 상태만 바꾸고 hydrate/rebind/resume/save를 호출하지 않으며, 명시적 연결 승인과 `작업 재개`만 기존 command 경계를 사용한다. 가로 탭 띠만 자체 가로 스크롤을 소유하고 세로 스크롤은 문서 root 하나가 소유한다.
+- `operator-stage-line`: 제품·입력, 대표, 사이즈, 옵션·색상, 일반컷, 섹션, 최종 상세, Cafe24의 여덟 관문을 실제 projection과 등록 상태로만 표시한다. `완료`, `진행 중`, `선택 필요`, `대기`, `차단`을 단계별로 읽을 수 있어야 하며 후보 수나 selectedId가 없는 단계를 추정 완료로 올리지 않는다.
+- `operator-now-card`: 현재 상태에서 작업자가 해야 할 행동 하나를 가장 높은 우선순위로 제시한다. 제품이 없으면 `제품 투입`, `waiting_manual`이면 해당 A컷 선택, `blocked`이면 재실행, 실행 중이면 관찰, 생산 완료 뒤에는 Cafe24 사전점검·승인으로 연결한다. 버튼은 기존 메뉴와 기존 command 함수만 호출하고 별도 실행 경로를 만들지 않는다.
 - `workfile-report-ledger`: `.kuasangse` 작업파일 하나를 한 카드로 표시하고 마지막 완료 단계, 멈춘 단계, 섹션 수, Cafe24 등록 상품번호·링크·등록 원본·후속 보정 파일을 함께 보여준다. 리포트는 현재 편집 작업과 분리된 읽기 전용 화면이며, 읽기 전용 작업파일을 연 상태에서도 조회·새로고침·리포트 폴더 열기가 가능해야 한다. 카드 안에 별도 세로 스크롤을 만들지 않고 작은 화면에서는 요약과 행동을 세로로 쌓아 앱의 맨 오른쪽 주 스크롤로 모두 도달하게 한다.
 
 ### 생산관제 factory API 동기화 계약
@@ -57,7 +66,7 @@ Pretendard와 Noto Sans KR을 사용한다. 제목은 18-26px 범위에서 굵�
 - 100개와 200개 제품은 기존 virtual queue 또는 최대 15개 API page를 유지한다. 후보 contact sheet는 최대 24개 thumbnail metadata만 DOM에 두고, 모든 영역은 별도 주요 세로 스크롤 없이 문서 루트의 오른쪽 스크롤바 하나로 도달한다.
 
 ### Task 13 메뉴 shell 계약
-- `menu-shell`: 생산관제의 7개 메뉴를 `개요`, `입력·소스`, `경쟁사`, `생산·A컷`, `자동판단`, `Cafe24`, `감사·동기화`로 고정한다. 메뉴 registry가 key, label, tab, panel을 한 번만 정의하고 API projection을 복제하지 않는다.
+- `menu-shell`: 생산관제의 8개 메뉴를 `개요`, `작업 큐`, `입력·소스`, `경쟁사`, `생산·A컷`, `자동판단`, `Cafe24`, `감사·동기화`로 고정한다. `작업 큐`는 여러 제품의 순서·입력 출처·현재 공정·잠긴 자동/수동 정책·필요한 선택을 행 목록으로 보여주며, 메뉴 registry가 key, label, tab, panel을 한 번만 정의하고 API projection을 복제하지 않는다.
 - `menu-tab`: `role=tablist` 안에서 `role=tab`, `aria-selected`, `aria-controls`, roving `tabindex`를 사용한다. 클릭과 Arrow/Home/End/Enter/Space 키보드 동작은 같은 active key를 갱신하며 활성 메뉴만 패널을 표시한다.
 - `menu-panel`: `role=tabpanel`과 `hidden`을 사용해 비활성 기능을 문서 흐름과 렌더 트리에서 숨긴다. 기능을 삭제하지 않으며 상태 store/SSE 수명은 메뉴 전환과 독립적이다. 모든 패널의 길이는 문서 root `main.page` 오른쪽 scrollbar로 도달한다.
 - `persistent-sync-bar`: header에 current product/job, factory session, capability, stage, percent, elapsed, revision, SSE cursor, reconnect/refresh를 계속 표시한다. 연결·진행 값은 실제 factory projection/event에서만 갱신하고 메뉴를 바꿔도 유지한다.
@@ -73,3 +82,13 @@ Pretendard와 Noto Sans KR을 사용한다. 제목은 18-26px 범위에서 굵�
 
 ## 7. 금지 사항
 기존 동작을 새 로직으로 갈아엎지 않는다. 자동화 화면은 기존 기능을 호출하는 지휘판이어야 하며, 옵션표/이미지컷/Cafe24/마켓플러스 세부 구현을 중복 작성하지 않는다.
+
+## 8. 생산관제 작업자 콘솔 설계 상태
+
+- 현재 목표: 개발 상태 설명용 화면이 아니라, 한 명의 생산 작업자가 여러 제품을 투입하고 현재 멈춘 공정과 다음 행동을 즉시 찾아 조립공장을 끝까지 운영하는 화면으로 만든다.
+- 주요 사용자: 상품 자료를 직접 입력하거나 신화사 DB에서 선택하는 실무자. 코드·API 용어를 몰라도 제품 순서, 현재 공정, 수동 선택 필요 여부, Cafe24 승인 전 차단 사유를 읽을 수 있어야 한다.
+- 핵심 여정: `제품 투입 → 큐 등록 → 조립 시작 → 단계별 생성/선택 → 최종 상세 → Cafe24 사전점검/일회 승인`이다. 첫 화면은 이 순서를 실제 상태로 요약하고 세부 메뉴는 해당 작업면으로 이동하는 용도다.
+- 인지·접근성 제약: 한국어 단어 보존, 상태의 색상 외 텍스트 병기, 44px 행동 영역, 키보드 focus-visible, 진행률의 숫자 read-back, 긴 제품명/오류문의 `overflow-wrap`, reduced-motion, 375px 한 열 재배치가 필수다.
+- 시각 방향: 기존 어두운 콘솔 토큰을 유지하되 동일 크기 카드의 나열을 없앤다. 활성 제품은 accent wash와 왼쪽 상태선으로, 지금 할 일은 가장 밝은 계층으로, 진단 정보는 접힌 보조 계층으로 분리한다. 장식용 가짜 통계·가짜 진행·아이콘 이모지는 사용하지 않는다.
+- 검증 기준: 빈 큐, 실행 중, 수동 선택 대기, 차단, 완료/Cafe24 승인 필요 상태를 실제 또는 격리 projection으로 각각 렌더하고 375/768/1280px에서 주 스크롤 하나, 버튼 도달성, 긴 한국어 제품명, 키보드 이동을 확인한다.
+- 허용된 부채: 외부 Cafe24 실등록은 비용·부작용이 있으므로 자동 시각 회귀에서 실행하지 않는다. UI는 승인 게이트와 사전점검 상태까지만 검증하고 실제 외부 등록은 사용자의 별도 명시 승인 후 확인한다.

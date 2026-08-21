@@ -208,6 +208,7 @@ test('protected richer-server no-op stops before IndexedDB and replicas without 
   assert.equal(result.accepted, true);
   assert.equal(result.clean, true, JSON.stringify(result));
   assert.equal(result.protectedNoOp, true);
+  assert.equal(result.reason, 'incoming snapshot has no competitor analysis result');
   assert.equal(result.acceptedRevision, 1);
   assert.equal(Object.values(adapters).every(item => item.writes.length === 0), true);
 });
@@ -809,6 +810,32 @@ test('restore rejects a higher-revision legacy local candidate without fence or 
 
   assert.equal(restored.source, 'server');
   assert.equal(restored.snapshot.source, 'current-server');
+});
+
+test('server restore accepts the requested project snapshot while the live tab holds its draft branch authority', async () => {
+  const { createWorkspacePersistence } = await loadGateway();
+  const adapters = Object.fromEntries(['session', 'indexeddb', 'server', 'workfile', 'archive']
+    .map(name => [name, adapter(name)]));
+  adapters.server.writes.push({
+    scopeId: 'project:alpha',
+    snapshot: { source: 'authoritative-project-option-labels' },
+    metadata: {
+      operationId: 'project-restore',
+      revision: { scopeId: 'project:alpha', counter: 2, updatedAt: 2, writerId: 'server' },
+    },
+  });
+  const authority = {
+    snapshot: () => ({
+      scopeId: 'draft:alpha-branch', leaseId: '', fencingToken: 0,
+      revision: 0, mode: 'offline-edit',
+    }),
+  };
+  const gateway = createWorkspacePersistence({ adapters, authority });
+
+  const restored = await gateway.restore({ scopeId: 'project:alpha', sources: ['server'] });
+
+  assert.equal(restored.source, 'server');
+  assert.equal(restored.snapshot.source, 'authoritative-project-option-labels');
 });
 
 test('restore still allows a legacy local candidate for an offline draft without fencing metadata', async () => {

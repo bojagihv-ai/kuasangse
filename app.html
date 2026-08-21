@@ -112,8 +112,9 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .db-workfile-current{grid-column:2;grid-row:1;min-width:0;text-align:center;padding:4px 10px 2px}
 .db-workfile-kicker{font-size:10px;font-weight:950;color:var(--primary-h);line-height:1.2}
 .db-workfile-name{margin-top:2px;font-size:28px;font-weight:950;line-height:1.1;color:var(--text);white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:break-word;word-break:keep-all}
-.db-workfile-name-base,.db-workfile-name-ext{display:inline-block;max-width:100%}
-.db-workfile-name-base{overflow-wrap:break-word;word-break:keep-all}
+.db-workfile-name-base{display:inline;max-width:100%;overflow-wrap:break-word;word-break:keep-all}
+.db-workfile-name-tail{display:inline-block;white-space:nowrap}
+.db-workfile-name-tail-wrap{display:inline;white-space:normal;overflow-wrap:break-word;word-break:keep-all}
 .db-workfile-name-ext{white-space:nowrap}
 .db-workfile-current-step{margin-top:4px;font-size:11px;font-weight:800;color:var(--text-d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .db-workfile-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
@@ -990,7 +991,7 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
 .factory-source-compare-badge.missing{border-color:rgba(239,68,68,.30);background:rgba(239,68,68,.08);color:#fecaca}
 .factory-workspace-panel{display:grid;grid-template-columns:1fr;gap:12px;align-items:start}
 .factory-workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-.factory-recent-workfile-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;align-items:stretch}
+.factory-recent-workfile-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;align-items:stretch}
 .factory-recent-workfile-card{border:1px solid rgba(148,163,184,.16);border-radius:10px;background:rgba(0,0,0,.16);padding:9px;display:grid;grid-template-columns:52px minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;gap:8px;align-items:start;min-width:0}
 .factory-recent-workfile-card.current{border-color:rgba(99,102,241,.52);background:rgba(99,102,241,.10)}
 .factory-recent-workfile-thumb{width:52px;height:52px;border-radius:8px;border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;overflow:hidden;color:var(--text-m)}
@@ -1340,6 +1341,7 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
 .factory-progress.failed > span{background:linear-gradient(90deg,#dc2626,#fb7185);box-shadow:0 0 12px rgba(239,68,68,.34)}
 .factory-small{font-size:11px;color:var(--text-m);line-height:1.55;overflow-wrap:break-word;word-break:keep-all;line-break:strict}
 [data-factory-goal-stage]{overflow-wrap:break-word;word-break:keep-all}
+[data-factory-cafe24-oauth]{overflow-wrap:break-word;word-break:keep-all;line-break:strict}
 [data-factory-cafe24-oauth="reauth-required"] .factory-small{overflow-wrap:normal;word-break:keep-all}
 .factory-stage-card textarea{min-height:76px}
 @media(min-width:1181px){
@@ -1354,6 +1356,13 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
   .factory-automation-shell{scroll-margin-top:300px}
   .factory-run-status-card{max-height:none;overflow:visible}
   .factory-run-status-card [data-factory-goal-log-list]{max-height:none;overflow:visible}
+  /* The fixed work identity dock narrows the command row before the viewport does. */
+  .top-command-row{display:flex;flex-direction:column;align-items:stretch;gap:10px;padding:0 12px 8px}
+  .top-command-row .db-workfile-strip{grid-template-columns:1fr;gap:10px}
+  .top-command-row .db-workfile-current{grid-column:1;grid-row:1;text-align:left;padding:2px 0}
+  .top-command-row .db-workfile-title{grid-column:1;grid-row:2}
+  .top-command-row .db-workfile-actions{grid-column:1;grid-row:3;justify-content:flex-start}
+  .top-command-row .api-status-wrap{width:100%;justify-content:flex-start}
 }
 @media(max-width:1180px){
   .top-command-row{display:flex;align-items:flex-start;gap:10px;padding:0 12px 8px;flex-wrap:wrap}
@@ -1386,6 +1395,7 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
 }
 @media(max-width:900px){
   .container.container-factory{max-width:1100px}
+  .factory-candidate-review{grid-template-columns:minmax(0,1fr)}
   .factory-stage-card{scroll-margin-top:260px}
   .factory-page-layout{display:flex;flex-direction:column;gap:14px;padding-bottom:48px}
   .factory-page{order:1}
@@ -1413,7 +1423,7 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
   .factory-source-panel.cafe24 .factory-source-field>.factory-source-compare-cell{grid-row:auto}
   .factory-db-snapshot-list{grid-template-columns:1fr}
   .factory-workspace-panel{grid-template-columns:1fr}
-  .factory-recent-workfile-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .factory-recent-workfile-row{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
   .factory-cafe24-option-grid{grid-template-columns:1fr}
   .factory-option-compare-grid{grid-template-columns:1fr}
   .factory-cafe24-variant-row{grid-template-columns:1fr}
@@ -1439,6 +1449,10 @@ select.input{padding-right:34px;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:480px){
   .factory-recent-workfile-row{grid-template-columns:minmax(0,1fr)}
   .factory-saved-list{grid-template-columns:minmax(0,1fr)}
+  .factory-candidate-card-top{grid-template-columns:48px minmax(0,1fr);grid-template-rows:auto auto}
+  .factory-candidate-rank{grid-column:1;grid-row:1}
+  .factory-candidate-thumb{grid-column:1;grid-row:2;width:48px;height:48px}
+  .factory-candidate-text{grid-column:2;grid-row:1 / span 2}
   .factory-automation-shell [style*="min-width:240px"]{min-width:0 !important}
 }
 /* Model Settings */
@@ -1748,7 +1762,7 @@ body:has(.work-identity-float.is-authority-dock) .main{padding-right:var(--work-
 @media(max-height:640px){
   .main{padding-bottom:152px}
   body:has(.work-identity-float.is-authority-dock) .main{padding-right:calc(var(--work-identity-short-width) + var(--space-4));padding-bottom:calc(var(--shell-bottom-safe-space) + 96px)}
-  .work-identity-float{right:var(--space-2);top:calc(var(--token-bar-height) + var(--space-2));bottom:auto;width:min(var(--work-identity-short-width),calc(100vw - var(--work-identity-short-viewport-reserve)));min-height:var(--work-identity-short-min-height);padding:var(--work-identity-short-padding);grid-template-columns:var(--work-identity-short-thumb-size) minmax(0,1fr);grid-template-rows:auto;gap:var(--work-identity-short-gap)}
+  .work-identity-float{left:var(--space-2);right:auto;top:calc(var(--token-bar-height) + var(--space-2));bottom:auto;width:min(var(--work-identity-short-width),calc(100vw - var(--work-identity-short-viewport-reserve)));min-height:var(--work-identity-short-min-height);padding:var(--work-identity-short-padding);grid-template-columns:var(--work-identity-short-thumb-size) minmax(0,1fr);grid-template-rows:auto;gap:var(--work-identity-short-gap)}
   .work-identity-thumb{grid-row:1 / span 2;width:var(--work-identity-short-thumb-size);height:var(--work-identity-short-thumb-size);border-radius:var(--work-identity-short-thumb-radius)}
   .work-identity-label{font-size:var(--work-identity-short-label-size)}
   .work-identity-copy strong{font-size:var(--work-identity-short-title-size)}
@@ -1756,6 +1770,34 @@ body:has(.work-identity-float.is-authority-dock) .main{padding-right:var(--work-
   .work-identity-status{display:none}
   .work-identity-authority{grid-column:2;font-size:var(--work-identity-compact-authority-size);gap:var(--work-identity-short-authority-gap)}
   .work-identity-authority-action{padding:var(--work-identity-short-action-padding)}
+}
+@media(max-width:900px){
+  /* The fixed work status card must not steal the editor's usable width. */
+  body:has(.work-identity-float.is-authority-dock) .main{padding-right:0}
+}
+@media(min-width:601px) and (max-width:900px){
+  /* Keep the tablet navigation discoverable while compacting only on phones. */
+  .sidebar{width:176px}
+  .sidebar .logo-text,.sidebar .logo-sub,.sidebar .nav-label,.sidebar .nav-api-badges{display:block}
+  .sidebar .nav-api-badges{display:inline-flex}
+  /* Reserve the compact identity dock beside tablet content instead of over it. */
+  body:has(.work-identity-float.is-authority-dock) .main{padding-right:calc(var(--work-identity-short-width) + var(--space-4))}
+}
+@media(max-width:900px) and (min-height:641px){
+  /* Shorten the dock on normal-height phones/tablets and leave a real scroll safe area. */
+  .main{padding-bottom:calc(var(--work-identity-bottom) + var(--work-identity-short-min-height) + var(--space-6))}
+  .work-identity-float{width:min(var(--work-identity-short-width),calc(100vw - var(--work-identity-short-viewport-reserve)));min-height:var(--work-identity-short-min-height);padding:var(--work-identity-short-padding);grid-template-columns:var(--work-identity-short-thumb-size) minmax(0,1fr);grid-template-rows:auto;gap:var(--work-identity-short-gap)}
+  .work-identity-thumb{grid-row:1 / span 2;width:var(--work-identity-short-thumb-size);height:var(--work-identity-short-thumb-size);border-radius:var(--work-identity-short-thumb-radius)}
+  .work-identity-label{font-size:var(--work-identity-short-label-size)}
+  .work-identity-copy strong{font-size:var(--work-identity-short-title-size)}
+  .work-identity-product{font-size:var(--work-identity-short-product-size)}
+  .work-identity-status{display:none}
+  .work-identity-authority{grid-column:2;font-size:var(--work-identity-compact-authority-size);gap:var(--work-identity-short-authority-gap)}
+  .work-identity-authority-action{padding:var(--work-identity-short-action-padding)}
+}
+@media(max-width:600px) and (min-height:641px){
+  /* The sticky workfile header already exposes identity; remove the duplicate overlay on phones. */
+  .work-identity-float{display:none}
 }
 .workfile-report-page{display:flex;flex-direction:column;gap:16px;min-width:0}
 .workfile-report-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}

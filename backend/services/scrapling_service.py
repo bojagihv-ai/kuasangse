@@ -6,6 +6,8 @@ from importlib import metadata
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
+
 
 class ScraplingUnavailable(RuntimeError):
     pass
@@ -17,6 +19,7 @@ class ScraplingRequestError(ValueError):
 
 _MAX_PRODUCTS = 10
 _MAX_IMAGES_PER_PRODUCT = 80
+_MAX_PAGE_TEXT_CHARACTERS = 60_000
 _IMAGE_SELECTORS = (
     "meta[property='og:image']::attr(content)",
     "meta[name='twitter:image']::attr(content)",
@@ -116,6 +119,23 @@ def _normalize_image_urls(page: Any, base_url: str) -> list[str]:
 def _page_title(page: Any, fallback: str) -> str:
     values = _selector_values(page, "title::text")
     return values[0] if values else fallback
+
+
+def fetch_url_html_text(url: str) -> str:
+    product_url = _public_http_url(url)
+    page = _load_fetcher().fetch(
+        product_url,
+        headless=True,
+        network_idle=True,
+        timeout=60_000,
+    )
+    document = BeautifulSoup(str(page.html_content or ""), "html.parser")
+    for element in document(["script", "style", "noscript", "svg", "iframe"]):
+        element.decompose()
+    text = " ".join(document.stripped_strings)
+    if not text:
+        raise ScraplingRequestError("경쟁사 페이지에서 분석할 텍스트를 찾지 못했습니다.")
+    return text[:_MAX_PAGE_TEXT_CHARACTERS]
 
 
 def _capture_product(fetcher: Any, product: dict[str, Any], index: int) -> dict[str, Any]:

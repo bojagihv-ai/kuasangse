@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="생산관제 격리 런타임 상태 화면">
+  <meta name="description" content="제품 투입부터 조립공장 단계 진행과 Cafe24 승인까지 연결하는 생산 작업자 콘솔">
   <link rel="icon" href="data:,">
   <title>생산관제</title>
   <style>
@@ -38,6 +38,7 @@
       --color-ok-border: rgb(52 211 153 / 0.34);
       --color-error-border: rgb(251 113 133 / 0.34);
       --color-danger-wash: rgb(251 113 133 / 0.12);
+      --color-dialog-backdrop: rgb(0 0 0 / 0.74);
       --space-1: 8px;
       --space-half: 4px;
       --space-2: 16px;
@@ -64,6 +65,8 @@
       --visually-hidden-size: 1px;
       --grid-min-detail: 240px;
       --grid-min-card: 304px;
+      --operator-queue-min: 19rem;
+      --operator-stage-min: 7rem;
       --card-min-block-size: 144px;
       --scope-row-min-block-size: 96px;
       --virtual-queue-min-block-size: 240px;
@@ -128,6 +131,7 @@
 
     main.page {
       overflow-y: auto;
+      overflow-x: hidden;
       scrollbar-gutter: stable;
     }
 
@@ -831,6 +835,80 @@
       gap: var(--space-2);
     }
 
+    .workfile-report-ledger {
+      display: grid;
+      gap: var(--space-2);
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .workfile-report-ledger[data-workfile-state="missing"],
+    .workfile-report-ledger[data-cafe24-state="unconfirmed"] {
+      border-color: var(--color-error-border);
+    }
+
+    .handoff-ledger-fields {
+      flex: none;
+    }
+
+    .handoff-ledger-message {
+      margin: 0;
+      padding: var(--space-1) var(--space-2);
+      border-left: var(--border-width-emphasis) solid var(--color-status-warn);
+      background: var(--color-input-background);
+      overflow-wrap: anywhere;
+    }
+
+    .handoff-ledger-message[data-tone="error"] {
+      border-left-color: var(--color-status-error);
+    }
+
+    .handoff-ledger-list-heading,
+    .publication-ledger-title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-1);
+    }
+
+    .handoff-ledger-list-heading h4 {
+      margin: 0;
+    }
+
+    .publication-ledger-list {
+      display: grid;
+      gap: var(--space-1);
+      min-inline-size: 0;
+    }
+
+    .publication-ledger-item {
+      display: grid;
+      gap: var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .publication-ledger-item p {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .ledger-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-block-size: var(--control-min-block-size);
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
     .field-stack {
       display: flex;
       flex-direction: column;
@@ -1123,7 +1201,8 @@
       color: var(--color-text-secondary);
       font-family: var(--font-family-mono);
       font-size: var(--font-size-compact);
-      overflow-wrap: anywhere;
+      overflow-wrap: break-word;
+      word-break: keep-all;
     }
 
     .factory-product-row {
@@ -1296,6 +1375,72 @@
       object-fit: cover;
     }
 
+    .work-bundle-image-trigger {
+      inline-size: 100%;
+      min-block-size: 0;
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-compact);
+      background: transparent;
+      color: inherit;
+      cursor: zoom-in;
+    }
+
+    .work-bundle-image-trigger:focus-visible {
+      outline: var(--border-width-emphasis) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .work-bundle-image-dialog {
+      inline-size: min(92vw, 72rem);
+      max-inline-size: 92vw;
+      max-block-size: 90vh;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+      color: var(--color-text-primary);
+    }
+
+    .work-bundle-image-dialog::backdrop {
+      background: var(--color-dialog-backdrop);
+    }
+
+    .work-bundle-image-dialog-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: start;
+      justify-content: space-between;
+      margin-bottom: var(--space-2);
+    }
+
+    .work-bundle-image-dialog-header h2,
+    .work-bundle-image-dialog-header p {
+      max-inline-size: 100%;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .work-bundle-image-dialog-media {
+      display: grid;
+      min-block-size: 0;
+      place-items: start center;
+      max-block-size: calc(90vh - 8rem);
+      overflow: auto;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      scrollbar-gutter: stable;
+    }
+
+    .work-bundle-image-dialog-media img {
+      display: block;
+      max-inline-size: 100%;
+      max-block-size: none;
+      block-size: auto;
+      object-fit: contain;
+    }
+
     .a-cut-candidate-meta {
       display: flex;
       flex-wrap: wrap;
@@ -1309,6 +1454,20 @@
       min-inline-size: 0;
       font-size: var(--font-size-compact);
       overflow-wrap: anywhere;
+    }
+
+    .a-cut-candidate-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-half);
+    }
+
+    .a-cut-candidate-actions button {
+      inline-size: 100%;
+      min-inline-size: max-content;
+      justify-content: center;
+      overflow-wrap: normal;
+      word-break: keep-all;
     }
 
     .selected-badge {
@@ -1532,7 +1691,7 @@
       word-break: keep-all;
     }
 
-    /* CSS custom properties are not supported in media conditions; 720px is the sole raw threshold exception. */
+    /* CSS custom properties are not supported in media conditions; use only documented 720px, 721px, 960px, and 1100px responsive thresholds. */
     @media (max-width: 720px) {
       .page {
         padding-top: var(--space-2);
@@ -1648,6 +1807,35 @@
         inline-size: 100%;
         text-align: start;
       }
+
+      .operator-console-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .operator-current-work {
+        order: -1;
+      }
+
+      .operator-summary-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .operator-stage-list {
+        grid-template-columns: 1fr;
+      }
+
+      .operator-stage-step {
+        min-block-size: var(--control-min-block-size);
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+      }
+
+      .operator-panel-heading,
+      .operator-focus-heading,
+      .operator-now-heading {
+        align-items: flex-start;
+        flex-direction: column;
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1761,6 +1949,13 @@
       font-size: var(--font-size-kicker);
       line-height: var(--line-height-page-title);
       text-align: center;
+      white-space: nowrap;
+    }
+
+    @media (min-width: 721px) and (max-width: 960px) {
+      .menu-tablist {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
     }
 
     .menu-panel[hidden] {
@@ -1803,6 +1998,207 @@
       color: var(--color-text-primary);
     }
 
+    .production-result-workspace {
+      grid-template-columns: minmax(13rem, 0.56fr) minmax(0, 1.8fr) minmax(15rem, 0.78fr);
+    }
+
+    .production-result-workspace[data-history-active="true"] {
+      grid-template-columns: minmax(13rem, 0.56fr) minmax(0, 2fr);
+    }
+
+    .result-stage-rail,
+    .result-stage-canvas {
+      display: grid;
+      gap: var(--space-2);
+      min-inline-size: 0;
+    }
+
+    .result-stage-rail {
+      position: sticky;
+      top: var(--space-2);
+      align-self: start;
+    }
+
+    .result-stage-rail-heading {
+      display: grid;
+      gap: var(--space-half);
+      padding: var(--space-1);
+      border-left: var(--border-width-emphasis) solid var(--color-accent-highlight);
+    }
+
+    .result-stage-rail-heading h3,
+    .result-stage-rail-heading p {
+      margin: 0;
+    }
+
+    .result-stage-rail .stage-subnav {
+      flex-direction: column;
+    }
+
+    .result-stage-rail .stage-subnav button {
+      display: grid;
+      grid-template-columns: 2rem minmax(0, 1fr) auto;
+      gap: var(--space-half);
+      align-items: center;
+      inline-size: 100%;
+      text-align: start;
+    }
+
+    .stage-nav-index {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .stage-nav-label {
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .production-result-workspace[data-history-active="true"] .stage-subnav button:not([data-stage-key="db"])::after {
+      content: attr(data-history-count) "장";
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+    }
+
+    .production-result-workspace[data-history-active="true"] .factory-progress-map,
+    .production-result-workspace[data-history-active="true"] #a-cut-contact-sheet,
+    .production-result-workspace[data-history-active="true"] .artifact-inspector {
+      display: none;
+    }
+
+    .production-result-workspace .work-bundle-contact-sheet {
+      grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+      gap: var(--space-2);
+    }
+
+    .production-result-workspace .a-cut-candidate {
+      padding: var(--space-2);
+    }
+
+    .production-result-workspace .a-cut-candidate-meta {
+      justify-content: flex-start;
+    }
+
+    .production-result-workspace .asset-card-title {
+      flex: 1 1 100%;
+      font-size: var(--font-size-card-title);
+    }
+
+    .production-result-workspace .asset-card-detail,
+    .production-result-workspace .asset-archive-name {
+      flex-basis: 100%;
+    }
+
+    .production-result-workspace .asset-archive-name {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      overflow-wrap: anywhere;
+    }
+
+    .history-result-callout {
+      margin: 0;
+      padding: var(--space-1);
+      border-left: var(--border-width-emphasis) solid var(--color-status-ok);
+      color: var(--color-text-secondary);
+      background: var(--color-input-background);
+    }
+
+    .detail-section-group,
+    .final-detail-storyboard,
+    .history-archive-disclosure {
+      display: grid;
+      gap: var(--space-2);
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-input-background);
+    }
+
+    .detail-section-group-heading {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    .detail-section-group-heading h4,
+    .detail-section-group-heading p {
+      margin: 0;
+    }
+
+    .detail-section-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+      gap: var(--space-2);
+      min-inline-size: 0;
+    }
+
+    .final-detail-storyboard {
+      gap: var(--space-3);
+    }
+
+    .final-detail-page-card {
+      gap: var(--space-2);
+    }
+
+    .final-detail-page-card .a-cut-thumb {
+      aspect-ratio: auto;
+      background: var(--color-page-background);
+    }
+
+    .final-detail-page-card .a-cut-thumb img {
+      block-size: auto;
+      object-fit: contain;
+    }
+
+    .history-archive-disclosure > summary {
+      cursor: pointer;
+      color: var(--color-text-primary);
+      font-weight: var(--font-weight-strong);
+    }
+
+    @media (max-width: 960px) {
+      .production-result-workspace,
+      .production-result-workspace[data-history-active="true"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .result-stage-rail,
+      .production-result-workspace[data-history-active="true"] .result-stage-canvas {
+        grid-column: 1 / -1;
+        position: static;
+      }
+
+      .result-stage-rail .stage-subnav {
+        flex-direction: row;
+      }
+
+      .result-stage-rail .stage-subnav button {
+        flex: 1 1 11rem;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .production-result-workspace,
+      .production-result-workspace[data-history-active="true"] {
+        grid-template-columns: 1fr;
+      }
+
+      .detail-section-group-heading {
+        flex-direction: column;
+      }
+
+      .production-result-workspace .work-bundle-contact-sheet,
+      .detail-section-gallery {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .menu-summary-grid {
       display: grid;
       gap: var(--space-2);
@@ -1821,6 +2217,514 @@
       margin-bottom: 0;
     }
 
+    .operator-console-shell {
+      container-type: inline-size;
+      padding-top: var(--space-1);
+    }
+
+    .operator-console-heading {
+      margin-bottom: var(--space-2);
+    }
+
+    .operator-console-grid {
+      display: grid;
+      gap: var(--space-2);
+      grid-template-columns: minmax(min(calc(var(--operator-queue-min) + var(--operator-stage-min)), 100%), 1fr) minmax(0, 1.65fr);
+      align-items: start;
+    }
+
+    #menu-panel-queue .operator-console-grid {
+      grid-template-columns: minmax(min(calc(var(--operator-queue-min) + var(--operator-stage-min)), 100%), 1fr) minmax(0, 1.65fr);
+    }
+
+    #menu-panel-queue .operator-queue-list {
+      gap: var(--space-1);
+    }
+
+    #menu-panel-queue .operator-job-row {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+    }
+
+    #menu-panel-queue .operator-job-actions {
+      grid-column: 2;
+      grid-row: auto;
+    }
+
+    @media (max-width: 720px) {
+    }
+
+    .operator-queue-panel,
+    .operator-current-work {
+      min-inline-size: 0;
+    }
+
+    .operator-queue-panel {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .operator-panel-heading,
+    .operator-focus-heading,
+    .operator-now-heading {
+      display: flex;
+      min-inline-size: 0;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-1);
+    }
+
+    .operator-panel-heading h3,
+    .operator-focus-heading h3,
+    .operator-now-heading h3 {
+      margin-bottom: 0;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .operator-queue-list,
+    .operator-current-work {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .operator-job-row {
+      display: grid;
+      min-inline-size: 0;
+      gap: var(--space-half) var(--space-1);
+      grid-template-columns: auto minmax(0, 1fr);
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .operator-job-row[data-current="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+      box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
+    }
+
+    .operator-job-row[data-status="waiting_manual"],
+    .operator-job-row[data-status="blocked"] {
+      border-color: var(--color-error-border);
+    }
+
+    .operator-job-row[data-status="completed"] {
+      border-color: var(--color-ok-border);
+    }
+
+    .operator-job-index {
+      display: grid;
+      inline-size: var(--space-3);
+      block-size: var(--space-3);
+      place-items: center;
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-circle);
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .operator-job-main {
+      min-inline-size: 0;
+    }
+
+    .operator-job-title {
+      display: flex;
+      min-inline-size: 0;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: var(--space-half);
+    }
+
+    .operator-job-title strong {
+      flex: 1 1 auto;
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .operator-job-title .factory-pill {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
+    .operator-job-row .status-message {
+      margin-bottom: 0;
+    }
+
+    .operator-job-actions {
+      grid-column: 2;
+    }
+
+    .operator-summary-strip {
+      display: grid;
+      gap: var(--space-half);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .operator-metric {
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border-bottom: var(--border-width-emphasis) solid var(--color-border-default);
+      background: var(--color-input-background);
+    }
+
+    .operator-metric[data-tone="active"] {
+      border-bottom-color: var(--color-accent-highlight);
+    }
+
+    .operator-metric[data-tone="warn"] {
+      border-bottom-color: var(--color-status-warn);
+    }
+
+    .operator-metric[data-tone="ok"] {
+      border-bottom-color: var(--color-status-ok);
+    }
+
+    .operator-metric strong {
+      display: block;
+      margin-top: var(--space-half);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-section-title);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .operator-focus-card,
+    .operator-stage-panel,
+    .operator-now-card,
+    .operator-queue-selection,
+    .operator-empty-state {
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .operator-focus-card {
+      box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
+    }
+
+    .operator-focus-card[data-status="waiting_manual"],
+    .operator-focus-card[data-status="blocked"] {
+      box-shadow: inset var(--space-half) 0 0 var(--color-status-warn);
+    }
+
+    .operator-focus-card[data-status="completed"] {
+      box-shadow: inset var(--space-half) 0 0 var(--color-status-ok);
+    }
+
+    .operator-focus-meta,
+    .operator-now-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-half);
+    }
+
+    .operator-focus-meta {
+      margin: var(--space-1) 0;
+    }
+
+    .operator-focus-card .progress-track {
+      margin-top: var(--space-1);
+    }
+
+    .operator-stage-panel {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .operator-stage-list {
+      display: grid;
+      gap: var(--space-half);
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--operator-stage-min), 100%), 1fr));
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .operator-stage-step {
+      display: grid;
+      min-block-size: calc(var(--control-min-block-size) + var(--space-3));
+      align-content: space-between;
+      gap: var(--space-half);
+      inline-size: 100%;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      font: inherit;
+      text-align: start;
+      cursor: pointer;
+    }
+
+    .operator-stage-step:hover,
+    .operator-stage-step:focus-visible {
+      border-color: var(--color-accent-highlight);
+      color: var(--color-text-primary);
+    }
+
+    .operator-stage-step:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .operator-stage-step[data-state="active"],
+    .operator-stage-step[data-state="manual"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .operator-stage-step[data-state="manual"] {
+      border-color: var(--color-status-warn);
+    }
+
+    .operator-stage-step[data-state="done"] {
+      border-color: var(--color-ok-border);
+    }
+
+    .operator-stage-step[data-state="blocked"] {
+      border-color: var(--color-error-border);
+    }
+
+    .operator-stage-number,
+    .operator-stage-state {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .operator-stage-step strong {
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .operator-now-card {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .operator-now-card[data-tone="warn"] {
+      border-color: var(--color-status-warn);
+    }
+
+    .operator-now-card[data-tone="error"] {
+      border-color: var(--color-status-error);
+      background: var(--color-danger-wash);
+    }
+
+    .operator-now-card[data-tone="ok"] {
+      border-color: var(--color-status-ok);
+    }
+
+    .operator-now-card .status-message {
+      margin-bottom: var(--space-1);
+      color: var(--color-text-secondary);
+    }
+
+    .operator-queue-selection {
+      display: grid;
+      gap: var(--space-1);
+      grid-column: 1 / -1;
+      order: -1;
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .operator-queue-selection .a-cut-contact-sheet {
+      grid-template-columns: repeat(auto-fill, minmax(min(var(--operator-queue-min), 100%), 1fr));
+    }
+
+    .workfile-job-desk {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-surface-sheen), var(--color-card-background);
+    }
+
+    .workfile-job-desk-heading,
+    .workfile-job-tab-panel,
+    .workfile-job-tab-panel-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .workfile-job-desk-heading {
+      justify-content: space-between;
+    }
+
+    .workfile-job-tab-panel-actions button {
+      max-inline-size: 100%;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      word-break: keep-all;
+    }
+
+    .workfile-job-tabs {
+      display: flex;
+      gap: var(--space-1);
+      max-inline-size: 100%;
+      padding-block-end: var(--space-half);
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      scroll-snap-type: inline proximity;
+    }
+
+    .workfile-job-tab {
+      display: grid;
+      flex: 0 0 min(var(--operator-queue-min), calc(100vi - var(--space-4)));
+      gap: var(--space-half);
+      min-block-size: calc(var(--control-min-block-size) + var(--space-3));
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      font: inherit;
+      text-align: start;
+      scroll-snap-align: start;
+      cursor: pointer;
+    }
+
+    .workfile-job-tab[aria-selected="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+      box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
+      color: var(--color-text-primary);
+    }
+
+    .workfile-job-tab[data-link-state="ambiguous"],
+    .workfile-job-tab[data-link-state="rebind_required"],
+    .workfile-job-tab[data-link-state="target_rebind_required"],
+    .workfile-job-tab[data-link-state="stale"] {
+      border-color: var(--color-status-warn);
+    }
+
+    .workfile-job-tab:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .workfile-job-tab-copy {
+      display: grid;
+      min-inline-size: 0;
+      gap: var(--space-half);
+    }
+
+    .workfile-job-tab-copy strong,
+    .workfile-job-tab-file {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .workfile-job-tab-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+    }
+
+    .workfile-job-tab-panel {
+      min-inline-size: 0;
+      justify-content: space-between;
+      padding-block-start: var(--space-half);
+      border-top: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .workfile-job-tab-panel-copy {
+      display: grid;
+      min-inline-size: min(100%, var(--operator-queue-min));
+      flex: 1 1 var(--operator-queue-min);
+      gap: var(--space-half);
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+    }
+
+    .operator-job-row[data-needs-selection="true"] {
+      border-color: var(--color-status-warn);
+      box-shadow: inset var(--space-half) 0 0 var(--color-status-warn);
+    }
+
+    .operator-job-row[role="button"] {
+      cursor: pointer;
+    }
+
+    .operator-job-row[role="button"]:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .recent-a-cut-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-half);
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-ok-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    @media (min-width: 1100px) {
+      .operator-current-work {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .operator-summary-strip,
+      .operator-stage-panel {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .operator-console-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .diagnostic-details {
+      margin-top: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    .diagnostic-details > summary {
+      min-block-size: var(--control-min-block-size);
+      padding: var(--space-1) var(--space-2);
+      color: var(--color-text-secondary);
+      font-weight: var(--font-weight-strong);
+      cursor: pointer;
+    }
+
+    .diagnostic-details > summary:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .system-diagnostics {
+      padding-inline: var(--space-2);
+    }
+
+    .system-diagnostics > .section:first-child {
+      padding-top: var(--space-1);
+    }
+
   </style>
 </head>
 <body>
@@ -1830,7 +2734,7 @@
         <div>
           <p class="eyebrow">BATCH PRODUCTION CONTROL</p>
           <h1>생산관제</h1>
-          <p class="lede">신화사 PDP 원장을 기준으로 제품 투입, 정책, 검수, 작업자 진행과 Cafe24 비공개 등록 점검을 연결합니다.</p>
+          <p class="lede">신화사 상세페이지 원장을 기준으로 제품 투입, 정책, 검수, 작업자 진행과 Cafe24 비공개 등록 점검을 연결합니다.</p>
         </div>
         <span class="factory-pill health-chip" id="health-chip" role="status" aria-live="polite">상태 확인 중</span>
       </header>
@@ -1838,6 +2742,7 @@
       <nav id="primary-menu" class="menu-shell" aria-label="생산관제 메뉴">
         <div class="menu-tablist" role="tablist" aria-label="생산관제 작업 메뉴">
           <button id="menu-tab-overview" class="menu-tab" type="button" role="tab" aria-selected="true" aria-controls="menu-panel-overview" data-menu-key="overview" tabindex="0">개요<span class="menu-tab-badge" data-menu-badge="overview">확인 중</span></button>
+          <button id="menu-tab-queue" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-queue" data-menu-key="queue" tabindex="-1">작업 큐<span class="menu-tab-badge" data-menu-badge="queue">확인 중</span></button>
           <button id="menu-tab-input-source" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-input-source" data-menu-key="input-source" tabindex="-1">입력·소스<span class="menu-tab-badge" data-menu-badge="input-source">확인 중</span></button>
           <button id="menu-tab-competitors" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-competitors" data-menu-key="competitors" tabindex="-1">경쟁사<span class="menu-tab-badge" data-menu-badge="competitors">확인 중</span></button>
           <button id="menu-tab-production-acut" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-production-acut" data-menu-key="production-acut" tabindex="-1">생산·A컷<span class="menu-tab-badge" data-menu-badge="production-acut">확인 중</span></button>
@@ -1846,6 +2751,19 @@
           <button id="menu-tab-audit-sync" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-audit-sync" data-menu-key="audit-sync" tabindex="-1">감사·동기화<span class="menu-tab-badge" data-menu-badge="audit-sync">확인 중</span></button>
         </div>
       </nav>
+
+      <section class="workfile-job-desk" aria-labelledby="workfile-job-desk-heading">
+        <div class="workfile-job-desk-heading">
+          <div><p class="eyebrow">작업파일 탭</p><h2 id="workfile-job-desk-heading">제품별 작업대</h2></div>
+          <p class="status-message">탭과 큐 행은 보기만 전환합니다. 파일 연결과 작업 재개는 아래 명시적 버튼으로만 실행됩니다.</p>
+        </div>
+        <div id="workfile-job-tabs" class="workfile-job-tabs" role="tablist" aria-label="제품과 작업파일 전환">
+          <p class="status-message">작업 큐와 작업파일을 확인하고 있습니다.</p>
+        </div>
+        <div id="workfile-job-tabpanel" class="workfile-job-tab-panel" role="tabpanel" aria-live="polite" tabindex="0">
+          <p class="status-message">볼 작업을 선택하세요.</p>
+        </div>
+      </section>
 
       <details class="persistent-sync-bar sync-disclosure">
         <summary class="sync-disclosure-summary">
@@ -1863,10 +2781,23 @@
 
       <section id="menu-panel-overview" class="menu-panel" data-menu-panel="overview" role="tabpanel" aria-labelledby="menu-tab-overview">
 
-      <section class="section" aria-labelledby="health-heading">
+      <section class="section" aria-labelledby="workfile-report-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">RUNTIME STATUS</p>
+            <p class="eyebrow">WORKFILE ↔ CAFE24 HANDOFF</p>
+            <h2 id="workfile-report-heading">작업파일·Cafe24 등록 매핑</h2>
+          </div>
+          <p class="section-copy">현재 생산관제 회차와 저장된 .kuasangse, 원격 Cafe24 상품을 한 묶음으로 확인합니다.</p>
+        </div>
+        <div id="workfile-report-ledger" class="workfile-report-ledger" aria-live="polite">
+          <p class="status-message">작업파일과 Cafe24 등록 결과를 확인하는 중입니다.</p>
+        </div>
+      </section>
+
+      <section id="runtime-health-section" class="section" aria-labelledby="health-heading" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">실행 상태</p>
             <h2 id="health-heading">런타임 상태</h2>
           </div>
           <p class="section-copy">백엔드의 실제 <code>/api/health</code> 응답만 상태의 근거로 사용합니다.</p>
@@ -1900,7 +2831,7 @@
         </div>
       </section>
 
-      <section class="section" aria-labelledby="connections-heading">
+      <section id="runtime-connections-section" class="section" aria-labelledby="connections-heading" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">LOCAL TOPOLOGY</p>
@@ -1930,7 +2861,7 @@
         </div>
       </section>
 
-      <section class="section" aria-labelledby="scope-heading">
+      <section id="runtime-scope-section" class="section" aria-labelledby="scope-heading" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">CONTROL TOWER OPERATIONS</p>
@@ -1950,14 +2881,14 @@
             <span class="factory-pill scope-state">제공</span>
             <div>
               <h3>원장 투입과 스케줄링</h3>
-              <p>DB 제품 snapshot, 정책 우선순위와 worker lease를 조정합니다.</p>
+              <p>DB 제품 자료, 자동화 판단 순서와 조립공장 작업 순서를 조정합니다.</p>
             </div>
           </article>
           <article class="factory-card scope-row">
             <span class="factory-pill scope-state">중계</span>
             <div>
               <h3>생성 및 Cafe24 실행</h3>
-              <p><span class="keep-together">등록된 versioned command bridge로</span> 기존 조립공장 엔진에만 명령을 전달합니다.</p>
+              <p><span class="keep-together">생산관제에서 확정한 명령만</span> 기존 조립공장 엔진에 전달합니다.</p>
             </div>
           </article>
           <article class="factory-card scope-row">
@@ -1970,14 +2901,33 @@
         </div>
       </section>
 
-      <div id="overview-stage-summary" class="menu-summary-grid" aria-live="polite">
-        <article class="menu-summary-card"><p class="status-message">현재 factory projection을 확인하는 중입니다.</p></article>
-      </div>
+      </section>
 
-      <section class="section" aria-labelledby="queue-heading">
-        <div class="section-heading"><div><p class="eyebrow">PRODUCT QUEUE</p><h2 id="queue-heading">제품 목록</h2></div><p class="section-copy">대량 fixture에서도 현재 window만 DOM에 유지하며 페이지 전체 오른쪽 스크롤로 다음 영역까지 이동합니다.</p></div>
-        <div id="product-list" class="review-grid">
-          <p class="status-message">현재 factory 제품 목록을 불러오는 중입니다.</p>
+      <section id="menu-panel-queue" class="menu-panel" data-menu-panel="queue" role="tabpanel" aria-labelledby="menu-tab-queue" hidden>
+      <section class="section operator-console-shell" aria-labelledby="operator-console-heading">
+        <div class="section-heading operator-console-heading">
+          <div>
+            <p class="eyebrow">LIVE PRODUCTION DESK</p>
+            <h2 id="operator-console-heading">지금 진행 중인 생산 작업</h2>
+          </div>
+          <p class="section-copy">대기 제품, 현재 공정, 필요한 선택과 Cafe24 승인까지 실제 작업 상태만 표시합니다.</p>
+        </div>
+        <div class="operator-console-grid">
+          <aside class="operator-queue-panel" aria-labelledby="queue-heading">
+            <div class="operator-panel-heading">
+              <div><p class="eyebrow">제품 작업 순서</p><h3 id="queue-heading">제품 대기열</h3></div>
+              <span class="factory-pill" id="operator-queue-total">0건</span>
+            </div>
+            <div id="product-list" class="operator-queue-list" aria-live="polite">
+              <p class="status-message">조립공장 작업 큐를 불러오는 중입니다.</p>
+            </div>
+          </aside>
+          <section id="overview-stage-summary" class="operator-current-work" aria-live="polite" aria-label="현재 제품 생산 진행과 다음 행동">
+            <article class="operator-empty-state"><p class="status-message">현재 조립공장 작업 상태를 확인하는 중입니다.</p></article>
+            <section id="operator-queue-selection" class="operator-queue-selection" aria-live="polite" aria-label="현재 제품 A컷 선택">
+              <p class="status-message">현재 선택할 제품과 후보를 확인하는 중입니다.</p>
+            </section>
+          </section>
         </div>
       </section>
 
@@ -1987,13 +2937,13 @@
       <section class="section" aria-labelledby="work-bundle-input-heading">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">SINHWA PDP ASSET CONTRACT</p>
-            <h2 id="work-bundle-input-heading">최신 work-bundle Input</h2>
+            <p class="eyebrow">조립공장 입력 자료</p>
+            <h2 id="work-bundle-input-heading">최신 입력 자료</h2>
           </div>
-          <p class="section-copy">신화사 PDP API가 반환한 실제 Input 자산만 역할별로 표시합니다. 로컬 폴더나 브라우저 저장소는 검색하지 않습니다.</p>
+          <p class="section-copy">신화사 상세페이지 원장에서 받은 실제 입력 자료만 용도별로 표시합니다. 로컬 폴더나 브라우저 저장소는 검색하지 않습니다.</p>
         </div>
         <section id="work-bundle-input-assets" class="factory-sync-pane" aria-live="polite">
-          <p class="status-message">신화사 PDP work-bundle을 불러오는 중입니다.</p>
+          <p class="status-message">신화사 상세페이지 입력 자료를 불러오는 중입니다.</p>
         </section>
       </section>
 
@@ -2015,7 +2965,7 @@
               <span id="workfile-file-name" class="workfile-file-name">선택한 파일 없음</span>
             </span>
           </label>
-          <p id="workfile-import-status" class="status-message" role="status" aria-live="polite">작업파일을 선택하면 Input과 Output 분류를 시작합니다.</p>
+          <p id="workfile-import-status" class="status-message" role="status" aria-live="polite">작업파일을 선택하면 입력 자료와 생성 결과를 분류합니다.</p>
           <div id="workfile-classification" class="workfile-classification" aria-live="polite" hidden></div>
         </div>
       </section>
@@ -2033,7 +2983,7 @@
             <div class="intake-mode-switch" role="radiogroup" aria-label="제품 투입 방식">
               <label class="intake-mode-card" for="intake-mode-db">
                 <input type="radio" id="intake-mode-db" name="intake-mode" value="db" checked>
-                <span><strong>신화사 DB에서 선택</strong><span>상품명이나 jcode로 검색하고 저장된 값을 즉시 불러옵니다.</span></span>
+                <span><strong>신화사 DB에서 선택</strong><span>상품명이나 신화사 품번으로 검색하고 저장된 값을 불러옵니다.</span></span>
               </label>
               <label class="intake-mode-card" for="intake-mode-manual">
                 <input type="radio" id="intake-mode-manual" name="intake-mode" value="manual">
@@ -2045,7 +2995,7 @@
               <div class="field-stack">
                 <label for="product-search">신화사 DB 제품 검색</label>
                 <div class="search-row">
-                  <input id="product-search" autocomplete="off" placeholder="상품명 또는 jcode">
+                  <input id="product-search" autocomplete="off" placeholder="상품명 또는 신화사 품번">
                   <button type="button" id="product-search-button">원장 검색</button>
                 </div>
               </div>
@@ -2059,30 +3009,33 @@
             </div>
 
             <div id="manual-intake-panel" class="intake-panel" hidden>
-              <p class="status-message intake-blocker" data-tone="error" id="manual-ledger-blocker">현재 신화사 `/api/pdp-control/v1`에는 신규 상품 생성과 이미지·필수값 저장 계약이 없습니다. 입력 검증은 가능하지만 원장 저장과 작업 생성은 성공으로 처리하지 않습니다.</p>
+              <p class="status-message intake-blocker" id="manual-ledger-blocker">직접 입력 자료는 신화사 원장에 새 상품을 만들지 않고 조립공장 작업 큐로 바로 전달합니다.</p>
               <div class="required-fields-grid">
-                <div class="field-stack"><label for="manual-jcode">신규 원장 jcode</label><input id="manual-jcode" inputmode="numeric" placeholder="양의 숫자" required></div>
-                <div class="field-stack"><label for="required-product-name">상품명 *</label><input id="required-product-name" required></div>
-                <div class="field-stack"><label for="required-category">카테고리 *</label><input id="required-category" required></div>
+                <div class="field-stack"><label for="required-product-name">제품명 *</label><input id="required-product-name" required></div>
+                <div class="field-stack"><label for="required-category">상품 종류 *</label><input id="required-category" placeholder="예: 수저집" required></div>
                 <div class="field-stack"><label for="required-material">소재 *</label><input id="required-material" required></div>
                 <div class="field-stack"><label for="required-origin">원산지 *</label><input id="required-origin" required></div>
-                <div class="field-stack"><label for="required-size">규격/사이즈 *</label><input id="required-size" required></div>
+                <div class="field-stack"><label for="required-size">사이즈/규격 *</label><input id="required-size" required></div>
                 <div class="field-stack"><label for="required-sale-price">판매가 *</label><input id="required-sale-price" inputmode="decimal" required></div>
+                <div class="field-stack"><label for="required-stock">기본 재고 *</label><input id="required-stock" inputmode="numeric" value="99" required></div>
+                <div class="field-stack"><label for="required-usage">사용용도 *</label><input id="required-usage" placeholder="예: 수저 보관, 선물 포장" required></div>
+                <div class="field-stack"><label for="required-option-mode">옵션 여부 *</label><select id="required-option-mode"><option value="provided">옵션 있음</option><option value="none">옵션 없음</option></select></div>
               </div>
               <div class="drop-grid">
-                <label class="factory-drop" for="base-images"><strong>기본 이미지 *</strong><span>최소 1장 · JPG, PNG, WEBP</span><input id="base-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+                <label class="factory-drop" for="base-images"><strong>제품 사진 *</strong><span>최소 1장 · JPG, PNG, WEBP</span><input id="base-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
                 <label class="factory-drop" for="color-images"><strong>색상 옵션 이미지</strong><span>선택 사항 · 이미지마다 색상명 지정</span><input id="color-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
               </div>
               <div id="image-intake-list" class="image-intake-list" aria-live="polite"></div>
             </div>
 
             <div class="control-grid">
-              <div class="field-stack"><label for="batch-id">배치 ID</label><input id="batch-id" value="batch-20260724" required></div>
-              <div class="field-stack"><label for="batch-policy">배치 정책</label><select id="batch-policy"><option>full_auto</option><option>representative_manual</option><option>representative_and_size_manual</option><option>all_images_manual</option><option>custom</option></select></div>
-              <div class="field-stack"><label for="product-policy">제품 전체 override</label><select id="product-policy"><option value="">개별 설정 유지</option><option>auto</option><option>manual</option></select></div>
-              <div class="field-stack"><label for="stage-policy">단계 전체 override</label><select id="stage-policy"><option value="">개별 설정 유지</option><option>auto</option><option>manual</option></select></div>
+              <div class="field-stack"><label for="batch-id">생산 묶음 이름</label><input id="batch-id" value="batch-20260724" required></div>
+              <div class="field-stack"><label for="image-model-select">이미지 생성 모델</label><select id="image-model-select"><option value="api-hub-openai-image">OpenAI 이미지 생성 (API Hub)</option><option value="gemini-3.1-flash-image">나노바나나2 (Gemini 3.1 Flash Image)</option></select></div>
+              <div class="field-stack"><label for="batch-policy">자동화 방식</label><select id="batch-policy"><option value="full_auto">전체 자동</option><option value="representative_manual">대표 이미지만 직접 선택</option><option value="representative_and_size_manual">대표·사이즈 직접 선택</option><option value="all_images_manual">모든 생성 이미지 직접 선택</option><option value="custom">사용자 지정</option></select></div>
+              <div class="field-stack"><label for="product-policy">이 제품 판단 방식</label><select id="product-policy"><option value="">자동화 방식 유지</option><option value="auto">자동 판단</option><option value="manual">직접 선택</option></select></div>
+              <div class="field-stack"><label for="stage-policy">전체 공정 판단 방식</label><select id="stage-policy"><option value="">제품 판단 방식 유지</option><option value="auto">자동 판단</option><option value="manual">직접 선택</option></select></div>
             </div>
-            <div class="button-row"><button type="submit" id="intake-submit">선택 제품을 컨베이어에 투입</button><span id="intake-status" class="status-message" role="status" aria-live="polite">세션 준비 중</span></div>
+            <div class="button-row"><button type="submit" id="intake-submit">조립공장 작업 시작</button><span id="intake-status" class="status-message" role="status" aria-live="polite">세션 준비 중</span></div>
           </form>
         </div>
       </section>
@@ -2093,10 +3046,10 @@
         <section class="section" aria-labelledby="competitor-heading">
           <div class="section-heading">
             <div><p class="eyebrow">COMPETITOR SOURCES</p><h2 id="competitor-heading">경쟁사 수집과 후보</h2></div>
-            <p class="section-copy">현재 factory projection에 포함된 수집 요청과 후보만 표시합니다. 연결되지 않은 시장은 성공처럼 채우지 않습니다.</p>
+            <p class="section-copy">조립공장이 실제로 수집한 후보, 상세수집 선택, 이미지 분석 상태를 순서대로 표시합니다.</p>
           </div>
           <div id="competitor-source-summary" class="menu-summary-grid" aria-live="polite">
-            <article class="menu-summary-card"><h3>경쟁사 source</h3><p class="status-message">조립공장 Input snapshot을 확인하는 중입니다.</p></article>
+            <article class="menu-summary-card"><h3>경쟁사 자료</h3><p class="status-message">조립공장 수집 상태를 확인하는 중입니다.</p></article>
           </div>
         </section>
       </section>
@@ -2108,15 +3061,15 @@
           <p class="section-copy">모델·추론·service tier는 API Hub 응답만 표시하며 인증정보는 표시하지 않습니다.</p>
         </div>
         <div class="factory-card control-card control-grid">
-          <div class="field-stack"><label for="model-select">모델</label><select id="model-select"><option>latestModel</option></select></div>
-          <div class="field-stack"><label for="reasoning-select">reasoning</label><select id="reasoning-select"><option>medium</option><option>low</option><option>high</option><option>xhigh</option></select></div>
-          <div class="field-stack"><label for="tier-select">service tier</label><select id="tier-select"><option>standard</option></select></div>
-          <div class="field-stack"><label for="preset-select">판단 preset</label><select id="preset-select"><option value="fast_single">빠른 단일 판단</option><option value="dual_review">고정밀 이중 검토</option></select></div>
+          <div class="field-stack"><label for="model-select">판단 모델</label><select id="model-select"><option>latestModel</option></select></div>
+          <div class="field-stack"><label for="reasoning-select">추론 깊이</label><select id="reasoning-select"><option>medium</option><option>low</option><option>high</option><option>xhigh</option></select></div>
+          <div class="field-stack"><label for="tier-select">처리 속도</label><select id="tier-select"><option>standard</option></select></div>
+          <div class="field-stack"><label for="preset-select">판단 방식</label><select id="preset-select"><option value="fast_single">빠른 단일 판단</option><option value="dual_review">고정밀 이중 검토</option></select></div>
           <div class="button-row span-all"><button type="button" id="refresh-model">API Hub 상태 새로고침</button><button type="button" id="login-model">Chrome / GPT 로그인</button><button type="button" id="force-login-model" class="button-secondary">강제 재로그인</button><span id="model-status" class="status-message" role="status" aria-live="polite">확인 중</span></div>
           <section id="automation-policy-matrix" class="automation-policy-surface" aria-label="판단별 자동화 정책">
             <p class="status-message">정책 registry를 불러오는 중입니다.</p>
           </section>
-          <p id="automation-policy-summary" class="status-message automation-policy-summary span-all" role="status" aria-live="polite">실행 시 정책 snapshot을 잠급니다.</p>
+          <p id="automation-policy-summary" class="status-message automation-policy-summary span-all" role="status" aria-live="polite">작업 시작 때 자동화 설정을 확정합니다.</p>
         </div>
       </section>
 
@@ -2125,28 +3078,37 @@
       <section id="menu-panel-production-acut" class="menu-panel" data-menu-panel="production-acut" role="tabpanel" aria-labelledby="menu-tab-production-acut" hidden>
       <section class="section factory-sync-surface" aria-labelledby="io-heading">
         <div class="section-heading">
-          <div><p class="eyebrow">LIVE FACTORY WORKBENCH</p><h2 id="io-heading">Input → 생산 진행 → Output A컷</h2></div>
-          <p class="section-copy">조립공장 public projection과 SSE event만 표시합니다. 보기는 선택하지 않으며 A컷 저장 후 receipt·revision으로 확정합니다.</p>
+          <div><p class="eyebrow">조립공장 생산 현황</p><h2 id="io-heading">입력 → 생산 진행 → 선택 결과</h2></div>
+          <p class="section-copy">조립공장이 실제로 받은 입력, 현재 공정, 생성 후보와 선택 결과를 한 화면에서 확인합니다.</p>
         </div>
-        <nav id="stage-subnav" class="stage-subnav" aria-label="생산 단계 선택">
-          <button type="button" data-stage-key="db">제품·DB</button>
-          <button type="button" data-stage-key="representative">대표</button>
-          <button type="button" data-stage-key="size">사이즈</button>
-          <button type="button" data-stage-key="option_color">옵션·색상</button>
-          <button type="button" data-stage-key="general">일반컷</button>
-          <button type="button" data-stage-key="sections">섹션</button>
-          <button type="button" data-stage-key="final_detail">최종 상세</button>
-        </nav>
-        <section id="work-bundle-output-assets" class="factory-sync-pane" aria-live="polite">
-          <p class="status-message">신화사 PDP work-bundle Output을 불러오는 중입니다.</p>
-        </section>
-        <div class="factory-sync-workspace">
-          <nav id="io-progress-map" class="factory-sync-pane factory-progress-map" aria-label="제품 Input과 Output 진행 맵">
-            <p class="status-message">Input/Output projection을 불러오는 중입니다.</p>
-          </nav>
-          <section id="a-cut-contact-sheet" class="factory-sync-pane" aria-label="단계별 A컷 후보">
-            <p class="status-message">출력 단계를 선택하세요.</p>
-          </section>
+        <div id="production-result-workspace" class="factory-sync-workspace production-result-workspace" data-history-active="false">
+          <aside class="result-stage-rail" aria-label="생산 단계와 상세페이지 제작 순서">
+            <div class="result-stage-rail-heading">
+              <p class="eyebrow">RESULT WORKBENCH</p>
+              <h3>상세페이지 제작 순서</h3>
+              <p class="status-message">단계를 고르면 실제 선택 결과를 큰 이미지로 확인합니다.</p>
+            </div>
+            <nav id="stage-subnav" class="stage-subnav" aria-label="생산 단계 선택">
+              <button type="button" data-stage-key="db"><span class="stage-nav-index" aria-hidden="true">01</span><span class="stage-nav-label">제품·DB</span></button>
+              <button type="button" data-stage-key="representative"><span class="stage-nav-index" aria-hidden="true">02</span><span class="stage-nav-label">대표 이미지</span></button>
+              <button type="button" data-stage-key="size"><span class="stage-nav-index" aria-hidden="true">03</span><span class="stage-nav-label">사이즈</span></button>
+              <button type="button" data-stage-key="option_color"><span class="stage-nav-index" aria-hidden="true">04</span><span class="stage-nav-label">옵션·색상</span></button>
+              <button type="button" data-stage-key="general"><span class="stage-nav-index" aria-hidden="true">05</span><span class="stage-nav-label">일반 이미지컷</span></button>
+              <button type="button" data-stage-key="sections"><span class="stage-nav-index" aria-hidden="true">06</span><span class="stage-nav-label">상세 섹션</span></button>
+              <button type="button" data-stage-key="final_detail"><span class="stage-nav-index" aria-hidden="true">07</span><span class="stage-nav-label">최종 상세페이지</span></button>
+            </nav>
+            <nav id="io-progress-map" class="factory-sync-pane factory-progress-map" aria-label="제품 입력과 생성 결과 진행 맵">
+              <p class="status-message">입력 자료와 생성 결과를 불러오는 중입니다.</p>
+            </nav>
+          </aside>
+          <div class="result-stage-canvas">
+            <section id="work-bundle-output-assets" class="factory-sync-pane" aria-live="polite">
+              <p class="status-message">조립공장의 생성 결과를 불러오는 중입니다.</p>
+            </section>
+            <section id="a-cut-contact-sheet" class="factory-sync-pane" aria-label="단계별 A컷 후보">
+              <p class="status-message">출력 단계를 선택하세요.</p>
+            </section>
+          </div>
           <aside id="artifact-inspector" class="factory-sync-pane artifact-inspector" aria-label="선택 후보 근거와 명령">
             <p class="status-message">확인할 후보를 선택하세요.</p>
           </aside>
@@ -2166,12 +3128,17 @@
 
       <section id="menu-panel-audit-sync" class="menu-panel" data-menu-panel="audit-sync" role="tabpanel" aria-labelledby="menu-tab-audit-sync" hidden>
       <div id="audit-sync-summary" class="menu-summary-grid" aria-live="polite">
-        <article class="menu-summary-card"><p class="status-message">SSE cursor와 worker identity를 확인하는 중입니다.</p></article>
+        <article class="menu-summary-card"><p class="status-message">실시간 연결과 조립공장 작업자를 확인하는 중입니다.</p></article>
       </div>
 
+      <details class="diagnostic-details">
+        <summary>런타임·연결·운영 경계 보기</summary>
+        <div id="system-diagnostics" class="system-diagnostics"></div>
+      </details>
+
       <section class="section" aria-labelledby="timeline-heading">
-        <div class="section-heading"><div><p class="eyebrow">AUDIT TIMELINE</p><h2 id="timeline-heading">작업 감사 타임라인</h2></div><p class="section-copy">이벤트 sequence·현재 단계·경과시간·차단 사유를 원장 영수증과 함께 표시합니다.</p></div>
-        <div class="timeline-grid"><article class="factory-card timeline-card"><ul id="audit-list"><li>세션 경계 확인 중</li><li>신화사 PDP capability 협상 대기</li><li>제품·배치·검수 상태 동기화 대기</li></ul></article><article class="factory-card timeline-card"><h3>최근 상태</h3><p class="card-copy" id="live-status">실제 원장 상태를 조회하고 있습니다.</p></article></div>
+        <div class="section-heading"><div><p class="eyebrow">작업 기록</p><h2 id="timeline-heading">작업 감사 타임라인</h2></div><p class="section-copy">작업 순서·현재 단계·경과시간·차단 사유를 원장 영수증과 함께 표시합니다.</p></div>
+        <div class="timeline-grid"><article class="factory-card timeline-card"><ul id="audit-list"><li>작업 연결 범위 확인 중</li><li>신화사 상세페이지 연결 기능 대기</li><li>제품·생산 묶음·검수 상태 동기화 대기</li></ul></article><article class="factory-card timeline-card"><h3>최근 상태</h3><p class="card-copy" id="live-status">실제 원장 상태를 조회하고 있습니다.</p></article></div>
       </section>
       </section>
 
@@ -2180,9 +3147,31 @@
       </footer>
     </div>
   </main>
+  <dialog id="work-bundle-image-dialog" class="work-bundle-image-dialog" aria-labelledby="work-bundle-image-dialog-title">
+    <div class="work-bundle-image-dialog-header">
+      <div>
+        <p class="eyebrow">작업자료 크게 보기</p>
+        <h2 id="work-bundle-image-dialog-title">작업자료 크게 보기</h2>
+        <p id="work-bundle-image-dialog-meta" class="status-message"></p>
+      </div>
+      <form method="dialog">
+        <button type="submit" class="button-secondary">닫기</button>
+      </form>
+    </div>
+    <div class="work-bundle-image-dialog-media">
+      <img id="work-bundle-image-dialog-image" alt="" decoding="async">
+    </div>
+  </dialog>
   <script>
     (() => {
       const app = document.getElementById("app");
+      const diagnostics = document.getElementById("system-diagnostics");
+      for (const id of ["runtime-health-section", "runtime-connections-section", "runtime-scope-section"]) {
+        const section = document.getElementById(id);
+        if (!section || !diagnostics) continue;
+        section.hidden = false;
+        diagnostics.append(section);
+      }
       const chip = document.getElementById("health-chip");
       const statusTitle = document.getElementById("status-title");
       const statusDetail = document.getElementById("status-detail");
@@ -2265,6 +3254,7 @@
         return /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(value || "") ? value : fallback;
       };
       const API_BASE = localOrigin("apiBase", "http://127.0.0.1:5062");
+      const FACTORY_BACKEND = localOrigin("factoryBackend", "http://127.0.0.1:5050");
       const API_HUB = localOrigin("apiHub", "http://127.0.0.1:4321");
       const session = { id: "", csrf: "" };
       const automation = {
@@ -2285,7 +3275,7 @@
         const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
         if (session.id && options.method && options.method !== "GET") headers["X-Control-Tower-Session"] = session.id;
         if (session.csrf && options.method && options.method !== "GET") headers["X-Control-Tower-CSRF"] = session.csrf;
-        const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        const response = await fetch(`${API_BASE}${path}`, { ...options, cache: "no-store", headers, credentials: "include" });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
           const error = new Error(String(body.error?.code || `HTTP_${response.status}`));
@@ -2297,7 +3287,7 @@
       };
       const loadSession = async () => {
         try {
-          const response = await fetch(`${API_BASE}/api/session`);
+          const response = await fetch(`${API_BASE}/api/session`, { credentials: "include" });
           const body = await response.json();
           session.id = String(body.sessionId || "");
           session.csrf = String(body.csrfToken || "");
@@ -2367,7 +3357,9 @@
       });
       const assetUrl = value => {
         try {
-          return new URL(String(value || ""), API_BASE).href;
+          const source = String(value || "");
+          const base = source.startsWith("/api/local-archive/") ? FACTORY_BACKEND : API_BASE;
+          return new URL(source, base).href;
         } catch {
           return "";
         }
@@ -2378,15 +3370,15 @@
     })();
   </script>
   <script type="module">
-    import { bindMenuShell } from "./src/menu-shell.mjs?menuReorg=1";
+    import { bindMenuShell } from "./src/menu-shell.mjs?menuReorg=3";
     globalThis.controlTowerMenu = bindMenuShell({
       onChange: key => document.getElementById("app")?.setAttribute("data-active-menu", key),
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=1&amp;workBundleCompleteness=6"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs";
+    import { mountProductIntake } from "./src/product-intake.mjs?factoryQueue=2";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");
@@ -2409,6 +3401,6 @@
       window.__CONTROL_TOWER_QUEUE_METRICS__ = () => ({ total: items.length, rendered: Number(queueRoot.dataset.virtualRendered || 0), scrollHeight: scrollRoot.scrollHeight });
     }
   </script>
-  <script type="module" src="./src/workfile-intake.mjs"></script>
+  <script type="module" src="./src/workfile-intake.mjs?actualB=1"></script>
 </body>
 </html>

@@ -237,6 +237,53 @@ test('registered bridge invokes only versioned snapshot and A-cut commands', asy
   ]);
 });
 
+test('registered bridge validates and forwards one factory product run command', async () => {
+  const { createFactoryControlCommandBridge } = await import(`${bridgeUrl}?product=${Date.now()}`);
+  const requests = [];
+  const bridge = createFactoryControlCommandBridge({
+    requestClassicRuntime: async request => {
+      requests.push(request);
+      return {
+        schema: 'factory-product-run-receipt:v1',
+        jobId: request.payload.jobId,
+        status: 'waiting_manual',
+        stageKey: 'representative',
+        projection: snapshot(),
+        checkpoint: {
+          schema: 'factory-product-checkpoint:v1',
+          jobId: request.payload.jobId,
+          projectId: `batch:${request.payload.jobId}`,
+          productId: 'cafe24:3001',
+          productKey: 'product:alpha',
+          runId: 'run-7',
+          inputFingerprint: 'sha256:input',
+          revision: 9,
+          status: 'waiting_manual',
+          stageKey: 'representative',
+          savedAt: 1,
+        },
+      };
+    },
+  });
+  const receipt = await bridge.run('factory-control', 'runFactoryProduct', {
+    schema: 'factory-product-run-command:v1',
+    jobId: 'factory-job-1',
+    batchId: 'batch-1',
+    mode: 'manual',
+    imageModel: 'api-hub-openai-image',
+    startFresh: true,
+    source: { kind: 'manual' },
+    productName: '직접 입력 제품',
+    requiredValues: { size: '20cm' },
+    inputImages: [{ role: 'base', dataUrl: 'data:image/png;base64,aGVsbG8=', name: '정면' }],
+  });
+
+  assert.equal(receipt.schema, 'factory-product-run-receipt:v1');
+  assert.equal(requests[0].command, 'runFactoryProduct');
+  assert.equal(requests[0].payload.imageModel, 'api-hub-openai-image');
+  assert.equal(requests[0].payload.inputImages[0].role, 'base');
+});
+
 async function normalize(modulePromise, value) {
   const module = await modulePromise;
   return module.normalizeFactoryProjection(value);

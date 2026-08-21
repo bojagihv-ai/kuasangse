@@ -104,10 +104,20 @@ def test_legacy_publish_collapses_upstream_receipt_422_to_503(tmp_path: Path) ->
         },
         headers=headers,
     ).get_json()
+    confirmed = client.post(
+        "/api/cafe24/confirm",
+        json={"approvalToken": approved["approvalToken"], "confirmed": True, **binding},
+        headers=headers,
+    ).get_json()
 
     response = client.post(
         "/api/cafe24/publish",
-        json={"jobId": "job-2994", "approvalToken": approved["approvalToken"], **binding},
+        json={
+            "jobId": "job-2994",
+            "approvalToken": approved["approvalToken"],
+            "confirmationNonce": confirmed["confirmationNonce"],
+            **binding,
+        },
         headers=headers,
     )
 

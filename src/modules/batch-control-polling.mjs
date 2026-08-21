@@ -1,3 +1,14 @@
+export function createSingleFlight() {
+  let request = null;
+  return run => {
+    if (request) return request;
+    request = Promise.resolve().then(run).finally(() => {
+      request = null;
+    });
+    return request;
+  };
+}
+
 export function createRecurringTask({
   run,
   setIntervalImpl,

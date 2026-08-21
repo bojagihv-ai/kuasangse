@@ -194,12 +194,41 @@ test('로컬 보관 옵션표 prompt가 있으면 숫자 슬롯에서도 15색 �
   assert.equal(context.factoryCafe24OptionStructureTouched(factory), true);
 });
 
+test('옵션이 없는 참조상품에서 새 옵션 구조를 만들면 has_option을 T로 강제한다', () => {
+  const context = {
+    factoryRuntimeReadFactory: () => ({}),
+    factoryCafe24CleanOptionGroupsForPayload: groups => groups,
+    factoryCafe24OptionExtrasTouched: () => false,
+    factoryCafe24OptionExtrasPayload: () => ({}),
+    factoryCafe24PayloadValue: (_key, value) => value,
+    factoryCafe24OptionSetting: (raw, _finalDb, key, fallback) => raw[key] ?? fallback,
+    factoryCafe24ExistingOptionGroup: () => null,
+    factoryCafe24OptionsPayloadValueItems: values => values.map(option_text => ({ option_text })),
+  };
+  vm.createContext(context);
+  vm.runInContext(sourceSlice(
+    source('cafe24-payloads.js'),
+    'function factoryBuildCafe24OptionsUpdatePayload(',
+    'function factoryBuildCafe24ProductOptionsPayload(',
+  ), context);
+  const groups = [{ name: '색상', values: ['초록', '빨강'], required_option: 'T', option_display_type: 'S' }];
+
+  const structurePayload = context.factoryBuildCafe24OptionsUpdatePayload({}, { has_option: 'F' }, {}, '색상', [], groups);
+  const settingsPayload = context.factoryBuildCafe24OptionsUpdatePayload({}, { has_option: 'F' }, {}, '색상', [], groups, { settingsOnly: true });
+
+  assert.equal(structurePayload.has_option, 'T');
+  assert.equal(settingsPayload.has_option, 'F');
+});
+
 test('Cafe24 준비 동기화는 상세 HTML 이미지와 옵션 재고 일괄 적용 경계를 포함한다', () => {
   const syncSource = source('cafe24-sync.js');
   const formSource = source('cafe24-product-form.js');
+  const coreSource = source('app-core-06.js');
   assert.match(formSource, /key:\s*'detailHtml'/, '기존 상품 동기화 계획에 상세 HTML 단계가 있어야 한다');
   assert.match(syncSource, /factoryCafe24IsTransferDetailImageUrl/, 'blob/local 상세 이미지 hydration 경계가 있어야 한다');
   assert.match(formSource, /factoryCafe24ApplyInventoryAll/, '옵션별 재고 일괄 적용 컨트롤이 있어야 한다');
+  assert.match(formSource, /factoryCafe24SaveVariantInventory/, '행별 재고를 명시적으로 저장하는 컨트롤이 있어야 한다');
+  assert.match(coreSource, /factory\/cafe24:sync-options-variants/, '행별 재고 저장은 기존 Cafe24 소유 명령으로 원자적으로 반영돼야 한다');
   assert.match(formSource, /cafe24VariantCatalogProductNo/, '새로 조회한 Cafe24 품목 목록을 상품번호별로 보존해야 한다');
   assert.match(source('cafe24-payloads.js'), /refreshedVariantCatalog/, 'Cafe24 품목 API 재조회 결과를 현재 작업에 연결해야 한다');
   assert.match(syncSource, /factoryCafe24ControlPlanFromBody\(inventoryBody\)/, '직접 재고 저장은 변경안 대기 없이 최종 재조회로 검증해야 한다');

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from base64 import b64encode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Protocol
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 import requests
 
@@ -34,6 +36,8 @@ class PdpWorkbenchApi(Protocol):
     def get_product_fields(self, jcode: int) -> JsonObject: ...
 
     def get_product_assets(self, jcode: int) -> JsonObject: ...
+
+    def get_product_source_images(self, jcode: int) -> JsonObject: ...
 
     def list_work_bundles(self, query: Mapping[str, JsonValue]) -> JsonObject: ...
 
@@ -186,6 +190,61 @@ class PdpWorkbenchHttpApi:
 
     def get_product_assets(self, jcode: int) -> JsonObject:
         return self._call(self._assets_base_url, "GET", f"/products/{jcode}/assets")
+
+    def get_product_source_images(self, jcode: int) -> JsonObject:
+        product = self.get_product(jcode)
+        catalog = product.get("catalog") if isinstance(product, dict) else None
+        raw_images = catalog.get("images") if isinstance(catalog, dict) else None
+        images: list[JsonObject] = []
+        for index, raw_image in enumerate(raw_images if isinstance(raw_images, list) else []):
+            if not isinstance(raw_image, dict):
+                continue
+            path = raw_image.get("path")
+            if not isinstance(path, str) or not path.strip():
+                continue
+            binary = self._get_catalog_image(path)
+            file_name = path.replace("\\", "/").rsplit("/", 1)[-1] or f"source-{index + 1}"
+            digest = sha256(binary.content).hexdigest()
+            images.append(
+                {
+                    "id": raw_image.get("id", index + 1),
+                    "fileName": file_name,
+                    "name": file_name.rsplit(".", 1)[0],
+                    "mime": binary.content_type,
+                    "sha256": digest,
+                    "role": "base",
+                    "primary": raw_image.get("primary") is True,
+                    "dataUrl": f"data:{binary.content_type};base64,{b64encode(binary.content).decode('ascii')}",
+                },
+            )
+        return {"jcode": jcode, "images": images}
+
+    def _get_catalog_image(self, reference: str) -> WorkbenchAssetBytes:
+        decoded_path = unquote(reference)
+        if (
+            not decoded_path
+            or decoded_path.startswith(("/", "\\"))
+            or "\\" in decoded_path
+            or ".." in decoded_path.split("/")
+        ):
+            raise PdpHttpError("asset_reference_forbidden", 422)
+        base = urlsplit(self._assets_base_url)
+        response = self._send(
+            f"{base.scheme}://{base.netloc}",
+            "GET",
+            f"/media/product-images/{quote(decoded_path, safe='/')}",
+            accept="image/*",
+        )
+        if response.status_code >= 400:
+            raise PdpHttpError("asset_fetch_failed", response.status_code)
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip()
+        if content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            raise PdpHttpError("asset_mime_forbidden", 502)
+        return WorkbenchAssetBytes(
+            content=response.content,
+            content_type=content_type,
+            cache_control=response.headers.get("Cache-Control", "private, max-age=300"),
+        )
 
     def list_work_bundles(self, query: Mapping[str, JsonValue]) -> JsonObject:
         return self._call(self._assets_base_url, "GET", "/work-bundles", query=query)

@@ -194,6 +194,36 @@ test('Given idle startup authority When draft scope is created Then the per-tab 
   }]);
 });
 
+test('Given project authority rotation When option-sorter tab recovery is saved Then it is not fenced by that temporary project lock', async () => {
+  // Given: option-sorter recovery is tab-local and carries its own project identity.
+  const { createGuardedWorkspaceMutations } = await loadGateway();
+  const writes = [];
+  const authority = editableAuthority({
+    scopeId: 'project:alpha', leaseId: 'lease-a', fencingToken: 1, revision: 3, mode: 'editing',
+  });
+  const mutations = createGuardedWorkspaceMutations({
+    authority,
+    adapters: {
+      session: {
+        async setItem(key, value, context) {
+          writes.push({ key, value, scopeId: context.scopeId });
+        },
+        async removeItem() {},
+      },
+      indexeddb: { async put() {}, async delete() {}, async putSessionAssets() {} },
+      archive: { async writeHandle() {} },
+    },
+  });
+
+  // When: the project lock is temporarily active while the tab persists option recovery.
+  await mutations.writeRecoveryValue('pdp_option_sorter_live_v1', '{"projectId":"alpha"}');
+
+  // Then: a later lock rotation cannot reject this scoped-in-payload tab recovery record.
+  assert.deepEqual(writes, [{
+    key: 'pdp_option_sorter_live_v1', value: '{"projectId":"alpha"}', scopeId: 'app-global',
+  }]);
+});
+
 for (const destination of ['recovery', 'projects', 'snapshots', 'sessionAssets']) {
   test(`Given A paused inside ${destination} helper When B commits Then stale A cannot publish`, async () => {
     // Given: direct A and B facades share one physical replica with a controllable pre-publish pause.

@@ -356,6 +356,14 @@ test('FACTORY-COMP delegated root events use declared actions after authority', 
     selector: '[data-comp-market-quick-action]',
   }));
   root.dispatch('click', delegatedTarget({
+    id: 'compMarketDetailSelectedMain',
+    selector: '#compMarketDetailSelectedMain',
+  }));
+  root.dispatch('click', delegatedTarget({
+    id: 'compMarketVmAnalyzeMain',
+    selector: '#compMarketVmAnalyzeMain',
+  }));
+  root.dispatch('click', delegatedTarget({
     dataset: { compMarketToggleResult: 'candidate-a' },
     selector: '[data-comp-market-toggle-result]',
   }));
@@ -364,12 +372,14 @@ test('FACTORY-COMP delegated root events use declared actions after authority', 
     selector: '[data-factory-comp-market-total-target]',
   }));
 
-  assert.deepEqual(harness.calls.slice(0, 8).map(call => call.kind), [
-    'authority', 'guide', 'authority', 'market', 'authority', 'market', 'authority', 'market',
+  assert.deepEqual(harness.calls.slice(0, 12).map(call => call.kind), [
+    'authority', 'guide', 'authority', 'market', 'authority', 'market', 'authority', 'market', 'authority', 'market', 'authority', 'market',
   ]);
   assert.equal(harness.calls[3].payload.action, 'detail-local');
-  assert.equal(harness.calls[5].payload.candidateId, 'candidate-a');
-  assert.deepEqual(harness.calls[7].payload, {
+  assert.equal(harness.calls[5].payload.action, 'detail-vm');
+  assert.equal(harness.calls[7].payload.action, 'analyze-vm');
+  assert.equal(harness.calls[9].payload.candidateId, 'candidate-a');
+  assert.deepEqual(harness.calls[11].payload, {
     type: 'candidate-target', scope: 'total', siteId: '', value: '7', commit: false,
   });
   dispose();

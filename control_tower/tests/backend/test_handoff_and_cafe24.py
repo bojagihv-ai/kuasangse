@@ -56,18 +56,20 @@ def test_cafe24_approval_gate_binds_once_to_payload_and_runtime_fence() -> None:
     with pytest.raises(Cafe24StagingError, match="approval_binding_mismatch"):
         gate.approve(str(request["approvalRequestId"]), {**binding, "payloadDigest": "tampered"})
     approved = gate.approve(str(request["approvalRequestId"]), binding)
+    confirmed = gate.confirm(str(approved["approvalToken"]), binding)
     with pytest.raises(Cafe24StagingError, match="stale_approval"):
-        gate.consume(str(approved["approvalToken"]), {**binding, "expectedWorkfileRevision": 4})
+        gate.consume(str(approved["approvalToken"]), {**binding, "expectedWorkfileRevision": 4}, str(confirmed["confirmationNonce"]))
     with pytest.raises(Cafe24StagingError, match="approval_token_reused"):
-        gate.consume(str(approved["approvalToken"]), binding)
+        gate.consume(str(approved["approvalToken"]), binding, str(confirmed["confirmationNonce"]))
     request = gate.issue(preview)
     approved = gate.approve(str(request["approvalRequestId"]), binding)
-    grant = gate.consume(str(approved["approvalToken"]), binding)
+    confirmed = gate.confirm(str(approved["approvalToken"]), binding)
+    grant = gate.consume(str(approved["approvalToken"]), binding, str(confirmed["confirmationNonce"]))
 
     assert grant["payloadDigest"] == preview["payloadDigest"]
     assert grant["approvalGrantDigest"]
     with pytest.raises(Cafe24StagingError, match="approval_token_reused"):
-        gate.consume(str(approved["approvalToken"]), binding)
+        gate.consume(str(approved["approvalToken"]), binding, str(confirmed["confirmationNonce"]))
 
 
 def test_cafe24_approval_validation_failure_requires_a_fresh_token_and_reservation_is_single_flight() -> None:
@@ -80,19 +82,27 @@ def test_cafe24_approval_validation_failure_requires_a_fresh_token_and_reservati
     request = gate.issue(preview)
     approved = gate.approve(str(request["approvalRequestId"]), binding)
     token = str(approved["approvalToken"])
+    confirmed = gate.confirm(token, binding)
+    nonce = str(confirmed["confirmationNonce"])
 
     with pytest.raises(Cafe24StagingError, match="approval_binding_mismatch"):
-        gate.reserve(token, {**binding, "productId": "cafe24:594"})
+        gate.reserve(token, {**binding, "productId": "cafe24:594"}, nonce)
     with pytest.raises(Cafe24StagingError, match="approval_token_reused"):
-        gate.reserve(token, binding)
+        gate.reserve(token, binding, nonce)
 
     fresh_request = gate.issue(preview)
     fresh_approved = gate.approve(str(fresh_request["approvalRequestId"]), binding)
     fresh_token = str(fresh_approved["approvalToken"])
+    with pytest.raises(Cafe24StagingError, match="confirmation_required"):
+        gate.reserve(fresh_token, binding, "")
+    fresh_confirmed = gate.confirm(fresh_token, binding)
+    fresh_nonce = str(fresh_confirmed["confirmationNonce"])
+    with pytest.raises(Cafe24StagingError, match="confirmation_invalid"):
+        gate.reserve(fresh_token, binding, "wrong")
 
     def reserve_once() -> str:
         try:
-            grant = gate.reserve(fresh_token, binding)
+            grant = gate.reserve(fresh_token, binding, fresh_nonce)
             return str(grant["approvalGrantDigest"])
         except Cafe24StagingError as error:
             return error.code
@@ -105,7 +115,7 @@ def test_cafe24_approval_validation_failure_requires_a_fresh_token_and_reservati
     assert outcomes.count("approval_token_reused") == 7
     gate.commit(grant_digests[0])
     with pytest.raises(Cafe24StagingError, match="approval_token_reused"):
-        gate.reserve(fresh_token, binding)
+        gate.reserve(fresh_token, binding, fresh_nonce)
 
 
 def test_cafe24_command_contract_is_versioned_and_never_contains_raw_approval_token() -> None:
@@ -124,6 +134,7 @@ def test_cafe24_reconcile_command_is_read_only_and_bound_to_original_preview() -
     assert command["command"]["name"] == CAFE24_RECONCILE_COMMAND_NAME
     assert command["command"]["payload"] == {**preview["payload"], "jobId": "job-1"}
     assert command["payloadDigest"] == preview["payloadDigest"]
+    assert command["idempotencyKey"] == f"{preview['idempotencyKey']}:reconcile"
     assert "approvalToken" not in str(command)
     assert "approvalGrantDigest" not in str(command)
 
@@ -144,7 +155,24 @@ def test_queued_cafe24_bridge_rendezvous_returns_remote_digest_and_replays_idemp
             "status": "staged_verified",
             "payloadDigest": preview["payloadDigest"],
             "remoteReadbackDigest": "remote-html-digest",
-            "externalProductNo": "2994",
+            "remoteReadback": {
+                "productNo": "4120",
+                "productCode": "P0000TEST",
+                "productName": "방울수저집",
+                "display": "F",
+                "selling": "F",
+                "marketSync": "F",
+                "categoryIds": ["71"],
+                "representativeImageCount": 4,
+                "detailImageCount": 14,
+                "optionValues": ["초록"],
+                "variantCount": 1,
+                "inventoryByOption": {"초록": {"quantity": "99", "useInventory": "T"}},
+                "detailHtmlDigest": "detail-html-digest",
+                "imageDigests": ["image-digest"],
+                "updatedAt": "2026-08-15T15:39:40+09:00",
+            },
+            "externalProductNo": "4120",
             "idempotencyKey": preview["idempotencyKey"],
         }
         bridge.lifecycle(order_id, "events", {**order, "workerId": "worker-1", "status": "completed", "eventSequence": 2, "result": result})
@@ -185,6 +213,38 @@ def test_queued_cafe24_bridge_returns_read_only_factory_preflight() -> None:
         }
         bridge.lifecycle(order_id, "complete", {**order, "workerId": "worker-1", "eventSequence": 2, "result": result})
 
+        assert pending.result(timeout=1) == result
+
+
+def test_queued_cafe24_bridge_only_allows_the_active_worker_session_to_claim() -> None:
+    bridge = QueuedCafe24CommandBridge(
+        execution_timeout_seconds=1.0,
+        worker_target=lambda: {"workerId": "worker-current", "sessionId": "session-current"},
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(bridge.inspect)
+        stale = bridge.claim({"workerId": "worker-old", "sessionId": "session-old", "contractVersion": "control-work-order:v1", "capabilityVersion": "batch-control-worker:v1"})
+        assert stale["order"] is None
+        claimed = bridge.claim({"workerId": "worker-current", "sessionId": "session-current", "contractVersion": "control-work-order:v1", "capabilityVersion": "batch-control-worker:v1"})
+        order = claimed["order"]
+        assert isinstance(order, dict)
+        assert order["workerSessionId"] == "session-current"
+        order_id = str(order["orderId"])
+        bridge.lifecycle(order_id, "ack", {**order, "workerId": "worker-current", "accepted": True, "eventSequence": 1})
+        result = {
+            "schema": "factory-cafe24-preflight:v1",
+            "status": "blocked",
+            "reason": "test-complete",
+            "productId": "",
+            "productKey": "",
+            "htmlDigest": "",
+            "imageDigests": [],
+            "expectedWorkfileRevision": 0,
+            "expectedRunId": "",
+            "expectedInputFingerprint": "",
+        }
+        bridge.lifecycle(order_id, "complete", {**order, "workerId": "worker-current", "eventSequence": 2, "result": result})
         assert pending.result(timeout=1) == result
 
 

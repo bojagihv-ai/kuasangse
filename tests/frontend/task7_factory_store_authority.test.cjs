@@ -39,6 +39,55 @@ async function importFresh(relativePath, label) {
   return import(url.href);
 }
 
+test('생산관제 Cafe24 상품분류는 현재 상품의 최하위 분류를 한글명으로 선택한다', () => {
+  const core = source('src/app-core-03.js');
+  const selectionSource = sourceSlice(
+    core,
+    'function factoryRuntimeCafe24CategorySelection(',
+    'async function factoryRuntimeResolveCafe24Category(',
+  );
+  const context = vm.createContext({
+    factoryCafe24NormalizeReferenceItem: item => ({
+      code: String(item.category_no || ''),
+      name: item.full_category_name
+        ? Object.values(item.full_category_name).filter(Boolean).join(' > ')
+        : String(item.category_name || ''),
+    }),
+  });
+  vm.runInContext(`${selectionSource}\nthis.selectCategory = factoryRuntimeCafe24CategorySelection;`, context);
+
+  const selected = context.selectCategory({
+    product: {
+      finalDb: { category: '수저집' },
+      cafe24ReferenceLists: {
+        categories: [{ code: '107', name: '전통공예품 > 일반공예품 > 기타공예용품' }],
+      },
+    },
+  }, {
+    categories: [
+      { category_no: 71 },
+      { category_no: 88 },
+      { category_no: 107 },
+    ],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(selected)), {
+    categoryId: '107',
+    categoryLabel: '전통공예품 > 일반공예품 > 기타공예용품',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(context.selectCategory({
+    product: { finalDb: { category_no: '88', category: '수저집' } },
+  }, {
+    category: {
+      category_no: 88,
+      full_category_name: { 1: '전통공예품', 2: '일반공예품', 3: null },
+    },
+  }))), {
+    categoryId: '88',
+    categoryLabel: '전통공예품 > 일반공예품',
+  });
+});
+
 test('작업파일 동기화는 이미 동일한 작업 정체성을 다시 커밋하지 않는다', () => {
   const core = source('src/app-core-03.js');
   const ensureIdentitySource = sourceSlice(
@@ -1391,8 +1440,8 @@ test('B3 production action bridge commits through the owned store draft transact
   }
   assert.match(candidateDbApplyWriter, /factoryScheduleSizeCutAfterCandidateConfirm\([\s\S]*persist: false,[\s\S]*render: false/);
   assert.match(candidateCafe24ApplyWriter, /factoryScheduleSizeCutAfterCandidateConfirm\([\s\S]*persist: false,[\s\S]*render: false/);
-  assert.match(candidateCollectWriter, /factoryApplyDbCandidateFromReview\(0, \{ render: false, factory: current \}\)/);
-  assert.match(candidateCollectWriter, /factoryApplyCafe24CandidateFromReview\(0, \{ render: false, factory: current \}\)/);
+  assert.match(candidateCollectWriter, /factoryApplyDbCandidateFromReview\(0, \{\s*render: false,\s*factory: current,\s*preserveManualFields: options\.preserveManualFields === true,\s*\}\)/);
+  assert.match(candidateCollectWriter, /factoryApplyCafe24CandidateFromReview\(0, \{\s*render: false,\s*factory: current,\s*preserveManualFields: options\.preserveManualFields === true,\s*\}\)/);
   assert.match(candidateCollectWriter, /factoryStartCafe24CandidateRerank\([\s\S]*\{ factory: current \}\)/);
 
   const candidateCafe24CollectWriter = sourceSlice(cafe24Sync, 'async function factoryCollectCafe24CandidatesForReviewOnly(', 'async function factoryCollectAdditionalCafe24CandidatesForReview(');
@@ -1667,8 +1716,8 @@ test('detail stage completes on its caller-owned draft without invoking image-st
   };
   const state = {
     analysis: { product_name: 'owned-detail-product' },
-    sectionContents: {},
-    sectionImages: {},
+    sectionContents: { header: { generation_basis: 'combined' } },
+    sectionImages: { header: 'data:image/png;base64,AA==' },
     detailImageBlocks: [],
     sectionBatchRun: null,
     step: 'factory',
@@ -1676,11 +1725,13 @@ test('detail stage completes on its caller-owned draft without invoking image-st
   let heartbeatStarts = 0;
   let heartbeatStops = 0;
   let imageCleanupCalls = 0;
+  let generationCalls = 0;
   let registeredFactory = null;
   const context = vm.createContext({
     state,
     cloneData: value => structuredClone(value),
     factoryUpdateFromInputs: draft => assert.strictEqual(draft, factory),
+    factoryApplyBatchControlDetailLayout: () => 0,
     factoryApplySelectedAssetsToSections: draft => {
       assert.strictEqual(draft, factory);
       return 0;
@@ -1714,8 +1765,12 @@ test('detail stage completes on its caller-owned draft without invoking image-st
     factoryEnsureCurrentProductImageAnalysisForOneClick: async () => {
       throw new Error('ready analysis must not invoke external image analysis');
     },
-    generateAllSections: async () => true,
-    orderedSections: () => [],
+    generateAllSections: async () => {
+      generationCalls += 1;
+      return true;
+    },
+    orderedSections: () => [{ id: 'header', name: '헤더' }],
+    getSectionGenerationMode: () => 'mixed',
     sectionWorkScopeMeta: () => ({}),
     sectionContentBelongsToCurrentWork: () => true,
     buildExportHtml: () => '<html><body>detail</body></html>',
@@ -1734,7 +1789,8 @@ test('detail stage completes on its caller-owned draft without invoking image-st
   assert.equal(factory.stages.detail.status, 'done');
   assert.equal(factory.goalRun.progress, 100);
   assert.equal(factory.goalRun.failureReason, '');
-  assert.equal(factory.product.detailStageDebug.message, '상세페이지 전체 섹션 생성 응답 확인');
+  assert.equal(factory.product.detailStageDebug.message, '상세페이지 현재 작업 섹션 1개 재사용');
+  assert.equal(generationCalls, 0);
   assert.equal(heartbeatStarts, 1);
   assert.equal(heartbeatStops, 1);
   assert.equal(imageCleanupCalls, 0);
@@ -1868,6 +1924,81 @@ test('B1 VM and analysis orchestration opens exact commands and rejects stale wo
   assert.equal(externalCalls, 0);
 });
 
+test('로컬 보관 원본을 복구한 뒤 제품 이미지 분석을 이어간다', async () => {
+  const factoryCore = source('src/app-core-06.js');
+  const analysisEnsureSource = sourceSlice(
+    factoryCore,
+    'async function factoryEnsureCurrentProductImageAnalysisForOneClick(',
+    'async function factoryRunCurrentProductImageAnalysisOnly(',
+  );
+  const token = Object.freeze({ workspaceId: 'workspace-restored-input', revision: 4, fence: 2 });
+  const events = [];
+  const state = { analysis: null, analysisImages: [], imageBase64: '', imagePreview: '', imageMime: '' };
+  const factory = { product: {}, goalRun: {}, stages: { db: {} }, logs: [] };
+  let sourceRestored = false;
+  const context = vm.createContext({
+    state,
+    factoryRuntimeRequireStore: () => ({
+      getOperationToken: () => token,
+      isOperationCurrent: candidate => candidate === token,
+    }),
+    factoryRuntimeStaleActionError: action => Object.assign(new Error(action), { code: 'STALE_FACTORY_RUNTIME_ACTION' }),
+    factoryUpdateFromInputs: () => true,
+    factoryApplyProductToApp: () => true,
+    restoreFactoryInputImageForGeneration: () => {
+      if (!sourceRestored) return false;
+      state.imageBase64 = 'QUJD';
+      state.imageMime = 'image/png';
+      state.imagePreview = 'data:image/png;base64,QUJD';
+      state.analysisImages = [{ base64: 'QUJD', mime: 'image/png' }];
+      return true;
+    },
+    factoryClearStaleProductAnalysis: () => false,
+    ensureCurrentProductAnalysisForGeneration: () => false,
+    analysisMatchesCurrentImageInput: analysis => !!analysis?.product_name,
+    analysisHasUsableInference: analysis => !!analysis?.product_name,
+    clearStaleImageDependentAnalysis: () => true,
+    hasAnalyzableProductImage: () => !!state.imageBase64,
+    factoryEnsureSourceImagePart: async stageId => {
+      assert.equal(stageId, 'input');
+      events.push('restore');
+      sourceRestored = true;
+      return { base64: 'QUJD', mime: 'image/png' };
+    },
+    getAnalysisMatchSettings: () => ({}),
+    getAnalysisEngineRunInfo: () => ({}),
+    renderModelRunLine: () => '테스트 모델',
+    factorySetGoalRunProgress: () => true,
+    factorySetStageStatus: (stageId, status, message, draft) => {
+      draft.stages[stageId] = { status, message };
+    },
+    factoryLog: () => true,
+    beginProductAnalysisRun: () => true,
+    saveLastWorkNow: () => true,
+    render: () => true,
+    factoryYieldToPaint: async () => true,
+    factoryStartGoalHeartbeat: () => 'heartbeat',
+    factoryStopGoalHeartbeat: () => true,
+    factoryEnsureImageInferenceWithFallback: async () => {
+      events.push('analysis');
+      state.analysis = { product_name: '복구 제품', category: '테스트' };
+      return state.analysis;
+    },
+    factoryStoreCurrentProductAnalysis: draft => {
+      draft.product.analysis = structuredClone(state.analysis);
+      return true;
+    },
+    finishProductAnalysisRun: () => true,
+  });
+  vm.runInContext(`${analysisEnsureSource}\nthis.ensureAnalysis = factoryEnsureCurrentProductImageAnalysisForOneClick;`, context);
+
+  const result = await context.ensureAnalysis({ factory, operationToken: token });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, ['restore', 'analysis']);
+  assert.equal(factory.product.analysis.product_name, '복구 제품');
+});
+
 test('B1 VM worker commits after a stubbed successful VM result and rejects a switched workspace before commit', async () => {
   const factoryCore = source('src/app-core-06.js');
   const vmCandidateSource = sourceSlice(
@@ -1903,6 +2034,7 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
     const context = vm.createContext({
       state: { step: 'factory', analysis: {}, productName: '테스트 제품', compPage: { marketScrape: market } },
       AbortController,
+      cloneData: value => structuredClone(value),
       COMP_MARKET_SITES: [{ id: 'site-a' }],
       factoryRuntimeRequireStore: () => store,
       factoryRuntimeStaleActionError: action => Object.assign(new Error(`STALE_FACTORY_RUNTIME_ACTION: ${action}`), {
@@ -1918,6 +2050,10 @@ test('B1 VM worker commits after a stubbed successful VM result and rejects a sw
       cleanDbSearchTerm: value => String(value || '').trim(),
       factoryWizardDbSearchQueryFromInput: () => '',
       ensureCompMarketScrapeState: () => market,
+      sanitizeCompMarketScrapeForPersistence: value => value,
+      mergeCompMarketStoredState: (previous, next) => ({ ...previous, ...next }),
+      compMarketSourceResults: value => value.vmResults || value.results || [],
+      compMarketSourceGroupedResults: value => value.vmGroupedResults || value.groupedResults || {},
       seedCompMarketDefaultProductContext: () => true,
       compMarketReadCandidateTargets: () => true,
       compMarketTargetForSite: () => 1,
@@ -3097,6 +3233,24 @@ test('factory store draft transaction is authority-first, atomic, fenced, and ca
   assert.equal(store.getSnapshot().factory.nested.count, 3);
   assert.equal(store.getOperationToken().revision, 6);
   assert.throws(() => asyncDraft.nested, /revoked|draft|transaction/i);
+});
+
+test('factory store draft reads frozen receipt arrays without Proxy invariant errors', async () => {
+  const { createFactoryStore } = await importFresh('src/modules/factory-store.mjs', 'frozen-receipt');
+  const store = createFactoryStore({
+    initialSnapshot: initialSnapshot(),
+    workspaceId: 'workspace-frozen-receipt',
+  });
+
+  const receipt = store.updateDraft(draft => {
+    draft.cafe24RegistrationReceipt = Object.freeze({
+      optionValues: Object.freeze(['1.빨강', '2.연핑']),
+    });
+    return [...draft.cafe24RegistrationReceipt.optionValues];
+  }, { owner: 'factory', expectedRevision: 0 });
+
+  assert.deepEqual(receipt.result, ['1.빨강', '2.연핑']);
+  store.dispose();
 });
 
 test('factory store operation leases reject same-key re-entry and cancel privately on switch or dispose', async () => {
@@ -5291,4 +5445,1068 @@ test('B3 image request timer registry is empty after success, throw, and operati
   await assert.rejects(aborted, /abort timeout/);
   assert.equal(activeTimers.size, 0);
   assert.equal(activeRequests.size, 0);
+});
+
+test('goal 루프 후보 수는 A컷 선택 뒤에도 전체 사용 가능 후보 수를 유지한다', () => {
+  const factoryCore = source('src/app-core-06.js');
+  const countSource = sourceSlice(
+    factoryCore,
+    'function factoryGoalAssetCount(',
+    'async function factoryRunGoalLoop(',
+  );
+  const count = new Function(
+    'factoryUsableAssetsForStage',
+    'factoryRuntimeReadFactory',
+    `${countSource}\nreturn factoryGoalAssetCount;`,
+  )(() => [{ used: true }, {}, {}, {}], () => ({}));
+
+  assert.equal(count('hero'), 4);
+});
+
+test('상세 HTML 자산은 goal 루프의 완료 자산으로 계산하고 이미지 단계는 기존 판정을 유지한다', () => {
+  const core = source('src/app-core-03.js');
+  const usableSource = sourceSlice(
+    core,
+    'function factoryUsableAssetsForStage(',
+    'function factorySelectedAssets(',
+  );
+  const assets = [
+    { id: 'detail-html', stageId: 'detail', html: '<main>done</main>' },
+    { id: 'hero-image', stageId: 'hero', image: 'data:image/png;base64,AA==' },
+  ];
+  const usable = new Function(
+    'state',
+    'factoryIdentityKey',
+    'factoryNormalizeIdentityText',
+    'factoryCurrentInputImageFingerprint',
+    'factoryHasDeclaredProductImage',
+    'factoryStageLatestGenerationRunId',
+    'factoryAssetsForStage',
+    'factoryAssetHasCurrentProductPayload',
+    'factoryAssetSupersededRunId',
+    'factoryAssetGenerationRunId',
+    `${usableSource}\nreturn factoryUsableAssetsForStage;`,
+  )(
+    { productName: '방울수저집' },
+    () => '방울수저집',
+    value => String(value || ''),
+    () => 'input-fingerprint',
+    () => true,
+    () => '',
+    stageId => assets.filter(asset => asset.stageId === stageId),
+    (asset, _factory, options) => options.allowHtml ? Boolean(asset.html) : Boolean(asset.image),
+    () => false,
+    () => '',
+  );
+
+  assert.deepEqual(usable('detail', { product: {} }).map(asset => asset.id), ['detail-html']);
+  assert.deepEqual(usable('hero', { product: {} }).map(asset => asset.id), ['hero-image']);
+});
+
+test('restoreOnly checkpoint keeps exact identity, allows one-way Cafe24 target binding, and rejects foreign or stale fences before hydration', async () => {
+  const core = source('src/app-core-03.js');
+  const restoreSource = sourceSlice(
+    core,
+    'function factoryRuntimeControlCheckpointProjectId(',
+    'async function factoryRuntimeControlPrepareProduct(',
+  );
+  const jobId = 'factory-job-restore-characterization';
+  const workspaceId = `batch:${jobId}`;
+  const workspaceScopeId = `project:${workspaceId}`;
+  const checkpoint = {
+    schema: 'factory-product-checkpoint:v1',
+    jobId,
+    projectId: workspaceId,
+    productId: 'factory:방울수저집',
+    productKey: '방울수저집',
+    runId: 'factory_work_run_restore_characterization',
+    inputFingerprint: 'sha256:restore-characterization-input',
+    revision: 6,
+    status: 'waiting_manual',
+    stageKey: 'general',
+    savedAt: 1,
+  };
+  const exactProjection = {
+    schema: 'factory-control-projection:v1',
+    connected: true,
+    session: {
+      workspaceId,
+      productId: checkpoint.productId,
+      productKey: checkpoint.productKey,
+      runId: checkpoint.runId,
+      inputFingerprint: checkpoint.inputFingerprint,
+      revision: checkpoint.revision,
+    },
+    registration: { jobId },
+    inputs: [],
+    stages: [{
+      key: 'option_color',
+      factoryStageId: 'options',
+      candidates: [],
+      selectedIds: [],
+    }],
+  };
+  const clone = value => structuredClone(value);
+  const events = [];
+  let projection = clone(exactProjection);
+  const error = code => Object.assign(new Error(code), { code });
+  const context = vm.createContext({
+    state: { projectBusy: false, workspaceDocumentDirty: false },
+    factoryRuntimeBatchCommandError: error,
+    factoryRuntimeDetachedValue: clone,
+    factoryRuntimeReadFactory: () => ({}),
+    factoryRuntimeControlProvidedColorOptionsMatch: () => true,
+    loadProjectRecord: async projectId => {
+      events.push(`load:${projectId}`);
+      return { id: projectId };
+    },
+    factoryRuntimeControlProjection: async () => clone(projection),
+    getCurrentDocumentWorkspaceScope: projectId => `project:${projectId}`,
+    ensureWorkspaceEditAuthority: async scopeId => {
+      events.push(`authority:${scopeId}`);
+      return { mode: 'editing', scopeId };
+    },
+    hydrateServerLastWorkSnapshot: async options => {
+      events.push(`hydrate:${JSON.stringify(options)}`);
+      return true;
+    },
+    factoryRuntimeUpdateOwnedFactory: async (commandName, owner, mutator) => {
+      events.push(`update:${commandName}:${owner}`);
+      mutator({});
+    },
+    factoryApplySelectedAssetsToSections: () => {
+      events.push('apply-selected-assets');
+      return 1;
+    },
+    saveLastWorkNow: async options => {
+      events.push(`save:${JSON.stringify(options)}`);
+    },
+  });
+  vm.runInContext(
+    `${restoreSource}\nglobalThis.restoreCheckpoint = factoryRuntimeControlRestoreProductCheckpoint;`,
+    context,
+    { filename: 'src/app-core-03.js#restore-only-characterization' },
+  );
+
+  const receipt = await context.restoreCheckpoint({ jobId, checkpoint: clone(checkpoint) });
+  assert.equal(receipt.status, checkpoint.status);
+  assert.equal(receipt.stageKey, checkpoint.stageKey);
+  assert.equal(receipt.projection.registration.jobId, jobId);
+  assert.deepEqual(clone(receipt.projection.session), exactProjection.session);
+  assert.equal(receipt.checkpoint.projectId, workspaceId);
+
+  projection = {
+    ...clone(exactProjection),
+    progress: {
+      stageKey: 'options',
+      status: 'blocked',
+      message: '색상옵션 값을 찾지 못했습니다.',
+    },
+  };
+  const blockedProgressReceipt = await context.restoreCheckpoint({ jobId, checkpoint: clone(checkpoint) });
+  assert.equal(blockedProgressReceipt.status, 'blocked');
+  assert.equal(blockedProgressReceipt.stageKey, 'option_color');
+  assert.equal(blockedProgressReceipt.message, '색상옵션 값을 찾지 못했습니다.');
+  assert.equal(blockedProgressReceipt.checkpoint.status, 'blocked');
+  assert.equal(blockedProgressReceipt.checkpoint.stageKey, 'option_color');
+
+  events.length = 0;
+  projection = {
+    ...clone(exactProjection),
+    session: { ...clone(exactProjection.session), productId: 'cafe24:2994' },
+    registration: { jobId, productId: 'cafe24:2994' },
+  };
+  const promotedReceipt = await context.restoreCheckpoint({ jobId, checkpoint: clone(checkpoint) });
+  assert.equal(promotedReceipt.projection.session.productId, 'cafe24:2994');
+  assert.deepEqual(events, [
+    `load:${workspaceId}`,
+    `authority:${workspaceScopeId}`,
+    'hydrate:{"force":true,"forceRevisionRestore":true,"render":false}',
+    'update:factory/sections:guide:apply-sections:detail-document',
+    'apply-selected-assets',
+    'save:{"sync":false}',
+  ]);
+
+  events.length = 0;
+  context.state.workspaceDocumentDirty = true;
+  projection = clone(exactProjection);
+  const dirtyReceipt = await context.restoreCheckpoint({ jobId, checkpoint: clone(checkpoint) });
+  assert.equal(dirtyReceipt.status, checkpoint.status);
+  assert.match(core, /loadProjectRecord\(checkpoint\.projectId, \{ startupRestore: true, checkpointRestore: true \}\)/);
+  assert.match(core, /options\.checkpointRestore === true[\s\S]*?\? 'continue'/);
+  context.state.workspaceDocumentDirty = false;
+
+  events.length = 0;
+  await assert.rejects(
+    context.restoreCheckpoint({
+      jobId,
+      checkpoint: { ...clone(checkpoint), productId: 'cafe24:2993' },
+    }),
+    errorValue => errorValue?.code === 'factory_product_checkpoint_restore_mismatch',
+  );
+  assert.deepEqual(
+    events.filter(event => event.startsWith('authority:') || event.startsWith('hydrate:')),
+    [],
+    'a concrete Cafe24 target must not drift to another product',
+  );
+
+  events.length = 0;
+  projection = clone(exactProjection);
+  await assert.rejects(
+    context.restoreCheckpoint({
+      jobId,
+      checkpoint: { ...clone(checkpoint), projectId: 'batch:factory-job-foreign' },
+    }),
+    errorValue => errorValue?.code === 'factory_product_checkpoint_invalid',
+  );
+  assert.deepEqual(
+    events.filter(event => event.startsWith('authority:') || event.startsWith('hydrate:')),
+    [],
+    'foreign checkpoint must not acquire authority or hydrate',
+  );
+
+  events.length = 0;
+  projection = {
+    ...clone(exactProjection),
+    session: { ...clone(exactProjection.session), runId: 'factory_work_run_stale' },
+  };
+  await assert.rejects(
+    context.restoreCheckpoint({ jobId, checkpoint: clone(checkpoint) }),
+    errorValue => errorValue?.code === 'factory_product_checkpoint_restore_mismatch',
+  );
+  assert.deepEqual(
+    events.filter(event => event.startsWith('authority:') || event.startsWith('hydrate:')),
+    [],
+    'stale restored identity must fail before authority or hydration',
+  );
+  assert.equal(workspaceScopeId, `project:${workspaceId}`);
+});
+
+test('restoreOnly exact checkpoint must hydrate durable competitors before returning a local partial projection', async () => {
+  const core = source('src/app-core-03.js');
+  const restoreSource = sourceSlice(
+    core,
+    'function factoryRuntimeControlCheckpointProjectId(',
+    'async function factoryRuntimeControlPrepareProduct(',
+  );
+  const runSource = sourceSlice(
+    core,
+    'async function factoryRuntimeControlRunProduct(',
+    'async function factoryRuntimeControlCommand(',
+  );
+  const jobId = 'factory-job-88e6ba8fa26a41b0ae396d2be6cb160a';
+  const workspaceId = `batch:${jobId}`;
+  const workspaceScopeId = `project:${workspaceId}`;
+  const productKey = '방울수저집';
+  const currentRunId = 'factory_work_run_mss7zm8b_9i1ifd';
+  const inputFingerprint = 'sha256:restore-only-input-10';
+  const inputImages = Array.from({ length: 10 }, (_, index) => ({
+    id: `input-${index + 1}`,
+    role: index === 0 ? 'base' : 'color-option',
+    name: index === 0 ? '대표 입력' : `색상 입력 ${index}`,
+  }));
+  const sectionCandidates = Array.from({ length: 15 }, (_, index) => ({
+    id: `section-${index + 1}:variant-a`,
+    sectionId: `section-${index + 1}`,
+    variantId: 'variant-a',
+  }));
+  const selectedByStage = {
+    hero: ['hero-a'],
+    size: ['size-a'],
+    options: ['options-a'],
+    cuts: ['cut-a'],
+    detail: ['detail-a', 'detail-b'],
+  };
+  const assets = Object.entries(selectedByStage).flatMap(([stageId, ids]) => (
+    ids.map(id => ({
+      id,
+      stageId,
+      used: true,
+      ...(stageId === 'cuts' ? { image: 'selected-general-cut', placedSectionId: 'material_tech' } : {}),
+    }))
+  ));
+  const candidates = Array.from({ length: 16 }, (_, index) => ({
+    id: `vm-candidate-${index + 1}`,
+    title: `방울수저집 경쟁상품 ${index + 1}`,
+    product_url: `https://example.test/products/${index + 1}`,
+    factoryWorkKey: `${currentRunId}::${productKey}::${inputFingerprint}`,
+    currentRunId,
+    factoryProductKey: productKey,
+    inputImageFingerprint: inputFingerprint,
+    stageId: 'competitors',
+  }));
+  const localFactory = {
+    workspace: { id: workspaceId },
+    batchJobId: jobId,
+    activeStage: 'detail',
+    goalRun: { jobId, currentRunId, mode: 'auto' },
+    automation: { currentRunId },
+    product: {
+      productName: productKey,
+      productKey,
+      currentRunId,
+      lockedInputImageFingerprint: inputFingerprint,
+      inputImages,
+      finalDb: {
+        category: '수저집',
+        material: '면',
+        originCountry: '대한민국',
+        salePrice: '19000',
+        size: '10x24cm',
+      },
+      competitors: [],
+    },
+    stages: Object.fromEntries(Object.entries(selectedByStage).map(([stageId, selectedAssetIds]) => [
+      stageId,
+      { status: 'done', selectedAssetIds },
+    ])),
+    assets,
+    sectionCandidates,
+    sectionSelectedIds: sectionCandidates.map(item => item.id),
+    competitors: {
+      compPage: {
+        marketScrape: { results: [], vmResults: [], selectedIds: [], scrapedImages: [] },
+      },
+    },
+  };
+  const serverFactory = {
+    ...structuredClone(localFactory),
+    product: { ...structuredClone(localFactory.product), competitors: candidates },
+    competitors: {
+      compPage: {
+        marketScrape: {
+          results: candidates,
+          vmResults: candidates,
+          selectedIds: [candidates[0].id],
+          scrapedImages: [{ id: 'deep-detail-1', candidateId: candidates[0].id }],
+          detailResults: { status: 'done', successCount: 1, requestedCount: 1 },
+        },
+      },
+    },
+  };
+  const durableSnapshot = {
+    workspaceScope: { id: workspaceScopeId },
+    assets: {
+      workspaceScope: { id: workspaceScopeId },
+      currentProjectId: workspaceId,
+      currentRunId,
+      inputImageFingerprint: inputFingerprint,
+      activeStage: 'competitors',
+      competitorData: null,
+      factory: serverFactory,
+    },
+  };
+  const checkpoint = {
+    schema: 'factory-product-checkpoint:v1',
+    jobId,
+    projectId: workspaceId,
+    productId: `factory:${productKey}`,
+    productKey,
+    runId: currentRunId,
+    inputFingerprint,
+    revision: 6,
+    status: 'waiting_manual',
+    stageKey: 'general',
+    savedAt: 1,
+  };
+  const payload = {
+    schema: 'factory-product-run-command:v1',
+    jobId,
+    batchId: 'batch-20260724',
+    mode: 'auto',
+    productName: productKey,
+    source: { kind: 'manual' },
+    inputImages: [],
+    startFresh: false,
+    restoreOnly: true,
+    expectedStageKey: 'general',
+    checkpoint,
+  };
+  const clone = value => structuredClone(value);
+
+  function createRuntime(options = {}) {
+    const events = [];
+    let mutable = false;
+    let canonicalFactory = {};
+    const state = {
+      currentProjectId: '',
+      currentProjectName: '',
+      projectBusy: false,
+      workspaceDocumentDirty: false,
+      competitorData: null,
+      sectionImages: { material_tech: 'stale-material-image' },
+    };
+    const error = code => Object.assign(new Error(code), { code });
+    const stageProjection = (key, stageId) => {
+      const stage = canonicalFactory.stages?.[stageId] || {};
+      const stageAssets = (canonicalFactory.assets || []).filter(asset => asset.stageId === stageId);
+      return {
+        key,
+        candidates: stageAssets.map(asset => ({ id: asset.id })),
+        selectedIds: Array.isArray(stage.selectedAssetIds) ? [...stage.selectedAssetIds] : [],
+      };
+    };
+    const projection = () => {
+      const competitorRows = canonicalFactory.product?.competitors || [];
+      return {
+        schema: 'factory-control-projection:v1',
+        connected: true,
+        session: {
+          workspaceId: canonicalFactory.workspace?.id || '',
+          productId: `factory:${canonicalFactory.product?.productKey || ''}`,
+          productKey: canonicalFactory.product?.productKey || '',
+          runId: canonicalFactory.product?.currentRunId || '',
+          inputFingerprint: canonicalFactory.product?.lockedInputImageFingerprint || '',
+          revision: 6,
+        },
+        registration: { jobId: canonicalFactory.goalRun?.jobId || '' },
+        inputs: [
+          { key: 'source_images', count: canonicalFactory.product?.inputImages?.length || 0, items: [] },
+          { key: 'competitors', count: competitorRows.length, items: competitorRows.map(item => ({ id: item.id })) },
+        ],
+        stages: [
+          stageProjection('representative', 'hero'),
+          stageProjection('size', 'size'),
+          stageProjection('option_color', 'options'),
+          stageProjection('general', 'cuts'),
+          {
+            key: 'sections',
+            candidates: (canonicalFactory.sectionCandidates || []).map(item => ({ id: item.id })),
+            selectedIds: [...(canonicalFactory.sectionSelectedIds || [])],
+          },
+          stageProjection('final_detail', 'detail'),
+        ],
+      };
+    };
+    const context = vm.createContext({
+      state,
+      factoryRuntimeBatchCommandError: error,
+      factoryRuntimeDetachedValue: clone,
+      factoryRuntimeReadFactory: () => canonicalFactory,
+      factoryRuntimeControlProvidedColorOptionsMatch: () => true,
+      loadProjectRecord: async projectId => {
+        events.push(`load:${projectId}`);
+        canonicalFactory = clone(options.localFactory || localFactory);
+        state.currentProjectId = projectId;
+        state.currentProjectName = productKey;
+        return { id: projectId };
+      },
+      factoryRuntimeControlProjection: async () => {
+        const value = projection();
+        const count = value.inputs.find(item => item.key === 'competitors')?.count || 0;
+        events.push(`projection:${count}`);
+        return clone(value);
+      },
+      getCurrentDocumentWorkspaceScope: projectId => `project:${projectId}`,
+      ensureWorkspaceEditAuthority: async (scopeId, authorityOptions) => {
+        events.push(`authority:${scopeId}`);
+        assert.deepEqual(clone(authorityOptions), { force: true, confirmedTakeover: true });
+        if (options.authorityError) throw error(options.authorityError);
+        mutable = true;
+        return { mode: 'editing', scopeId };
+      },
+      hydrateServerLastWorkSnapshot: async hydrateOptions => {
+        events.push('hydrate');
+        assert.deepEqual(clone(hydrateOptions), {
+          force: true,
+          forceRevisionRestore: true,
+          render: false,
+        });
+        if (!mutable || options.hydrationResult === false) return false;
+        canonicalFactory = {
+          ...canonicalFactory,
+          product: {
+            ...canonicalFactory.product,
+            competitors: clone(durableSnapshot.assets.factory.product.competitors),
+          },
+          competitors: clone(durableSnapshot.assets.factory.competitors),
+        };
+        state.competitorData = durableSnapshot.assets.competitorData;
+        if (options.postHydrateForeign) {
+          canonicalFactory.goalRun = { ...canonicalFactory.goalRun, jobId: 'factory-job-foreign' };
+        }
+        events.push('replica-save-failed:newer-revision');
+        return true;
+      },
+      factoryRuntimeUpdateOwnedFactory: async (commandName, owner, mutator) => {
+        events.push(`update:${commandName}:${owner}`);
+        mutator(canonicalFactory);
+      },
+      factoryApplySelectedAssetsToSections: draft => {
+        events.push('apply-selected-assets');
+        state.sectionImages.material_tech = draft.assets.find(asset => asset.id === 'cut-a')?.image || '';
+        return 1;
+      },
+      saveLastWorkNow: async saveOptions => {
+        events.push(`save:${JSON.stringify(saveOptions)}`);
+      },
+    });
+    vm.runInContext(
+      `${restoreSource}\n${runSource}\nglobalThis.runProduct = factoryRuntimeControlRunProduct;`,
+      context,
+      { filename: 'src/app-core-03.js#restore-only-hydration' },
+    );
+    return {
+      run: value => context.runProduct(clone(value)),
+      events,
+      readFactory: () => clone(canonicalFactory),
+      readState: () => clone(state),
+    };
+  }
+
+  const runtime = createRuntime();
+  const receipt = await runtime.run(payload);
+  const competitorInput = receipt.projection.inputs.find(item => item.key === 'competitors');
+  const sectionStage = receipt.projection.stages.find(stage => stage.key === 'sections');
+  assert.equal(competitorInput.count, 16, 'restoreOnly returned the local zero-candidate projection instead of durable 16');
+  assert.deepEqual(
+    runtime.readFactory().product.competitors.map(item => item.id),
+    candidates.map(item => item.id),
+    'same-work hydration must expose only the 16 durable rows without fabrication',
+  );
+  assert.equal(runtime.readFactory().product.inputImages.length, 10, 'input A must not decrease');
+  assert.deepEqual(runtime.readFactory().stages, localFactory.stages, 'selected asset A must not decrease');
+  assert.equal(sectionStage.candidates.length, 15);
+  assert.equal(sectionStage.selectedIds.length, 15);
+  assert.equal(runtime.readState().competitorData, null);
+  assert.equal(runtime.readState().sectionImages.material_tech, 'selected-general-cut');
+  assert.deepEqual(runtime.readFactory().competitors.compPage.marketScrape.selectedIds, [candidates[0].id]);
+  assert.deepEqual(
+    runtime.readFactory().competitors.compPage.marketScrape.detailResults,
+    { status: 'done', successCount: 1, requestedCount: 1 },
+  );
+  assert.deepEqual(runtime.events, [
+    `load:${workspaceId}`,
+    'projection:0',
+    `authority:${workspaceScopeId}`,
+    'hydrate',
+    'replica-save-failed:newer-revision',
+    'projection:16',
+    'update:factory/sections:guide:apply-sections:detail-document',
+    'apply-selected-assets',
+    'save:{"sync":false}',
+    'projection:16',
+  ]);
+
+  const hydrationFailure = createRuntime({ hydrationResult: false });
+  await assert.rejects(
+    hydrationFailure.run(payload),
+    errorValue => errorValue?.code === 'factory_product_checkpoint_hydration_failed',
+  );
+  assert.deepEqual(hydrationFailure.events, [
+    `load:${workspaceId}`,
+    'projection:0',
+    `authority:${workspaceScopeId}`,
+    'hydrate',
+  ]);
+
+  const authorityFailure = createRuntime({ authorityError: 'AUTHORITY_ACQUIRE_FAILED' });
+  await assert.rejects(
+    authorityFailure.run(payload),
+    errorValue => errorValue?.code === 'AUTHORITY_ACQUIRE_FAILED',
+  );
+  assert.deepEqual(authorityFailure.events, [
+    `load:${workspaceId}`,
+    'projection:0',
+    `authority:${workspaceScopeId}`,
+  ]);
+
+  const staleAfterHydrate = createRuntime({ postHydrateForeign: true });
+  await assert.rejects(
+    staleAfterHydrate.run(payload),
+    errorValue => errorValue?.code === 'factory_product_checkpoint_restore_mismatch',
+  );
+  assert.deepEqual(staleAfterHydrate.events, [
+    `load:${workspaceId}`,
+    'projection:0',
+    `authority:${workspaceScopeId}`,
+    'hydrate',
+    'replica-save-failed:newer-revision',
+    'projection:16',
+  ]);
+});
+
+test('fresh resumed worker acquires exact product authority before server candidate hydration', async () => {
+  const { validateOrder } = await importFresh(
+    'src/modules/batch-control-contract.mjs',
+    'fresh-worker-authority-order',
+  );
+  const core = source('src/app-core-03.js');
+  const checkpointProjectSource = sourceSlice(
+    core,
+    'function factoryRuntimeControlCheckpointProjectId(',
+    'function factoryRuntimeControlValidateProductCheckpoint(',
+  );
+  const providedOptionsSource = sourceSlice(
+    core,
+    'function factoryRuntimeControlProvidedColorOptionValues(',
+    'function factoryRuntimeControlWaitingStage(',
+  );
+  const prepareProductSource = sourceSlice(
+    core,
+    'async function factoryRuntimeControlPrepareProduct(',
+    'async function factoryRuntimeControlRestoreRequiredValues(',
+  );
+  const runProductSource = sourceSlice(
+    core,
+    'async function factoryRuntimeControlRunProduct(',
+    'async function factoryRuntimeControlCommand(',
+  );
+  const jobId = 'factory-job-88e6ba8fa26a41b0ae396d2be6cb160a';
+  const batchId = 'batch-20260724';
+  const workspaceId = `batch:${jobId}`;
+  const workspaceScopeId = `project:${workspaceId}`;
+  const productKey = '방울수저집';
+  const currentRunId = 'factory_work_run_mss7zm8b_9i1ifd';
+  const inputFingerprint = 'sha256:attempt-60-input-10';
+  const inputImages = Array.from({ length: 10 }, (_, index) => ({
+    role: index === 0 ? 'base' : 'color-option',
+    ordinal: index + 1,
+    name: index === 0 ? '대표 입력' : `색상 입력 ${index}`,
+    fileName: `input-${index + 1}.png`,
+    colorName: index === 0 ? '' : `색상 ${index}`,
+    sha256: `fixture-sha-${index + 1}`,
+    dataUrl: 'data:image/png;base64,QUFBQQ==',
+  }));
+  const candidates = Array.from({ length: 16 }, (_, index) => ({
+    id: `vm-candidate-${index + 1}`,
+    title: `방울수저집 경쟁상품 ${index + 1}`,
+    product_url: `https://example.test/products/${index + 1}`,
+    factoryWorkKey: `${currentRunId}::${productKey}::${inputFingerprint}`,
+    currentRunId,
+    factoryProductKey: productKey,
+    inputImageFingerprint: inputFingerprint,
+    stageId: 'competitors',
+  }));
+  const payload = {
+    schema: 'factory-product-run-command:v1',
+    jobId,
+    batchId,
+    mode: 'auto',
+    productName: productKey,
+    source: { kind: 'manual' },
+    jcode: null,
+    requiredValues: {
+      category: '수저집',
+      material: '면',
+      originCountry: '대한민국',
+      salePrice: '19000',
+      size: '10x24cm',
+    },
+    inputImages,
+    startFresh: false,
+    restoreOnly: false,
+    expectedStageKey: '',
+    idempotencyKey: 'factory-product:attempt-60',
+  };
+  const order = {
+    orderId: 'attempt-60',
+    contractVersion: 'control-work-order:v1',
+    capabilityVersion: 'batch-control-worker:v1',
+    batchId,
+    productId: 'factory:방울수저집',
+    productKey,
+    currentRunId: jobId,
+    stageId: 'general',
+    operationToken: 'factory-product:attempt-60',
+    idempotencyKey: payload.idempotencyKey,
+    expectedWorkfileRevision: 6,
+    command: {
+      kind: 'factory-control',
+      version: 'factory-control-command:v1',
+      name: 'runFactoryProduct',
+      payload,
+    },
+  };
+  assert.doesNotThrow(() => validateOrder(order));
+
+  const durableSnapshot = {
+    workspaceScope: { id: workspaceScopeId },
+    assets: {
+      workspaceScope: { id: workspaceScopeId },
+      currentProjectId: workspaceId,
+      currentRunId,
+      inputImageFingerprint: inputFingerprint,
+      activeStage: 'competitors',
+      competitorData: null,
+      workIdentity: {
+        initialProductKey: productKey,
+        initialInputImageFingerprint: inputFingerprint,
+      },
+      factory: {
+        workspace: { id: workspaceId },
+        batchJobId: jobId,
+        activeStage: 'competitors',
+        goalRun: { jobId, currentRunId },
+        automation: { currentRunId },
+        product: {
+          productName: productKey,
+          productKey,
+          lockedInputImageFingerprint: inputFingerprint,
+          inputImages,
+          competitors: candidates,
+        },
+        competitors: {
+          compPage: {
+            marketScrape: {
+              results: candidates,
+              vmResults: candidates,
+              selectedIds: [candidates[0].id],
+              scrapedImages: [{ id: 'deep-detail-1', candidateId: candidates[0].id }],
+              detailResults: { status: 'done', successCount: 1, requestedCount: 1 },
+            },
+          },
+        },
+      },
+    },
+  };
+  const clone = value => structuredClone(value);
+
+  function createRuntime(options = {}) {
+    const events = [];
+    let mutable = false;
+    let candidateCountBeforeDetail = null;
+    let canonicalFactory = clone(options.factory || {
+      workspace: { id: workspaceId },
+      batchJobId: jobId,
+      activeStage: 'competitors',
+      goalRun: { jobId, currentRunId },
+      automation: { currentRunId },
+      product: {
+        productName: productKey,
+        productKey,
+        lockedInputImageFingerprint: inputFingerprint,
+        inputImages,
+        competitors: [],
+      },
+      competitors: { compPage: { marketScrape: { results: [], vmResults: [], selectedIds: [] } } },
+    });
+    const state = {
+      currentProjectId: workspaceId,
+      currentProjectName: productKey,
+      currentProjectCreatedAt: 1,
+      competitorData: null,
+    };
+    const snapshot = clone(options.snapshot || durableSnapshot);
+    const error = code => Object.assign(new Error(code), { code });
+    const snapshotMatchesCurrentWork = () => (
+      snapshot.workspaceScope?.id === workspaceScopeId
+      && snapshot.assets?.workspaceScope?.id === workspaceScopeId
+      && snapshot.assets?.currentProjectId === workspaceId
+      && snapshot.assets?.factory?.goalRun?.jobId === jobId
+      && snapshot.assets?.currentRunId === canonicalFactory.automation?.currentRunId
+      && snapshot.assets?.workIdentity?.initialProductKey === canonicalFactory.product?.productKey
+      && snapshot.assets?.inputImageFingerprint === canonicalFactory.product?.lockedInputImageFingerprint
+      && snapshot.assets?.activeStage === canonicalFactory.activeStage
+    );
+    const context = vm.createContext({
+      state,
+      factoryRuntimeBatchCommandError: error,
+      factoryRuntimeDetachedValue: clone,
+      factoryRuntimeControlProductImage: value => ({
+        ...clone(value),
+        base64: 'AAAA',
+        mime: 'image/png',
+        preview: value.dataUrl,
+      }),
+      factoryRuntimeReadFactory: () => canonicalFactory,
+      getCurrentDocumentWorkspaceScope: projectId => `project:${projectId}`,
+      ensureWorkspaceEditAuthority: async scopeId => {
+        events.push(`authority:${scopeId}`);
+        if (options.authorityError) throw error(options.authorityError);
+        mutable = true;
+        return { mode: 'editing', scopeId };
+      },
+      hydrateServerLastWorkSnapshot: async hydrateOptions => {
+        events.push('hydrate');
+        assert.deepEqual(clone(hydrateOptions), {
+          force: true,
+          forceRevisionRestore: true,
+          render: false,
+        });
+        if (!mutable) {
+          events.push('hydrate-rejected:READ_ONLY');
+          return false;
+        }
+        if (!snapshotMatchesCurrentWork()) {
+          events.push('hydrate-rejected:foreign-fence');
+          return false;
+        }
+        canonicalFactory = clone(snapshot.assets.factory);
+        events.push('replica-save-failed:newer-revision');
+        return true;
+      },
+      factoryRuntimeUpdateOwnedFactory: async (_command, _owner, update) => {
+        const draft = clone(canonicalFactory);
+        update(draft);
+        canonicalFactory = draft;
+        return true;
+      },
+      factoryCafe24CurrentProductKey: () => '',
+      factoryStoreCafe24OptionGroupDraft: (groups, storeOptions) => {
+        storeOptions.factory.product.cafe24OptionGroupsDraft = clone(groups);
+        storeOptions.factory.product.dbFieldSettings = storeOptions.factory.product.dbFieldSettings || {};
+        storeOptions.factory.product.dbFieldSettings.option_name = { manualTouched: true, manualValue: groups[0].name };
+        storeOptions.factory.product.dbFieldSettings.option_values = { manualTouched: true, manualValue: groups[0].values.join('\n') };
+      },
+      factorySetDbFieldManualValue: (fieldId, value, fieldOptions) => {
+        fieldOptions.factory.product.dbFieldSettings = fieldOptions.factory.product.dbFieldSettings || {};
+        fieldOptions.factory.product.dbFieldSettings[fieldId] = { manualTouched: true, manualValue: String(value) };
+      },
+      factoryApplyProductImagePayload: () => true,
+      normalizeModelConfig: value => value,
+      saveModelConfig: () => true,
+      factoryRuntimeControlEnsureAutoReferences: async () => {
+        const restored = canonicalFactory.product?.competitors || [];
+        candidateCountBeforeDetail = restored.length;
+        events.push(`detail-candidates:${restored.length}`);
+        if (!restored.length) {
+          throw error('경쟁사 후보 수집 결과가 없어 상세수집을 진행할 수 없습니다.');
+        }
+      },
+      factoryRuntimeControlProjection: async () => ({
+        schema: 'factory-control-projection:v1',
+        session: {
+          workspaceId,
+          productId: order.productId,
+          productKey,
+          runId: currentRunId,
+          inputFingerprint,
+          revision: 6,
+        },
+        stages: [],
+      }),
+      factoryRuntimeControlWaitingStage: () => null,
+      factoryRuntimeControlNeedsDetailRebuild: () => false,
+      factoryRunGoalLoop: async () => true,
+      factoryRuntimeControlSaveProductCheckpoint: async (_payload, status, stageKey) => ({
+        projection: { status, stageKey },
+        checkpoint: { schema: 'factory-product-checkpoint:v1', jobId, status, stageKey },
+      }),
+    });
+    vm.runInContext(
+      `${checkpointProjectSource}\n${providedOptionsSource}\n${prepareProductSource}\n${runProductSource}\n`
+      + 'globalThis.runProduct = factoryRuntimeControlRunProduct;',
+      context,
+    );
+    return {
+      run: value => context.runProduct(clone(value)),
+      events,
+      readCandidateCount: () => candidateCountBeforeDetail,
+      readFactory: () => clone(canonicalFactory),
+    };
+  }
+
+  const runtime = createRuntime();
+  const receipt = await runtime.run(payload);
+  assert.equal(receipt.status, 'completed');
+  assert.equal(runtime.readCandidateCount(), 16);
+  assert.deepEqual(runtime.readFactory().product.competitors.map(item => item.id), candidates.map(item => item.id));
+  assert.equal(runtime.readFactory().product.inputImages.length, 10, 'existing input A must not decrease');
+  assert.deepEqual(runtime.events.slice(0, 4), [
+    `authority:${workspaceScopeId}`,
+    'hydrate',
+    'replica-save-failed:newer-revision',
+    'detail-candidates:16',
+  ]);
+
+  const staleJobRuntime = createRuntime({
+    factory: {
+      ...clone(durableSnapshot.assets.factory),
+      goalRun: { jobId: 'factory-job-stale', currentRunId },
+      product: { ...clone(durableSnapshot.assets.factory.product), competitors: [] },
+    },
+  });
+  await assert.rejects(
+    staleJobRuntime.run(payload),
+    errorValue => errorValue?.code === 'stale_factory_product_job',
+  );
+  assert.deepEqual(staleJobRuntime.events, [], 'stale job must not acquire authority or hydrate');
+
+  const authorityFailureRuntime = createRuntime({ authorityError: 'AUTHORITY_ACQUIRE_FAILED' });
+  await assert.rejects(
+    authorityFailureRuntime.run(payload),
+    errorValue => errorValue?.code === 'AUTHORITY_ACQUIRE_FAILED',
+  );
+  assert.deepEqual(authorityFailureRuntime.events, [`authority:${workspaceScopeId}`]);
+  assert.equal(authorityFailureRuntime.readCandidateCount(), null, 'authority failure must not become a zero-candidate run');
+
+  const invalidOrders = [
+    { label: 'foreign workspace/job', change: value => { value.command.payload.jobId = 'factory-job-foreign'; } },
+    { label: 'stale run', change: value => { value.currentRunId = 'factory-job-stale-run'; } },
+    { label: 'foreign product', change: value => { value.productKey = '외부 제품'; } },
+    { label: 'malformed input', change: value => { value.command.payload.inputImages[0].dataUrl = 'foreign-input'; } },
+    {
+      label: 'stale checkpoint',
+      change: value => {
+        value.command.payload.restoreOnly = true;
+        value.command.payload.checkpoint = {
+          schema: 'factory-product-checkpoint:v1',
+          jobId,
+          projectId: 'batch:factory-job-foreign',
+          productId: value.productId,
+          productKey,
+          runId: currentRunId,
+          inputFingerprint,
+          revision: 6,
+          status: 'blocked',
+          stageKey: 'general',
+          savedAt: 1,
+        };
+      },
+    },
+  ];
+  for (const invalid of invalidOrders) {
+    const candidateOrder = clone(order);
+    invalid.change(candidateOrder);
+    assert.throws(() => validateOrder(candidateOrder), undefined, invalid.label);
+  }
+  assert.deepEqual(runtime.events.slice(0, 1), [`authority:${workspaceScopeId}`]);
+});
+
+test('Product B checkpoint refreshes stale project authority before preserving the selected size A-cut', async () => {
+  const core = source('src/app-core-03.js');
+  const checkpointSource = sourceSlice(
+    core,
+    'async function factoryRuntimeControlSaveProductCheckpoint(',
+    'async function factoryRuntimeControlRestoreProductCheckpoint(',
+  );
+  const jobId = 'factory-job-a66111b339304b5ab3f2b8de4fedf751';
+  const projectId = `batch:${jobId}`;
+  const scopeId = `project:${projectId}`;
+  const candidateId = 'factory_size_msxcctca_e6wrpn';
+  const resultId = 'factory_size_result_msxcctca_e6wrpn';
+  const selectedInputs = new Map([[candidateId, { id: candidateId }]]);
+  const resultMap = new Map([[candidateId, { id: resultId, candidateId }]]);
+  const before = {
+    selectedIds: [...selectedInputs.keys()],
+    resultIds: [...resultMap.values()].map(result => result.id),
+  };
+  const events = [];
+  const state = {
+    currentProjectId: '',
+    error: '',
+    factory: { workspace: { id: projectId } },
+  };
+  let authorityRevision = 91;
+  let activeAuthorityScope = 'draft:batch-worker';
+  const serverRevision = 103;
+  const context = vm.createContext({
+    state,
+    getCurrentDocumentWorkspaceScope: currentProjectId => (
+      `project:${currentProjectId || state.factory.workspace.id}`
+    ),
+    ensureWorkspaceEditAuthority: async (requestedScope, options) => {
+      assert.equal(requestedScope, scopeId);
+      assert.deepEqual({ ...options }, { force: true, confirmedTakeover: true });
+      events.push(`authority:${authorityRevision}->${serverRevision}`);
+      authorityRevision = serverRevision;
+      activeAuthorityScope = requestedScope;
+      return { mode: 'editing', scopeId: requestedScope, revision: authorityRevision };
+    },
+    saveCurrentProject: async options => {
+      events.push(`commit:${authorityRevision}:${options?.retainProjectAuthority === true}`);
+      if (authorityRevision !== serverRevision) {
+        state.error = '작업 저장 실패: server persistence rejected (409)';
+        return false;
+      }
+      if (options?.retainProjectAuthority !== true) activeAuthorityScope = 'draft:batch-worker';
+      return true;
+    },
+    factoryRuntimeControlProjection: async () => ({
+      session: { workspaceId: projectId },
+      stages: {
+        size: {
+          selectedIds: [...selectedInputs.keys()],
+          results: [...resultMap.values()],
+        },
+      },
+    }),
+    factoryRuntimeControlCheckpointFromProjection: (_payload, projection, status, stageKey) => ({
+      projectId: projection.session.workspaceId,
+      status,
+      stageKey,
+    }),
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+  });
+  vm.runInContext(`${checkpointSource}\nthis.saveCheckpoint = factoryRuntimeControlSaveProductCheckpoint;`, context);
+
+  const receipt = await context.saveCheckpoint({ jobId }, 'waiting_manual', 'size');
+
+  assert.equal(authorityRevision, 103, 'stale revision 91 must rebase once to server revision 103');
+  assert.equal(activeAuthorityScope, scopeId, 'selected A-cut checkpoint must keep its project authority after saving');
+  assert.deepEqual(events, ['authority:91->103', 'commit:103:true']);
+  assert.deepEqual([...selectedInputs.keys()], before.selectedIds);
+  assert.deepEqual([...resultMap.values()].map(result => result.id), before.resultIds);
+  assert.deepEqual([...receipt.projection.stages.size.selectedIds], [candidateId]);
+  assert.deepEqual(Array.from(receipt.projection.stages.size.results, result => result.id), [resultId]);
+});
+
+test('생산관제 직접 입력 색상과 사진은 옵션분류기 슬롯에 중복 없이 이어진다', () => {
+  const core = source('src/app-core-06.js');
+  const optionSyncSource = sourceSlice(
+    core,
+    'function factoryDbOptionPlanForOptionSorter(',
+    'function factoryOpenOptionSorterEditor(',
+  );
+  const preservedImage = {
+    id: 'color-1',
+    name: '초록',
+    base64: 'green',
+    mime: 'image/png',
+    preview: 'data:image/png;base64,green',
+    hasImageData: true,
+  };
+  const state = {
+    optionSorter: {
+      slots: Array.from({ length: 10 }, (_, index) => ({ id: `slot-${index + 1}`, name: `${index + 1}번`, imgIds: [] })),
+      pool: [],
+      images: [preservedImage],
+      optionResults: [],
+    },
+  };
+  const context = vm.createContext({
+    state,
+    factoryRuntimeReadFactory: () => ({}),
+    factoryCleanOptionLabel: value => String(value || '').trim(),
+    factorySplitOptionText: value => String(value || '').split(/[,/|\n]+/).map(item => item.trim()).filter(Boolean),
+    factoryDedupeRealOptionValues: values => [...new Set((Array.isArray(values) ? values : [values]).map(value => String(value || '').trim()).filter(Boolean))],
+    factoryDbNormalizeKey: value => String(value || '').trim().toLowerCase(),
+    factoryCafe24OptionEditorModel: () => ({ editGroups: [] }),
+    factoryDbFactSourceObjects: () => [],
+    factoryExtractCafe24OptionGroups: () => [],
+    factoryExtractOptionGroupsFromData: () => [],
+    defaultOptionSorterState: () => ({ slots: [], pool: [], images: [], optionResults: [] }),
+    ensureOptionSorterDefaults: () => {},
+    factorySetStageStatus: () => {},
+    factoryLog: () => {},
+    optAppendLogs: () => {},
+    saveLastWorkNow: () => {},
+    render: () => {},
+  });
+  vm.runInContext(`${optionSyncSource}\nthis.syncDirectOptions = factorySyncDbOptionsToOptionSorter;`, context);
+  const factory = {
+    automation: { optionMode: 'provided' },
+    product: {
+      finalDb: {},
+      colorImages: [
+        { id: 'color-1', name: '2번', colorName: '초록', base64: 'green', mime: 'image/png', preview: 'data:image/png;base64,green' },
+        { id: 'color-2', name: '3번', colorName: '빨강', base64: 'red', mime: 'image/png', preview: 'data:image/png;base64,red' },
+      ],
+    },
+    stages: { options: {} },
+  };
+
+  const first = context.syncDirectOptions({ factory, setStatus: false });
+  const second = context.syncDirectOptions({ factory, setStatus: false });
+
+  assert.equal(first.ok, true);
+  assert.deepEqual([...first.values], ['초록', '빨강']);
+  assert.equal(first.plan.sourceLabel, '생산관제 직접 입력');
+  assert.equal(state.optionSorter.images.length, 2);
+  assert.equal(state.optionSorter.images[0], preservedImage);
+  assert.deepEqual(Array.from(state.optionSorter.slots, slot => slot.name), ['초록', '빨강']);
+  assert.deepEqual(Array.from(state.optionSorter.slots, slot => Array.from(slot.imgIds)), [['color-1'], ['color-2']]);
+  assert.equal(second.ok, true);
+  assert.equal(state.optionSorter.images.length, 2);
 });

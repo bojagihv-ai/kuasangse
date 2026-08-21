@@ -189,3 +189,24 @@ test('현재 열어 둔 작업 묶음은 5초마다 활동 상태를 보내고 �
   controller.dispose();
   assert.equal(clearedTimer, 42);
 });
+
+test('최초 작업 묶음 동기화가 끝나기 전에는 heartbeat 활동 요청을 보내지 않는다', async () => {
+  const { createWorkBundleActivityHeartbeat } = await loadModule();
+  let ready = false;
+  let intervalCallback = null;
+  const calls = [];
+  const controller = createWorkBundleActivityHeartbeat({
+    getBundleKey: () => 'kuasangse:work-startup',
+    isReady: () => ready,
+    sendActivity: async activity => { calls.push(activity); },
+    clientId: 'browser-session-startup',
+    setIntervalFn: callback => { intervalCallback = callback; return 7; },
+    clearIntervalFn() {},
+  });
+
+  await controller.start();
+  assert.equal(calls.length, 0, 'remote bundle이 생기기 전 activity POST를 보내면 안 된다');
+  ready = true;
+  await intervalCallback();
+  assert.equal(calls.length, 1);
+});

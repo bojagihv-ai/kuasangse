@@ -136,10 +136,19 @@ def test_full_auto_conveyor_reaches_staged_verified_with_existing_fake_bridges()
         for key in APPROVAL_BINDING_FIELDS
     }
     approved = gate.approve(str(request["approvalRequestId"]), approval_binding)
-    approval = {"approvalToken": approved["approvalToken"], **identity}
+    confirmed = gate.confirm(str(approved["approvalToken"]), approval_binding)
+    approval = {
+        "approvalToken": approved["approvalToken"],
+        "confirmationNonce": confirmed["confirmationNonce"],
+        **identity,
+    }
 
     def execute_cafe24(binding):
-        grant = gate.consume(str(binding["approvalToken"]), approval_binding)
+        grant = gate.consume(
+            str(binding["approvalToken"]),
+            approval_binding,
+            str(binding["confirmationNonce"]),
+        )
         command = build_cafe24_command(
             grant,
             str(grant["approvalGrantDigest"]),

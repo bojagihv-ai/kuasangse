@@ -517,6 +517,56 @@ test('같은 작업 복원은 비어 있는 서버 필드가 현재 확정 상�
   });
 });
 
+test('동일 제목의 선택된 상세 HTML 3개는 정규화 중 중복 제거되지 않는다', async () => {
+  const result = await browser.call(() => {
+    const selectedIds = ['detail-a', 'detail-b', 'detail-c'];
+    const scope = {
+      workspaceId: 'workspace-detail',
+      currentProjectId: 'workspace-detail',
+      productName: '상세 선택 상품',
+      productIdentityKey: '상세선택상품',
+      productKey: '상세 선택 상품',
+      currentRunId: 'run-detail',
+      inputImageFingerprint: 'image-detail',
+      stageId: 'detail',
+    };
+    const assets = [...selectedIds, 'detail-unselected'].map((id, index) => ({
+      ...scope,
+      id,
+      title: '상세 선택 상품 현재 미리보기 상세페이지 HTML',
+      type: 'html',
+      html: `<section>${id}</section>`,
+      used: selectedIds.includes(id),
+      rejected: false,
+      createdAt: 100 + index,
+      metadata: { ...scope, sectionCount: 15 },
+      sourceMap: { ...scope },
+    }));
+    const normalized = normalizeFactoryState({
+      currentProjectId: 'workspace-detail',
+      workspace: { id: 'workspace-detail' },
+      automation: { currentRunId: 'run-detail' },
+      product: {
+        productName: '상세 선택 상품',
+        productKey: '상세 선택 상품',
+        inputImageFingerprint: 'image-detail',
+        lockedInputImageFingerprint: 'image-detail',
+      },
+      stages: { detail: { status: 'done', selectedAssetIds: selectedIds } },
+      assets,
+    });
+    return {
+      assetIds: normalized.assets.filter(asset => asset.stageId === 'detail').map(asset => asset.id).sort(),
+      selectedIds: [...normalized.stages.detail.selectedAssetIds].sort(),
+    };
+  });
+
+  assert.deepEqual(result, {
+    assetIds: ['detail-a', 'detail-b', 'detail-c'],
+    selectedIds: ['detail-a', 'detail-b', 'detail-c'],
+  });
+});
+
 test('현재 작업 키 비교는 불일치 필드 이름을 정확히 반환한다', async () => {
   // Given: 현재 작업의 완전한 다섯 식별값을 준비한다.
   // When: 실제 작업 키 비교 함수에 각 필드가 다른 후보를 넣는다.

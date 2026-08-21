@@ -800,6 +800,16 @@ function factoryCafe24ValuesRoughlyEqual(expected, actual) {
   return false;
 }
 
+function factoryCafe24ProductFieldValuesEqual(field, expected, actual) {
+  if (field === 'points_amount') {
+    return factoryCafe24ValuesRoughlyEqual(
+      factoryCafe24PointsAmountPayload(expected),
+      factoryCafe24PointsAmountPayload(actual),
+    );
+  }
+  return factoryCafe24ValuesRoughlyEqual(expected, actual);
+}
+
 function factoryVerifyCafe24ProductEcho(product = {}, raw = {}) {
   const fields = Object.keys(product || {});
   const missing = [];
@@ -809,7 +819,7 @@ function factoryVerifyCafe24ProductEcho(product = {}, raw = {}) {
       missing.push(factoryCafe24FieldLabelByApiField(key));
       return;
     }
-    if (!factoryCafe24ValuesRoughlyEqual(product[key], raw[key])) {
+    if (!factoryCafe24ProductFieldValuesEqual(key, product[key], raw[key])) {
       mismatches.push(factoryCafe24FieldLabelByApiField(key));
     }
   });
@@ -1488,6 +1498,7 @@ const FACTORY_CAFE24_STRICT_REFERENCE_CODE_FIELDS = new Set([
   'supplier_code',
   'brand_code',
   'trend_code',
+  'made_in_code',
 ]);
 
 function factoryCafe24StrictReferenceCodeValid(value) {
@@ -1502,7 +1513,10 @@ function factoryRemoveCafe24InvalidReferenceCodePayloadFields(product = {}, note
   FACTORY_CAFE24_STRICT_REFERENCE_CODE_FIELDS.forEach(field => {
     if (!Object.prototype.hasOwnProperty.call(product, field)) return;
     const value = product[field];
-    if (factoryCafe24StrictReferenceCodeValid(value)) return;
+    const valid = field === 'made_in_code'
+      ? /^[A-Z]{2}$/.test(String(value ?? '').trim())
+      : factoryCafe24StrictReferenceCodeValid(value);
+    if (valid) return;
     removed.push(field);
     delete product[field];
   });
@@ -1861,7 +1875,7 @@ function factoryFilterCafe24ChangedProductPayload(product = {}, factory = factor
     if (value === undefined || value === null || String(factoryCafe24ComparableValue(value)).trim() === '') return;
     const hasCurrent = raw && Object.prototype.hasOwnProperty.call(raw, apiField) &&
       String(factoryCafe24ComparableValue(raw[apiField]) || '').trim() !== '';
-    if (!hasCurrent || !factoryCafe24ValuesRoughlyEqual(value, raw[apiField])) {
+    if (!hasCurrent || !factoryCafe24ProductFieldValuesEqual(apiField, value, raw[apiField])) {
       filtered[apiField] = value;
     }
   });
@@ -2484,6 +2498,42 @@ function factoryCafe24ResolveSectionScopeCheck(appState = {}, currentScope = {},
 function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactory()) {
   const appState = typeof state !== 'undefined' ? state : {};
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
+  const detailHtmlImageCount = html => (String(html || '').match(/<img\b[^>]*\bsrc\s*=/gi) || []).length;
+  const detailHtmlAltKey = value => String(value || '')
+    .replace(/&(?:amp|#0*38|#x0*26);/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const detailHtmlImageAlt = tag => detailHtmlAltKey(
+    String(tag || '').match(new RegExp("\\balt\\s*=\\s*([\"'])(.*?)\\1", 'i'))?.[2] || '',
+  );
+  const selectedSectionImageByAlt = new Map(assets
+    .filter(asset => asset?.used && !asset?.rejected)
+    .map(asset => {
+      const sectionId = asset.placedSectionId || factory.detailPlacement?.[asset.id] || '';
+      const section = typeof SECTIONS !== 'undefined' && Array.isArray(SECTIONS)
+        ? SECTIONS.find(item => item?.id === sectionId)
+        : null;
+      const image = typeof factoryAssetDisplayImage === 'function'
+        ? factoryAssetDisplayImage(asset)
+        : (asset.image || asset.imageUrl || '');
+      return [detailHtmlAltKey(section?.name), image];
+    })
+    .filter(([alt, image]) => alt && image));
+  const mergeCurrentSectionImages = (preservedHtml, currentHtml) => {
+    const currentByAlt = new Map((String(currentHtml || '').match(/<img\b[^>]*>/gi) || [])
+      .map(tag => [detailHtmlImageAlt(tag), tag])
+      .filter(([alt]) => alt));
+    if (!currentByAlt.size && !selectedSectionImageByAlt.size) return preservedHtml;
+    return String(preservedHtml || '').replace(/<img\b[^>]*>/gi, tag => {
+      const alt = detailHtmlImageAlt(tag);
+      const currentTag = currentByAlt.get(alt) || tag;
+      const selectedImage = selectedSectionImageByAlt.get(alt);
+      return selectedImage
+        ? currentTag.replace(new RegExp("\\bsrc\\s*=\\s*([\"'])(.*?)\\1", 'i'), `src="${escAttr(selectedImage)}"`)
+        : currentTag;
+    });
+  };
   const detailHtmlProductCheck = html => {
     const product = factory.product || {};
     const finalDb = product.finalDb || {};
@@ -2510,6 +2560,19 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
       : text.replace(/\s+/g, '').toLowerCase();
     return { ok: terms.some(term => normalizedHtml.includes(term)), terms };
   };
+  const detailAssets = assets
+    .filter(asset =>
+      asset &&
+      !asset.rejected &&
+      (asset.stageId === 'detail' || asset.type === 'html' || asset.html) &&
+      (typeof factoryAssetHasCurrentProductPayload !== 'function' ||
+        factoryAssetHasCurrentProductPayload(asset, factory, { allowHtml: true }))
+    )
+    .sort((a, b) => {
+      const scoreA = (a.used ? 10 : 0) + (a.stageId === 'detail' ? 5 : 0) + Number(a.createdAt || 0) / 10000000000000;
+      const scoreB = (b.used ? 10 : 0) + (b.stageId === 'detail' ? 5 : 0) + Number(b.createdAt || 0) / 10000000000000;
+      return scoreB - scoreA;
+    });
   let sectionExportBlocked = null;
   try {
     const previewStatus = factoryCurrentPreviewSectionStatus(appState);
@@ -2550,13 +2613,34 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
             message: `상세페이지 HTML에 현재 상품과 다른 상품명 단서가 남아 있어 전송하지 않습니다: ${foreignCheck.conflicts.slice(0, 3).join(', ')}. 현재 상품 기준으로 섹션을 다시 생성해주세요.`,
           };
         }
-          const check = detailHtmlProductCheck(html);
-          const warningMessages = [
-            sectionScopeCheck.productKeyWarning ? sectionScopeCheck.message : '',
-            !check.ok ? '상품명 문구가 HTML에 직접 보이지 않지만 입력 이미지 원본 기준이 맞아 등록 대상으로 유지합니다.' : '',
-          ].filter(Boolean);
+        const richerAsset = detailAssets
+          .map(asset => ({
+            asset,
+            html: factoryCafe24StripDetailAdminLabels(asset.html || asset.content || asset.value || ''),
+          }))
+          .find(candidate => {
+            if (detailHtmlImageCount(candidate.html) <= detailHtmlImageCount(html)) return false;
+            const candidateSafe = factoryCafe24DetailHtmlPreflight(candidate.html);
+            if ((!candidateSafe.ok && candidateSafe.hasAdminLabels) || candidateSafe.hasLightPlaceholder) return false;
+            if (!factoryCafe24DetailForeignProductCheck(candidate.html, factory, appState).ok) return false;
+            return detailHtmlProductCheck(candidate.html).ok;
+          });
+        if (richerAsset) {
+          return {
+            html: mergeCurrentSectionImages(richerAsset.html, html),
+            source: 'detail-asset-richer-current',
+            asset: richerAsset.asset,
+            sectionCount: Number(richerAsset.asset?.metadata?.sectionCount || 0) || sectionCount,
+            message: '현재 미리보기에서 복원되지 않은 상세 이미지가 있어 같은 작업의 완성 보존본을 사용합니다.',
+          };
+        }
+        const check = detailHtmlProductCheck(html);
+        const warningMessages = [
+          sectionScopeCheck.productKeyWarning ? sectionScopeCheck.message : '',
+          !check.ok ? '상품명 문구가 HTML에 직접 보이지 않지만 입력 이미지 원본 기준이 맞아 등록 대상으로 유지합니다.' : '',
+        ].filter(Boolean);
         return {
-          html: String(html),
+          html: mergeCurrentSectionImages(String(html), html),
           source: 'current-section-export',
           productCheckWarning: !!warningMessages.length,
           sectionCount,
@@ -2579,19 +2663,6 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
   } catch(e) {
     sectionExportBlocked = { html: '', source: 'section-export-error', blocked: true, error: e?.message || String(e) };
   }
-  const detailAssets = assets
-    .filter(asset =>
-      asset &&
-      !asset.rejected &&
-      (asset.stageId === 'detail' || asset.type === 'html' || asset.html) &&
-      (typeof factoryAssetHasCurrentProductPayload !== 'function' ||
-        factoryAssetHasCurrentProductPayload(asset, factory, { allowHtml: true }))
-    )
-    .sort((a, b) => {
-      const scoreA = (a.used ? 10 : 0) + (a.stageId === 'detail' ? 5 : 0) + Number(a.createdAt || 0) / 10000000000000;
-      const scoreB = (b.used ? 10 : 0) + (b.stageId === 'detail' ? 5 : 0) + Number(b.createdAt || 0) / 10000000000000;
-      return scoreB - scoreA;
-    });
   for (const asset of detailAssets) {
     const html = factoryCafe24StripDetailAdminLabels(asset.html || asset.content || asset.value || '');
     if (html && /<[^>]+>/.test(html)) {
@@ -2625,7 +2696,7 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
         };
       }
       const check = detailHtmlProductCheck(html);
-      if (check.ok) return { html, source: 'detail-asset', asset };
+      if (check.ok) return { html: mergeCurrentSectionImages(html, html), source: 'detail-asset', asset };
       return {
         html: '',
         source: 'detail-product-mismatch',
@@ -3247,7 +3318,9 @@ function factoryBuildCafe24OptionsUpdatePayload(factory = factoryRuntimeReadFact
   const extrasPayload = factoryCafe24OptionExtrasPayload(factory, raw);
   if (!cleanGroups.length && !settingsOnly && !extrasTouched) return null;
   const payload = {
-    has_option: factoryCafe24PayloadValue('has_option', factoryCafe24OptionSetting(raw, finalDb, 'has_option', 'T', { preferFinalDb: preferFinalDbSettings })) || 'T',
+    has_option: !settingsOnly && cleanGroups.length
+      ? 'T'
+      : (factoryCafe24PayloadValue('has_option', factoryCafe24OptionSetting(raw, finalDb, 'has_option', 'T', { preferFinalDb: preferFinalDbSettings })) || 'T'),
     option_type: factoryCafe24PayloadValue('option_type', factoryCafe24OptionSetting(raw, finalDb, 'option_type', 'T', { preferFinalDb: preferFinalDbSettings })) || 'T',
     option_list_type: factoryCafe24PayloadValue('option_list_type', factoryCafe24OptionSetting(raw, finalDb, 'option_list_type', 'C', { preferFinalDb: preferFinalDbSettings })) || 'C',
     select_one_by_option: factoryCafe24PayloadValue('select_one_by_option', factoryCafe24OptionSetting(raw, finalDb, 'select_one_by_option', 'F', { preferFinalDb: preferFinalDbSettings })) || 'F',

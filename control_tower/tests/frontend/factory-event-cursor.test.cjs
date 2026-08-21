@@ -134,3 +134,114 @@ test('same-sequence initial snapshot establishes only the BFF event cursor', asy
     error => error.code === 'stale_event_sequence',
   );
 });
+
+test('same-work retry snapshot does not project a thin size stage over preserved candidates', async () => {
+  const {
+    applyFactoryDelta,
+    applyFactorySseMessage,
+    reconcileFactoryProjectionForSameWork,
+  } = await import(`${pathToFileURL(WORKBENCH).href}?thin-retry=${Date.now()}`);
+  const before = projection({ sequence: 41, cursor: '41', selectedId: 'representative-b' });
+  before.session.workfileSha256 = 'b-workfile-sha';
+  before.stages[0] = {
+    ...before.stages[0],
+    candidates: [
+      { id: 'representative-b', assetId: 'asset:representative-b' },
+      { id: 'representative-c', assetId: 'asset:representative-c' },
+      { id: 'representative-d', assetId: 'asset:representative-d' },
+      { id: 'representative-e', assetId: 'asset:representative-e' },
+    ],
+  };
+  before.stages.push({
+    key: 'size',
+    status: 'done',
+    selectedId: '',
+    selectedIds: [],
+    candidates: [
+      { id: 'size-b-1', assetId: 'asset:size-b-1' },
+      { id: 'size-b-2', assetId: 'asset:size-b-2' },
+      { id: 'size-b-3', assetId: 'asset:size-b-3' },
+    ],
+  });
+  const thinRetry = {
+    ...before,
+    sequence: 42,
+    cursor: '42',
+    stages: [
+      before.stages[0],
+      { key: 'size', status: 'blocked', selectedId: '', selectedIds: [], candidates: [] },
+    ],
+    progress: { ...before.progress, stageKey: 'size', status: 'blocked' },
+  };
+
+  const reconciled = reconcileFactoryProjectionForSameWork(before, thinRetry);
+  const stageDelta = applyFactoryDelta(before, {
+    schema: 'factory-control-event:v1',
+    eventId: '42',
+    sequence: 42,
+    productId: before.session.productId,
+    productKey: before.session.productKey,
+    runId: before.session.runId,
+    inputFingerprint: before.session.inputFingerprint,
+    revision: before.session.revision,
+    stage: thinRetry.stages[1],
+  });
+  const current = applyFactorySseMessage(
+    before,
+    '41',
+    message('42', { type: 'factory.snapshot', projection: thinRetry }),
+  ).projection;
+  assert.deepEqual(current.stages, reconciled.stages);
+  const size = current.stages.find(stage => stage.key === 'size');
+  const representative = current.stages.find(stage => stage.key === 'representative');
+
+  assert.deepEqual(
+    stageDelta.stages.find(stage => stage.key === 'size').candidates.map(candidate => candidate.id),
+    ['size-b-1', 'size-b-2', 'size-b-3'],
+  );
+  assert.equal(size.candidates.length, 3);
+  assert.deepEqual(size.candidates.map(candidate => candidate.id), ['size-b-1', 'size-b-2', 'size-b-3']);
+  assert.deepEqual(size.candidates.map(candidate => candidate.assetId), ['asset:size-b-1', 'asset:size-b-2', 'asset:size-b-3']);
+  assert.deepEqual(
+    [representative.candidates.length, representative.selectedId],
+    [4, 'representative-b'],
+  );
+
+  const foreign = applyFactorySseMessage(
+    before,
+    '41',
+    message('43', {
+      type: 'factory.snapshot',
+      projection: {
+        ...thinRetry,
+        sequence: 43,
+        cursor: '43',
+        session: {
+          ...thinRetry.session,
+          runId: 'run:foreign',
+          inputFingerprint: 'sha256:foreign',
+        },
+      },
+    }),
+  ).projection;
+  assert.equal(foreign.stages.find(stage => stage.key === 'size').candidates.length, 0);
+  assert.throws(
+    () => applyFactorySseMessage(
+      before,
+      '41',
+      message('44', {
+        type: 'factory.snapshot',
+        projection: {
+          ...thinRetry,
+          sequence: 44,
+          cursor: '44',
+          stages: [
+            before.stages[0],
+            { key: 'size', status: 'blocked', selectedId: 'missing-size', candidates: [] },
+          ],
+        },
+      }),
+    ),
+    /factory selected candidate missing:size:missing-size/,
+  );
+});

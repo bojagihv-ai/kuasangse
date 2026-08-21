@@ -135,9 +135,14 @@ export function bindOptionSorterSlots(context) {
   });
 
   // 입력화면 슬롯 삭제
-  queryAll('[data-slot-del-input]').forEach(btn => {
-    btn.onclick = e => { e.stopPropagation(); optDeleteSlot(btn.dataset.slotDelInput); };
-  });
+  queryAll('[data-slot-del-input]').forEach(btn => { btn.onclick = e => { e.stopPropagation(); optDeleteSlot(btn.dataset.slotDelInput); }; });
+
+  const optOpenStoredOptionResults = byId('optOpenStoredOptionResults');
+  if (optOpenStoredOptionResults) optOpenStoredOptionResults.onclick = () => {
+    const os = optionSorter(); if (!Array.isArray(os.optionResults) || !os.optionResults.length) return;
+    os.subStep = 'sort'; os.subStepUpdatedAt = Date.now(); optScheduleSave(); requestRender();
+    byId('optStoredOptionResults')?.scrollIntoView?.({ block: 'start' });
+  };
 
   // 분류 시작 버튼
   const optGoSort = byId('optGoSort');
@@ -148,9 +153,7 @@ export function bindOptionSorterSlots(context) {
     const newPool = os.images.filter(i => !assignedIds.has(i.id) && !os.pool.includes(i.id)).map(i => i.id);
     os.pool = [...os.pool, ...newPool].filter(id => os.images.some(im => im.id === id));
     os.slots.forEach(s => { s.imgIds = s.imgIds.filter(id => os.images.some(im => im.id === id)); });
-    os.subStep = 'sort';
-    optScheduleSave();
-    requestRender();
+    os.subStep = 'sort'; os.subStepUpdatedAt = Date.now(); optScheduleSave(); requestRender();
   };
 
   // 분류 화면: 슬롯 추가
@@ -170,7 +173,7 @@ export function bindOptionSorterSlots(context) {
 
   // 분류 화면: 이미지 변경 (입력으로 돌아가기)
   const optBackInput = byId('optBackInput');
-  if (optBackInput) optBackInput.onclick = () => { optionSorter().subStep = 'input'; optScheduleSave(); requestRender(); };
+  if (optBackInput) optBackInput.onclick = () => { const os = optionSorter(); os.subStep = 'input'; os.subStepUpdatedAt = Date.now(); optScheduleSave(); requestRender(); };
 
   // 전체 다운로드
   const optDlAll = byId('optDlAll');

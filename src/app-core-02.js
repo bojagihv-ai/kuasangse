@@ -413,6 +413,7 @@ async function applyDbColorOptionsToOptionSorter(options = {}) {
   os.previewResultId = null;
   os.optionResults = [];
   os.subStep = 'input';
+  os.subStepUpdatedAt = Date.now();
   os.optionGenLogs = [
     `DB 색상옵션 ${currentOptions.length}개를 슬롯명으로 적용했습니다.`,
     importedImages.length ? `사진 ${importedImages.length}장을 옵션 이미지로 불러왔습니다.` : 'DB 옵션명만 적용했습니다. 사진은 직접 업로드하거나 DB 사진 연결을 확인하세요.',
@@ -616,10 +617,52 @@ function renderWorkfileSaveStatus() {
   return `<span class="workfile-save-status ${savedAt ? 'saved' : ''}" id="workfileSaveStatus" role="status">${savedAt ? `저장 완료${durationLabel} · 마지막 저장: ${escapeHtml(savedAt)}` : '저장 전'}</span>`;
 }
 
+function runtimePerformanceBudgetModel(renderMs, persistenceMs) {
+  const measuredRenderMs = Math.max(0, Math.round(Number(renderMs) || 0));
+  const measuredPersistenceMs = Math.max(0, Math.round(Number(persistenceMs) || 0));
+  const slow = [];
+  if (measuredRenderMs > 150) slow.push('render');
+  if (measuredPersistenceMs > 1000) slow.push('persistence');
+  return {
+    renderMs: measuredRenderMs,
+    persistenceMs: measuredPersistenceMs,
+    measured: measuredRenderMs > 0 || measuredPersistenceMs > 0,
+    overBudget: slow.length > 0,
+    slow,
+  };
+}
+
+function renderRuntimePerformanceStatus() {
+  const dataset = typeof document !== 'undefined' ? document.documentElement?.dataset : null;
+  const model = runtimePerformanceBudgetModel(
+    state.runtimeRenderLastMs || dataset?.kuasangseRenderLastMs,
+    state.runtimePersistenceLastMs || dataset?.kuasangsePersistenceLastMs,
+  );
+  if (!model.measured) {
+    return '<span class="workfile-save-status" id="runtimePerformanceStatus" role="status">성능 계측 대기</span>';
+  }
+  const label = model.overBudget
+    ? `성능 확인 필요 · 렌더 ${model.renderMs}ms · 자동저장 ${model.persistenceMs}ms`
+    : `성능 정상 · 렌더 ${model.renderMs}ms · 자동저장 ${model.persistenceMs}ms`;
+  return `<span class="workfile-save-status ${model.overBudget ? 'error' : 'saved'}" id="runtimePerformanceStatus" role="status" data-performance-over-budget="${model.overBudget ? '1' : '0'}" title="예산: 렌더 150ms, 자동저장 1000ms">${escapeHtml(label)}</span>`;
+}
+
 function renderWorkfileBuildLabel() {
   const buildId = String(window.__KUASANGSE_APP_BUILD_ID__ || '개발').trim();
   const shortBuild = buildId.match(/v\d+$/i)?.[0] || buildId;
   return `<span class="workfile-build-label" id="workfileBuildLabel" title="${escAttr(buildId)}">빌드 ${escapeHtml(shortBuild)}</span>`;
+}
+
+function renderProjectSafetyBackupStatus() {
+  const status = String(state.projectSafetyBackupState || '');
+  if (!status) return '';
+  const labels = {
+    exporting: '안전 백업 만드는 중...',
+    restoring: '안전 백업 복원 중...',
+    completed: state.projectSafetyBackupMessage || '안전 백업 완료',
+    error: state.projectSafetyBackupMessage || '안전 백업 실패',
+  };
+  return `<span class="workfile-save-status ${status === 'error' ? 'error' : (status === 'completed' ? 'saved' : 'saving')}" id="projectSafetyBackupStatus" role="status">${escapeHtml(labels[status] || status)}</span>`;
 }
 
 let workBundleSyncStatusLabel = '자산관 사진: 확인 전';
@@ -631,6 +674,7 @@ function renderGlobalDbSyncStatusStrip() {
       saveCurrent: () => exportCurrentProjectFile({ name: state.currentProjectName || deriveProjectName(), saveAs: false }),
       saveAs: () => exportCurrentProjectFile({ name: state.currentProjectName || deriveProjectName(), saveAs: true }),
       importFile: () => openFactoryProjectFilePicker(),
+      importFileDirect: () => openFactoryProjectFileInput({ direct: true }),
     };
   }
   const authorityReadOnly = workspaceDocumentAuthorityIsReadOnly();
@@ -642,9 +686,13 @@ function renderGlobalDbSyncStatusStrip() {
     || currentFactory?.product?.userProductName
     || state.productName
     || state.analysis?.product_name
-    || state.analysis?.product_name_en
-    || '새 작업';
+  || state.analysis?.product_name_en
+  || '새 작업';
   const cleanProjectName = String(projectName || '새 작업').replace(/\.kuasangse$/i, '').trim() || '새 작업';
+  const workfileNameTailStart = cleanProjectName.lastIndexOf(' ');
+  const workfileNamePrefix = workfileNameTailStart >= 0 ? cleanProjectName.slice(0, workfileNameTailStart + 1) : '';
+  const workfileNameTail = workfileNamePrefix ? cleanProjectName.slice(workfileNameTailStart + 1) : cleanProjectName;
+  const workfileNameTailClass = workfileNamePrefix ? 'db-workfile-name-tail' : 'db-workfile-name-tail db-workfile-name-tail-wrap';
   const fileDisplayName = `${cleanProjectName}.kuasangse`;
   const currentStatus = typeof workspaceDocumentStatusLabel === 'function'
     ? workspaceDocumentStatusLabel()
@@ -665,7 +713,7 @@ function renderGlobalDbSyncStatusStrip() {
   return `<div class="db-workfile-strip" aria-label="제품정보 DB·자산관 사진과 작업파일">
     <div class="db-workfile-current">
       <div class="db-workfile-kicker">현재 작업파일</div>
-      <div class="db-workfile-name" title="${escAttr(fileDisplayName)}"><span class="db-workfile-name-base">${escapeHtml(cleanProjectName)}</span><span class="db-workfile-name-ext">.kuasangse</span></div>
+      <div class="db-workfile-name" title="${escAttr(fileDisplayName)}"><span class="db-workfile-name-base">${escapeHtml(workfileNamePrefix)}<span class="${workfileNameTailClass}">${escapeHtml(workfileNameTail)}&#8288;<span class="db-workfile-name-ext">.kuasangse</span></span></span></div>
       <div class="db-workfile-current-step">현재 화면 ${escapeHtml(activeStepLabel)}</div>
     </div>
     <div class="db-workfile-title">
@@ -683,9 +731,14 @@ function renderGlobalDbSyncStatusStrip() {
       <button class="btn-sm" id="blankWorkBtn" type="button" title="미저장 시 저장 여부를 묻고, 화면을 완전히 비워 새 작업을 시작합니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'blank'}}))">새 작업</button>
       ${renderWorkfileSaveStatus()}
       ${renderWorkfileBuildLabel()}
+      ${renderRuntimePerformanceStatus()}
       <button class="btn-sm primary" id="saveCurrentProjectFileBtn" type="button" title="현재 작업파일에 바로 덮어씁니다. 처음 저장할 때만 위치를 선택합니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'save-current'}}))" ${authorityReadOnly ? 'disabled aria-disabled="true"' : ''}>현재 상태 저장</button>
       <button class="btn-sm" id="saveProjectFileAsBtn" type="button" title="새 이름과 로컬 저장 위치를 선택해 별도 작업파일로 저장합니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'save-as'}}))">다른 이름으로 저장</button>
       <button class="btn-sm" id="importProjectFileBtn" type="button" title="최근 작업파일 위치에서 .kuasangse 파일을 불러옵니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'import'}}))">작업파일 불러오기</button>
+      <button class="btn-sm" id="importProjectFileDirectBtn" type="button" title="Windows 파일창 대신 표준 파일 선택으로 .kuasangse를 직접 불러옵니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'import-direct'}}))">작업파일 직접 선택</button>
+      <button class="btn-sm" id="exportProjectSafetyBackupBtn" type="button" title="현재 작업파일, 이 작업의 로컬 보관 이미지, IndexedDB 복원 manifest를 SHA-256 체크섬과 함께 한 파일로 내려받습니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'export-safety-backup'}}))" ${state.projectBusy ? 'disabled aria-disabled="true"' : ''}>안전 백업</button>
+      <button class="btn-sm" id="restoreProjectSafetyBackupBtn" type="button" title="안전 백업의 체크섬을 먼저 검증한 뒤 작업파일, 로컬 보관 이미지, 브라우저 복원 상태를 복원합니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'restore-safety-backup'}}))" ${state.projectBusy ? 'disabled aria-disabled="true"' : ''}>백업 복원</button>
+      ${renderProjectSafetyBackupStatus()}
       <button class="btn-sm" id="syncSinhwaAssetsBtn" type="button" title="로컬 원본은 그대로 두고 현재 입력·생성 사진을 신화사 자산관과 즉시 다시 대조합니다." onclick="document.dispatchEvent(new CustomEvent('kuasangse:workfile-action',{detail:{action:'sync-assets'}}))">자산관 사진 다시 대조</button>
     </div>
   </div>`;
@@ -2110,7 +2163,7 @@ function validateIncomingWorkspaceBoundary(snapshot, options = {}) {
   if (activeIdentity && options.replaceWorkspace !== true) {
     const sameInstance = !result.identity || api.workIdentitiesMatch(activeIdentity, result.identity);
     const sameProduct = !result.productKey || !activeIdentity.initialProductKey
-      || result.productKey === activeIdentity.initialProductKey;
+      || lastWorkIdentityKeysCompatible(result.productKey, activeIdentity.initialProductKey);
     const sameImage = !result.inputImageFingerprint || !activeIdentity.initialInputImageFingerprint
       || result.inputImageFingerprint === activeIdentity.initialInputImageFingerprint;
     if (!sameInstance || !sameProduct || !sameImage) {
@@ -2859,7 +2912,10 @@ function currentBranchDocumentMigrationBoundary(scopeId = getCurrentLastWorkWork
   if (!branchScopeId.startsWith('draft:')) return null;
   const documentScopeId = getCurrentDocumentWorkspaceScope();
   if (!documentScopeId) return null;
-  const branch = currentWorkspaceBranch(branchScopeId, state.currentProjectId);
+  const branch = currentWorkspaceBranch(
+    branchScopeId,
+    documentScopeId.replace(/^project:/i, ''),
+  );
   if (branch.scopeId !== branchScopeId || branch.documentScopeId !== documentScopeId) return null;
   return Object.freeze({ branchScopeId, documentScopeId, branch });
 }
@@ -4225,15 +4281,32 @@ function stripAiRepairUndoImages(undoStack = {}) {
 function sanitizeCompMarketScrapeForPersistence(marketScrape) {
   const copy = marketScrape && typeof marketScrape === 'object' ? { ...marketScrape } : null;
   if (!copy || typeof copy !== 'object') return copy || null;
-  if (Array.isArray(copy.results)) {
-    copy.results = copy.results.slice(0, 80);
+  const compactInlineImage = (value, key = '') => {
+    if (typeof value === 'string') {
+      const field = String(key).toLowerCase();
+      const isInline = /^data:image\//i.test(value)
+        || /base64|dataurl/.test(field)
+        || (/(image|thumbnail|preview)$/.test(field) && value.length > 4096 && !/^https?:\/\//i.test(value));
+      if (isInline) return field === 'src' ? IMAGE_STORED_MARKER : '';
+      return value;
+    }
+    if (Array.isArray(value)) return value.map(item => compactInlineImage(item));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).map(([field, item]) => [field, compactInlineImage(item, field)]));
+    }
+    return value;
+  };
+  const compactRows = rows => (Array.isArray(rows) ? rows.slice(0, 80) : []).map(row => compactInlineImage(row));
+  for (const key of ['results', 'localResults', 'vmResults', 'vmLocalResults']) {
+    if (Array.isArray(copy[key])) copy[key] = compactRows(copy[key]);
   }
-  if (copy.groupedResults && typeof copy.groupedResults === 'object') {
-    copy.groupedResults = Object.fromEntries(Object.entries(copy.groupedResults).map(([siteId, rows]) => [
-      siteId,
-      Array.isArray(rows) ? rows.slice(0, 80) : [],
-    ]));
+  for (const key of ['groupedResults', 'localGroupedResults', 'vmGroupedResults', 'vmLocalGroupedResults']) {
+    if (copy[key] && typeof copy[key] === 'object') {
+      copy[key] = Object.fromEntries(Object.entries(copy[key]).map(([siteId, rows]) => [siteId, compactRows(rows)]));
+    }
   }
+  copy.imageBase64 = '';
+  copy.imagePreview = '';
   if (Array.isArray(copy.searchRuns)) {
     copy.searchRuns = copy.searchRuns.slice(-20);
   }
@@ -4247,7 +4320,7 @@ function sanitizeCompMarketScrapeForPersistence(marketScrape) {
   copy.loading = false;
   if (Array.isArray(copy.scrapedImages)) {
     copy.scrapedImages = copy.scrapedImages.slice(0, 80).map(image => ({
-      ...image,
+      ...compactInlineImage(image),
       hasImageData: !!(image?.src || image?.base64 || image?.image),
       src: image?.src && /^data:image\//i.test(String(image.src)) ? IMAGE_STORED_MARKER : image?.src,
       base64: '',
@@ -4408,7 +4481,9 @@ function flushOptionSorterLiveRecoverySave() {
     return Promise.resolve(false);
   }
   optionSorterLiveSaveQueued = false;
-  return saveOptionSorterLiveRecovery();
+  return saveOptionSorterLiveRecovery().then(saved => (
+    saved && saveServerLastWorkSnapshot('option-sorter-live', { force: true })
+  ));
 }
 
 function applyOptionSorterLiveRecovery(target = state, options = {}) {
@@ -4416,8 +4491,10 @@ function applyOptionSorterLiveRecovery(target = state, options = {}) {
   const projectId = String(options.projectId || target?.currentProjectId || '').trim();
   const recovery = loadOptionSorterLiveRecovery(scopeId, { projectId });
   if (!recovery) return false;
+  const currentOptionSorter = target.optionSorter || {};
+  const mergedOptionSorter = mergeOptionSorterStoredImages(currentOptionSorter, recovery.optionSorter);
   target.optionSorter = normalizeOptionSorterState({
-    ...mergeOptionSorterStoredImages(target.optionSorter || {}, recovery.optionSorter),
+    ...mergedOptionSorter,
     optionGenRunning: false,
   });
   return true;
@@ -4769,6 +4846,9 @@ function currentSessionAssetsPayload(options = {}) {
   const preserveSelectedFactoryImages = options.preserveSelectedFactoryImages === true;
   const preserveRecentWorkingImages = options.preserveRecentWorkingImages === true;
   const preserveInlineSectionImages = includeImages || options.preserveSectionImages === true || preserveRecentWorkingImages;
+  const compPageSnapshot = options.compPageSnapshot && typeof options.compPageSnapshot === 'object'
+    ? options.compPageSnapshot
+    : (state.compPage || {});
   const canonicalFactory = options.factorySnapshot
     || (typeof factoryRuntimeReadCommittedFactory === 'function'
       ? factoryRuntimeReadCommittedFactory()
@@ -4843,11 +4923,9 @@ function currentSessionAssetsPayload(options = {}) {
       preserveRecentResults: preserveRecentWorkingImages,
     }),
     compPage: {
-      uploadedImages: includeImages ? cloneData(state.compPage?.uploadedImages || []) : [],
-      evidenceImages: includeImages ? cloneData(state.compPage?.evidenceImages || []) : [],
-      marketScrape: includeImages ? sanitizeCompMarketScrapeForPersistence(state.compPage?.marketScrape || null) : stripCompPageImages(state.compPage || {}).marketScrape || null,
-      hasUploadedImages: !!(state.compPage?.uploadedImages || []).length,
-      hasEvidenceImages: !!(state.compPage?.evidenceImages || []).length,
+      ...stripCompPageImages(compPageSnapshot),
+      uploadedImages: includeImages ? cloneData(compPageSnapshot.uploadedImages || []) : [],
+      evidenceImages: includeImages ? cloneData(compPageSnapshot.evidenceImages || []) : [],
     },
     optionSorter: includeImages ? cloneData(state.optionSorter || {}) : stripOptionSorterImages(state.optionSorter || {}, {
       preserveRecentResults: preserveRecentWorkingImages,
@@ -4897,12 +4975,22 @@ function getCurrentLastWorkWorkspaceScope() {
   return workspacePersistenceApi().normalizeWorkspaceScope(getStoredLastWorkDraftScope());
 }
 
-function getCurrentDocumentWorkspaceScope(projectId = state?.currentProjectId || '') {
+function getCurrentDocumentWorkspaceScope(projectId = '') {
   const id = String(projectId || '').replace(/^project:/i, '').trim();
-  return id ? workspacePersistenceApi().normalizeProjectScope(id) : '';
+  if (id) return workspacePersistenceApi().normalizeProjectScope(id);
+  let factory = null;
+  try {
+    if (typeof factoryRuntimeReadFactory === 'function') factory = factoryRuntimeReadFactory();
+  } catch (_) {}
+  const restoredId = String(
+    factory?.workspace?.id || factory?.currentProjectId || '',
+  ).replace(/^project:/i, '').trim();
+  return restoredId && !/^draft:/i.test(restoredId)
+    ? workspacePersistenceApi().normalizeProjectScope(restoredId)
+    : '';
 }
 
-function currentWorkspaceBranch(scopeId = getCurrentLastWorkWorkspaceScope(), projectId = state?.currentProjectId || '') {
+function currentWorkspaceBranch(scopeId = getCurrentLastWorkWorkspaceScope(), projectId = '') {
   const branchScope = workspacePersistenceApi().normalizeWorkspaceScope(scopeId);
   const documentScope = getCurrentDocumentWorkspaceScope(projectId);
   return workspacePersistenceApi().createWorkBranch({
@@ -5552,6 +5640,84 @@ function lastWorkRequiredFieldRestoreNeeded(snapshot = {}, currentFactory = {}, 
   });
 }
 
+function lastWorkOptionLabelsRestoreNeeded(snapshot = {}, currentOptionSorter = {}) {
+  const assets = snapshot?.assets && typeof snapshot.assets === 'object' ? snapshot.assets : snapshot;
+  const rawValues = assets?.factory?.product?.finalDb?.option_values;
+  const labels = (Array.isArray(rawValues)
+    ? rawValues
+    : (typeof rawValues === 'string' ? rawValues.split(/[,;\n]+/) : []))
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!labels.length) return false;
+  const slots = Array.isArray(currentOptionSorter?.slots) ? currentOptionSorter.slots : [];
+  if (!slots.length) return true;
+  const allGenericNames = slots.every(slot => optionSorterSlotNameIsGeneric(slot?.name));
+  const allCanonicalNames = slots.length === labels.length
+    && slots.every((slot, index) => String(slot?.name || '').trim() === labels[index]);
+  return allGenericNames && !allCanonicalNames;
+}
+
+function optionSorterSlotNameIsGeneric(value = '') {
+  return /^\d+(?:\s*번)?$/.test(String(value || '').trim());
+}
+
+function optionSorterDurableProgress(optionSorter = {}) {
+  const slots = Array.isArray(optionSorter?.slots) ? optionSorter.slots : [];
+  const optionResults = Array.isArray(optionSorter?.optionResults) ? optionSorter.optionResults : [];
+  return {
+    slots: slots.length,
+    namedSlots: slots.filter(slot => !optionSorterSlotNameIsGeneric(slot?.name)).length,
+    slotImageAssignments: new Set(slots.flatMap(slot => Array.isArray(slot?.imgIds) ? slot.imgIds : []).map(String).filter(Boolean)).size,
+    images: Array.isArray(optionSorter?.images) ? optionSorter.images.length : 0,
+    optionResults: optionResults.length,
+    displayableOptionResults: optionResults.filter(result => result?.image || result?.imageUrl || result?.archiveId || result?.resultAssetId || (Array.isArray(result?.splitImages) && result.splitImages.some(item => item?.image || item?.imageUrl || item?.archiveId))).length,
+  };
+}
+
+function optionSorterSnapshotIsMoreComplete(current, incoming) {
+  const currentProgress = optionSorterDurableProgress(current);
+  const incomingProgress = optionSorterDurableProgress(incoming);
+  const keys = Object.keys(currentProgress);
+  return keys.every(key => currentProgress[key] >= incomingProgress[key])
+    && keys.some(key => currentProgress[key] > incomingProgress[key]);
+}
+
+function lastWorkCompMarketScore(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return 0;
+  const assets = snapshot.assets && typeof snapshot.assets === 'object' ? snapshot.assets : snapshot;
+  const compPage = assets.compPage && typeof assets.compPage === 'object' ? assets.compPage : {};
+  const market = compPage.marketScrape && typeof compPage.marketScrape === 'object'
+    ? compPage.marketScrape
+    : {};
+  const groupedCount = groups => Object.values(groups && typeof groups === 'object' ? groups : {})
+    .reduce((total, rows) => total + (Array.isArray(rows) ? rows.length : 0), 0);
+  const candidateCount = Math.max(
+    Array.isArray(market.vmResults) ? market.vmResults.length : 0,
+    Array.isArray(market.results) ? market.results.length : 0,
+    Array.isArray(market.localResults) ? market.localResults.length : 0,
+    groupedCount(market.groupedResults),
+    groupedCount(market.vmGroupedResults),
+    groupedCount(market.localGroupedResults),
+  );
+  const selectedCount = Array.isArray(market.selectedIds) ? market.selectedIds.length : 0;
+  const selectedImageCount = Array.isArray(market.selectedImageIds) ? market.selectedImageIds.length : 0;
+  const scrapedImageCount = Array.isArray(market.scrapedImages) ? market.scrapedImages.length : 0;
+  const detailCount = market.detailResults && typeof market.detailResults === 'object'
+    ? Object.keys(market.detailResults).length
+    : 0;
+  const hasAnalysis = compPage.analysisResult && typeof compPage.analysisResult === 'object'
+    && Object.keys(compPage.analysisResult).length > 0;
+  const hasSectionPlan = compPage.sectionPlan && typeof compPage.sectionPlan === 'object'
+    && Object.keys(compPage.sectionPlan).length > 0;
+  return candidateCount
+    + selectedCount * 2
+    + selectedImageCount * 2
+    + scrapedImageCount
+    + detailCount
+    + (hasAnalysis ? 10 : 0)
+    + (hasSectionPlan ? 4 : 0);
+}
+
 function lastWorkSnapshotScore(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return 0;
   const lightweight = snapshot.lightweight && typeof snapshot.lightweight === 'object' ? snapshot.lightweight : {};
@@ -5661,7 +5827,9 @@ function getCurrentCompAnalysisTime() {
 
 function buildServerLastWorkSnapshot(reason = 'auto', options) {
   options = options || {};
-  const workspaceScope = getCurrentLastWorkWorkspaceScope();
+  const documentScope = getCurrentDocumentWorkspaceScope();
+  const workspaceScope = documentScope || getCurrentLastWorkWorkspaceScope();
+  const documentSnapshot = !!documentScope;
   const canonicalFactory = options.factorySnapshot
     || (typeof factoryRuntimeReadCommittedFactory === 'function'
       ? factoryRuntimeReadCommittedFactory()
@@ -5674,6 +5842,8 @@ function buildServerLastWorkSnapshot(reason = 'auto', options) {
     preserveRecentWorkingImages: true,
     preserveSectionImages: true,
     factorySnapshot: canonicalFactory,
+    scopeId: workspaceScope,
+    documentSnapshot,
   }), {
     targetName,
   });
@@ -5684,7 +5854,7 @@ function buildServerLastWorkSnapshot(reason = 'auto', options) {
     currentProjectCreatedAt: state.currentProjectCreatedAt,
     workspaceScope: { id: workspaceScope },
     workspaceRevision: currentWorkspaceRevision(workspaceScope),
-    workspaceBranch: currentWorkspaceBranch(workspaceScope, state.currentProjectId),
+    workspaceBranch: documentSnapshot ? null : currentWorkspaceBranch(workspaceScope, state.currentProjectId),
     analysis: state.analysis,
     competitorData: state.competitorData,
     sectionContents: state.sectionContents,
@@ -5715,7 +5885,7 @@ function buildServerLastWorkSnapshot(reason = 'auto', options) {
     workspaceId: workspaceScope,
     workspaceScope: { id: workspaceScope },
     workspaceRevision: currentWorkspaceRevision(workspaceScope),
-    workspaceBranch: currentWorkspaceBranch(workspaceScope, state.currentProjectId),
+    workspaceBranch: documentSnapshot ? null : currentWorkspaceBranch(workspaceScope, state.currentProjectId),
     savedAt,
     reason,
     origin: location.origin,
@@ -5756,6 +5926,7 @@ function serverLastWorkFailureDelayMs(failureCount = 1) {
 
 async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
   const documentFence = captureWorkspaceDocumentFence(options);
+  const activeBranchScope = documentFence.scopeId;
   if (!workspaceDocumentFenceIsCurrent(documentFence)) return false;
   if (workspaceScopeTransitionState.inProgress) return false;
   const forceRequested = options.force === true;
@@ -5775,6 +5946,7 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
   }
   serverLastWorkForceSaveRequested = forceRequested;
   serverLastWorkFactorySnapshotRequested = options.factorySnapshot || null;
+  let restoreBranchAuthority = false;
   serverLastWorkSavePromise = (async () => {
     do {
       serverLastWorkSaveRequestedAgain = false;
@@ -5783,7 +5955,10 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       const requestedFactorySnapshot = serverLastWorkFactorySnapshotRequested;
       serverLastWorkFactorySnapshotRequested = null;
       if (!workspaceDocumentFenceIsCurrent(documentFence)) return false;
-      const scopeId = documentFence.scopeId;
+      const documentScopeId = getCurrentDocumentWorkspaceScope();
+      const scopeId = documentScopeId || documentFence.scopeId;
+      restoreBranchAuthority = restoreBranchAuthority
+        || (scopeId !== activeBranchScope && activeBranchScope.startsWith('draft:'));
       if (!scopeId.startsWith('project:')) {
         serverLastWorkFailureCount = 0;
         serverLastWorkRetryAfter = 0;
@@ -5791,6 +5966,7 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       }
       const authority = await ensureWorkspaceEditAuthority(scopeId);
       if (!workspaceDocumentFenceIsCurrent(documentFence)) return false;
+      if (documentScopeId && getCurrentDocumentWorkspaceScope() !== documentScopeId) return false;
       if (scopeId.startsWith('project:') && authority?.mode !== 'editing') {
         throw new Error('현재 작업의 편집권이 없어 서버 저장을 중지했습니다.');
       }
@@ -5813,6 +5989,7 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
           indexeddb: { sessionAssets },
         },
         isCurrent: () => workspaceDocumentFenceIsCurrent(documentFence)
+          && (!documentScopeId || getCurrentDocumentWorkspaceScope() === documentScopeId)
           && Number(state.contentVersion || 0) === contentVersion,
       });
       if (result.stale) return false;
@@ -5835,8 +6012,18 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
     console.warn(`Server last-work save failed; retrying after ${Math.round(retryDelay / 1000)}s:`, e);
     scheduleServerLastWorkSave(reason, retryDelay, options);
     return false;
-  }).finally(() => {
-    serverLastWorkSavePromise = null;
+  }).finally(async () => {
+    try {
+      if (restoreBranchAuthority
+        && workspaceDocumentFenceIsCurrent(documentFence)
+        && getCurrentLastWorkWorkspaceScope() === activeBranchScope) {
+        await ensureWorkspaceEditAuthority(activeBranchScope, { force: true });
+      }
+    } catch (error) {
+      console.warn('Server last-work save could not restore this tab branch:', error);
+    } finally {
+      serverLastWorkSavePromise = null;
+    }
   });
   return serverLastWorkSavePromise;
 }
@@ -6023,9 +6210,12 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
   return changed;
 }
 
-async function hydrateServerLastWorkSnapshot(options = {}) {
+async function hydrateServerLastWorkSnapshot(options = {}, validation = {}) {
   const requestIsCurrent = () => typeof options.isCurrent !== 'function' || options.isCurrent() !== false;
-  if (serverLastWorkHydrated && !options.force) return false;
+  const initialRequestIsCurrent = requestIsCurrent();
+  if (serverLastWorkHydrated && !options.force && options.projectFallback !== true) {
+    return false;
+  }
   if (serverLastWorkHydrating && serverLastWorkHydrationPromise) {
     await serverLastWorkHydrationPromise;
     if (!options.takeoverSync) return false;
@@ -6044,11 +6234,15 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
   let previousFactorySnapshot = null;
   let applyStarted = false;
   try {
-    if (!requestIsCurrent()) return false;
+    if (!initialRequestIsCurrent) return false;
     takeoverIdentity = options.takeoverAuthority
       ? workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority)
       : null;
     const hydrateScopeId = String(takeoverIdentity?.scopeId || requestedScopeId).trim();
+    const documentScopeId = !takeoverIdentity ? getCurrentDocumentWorkspaceScope() : '';
+    const restoreScopeId = documentScopeId || hydrateScopeId;
+    const crossScopeRestore = restoreScopeId !== hydrateScopeId;
+    if (!restoreScopeId) return false;
     if (!workspaceHydrationScopeIsCurrent(
       hydrateScopeId,
       hydrateToken,
@@ -6058,7 +6252,7 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
     previousStateSnapshot = takeoverIdentity ? cloneData(state) : null;
     previousFactorySnapshot = takeoverIdentity ? factoryRuntimeReadFactory() : null;
     const restored = await workspacePersistenceApi().restore({
-      scopeId: hydrateScopeId,
+      scopeId: restoreScopeId,
       sources: ['server'],
     });
     if (!workspaceHydrationScopeIsCurrent(
@@ -6068,9 +6262,9 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       options.takeoverAuthority,
     )) return false;
     if (takeoverIdentity) workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority);
-    const trustedRevision = restored?.revision && typeof restored.revision === 'object'
-      ? restored.revision
-      : null;
+    const trustedRevision = workspaceSnapshotRevision(restored?.snapshot) || (
+      restored?.revision && typeof restored.revision === 'object' ? restored.revision : null
+    );
     let snapshot = restored?.snapshot && trustedRevision
       ? { ...restored.snapshot, workspaceRevision: trustedRevision }
       : restored?.snapshot;
@@ -6080,7 +6274,7 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       }
       return options.takeoverSync === true;
     }
-    if (!lastWorkSnapshotMatchesWorkspaceScope(snapshot, hydrateScopeId)
+    if (!lastWorkSnapshotMatchesWorkspaceScope(snapshot, restoreScopeId)
       || !workspaceHydrationScopeIsCurrent(
         hydrateScopeId,
         hydrateToken,
@@ -6133,6 +6327,16 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
     const serverAssetPayload = snapshot.assets && typeof snapshot.assets === 'object'
       ? snapshot.assets
       : snapshot;
+    const serverCompMarketScore = lastWorkCompMarketScore(serverAssetPayload);
+    const currentCompMarketScore = lastWorkCompMarketScore({ compPage: state.compPage });
+    const serverHasBetterCompMarket = serverCompMarketScore > currentCompMarketScore;
+    const currentStateOutranksServer = currentScore > serverScore
+      || optionSorterSnapshotIsMoreComplete(state.optionSorter, serverAssetPayload.optionSorter);
+    const serverHasBetterOptionSorter = optionSorterSnapshotIsMoreComplete(
+      serverAssetPayload.optionSorter,
+      state.optionSorter,
+    );
+    const serverHasCanonicalOptionLabels = lastWorkOptionLabelsRestoreNeeded(snapshot, state.optionSorter);
     const serverHasBetterCutResults = persistedCutResultCount(serverAssetPayload.cuts)
       > persistedCutResultCount(state.cuts);
     const serverHasRequiredFieldRestore = lastWorkRequiredFieldRestoreNeeded(
@@ -6149,16 +6353,27 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       || serverScore > currentScore
       || serverHasBetterSectionImages
       || serverHasBetterCutResults
+      || serverHasBetterOptionSorter
+      || serverHasBetterCompMarket
+      || serverHasCanonicalOptionLabels
       || (serverHasInlineOptionImages && currentNeedsOptionImageRestore)
       || (serverSavedAt > currentSavedAt + 1000 && serverScore >= currentScore)
       || (serverCompAnalysisAt > currentCompAnalysisAt + 1000);
-    if (!shouldApply) return false;
+    if (!shouldApply) {
+      shouldResaveAfterHydrate = options.takeoverSync !== true
+        && !crossScopeRestore
+        && currentStateOutranksServer;
+      return false;
+    }
     if (!workspaceHydrationScopeIsCurrent(
       hydrateScopeId,
       hydrateToken,
       requestIsCurrent,
       options.takeoverAuthority,
     )) return false;
+    if (typeof validation.validateSnapshot === 'function' && validation.validateSnapshot(snapshot) !== true) {
+      return false;
+    }
     applyStarted = true;
     const changed = applyServerLastWorkSnapshot(snapshot, {
       forceStep: options.forceStep,
@@ -6176,7 +6391,7 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
       }
       // 복원된 last-work는 저장된 문서 상태로 본다 (새 작업 시 불필요 저장 강요 방지)
       if (typeof markWorkspaceDocumentClean === 'function') markWorkspaceDocumentClean();
-      shouldResaveAfterHydrate = options.takeoverSync !== true;
+      shouldResaveAfterHydrate = options.takeoverSync !== true && !crossScopeRestore;
       if (!options.takeoverSync) {
         if (sessionAssetsHydrated) {
           scheduleSessionAssetSaveIfChanged();
@@ -6221,11 +6436,12 @@ async function hydrateServerLastWorkSnapshot(options = {}) {
     if (serverLastWorkHydrationPromise === hydrationCompletion) {
       serverLastWorkHydrationPromise = null;
     }
-    if (shouldFlushPersistentStateAfterHydrate) {
+    if (shouldFlushPersistentStateAfterHydrate || shouldResaveAfterHydrate) {
       workspaceScopeTransitionState.persistentSaveQueued = false;
-      setTimeout(() => savePersistentState(), 0);
-    } else if (shouldResaveAfterHydrate) {
-      setTimeout(() => saveServerLastWorkSnapshot('hydrate-restored').catch(() => {}), 0);
+      setTimeout(() => savePersistentState({
+        server: shouldResaveAfterHydrate,
+        force: shouldResaveAfterHydrate,
+      }), 0);
     }
   }
 }
@@ -6448,7 +6664,27 @@ function sessionAssetSaveFingerprint() {
     }
     return String(item?.jcode || item?.id || item?.product_name || item?.jname || '').trim();
   });
+  const optionResultKeys = (list) => (Array.isArray(list) ? list : []).map(item => [
+    String(item?.optionResultId || item?.resultId || item?.id || item?.archiveId || item?.title || '').trim(),
+    !!(item?.image || item?.imageUrl || item?.archiveId || item?.resultAssetId || item?.hasImage),
+  ]);
+  const market = state.compPage?.marketScrape && typeof state.compPage.marketScrape === 'object'
+    ? state.compPage.marketScrape
+    : {};
+  const marketCandidateKeys = [
+    ...(Array.isArray(market.results) ? market.results : []),
+    ...(Array.isArray(market.vmResults) ? market.vmResults : []),
+    ...(Array.isArray(market.localResults) ? market.localResults : []),
+  ].map(item => String(item?.id || item?.candidateId || item?.productUrl || item?.url || item?.title || '').trim())
+    .filter(Boolean)
+    .sort();
   return JSON.stringify({
+    productIdentity: {
+      productName: String(state.productName || factory.product?.productName || '').trim(),
+      currentProjectId: String(state.currentProjectId || factory.currentProjectId || factory.workspace?.id || '').trim(),
+      currentProjectName: String(state.currentProjectName || factory.currentProjectName || factory.workspace?.name || '').trim(),
+      step: String(state.step || '').trim(),
+    },
     imagePreview: valueLength(state.imagePreview),
     imageBase64: valueLength(state.imageBase64),
     analysisImages: mapImageList(state.analysisImages),
@@ -6465,6 +6701,12 @@ function sessionAssetSaveFingerprint() {
     optionSorter: {
       images: mapImageList(state.optionSorter?.images),
       results: mapImageList(state.optionSorter?.optionResults),
+      resultKeys: optionResultKeys(state.optionSorter?.optionResults),
+      slots: (Array.isArray(state.optionSorter?.slots) ? state.optionSorter.slots : []).map(slot => [
+        String(slot?.id || '').trim(),
+        String(slot?.name || '').trim(),
+        (Array.isArray(slot?.imgIds) ? slot.imgIds : []).map(String).sort(),
+      ]),
       sample: imageStamp(state.optionSorter?.styleSample || {}),
     },
     factory: {
@@ -6486,6 +6728,17 @@ function sessionAssetSaveFingerprint() {
     compPage: {
       uploaded: mapImageList(state.compPage?.uploadedImages),
       evidence: mapImageList(state.compPage?.evidenceImages),
+      market: {
+        candidateKeys: marketCandidateKeys,
+        selectedIds: (Array.isArray(market.selectedIds) ? market.selectedIds : []).map(String).sort(),
+        selectedImageIds: (Array.isArray(market.selectedImageIds) ? market.selectedImageIds : []).map(String).sort(),
+        detailKeys: Object.keys(market.detailResults && typeof market.detailResults === 'object' ? market.detailResults : {}).sort(),
+      },
+      analysis: {
+        updatedAt: String(state.compPage?.analysisUpdatedAt || state.compPage?.analyzedAt || '').trim(),
+        hasResult: !!(state.compPage?.analysisResult && typeof state.compPage.analysisResult === 'object' && Object.keys(state.compPage.analysisResult).length),
+        hasSectionPlan: !!(state.compPage?.sectionPlan && typeof state.compPage.sectionPlan === 'object' && Object.keys(state.compPage.sectionPlan).length),
+      },
     },
   });
 }
@@ -6622,7 +6875,10 @@ function scheduleLastWorkSave(delay = 1600, options = {}) {
     if (optionSorterLiveSaveTimer) clearTimeout(optionSorterLiveSaveTimer);
     optionSorterLiveSaveTimer = setTimeout(() => {
       optionSorterLiveSaveTimer = null;
-      saveOptionSorterLiveRecovery();
+      const serverOptions = options.durable === true ? { force: true } : undefined;
+      Promise.resolve(saveOptionSorterLiveRecovery()).then(saved => (
+        saved && saveServerLastWorkSnapshot('option-sorter-live', serverOptions)
+      ));
     }, wait);
     return;
   }
@@ -6989,7 +7245,10 @@ function countSessionAssetRestoreRefs() {
       )).length;
     }
     if (Array.isArray(optionSorter.optionResults)) {
-      count += optionSorter.optionResults.filter(result => result?.hasImage && !result.image).length;
+      count += optionSorter.optionResults.filter(result => result?.hasImage && !hasInlineImagePayload(
+        result,
+        ['image', 'imageUrl', 'archiveId', 'localArchive', 'archive', 'preview', 'dataUrl', 'result'],
+      )).length;
     }
     if (optionSorter.styleSample?.hasImage && !optionSorter.styleSample.image) count += 1;
   }
@@ -7067,19 +7326,238 @@ function showImageRestoreWarningIfNeeded() {
 }
 
 function mergeOptionSorterStoredImages(current = {}, incoming = {}) {
-  const storedById = new Map((current.images || []).map(image => [String(image?.id || ''), image]));
-  const images = (incoming.images || []).map(image => {
-    const stored = storedById.get(String(image?.id || ''));
-    if (!stored) return image;
+  const mergeRows = (currentRows, incomingRows, keyOf) => {
+    const currentByKey = new Map((Array.isArray(currentRows) ? currentRows : []).map((row, index) => [keyOf(row, index), row]));
+    const incomingKeys = new Set();
+    const rows = (Array.isArray(incomingRows) ? incomingRows : []).map((row, index) => {
+      const key = keyOf(row, index);
+      const stored = currentByKey.get(key);
+      incomingKeys.add(key);
+      return stored && row && typeof row === 'object' ? { ...stored, ...row } : row;
+    });
+    currentByKey.forEach((row, key) => {
+      if (!incomingKeys.has(key)) rows.push(row);
+    });
+    return rows;
+  };
+  const imageKey = (image, index) => String(image?.archiveId || image?.localArchive?.archiveId || image?.id || `image-${index}`);
+  const resultKey = (result, index) => String(result?.id || result?.archiveId || result?.createdAt || `result-${index}`);
+  const logKey = (log, index) => String(log?.id || `${log?.time || ''}:${log?.message || ''}` || `log-${index}`);
+  const incomingDeletedArchiveIds = new Set(Array.isArray(incoming.optionSourceDeletedArchiveIds) ? incoming.optionSourceDeletedArchiveIds.map(String) : []);
+  const incomingClearedAt = Number(incoming.optionSourceClearedAt || 0) || 0;
+  const currentClearedAt = Number(current.optionSourceClearedAt || 0) || 0;
+  const sourceExplicitlyCleared = incomingClearedAt > currentClearedAt && !(Array.isArray(incoming.images) && incoming.images.length);
+  const currentImagesByKey = new Map((Array.isArray(current.images) ? current.images : []).map((image, index) => [imageKey(image, index), image]));
+  const mergedImages = sourceExplicitlyCleared
+    ? []
+    : mergeRows(current.images, incoming.images, imageKey)
+      .map((image, index) => {
+        const stored = currentImagesByKey.get(imageKey(image, index)) || {};
+        return {
+          ...stored,
+          ...image,
+          id: stored?.id || image?.id || `image-${index}`,
+          base64: image?.base64 || stored?.base64 || '',
+          preview: image?.preview || stored?.preview || '',
+          dataUrl: image?.dataUrl || stored?.dataUrl || '',
+          imageUrl: image?.imageUrl || stored?.imageUrl || '',
+          imagePersistence: image?.imagePersistence || stored?.imagePersistence
+            || ((image?.archiveId || image?.localArchive?.archiveId || stored?.archiveId || stored?.localArchive?.archiveId)
+              ? 'local-archive-url'
+              : ''),
+        };
+      })
+      .filter(image => {
+        const archiveId = String(image?.archiveId || image?.localArchive?.archiveId || '');
+        return !archiveId || !incomingDeletedArchiveIds.has(archiveId);
+      });
+  const canonicalImageIds = new Map(mergedImages.map((image, index) => [imageKey(image, index), String(image?.id || '')]));
+  const imageIdAliases = new Map();
+  [current.images, incoming.images].forEach(images => (Array.isArray(images) ? images : []).forEach((image, index) => {
+    const id = String(image?.id || '').trim();
+    const canonicalId = canonicalImageIds.get(imageKey(image, index));
+    if (id && canonicalId) imageIdAliases.set(id, canonicalId);
+  }));
+  const canonicalizeImageIds = ids => Array.from(new Set((Array.isArray(ids) ? ids : [])
+    .map(id => imageIdAliases.get(String(id)) || String(id))
+    .filter(Boolean)));
+  const currentSlotRows = Array.isArray(current.slots) ? current.slots : [];
+  const currentSlots = new Map(currentSlotRows.map((slot, index) => [String(slot?.id || `slot_${index + 1}`), slot]));
+  const matchedCurrentSlotIds = new Set();
+  const mergedSlots = (incoming.slots || []).map((slot, index) => {
+    const id = String(slot?.id || `slot_${index + 1}`);
+    const incomingName = String(slot?.name || '').trim();
+    const genericIncomingName = !incomingName || optionSorterSlotNameIsGeneric(incomingName);
+    const exactStored = currentSlots.get(id);
+    const positionalStored = exactStored ? null : currentSlotRows[index];
+    const positionalPlaceholder = !String(positionalStored?.name || '').trim()
+      || optionSorterSlotNameIsGeneric(positionalStored?.name);
+    const matchedStored = exactStored || (positionalStored && (positionalPlaceholder || genericIncomingName) ? positionalStored : null);
+    const stored = matchedStored || {};
+    if (matchedStored) matchedCurrentSlotIds.add(String(matchedStored?.id || `slot_${index + 1}`));
+    const storedName = String(stored?.name || '').trim();
+    const keepStoredIdentity = !exactStored && matchedStored
+      && !optionSorterSlotNameIsGeneric(storedName) && genericIncomingName;
     return {
       ...stored,
-      ...image,
-      base64: image.base64 || stored.base64 || '',
-      preview: image.preview || stored.preview || '',
-      dataUrl: image.dataUrl || stored.dataUrl || '',
+      ...slot,
+      id: keepStoredIdentity ? String(stored?.id || `slot_${index + 1}`) : id,
+      name: genericIncomingName && storedName && !optionSorterSlotNameIsGeneric(storedName) ? storedName : (incomingName || storedName),
+      imgIds: canonicalizeImageIds([...(stored?.imgIds || []), ...(slot?.imgIds || [])]),
     };
   });
-  return { ...current, ...incoming, images };
+  if (!sourceExplicitlyCleared) {
+    currentSlots.forEach((slot, id) => {
+      if (!matchedCurrentSlotIds.has(id)) mergedSlots.push(slot);
+    });
+  }
+  const currentResultsByKey = new Map((Array.isArray(current.optionResults) ? current.optionResults : []).map((result, index) => [resultKey(result, index), result]));
+  const optionResults = mergeRows(current.optionResults, incoming.optionResults, resultKey).map((result, index) => {
+    const stored = currentResultsByKey.get(resultKey(result, index)) || {};
+    const storedSplitImages = Array.isArray(stored.splitImages) ? stored.splitImages : [];
+    return {
+      ...stored,
+      ...result,
+      image: result?.image || stored?.image || null,
+      imageUrl: result?.imageUrl || stored?.imageUrl || '',
+      archiveId: result?.archiveId || stored?.archiveId || '',
+      resultAssetId: result?.resultAssetId || stored?.resultAssetId || '',
+      imagePersistence: result?.imagePersistence || stored?.imagePersistence || '',
+      hasImage: result?.hasImage === true || stored?.hasImage === true,
+      splitImages: Array.isArray(result?.splitImages) && result.splitImages.length
+        ? result.splitImages.map((item, splitIndex) => ({
+          ...(storedSplitImages[splitIndex] || {}),
+          ...item,
+          image: item?.image || storedSplitImages[splitIndex]?.image || null,
+        }))
+        : storedSplitImages,
+    };
+  });
+  const currentSubStepUpdatedAt = Math.max(0, Number(current.subStepUpdatedAt || 0) || 0);
+  const incomingSubStepUpdatedAt = Math.max(0, Number(incoming.subStepUpdatedAt || 0) || 0);
+  const currentSubStep = current.subStep === 'sort' ? 'sort' : 'input';
+  const incomingSubStep = incoming.subStep === 'sort' ? 'sort' : 'input';
+  const hasMappedWork = value => (
+    (Array.isArray(value?.optionResults) && value.optionResults.length > 0)
+    || (Array.isArray(value?.slots) && value.slots.some(slot => Array.isArray(slot?.imgIds) && slot.imgIds.length > 0))
+  );
+  const subStep = incomingSubStepUpdatedAt > currentSubStepUpdatedAt
+    ? incomingSubStep
+    : (currentSubStepUpdatedAt > incomingSubStepUpdatedAt
+      ? currentSubStep
+      : ((currentSubStep === 'sort' || incomingSubStep === 'sort' || hasMappedWork(current) || hasMappedWork(incoming)) ? 'sort' : 'input'));
+  return {
+    ...current,
+    ...incoming,
+    images: mergedImages,
+    slots: mergedSlots,
+    pool: sourceExplicitlyCleared ? [] : canonicalizeImageIds([...(incoming.pool || []), ...(current.pool || [])])
+      .filter(id => mergedImages.some(image => String(image?.id || '') === id)),
+    optionResults,
+    optionLastGeneratedResultIds: Array.from(new Set([...(incoming.optionLastGeneratedResultIds || []), ...(current.optionLastGeneratedResultIds || [])]))
+      .filter(id => optionResults.some(result => String(result?.id || '') === String(id))),
+    optionGenLogs: mergeRows(current.optionGenLogs, incoming.optionGenLogs, logKey),
+    subStep,
+    subStepUpdatedAt: Math.max(currentSubStepUpdatedAt, incomingSubStepUpdatedAt),
+    optionSourceDeletedArchiveIds: Array.from(new Set([
+      ...(current.optionSourceDeletedArchiveIds || []),
+      ...(incoming.optionSourceDeletedArchiveIds || []),
+    ])),
+  };
+}
+
+function mergeSameWorkDerivedValue(current, incoming) {
+  const hasValue = value => (
+    Array.isArray(value) ? value.length > 0
+      : value && typeof value === 'object' ? Object.keys(value).length > 0
+        : typeof value === 'string' ? !!value.trim()
+          : value !== null && value !== undefined
+  );
+  if (!hasValue(incoming)) return current;
+  if (!hasValue(current)) return incoming;
+  if (Array.isArray(current) && Array.isArray(incoming)) {
+    return incoming
+      .map((value, index) => mergeSameWorkDerivedValue(current[index], value))
+      .concat(current.slice(incoming.length));
+  }
+  if (
+    current && incoming
+    && typeof current === 'object' && typeof incoming === 'object'
+    && !Array.isArray(current) && !Array.isArray(incoming)
+  ) {
+    return Object.fromEntries(Array.from(new Set([
+      ...Object.keys(current),
+      ...Object.keys(incoming),
+    ])).map(key => [key, mergeSameWorkDerivedValue(current[key], incoming[key])]));
+  }
+  return incoming;
+}
+
+function mergeCompMarketStoredState(current = {}, incoming = {}) {
+  const mergeRows = (currentRows, incomingRows, keyOf) => {
+    const storedRows = Array.isArray(currentRows) ? currentRows : [];
+    const incomingRowsList = Array.isArray(incomingRows) ? incomingRows : [];
+    const storedByKey = new Map(storedRows.map((row, index) => [keyOf(row, index), row]));
+    const seen = new Set();
+    const merged = [];
+    incomingRowsList.forEach((row, index) => {
+      const key = keyOf(row, index);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(mergeSameWorkDerivedValue(storedByKey.get(key), row));
+    });
+    storedRows.forEach((row, index) => {
+      const key = keyOf(row, index);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(row);
+    });
+    return merged;
+  };
+  const candidateKey = (row, index) => String(
+    row?.id
+    || row?.product_id
+    || row?.product_no
+    || row?.product_url
+    || row?.url
+    || row?.link
+    || [row?.platform || row?.site, row?.title || row?.name, row?.price].map(value => String(value || '').trim()).filter(Boolean).join(':')
+    || `candidate-${index}`
+  );
+  const imageKey = (row, index) => String(row?.id || row?.src || row?.url || row?.sourcePath || `image-${index}`);
+  const logKey = (row, index) => String(row?.id || `${row?.time || ''}:${row?.message || ''}` || `log-${index}`);
+  const mergeGrouped = (currentGroups, incomingGroups) => Object.fromEntries(
+    Array.from(new Set([
+      ...Object.keys(currentGroups && typeof currentGroups === 'object' ? currentGroups : {}),
+      ...Object.keys(incomingGroups && typeof incomingGroups === 'object' ? incomingGroups : {}),
+    ])).map(siteId => [siteId, mergeRows(currentGroups?.[siteId], incomingGroups?.[siteId], candidateKey)])
+  );
+  const currentSelectionVersion = Math.max(0, Number(current.detailSelectionVersion || 0) || 0);
+  const incomingSelectionVersion = Math.max(0, Number(incoming.detailSelectionVersion || 0) || 0);
+  const incomingSelectionIsNewer = incomingSelectionVersion > currentSelectionVersion;
+  const mergedSelection = key => incomingSelectionIsNewer
+    ? Array.from(new Set(incoming[key] || []))
+    : Array.from(new Set([...(incoming[key] || []), ...(current[key] || [])]));
+  return {
+    ...current,
+    ...incoming,
+    results: Array.isArray(current.results) && Array.isArray(incoming.results)
+      ? mergeRows(current.results, incoming.results, candidateKey)
+      : mergeSameWorkDerivedValue(current.results, incoming.results),
+    vmResults: mergeRows(current.vmResults, incoming.vmResults, candidateKey),
+    localResults: mergeRows(current.localResults, incoming.localResults, candidateKey),
+    groupedResults: mergeGrouped(current.groupedResults, incoming.groupedResults),
+    vmGroupedResults: mergeGrouped(current.vmGroupedResults, incoming.vmGroupedResults),
+    localGroupedResults: mergeGrouped(current.localGroupedResults, incoming.localGroupedResults),
+    selectedIds: mergedSelection('selectedIds'),
+    scrapedImages: mergeRows(current.scrapedImages, incoming.scrapedImages, imageKey),
+    selectedImageIds: mergedSelection('selectedImageIds'),
+    detailSelectionVersion: Math.max(currentSelectionVersion, incomingSelectionVersion),
+    detailResults: incoming.detailResults && typeof incoming.detailResults === 'object'
+      ? mergeSameWorkDerivedValue(current.detailResults || {}, incoming.detailResults)
+      : (current.detailResults || incoming.detailResults || null),
+    logs: mergeRows(current.logs, incoming.logs, logKey),
+  };
 }
 
 function recoverStaleSessionInlineImages(assets = {}) {
@@ -7220,6 +7698,21 @@ function applySessionAssetsPayload(assets, options = {}) {
     ? lastWorkSnapshotMatchesTakeoverWorkspace(assets, options.takeoverAuthority)
     : lastWorkSnapshotMatchesCurrentWorkspace(assets);
   if (options.forceWorkspaceRestore !== true && !matchesWorkspace) return false;
+  const preserveCurrentWork = options.replaceWorkspace !== true && matchesWorkspace;
+  const hasRestoreValue = value => (
+    Array.isArray(value) ? value.length > 0
+      : value && typeof value === 'object' ? Object.keys(value).length > 0
+        : typeof value === 'string' ? !!value.trim()
+          : value !== null && value !== undefined
+  );
+  const restoreIncomingValue = (incoming, current) => {
+    if (!preserveCurrentWork || !hasRestoreValue(current)) return incoming;
+    if (incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+      && current && typeof current === 'object' && !Array.isArray(current)) {
+      return { ...incoming, ...current };
+    }
+    return current;
+  };
   if (options.forceRevisionRestore !== true
     && !workspaceRevisionAllowsSnapshot(assets, { allowEqual: options.allowEqualRevision === true })) return false;
   restoreLastWorkProjectIdentityFromAssets(assets);
@@ -7249,10 +7742,12 @@ function applySessionAssetsPayload(assets, options = {}) {
     targetName: productScopeTargetName,
     mutate: true,
   });
-  let workingFactory = (forceIncomingFactory || preserveInlineImages || preserveRestoredFactoryAssetScope)
-    && assets.factory && typeof assets.factory === 'object'
-    ? normalizeFactoryState(cloneData(assets.factory))
-    : normalizeFactoryState(cloneData(currentFactorySnapshot));
+  const useIncomingFactory = (forceIncomingFactory || preserveInlineImages || preserveRestoredFactoryAssetScope)
+    && assets.factory && typeof assets.factory === 'object';
+  const factoryForHydration = useIncomingFactory && typeof factoryPreserveProgressForSameWork === 'function'
+    ? factoryPreserveProgressForSameWork(assets.factory, currentFactorySnapshot)
+    : (useIncomingFactory ? assets.factory : currentFactorySnapshot);
+  let workingFactory = normalizeFactoryState(cloneData(factoryForHydration));
   let changed = !!assets.__productScopeCleaned;
   const incomingInputImageFingerprint = String(
     assets.inputImageFingerprint
@@ -7299,11 +7794,11 @@ function applySessionAssetsPayload(assets, options = {}) {
     return false;
   }
   if (assets.analysis && typeof assets.analysis === 'object') {
-    state.analysis = cloneData(assets.analysis);
+    state.analysis = cloneData(restoreIncomingValue(assets.analysis, state.analysis));
     changed = true;
   }
   if (assets.competitorData !== undefined) {
-    state.competitorData = cloneData(assets.competitorData || null);
+    state.competitorData = cloneData(restoreIncomingValue(assets.competitorData || null, state.competitorData));
     changed = true;
   }
   if (typeof assets.productName === 'string' && assets.productName) {
@@ -7319,7 +7814,7 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (Array.isArray(assets.analysisRuns)) {
-    state.analysisRuns = cloneData(assets.analysisRuns);
+    state.analysisRuns = cloneData(restoreIncomingValue(assets.analysisRuns, state.analysisRuns));
     changed = true;
   }
   if (typeof assets.currentAnalysisRunId === 'string') {
@@ -7355,7 +7850,9 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (assets.productInfoManualValues && typeof assets.productInfoManualValues === 'object') {
-    state.productInfoManualValues = normalizeProductInfoManualValues(assets.productInfoManualValues);
+    state.productInfoManualValues = normalizeProductInfoManualValues(
+      restoreIncomingValue(assets.productInfoManualValues, state.productInfoManualValues),
+    );
     changed = true;
   }
   // Factory work does not require an analysis object. During startup the
@@ -7392,11 +7889,11 @@ function applySessionAssetsPayload(assets, options = {}) {
     }) || changed;
   }
   if (assets.sectionContents && typeof assets.sectionContents === 'object') {
-    state.sectionContents = cloneData(assets.sectionContents);
+    state.sectionContents = cloneData(restoreIncomingValue(assets.sectionContents, state.sectionContents));
     changed = true;
   }
   if (assets.sectionInstructionSources && typeof assets.sectionInstructionSources === 'object') {
-    state.sectionInstructionSources = cloneData(assets.sectionInstructionSources);
+    state.sectionInstructionSources = cloneData(restoreIncomingValue(assets.sectionInstructionSources, state.sectionInstructionSources));
     changed = true;
   }
   if (assets.sectionGenerationModes && typeof assets.sectionGenerationModes === 'object') {
@@ -7426,7 +7923,7 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (assets.sectionGenerationMeta && typeof assets.sectionGenerationMeta === 'object') {
-    state.sectionGenerationMeta = cloneData(assets.sectionGenerationMeta);
+    state.sectionGenerationMeta = cloneData(restoreIncomingValue(assets.sectionGenerationMeta, state.sectionGenerationMeta));
     changed = true;
   }
   if (Array.isArray(assets.sectionOrder) && assets.sectionOrder.length) {
@@ -7434,15 +7931,15 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (Array.isArray(assets.hiddenSectionIds)) {
-    state.hiddenSectionIds = cloneData(assets.hiddenSectionIds).filter(Boolean);
+    state.hiddenSectionIds = cloneData(restoreIncomingValue(assets.hiddenSectionIds, state.hiddenSectionIds)).filter(Boolean);
     changed = true;
   }
   if (Array.isArray(assets.customSections)) {
-    state.customSections = cloneData(assets.customSections);
+    state.customSections = cloneData(restoreIncomingValue(assets.customSections, state.customSections));
     changed = true;
   }
   if (Array.isArray(assets.analysisImages)) {
-    const validatedAnalysisImages = validatedIncomingImage.images || [];
+    const validatedAnalysisImages = restoreIncomingValue(validatedIncomingImage.images || [], state.analysisImages);
     state.analysisImages = preserveInlineImages
       ? cloneData(validatedAnalysisImages)
       : stripRuntimeAnalysisImages(validatedAnalysisImages);
@@ -7453,38 +7950,41 @@ function applySessionAssetsPayload(assets, options = {}) {
     changed = true;
   }
   if (assets.sectionImages && typeof assets.sectionImages === 'object') {
-    state.sectionImages = mergeRuntimeSectionImages(state.sectionImages, assets.sectionImages, {
+    const incomingSectionImages = restoreIncomingValue(assets.sectionImages, state.sectionImages);
+    state.sectionImages = mergeRuntimeSectionImages(state.sectionImages, incomingSectionImages, {
       preserveInlineImages,
     });
     changed = true;
   }
   if (Array.isArray(assets.detailImageBlocks)) {
+    const incomingDetailBlocks = restoreIncomingValue(assets.detailImageBlocks, state.detailImageBlocks);
     state.detailImageBlocks = preserveInlineImages
-      ? cloneData(assets.detailImageBlocks)
-      : stripRuntimeDetailBlockImages(assets.detailImageBlocks);
+      ? cloneData(incomingDetailBlocks)
+      : stripRuntimeDetailBlockImages(incomingDetailBlocks);
     changed = true;
   }
   if (assets.sectionVariants && typeof assets.sectionVariants === 'object') {
+    const incomingSectionVariants = restoreIncomingValue(assets.sectionVariants, state.sectionVariants);
     state.sectionVariants = preserveInlineImages
-      ? cloneData(assets.sectionVariants)
-      : stripRuntimeVariantImages(assets.sectionVariants);
+      ? cloneData(incomingSectionVariants)
+      : stripRuntimeVariantImages(incomingSectionVariants);
     changed = true;
   }
   if (assets.currentSectionVariantIds && typeof assets.currentSectionVariantIds === 'object') {
-    state.currentSectionVariantIds = cloneData(assets.currentSectionVariantIds);
+    state.currentSectionVariantIds = cloneData(restoreIncomingValue(assets.currentSectionVariantIds, state.currentSectionVariantIds));
     changed = true;
   }
   if (assets.sectionTipHelperApplied && typeof assets.sectionTipHelperApplied === 'object') {
-    state.sectionTipHelperApplied = cloneData(assets.sectionTipHelperApplied);
+    state.sectionTipHelperApplied = cloneData(restoreIncomingValue(assets.sectionTipHelperApplied, state.sectionTipHelperApplied));
     changed = true;
   }
   if (assets.sectionVariantEvaluations && typeof assets.sectionVariantEvaluations === 'object') {
-    state.sectionVariantEvaluations = cloneData(assets.sectionVariantEvaluations);
+    state.sectionVariantEvaluations = cloneData(restoreIncomingValue(assets.sectionVariantEvaluations, state.sectionVariantEvaluations));
     changed = true;
   }
   changed = restoreSectionContentsFromStoredVariants(state) || changed;
   if (assets.aiRepairUndoStack && typeof assets.aiRepairUndoStack === 'object') {
-    state.aiRepairUndoStack = assets.aiRepairUndoStack;
+    state.aiRepairUndoStack = restoreIncomingValue(assets.aiRepairUndoStack, state.aiRepairUndoStack);
     changed = true;
   }
   if (assets.aiRepair && typeof assets.aiRepair === 'object') {
@@ -7530,54 +8030,40 @@ function applySessionAssetsPayload(assets, options = {}) {
   if (assets.compPage && typeof assets.compPage === 'object') {
     const incomingAnalysisAt = Number(assets.compPage.analysisResult?.analyzedAt || assets.compPage.savedAt || assets.savedAt || 0) || 0;
     const currentAnalysisAt = getCurrentCompAnalysisTime();
-    if (assets.compPage.analysisResult && (!state.compPage.analysisResult || incomingAnalysisAt >= currentAnalysisAt)) {
+    const hasIncomingDerivedCompState = !!(
+      assets.compPage.analysisResult
+      || (assets.compPage.sectionPlan && Object.keys(assets.compPage.sectionPlan).length)
+      || (assets.compPage.planEdits && Object.keys(assets.compPage.planEdits).length)
+    );
+    if (hasIncomingDerivedCompState && (!state.compPage.analysisResult || incomingAnalysisAt >= currentAnalysisAt)) {
       applyCompAnalysisSnapshot(assets.compPage, assets.compPage.subStep || state.compPage.subStep || 'report');
       changed = true;
     }
     if (Array.isArray(assets.compPage.uploadedImages)) {
-      state.compPage.uploadedImages = assets.compPage.uploadedImages;
+      state.compPage.uploadedImages = restoreIncomingValue(assets.compPage.uploadedImages, state.compPage.uploadedImages);
       changed = true;
     }
     if (Array.isArray(assets.compPage.evidenceImages)) {
-      state.compPage.evidenceImages = assets.compPage.evidenceImages;
+      state.compPage.evidenceImages = restoreIncomingValue(assets.compPage.evidenceImages, state.compPage.evidenceImages);
       changed = true;
     }
     if (assets.compPage.marketScrape && typeof assets.compPage.marketScrape === 'object') {
       const currentMarket = state.compPage.marketScrape || {};
       const incomingMarket = sanitizeCompMarketScrapeForPersistence(assets.compPage.marketScrape);
-      const currentUpdatedAt = Number(currentMarket.lastUpdatedAt || 0);
-      const incomingUpdatedAt = Number(incomingMarket?.lastUpdatedAt || assets.compPage.savedAt || assets.savedAt || 0);
-      const keepCurrentSelection = (
-        currentUpdatedAt > incomingUpdatedAt
-        && Array.isArray(currentMarket.selectedIds)
-        && currentMarket.selectedIds.length > 0
-      ) || (
-        Array.isArray(currentMarket.selectedIds)
-        && currentMarket.selectedIds.length > 0
-        && (!Array.isArray(incomingMarket?.selectedIds) || incomingMarket.selectedIds.length === 0)
-      );
-      const keepCurrentImageSelection = (
-        Array.isArray(currentMarket.selectedImageIds)
-        && currentMarket.selectedImageIds.length > 0
-        && (
-          currentUpdatedAt >= incomingUpdatedAt
-          || Array.isArray(incomingMarket?.selectedImageIds)
-        )
-      );
-      state.compPage.marketScrape = {
-        ...currentMarket,
-        ...incomingMarket,
-      };
-      if (keepCurrentSelection) state.compPage.marketScrape.selectedIds = currentMarket.selectedIds;
-      if (keepCurrentImageSelection) state.compPage.marketScrape.selectedImageIds = currentMarket.selectedImageIds;
+      state.compPage.marketScrape = mergeCompMarketStoredState(currentMarket, incomingMarket);
       changed = true;
     }
   }
+  const factoryCompetitorMarket = assets.factory?.competitors?.compPage?.marketScrape;
+  if (factoryCompetitorMarket && typeof factoryCompetitorMarket === 'object') {
+    const currentMarket = state.compPage.marketScrape || {};
+    const incomingMarket = sanitizeCompMarketScrapeForPersistence(factoryCompetitorMarket);
+    state.compPage.marketScrape = mergeCompMarketStoredState(currentMarket, incomingMarket);
+    changed = true;
+  }
   if (assets.optionSorter && typeof assets.optionSorter === 'object') {
     state.optionSorter = normalizeOptionSorterState({
-      ...(preserveInlineImages
-        ? { ...(state.optionSorter || {}), ...assets.optionSorter }
-        : mergeOptionSorterStoredImages(state.optionSorter || {}, assets.optionSorter)),
+      ...mergeOptionSorterStoredImages(state.optionSorter || {}, assets.optionSorter),
       optionGenRunning: false,
     });
     changed = true;
@@ -7605,6 +8091,11 @@ function applySessionAssetsPayload(assets, options = {}) {
       );
       changed = migratedCandidateCount > 0 || changed;
     }
+    changed = true;
+  }
+  const restoredOptionSorter = restoreOptionSorterLabelsFromFactory(state.optionSorter || {}, workingFactory);
+  if (restoredOptionSorter !== state.optionSorter) {
+    state.optionSorter = normalizeOptionSorterState(restoredOptionSorter);
     changed = true;
   }
   const repairedRestoredDraftAssetScope = repairRestoredDraftFactoryAssetWorkspaceScope(workingFactory);
@@ -7704,7 +8195,10 @@ function repairRestoredSessionIdentityDrift(reason = 'restore', factory) {
     const marketKey = typeof factoryNormalizeIdentityText === 'function'
       ? factoryNormalizeIdentityText(market.productName || '')
       : String(market.productName || '').replace(/\s+/g, '').toLowerCase();
-    if (marketKey && marketKey !== targetKey) {
+    const marketMatchesTarget = typeof factoryIdentityKeysCompatible === 'function'
+      ? factoryIdentityKeysCompatible(marketKey, targetKey)
+      : marketKey === targetKey;
+    if (marketKey && !marketMatchesTarget) {
       state.compPage.marketScrape = null;
       changed = true;
     }
@@ -8180,36 +8674,53 @@ function applyCompAnalysisSnapshot(saved, targetSubStep = null, options = {}) {
   const scopeMatches = workspaceScopeMatches && analysisScopeMatches;
   if (!scopeMatches && options.allowScopeMismatch !== true) return false;
   const cp = state.compPage;
-  cp.sectionWorkScope = saved.sectionWorkScope || currentScope;
-  cp.analysisResult = saved.analysisResult || null;
-  cp.sectionPlan = saved.sectionPlan || null;
-  cp.planEdits = saved.planEdits || {};
-  cp.mode = saved.mode || cp.mode || 'images';
-  if (Array.isArray(saved.uploadedImages) && (saved.uploadedImages.length > 0 || !saved.hasUploadedImages)) {
-    cp.uploadedImages = saved.uploadedImages;
+  const preserveCurrent = options.replaceWorkspace !== true;
+  const nonEmpty = value => (
+    Array.isArray(value) ? value.length > 0
+      : value && typeof value === 'object' ? Object.keys(value).length > 0
+        : typeof value === 'number' ? value !== 0
+          : typeof value === 'string' ? !!value.trim()
+            : !!value
+  );
+  const keepCurrent = (incoming, current) => (
+    preserveCurrent && !nonEmpty(incoming) && nonEmpty(current) ? current : incoming
+  );
+  cp.sectionWorkScope = keepCurrent(saved.sectionWorkScope, cp.sectionWorkScope) || currentScope;
+  const preserveDerived = (incoming, current) => (
+    preserveCurrent ? mergeSameWorkDerivedValue(current, incoming) : incoming
+  );
+  cp.analysisResult = preserveDerived(saved.analysisResult, cp.analysisResult) || null;
+  cp.sectionPlan = preserveDerived(saved.sectionPlan, cp.sectionPlan) || null;
+  cp.planEdits = preserveDerived(saved.planEdits, cp.planEdits) || {};
+  cp.mode = keepCurrent(saved.mode, cp.mode) || 'images';
+  if (Array.isArray(saved.uploadedImages)) {
+    cp.uploadedImages = keepCurrent(saved.uploadedImages, cp.uploadedImages) || [];
   } else if (!Array.isArray(cp.uploadedImages)) {
     cp.uploadedImages = [];
   }
-  if (Array.isArray(saved.evidenceImages) && (saved.evidenceImages.length > 0 || !saved.hasEvidenceImages)) {
-    cp.evidenceImages = saved.evidenceImages;
+  if (Array.isArray(saved.evidenceImages)) {
+    cp.evidenceImages = keepCurrent(saved.evidenceImages, cp.evidenceImages) || [];
   } else if (!Array.isArray(cp.evidenceImages)) {
     cp.evidenceImages = [];
   }
-  cp.htmlText = saved.htmlText || '';
-  cp.urlInput = saved.urlInput || '';
-  cp.scraperBase = saved.scraperBase || cp.scraperBase || 'http://127.0.0.1:5001';
-  cp.scraperImportInfo = saved.scraperImportInfo || null;
-  cp.marketScrape = sanitizeCompMarketScrapeForPersistence(saved.marketScrape || cp.marketScrape || null);
-  cp.analyzeMsg = saved.analyzeMsg || '';
-  cp.analyzeProgress = saved.analyzeProgress || 0;
-  cp.analyzeStage = saved.analyzeStage || '';
-  cp.analyzeDetail = saved.analyzeDetail || '';
-  cp.analyzeLogs = Array.isArray(saved.analyzeLogs) ? saved.analyzeLogs : [];
-  cp.analyzeModel = saved.analyzeModel || saved.analysisResult?.analyzeModel || null;
-  cp.analyzeElapsedSec = saved.analyzeElapsedSec || 0;
-  cp.analysisImageSelection = saved.analysisImageSelection || saved.analysisResult?.compMarketImageSelection || null;
+  cp.htmlText = keepCurrent(saved.htmlText, cp.htmlText) || '';
+  cp.urlInput = keepCurrent(saved.urlInput, cp.urlInput) || '';
+  cp.scraperBase = keepCurrent(saved.scraperBase, cp.scraperBase) || 'http://127.0.0.1:5001';
+  cp.scraperImportInfo = keepCurrent(saved.scraperImportInfo, cp.scraperImportInfo) || null;
+  cp.marketScrape = mergeCompMarketStoredState(
+    cp.marketScrape || {},
+    sanitizeCompMarketScrapeForPersistence(saved.marketScrape || null) || {},
+  );
+  cp.analyzeMsg = keepCurrent(saved.analyzeMsg, cp.analyzeMsg) || '';
+  cp.analyzeProgress = keepCurrent(saved.analyzeProgress, cp.analyzeProgress) || 0;
+  cp.analyzeStage = keepCurrent(saved.analyzeStage, cp.analyzeStage) || '';
+  cp.analyzeDetail = keepCurrent(saved.analyzeDetail, cp.analyzeDetail) || '';
+  cp.analyzeLogs = keepCurrent(Array.isArray(saved.analyzeLogs) ? saved.analyzeLogs : [], cp.analyzeLogs) || [];
+  cp.analyzeModel = keepCurrent(saved.analyzeModel || saved.analysisResult?.analyzeModel, cp.analyzeModel) || null;
+  cp.analyzeElapsedSec = keepCurrent(saved.analyzeElapsedSec, cp.analyzeElapsedSec) || 0;
+  cp.analysisImageSelection = keepCurrent(saved.analysisImageSelection || saved.analysisResult?.compMarketImageSelection, cp.analysisImageSelection) || null;
   cp.previousAnalysisViewOnly = !scopeMatches;
-  cp.subStep = targetSubStep || saved.subStep || cp.subStep || 'input';
+  cp.subStep = targetSubStep || keepCurrent(saved.subStep, cp.subStep) || 'input';
   if (saved.imagePersistenceWarning) state.storageWarning = compImagePersistenceWarningMessage();
   return true;
 }
@@ -9139,9 +9650,16 @@ function savePersistentState(options = {}) {
     return false;
   }
   persistentStateSaving = true;
+  const persistenceStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   let payload = null;
   let workspaceRevision = null;
   const finishPersistentStateSave = () => {
+    const persistenceEndedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    state.runtimePersistenceLastMs = Math.max(0, Math.round(persistenceEndedAt - persistenceStartedAt));
+    if (typeof document !== 'undefined' && document.documentElement?.dataset) {
+      document.documentElement.dataset.kuasangsePersistenceLastMs = String(state.runtimePersistenceLastMs);
+      document.documentElement.dataset.kuasangsePersistenceEndedAt = new Date().toISOString();
+    }
     persistentStateSaving = false;
     persistentStateSavePromise = null;
     if (!workspaceDocumentFenceIsCurrent(documentFence)) {
@@ -9344,8 +9862,11 @@ function savePersistentState(options = {}) {
       const warningCleared = clearResolvedSessionPersistenceWarning();
       if (warningCleared && options.deferWarningRender !== true && !state.projectBusy && typeof render === 'function') render();
       if (options.skipSessionAssetSave !== true) scheduleSessionAssetSaveIfChanged();
-      if (options.allowBlankResetCheckpoint !== true) {
-        scheduleServerLastWorkSave('persistent-state', 3200, { factorySnapshot });
+      if (options.allowBlankResetCheckpoint !== true && options.server !== false) {
+        scheduleServerLastWorkSave('persistent-state', 3200, {
+          factorySnapshot,
+          force: options.force === true,
+        });
       }
       return true;
     }).catch(error => {
@@ -9520,6 +10041,7 @@ function loadPersistentSession() {
     applyOptionSorterLiveRecovery(s, { scopeId: savedWorkspaceScope });
     s.factory = normalizeFactoryState(s.factory);
     if (typeof stripFactoryImages === 'function') s.factory = normalizeFactoryState(stripFactoryImages(s.factory));
+    s.optionSorter = normalizeOptionSorterState(restoreOptionSorterLabelsFromFactory(s.optionSorter, s.factory));
     s.factory.cafe24FieldView = resolveCafe24FieldViewForLastWork(s.factory);
     persistCafe24FieldViewForLastWork(s.factory.cafe24FieldView);
     restoreSpecificationSizeImageFromFactory(s);
@@ -9686,6 +10208,7 @@ function defaultOptionSorterState() {
     optionGenLogs: [],
     optionResults: [],
     optionLastGeneratedResultIds: [],
+    subStepUpdatedAt: 0,
     subStep: 'input',
   };
 }
@@ -9939,10 +10462,54 @@ function optLayoutSummaryFromSheets(sheets = []) {
   return sheets.map(sheet => `${sheet.index}장:${(sheet.rowPattern || []).join('/') || sheet.pairs.length}`).join(' · ');
 }
 
+function restoreOptionSorterLabelsFromFactory(optionSorter = {}, factory = {}) {
+  const slots = Array.isArray(optionSorter?.slots) ? optionSorter.slots : [];
+  const rawValues = factory?.product?.finalDb?.option_values;
+  const labels = (Array.isArray(rawValues)
+    ? rawValues
+    : (typeof rawValues === 'string' ? rawValues.split(/[,;\n]+/) : []))
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  const allGenericNames = slots.every(slot => optionSorterSlotNameIsGeneric(slot?.name));
+  const allCanonicalNames = slots.every((slot, index) => String(slot?.name || '').trim() === labels[index]);
+  if (!labels.length || labels.length !== slots.length || (!allGenericNames && !allCanonicalNames)) {
+    return optionSorter;
+  }
+  const images = Array.isArray(optionSorter?.images) ? optionSorter.images : [];
+  const restoreOrdinalAssignments = images.length === slots.length
+    && slots.every(slot => !(Array.isArray(slot?.imgIds) && slot.imgIds.length))
+    && images.every(image => String(image?.id || '').trim());
+  const assignedIds = restoreOrdinalAssignments
+    ? new Set(images.map(image => String(image.id)))
+    : null;
+  return {
+    ...optionSorter,
+    slots: slots.map((slot, index) => ({
+      ...slot,
+      name: allGenericNames ? labels[index] : slot.name,
+      imgIds: restoreOrdinalAssignments ? [String(images[index].id)] : slot.imgIds,
+    })),
+    ...(restoreOrdinalAssignments ? {
+      pool: (Array.isArray(optionSorter.pool) ? optionSorter.pool : [])
+        .filter(id => !assignedIds.has(String(id))),
+      optionSlotSource: 'db',
+      subStep: 'sort',
+    } : {}),
+  };
+}
+
 function normalizeOptionSorterState(saved) {
   const base = defaultOptionSorterState();
   const source = saved && typeof saved === 'object' ? saved : {};
-  const imageIds = new Set((Array.isArray(source.images) ? source.images : []).map(img => img?.id).filter(Boolean));
+  const images = Array.isArray(source.images)
+    ? source.images.map(image => {
+      const archiveId = image?.archiveId || image?.localArchive?.archiveId;
+      return archiveId
+        ? { ...image, imagePersistence: 'local-archive-url' }
+        : image;
+    })
+    : [];
+  const imageIds = new Set(images.map(img => img?.id).filter(Boolean));
   const slots = Array.isArray(source.slots) && source.slots.length
     ? source.slots.map((slot, idx) => ({
       id: slot?.id || ('slot_' + (idx + 1)),
@@ -9958,6 +10525,8 @@ function normalizeOptionSorterState(saved) {
     if (!assigned.has(id) && !pool.includes(id)) pool.push(id);
   }
   const optionResults = Array.isArray(source.optionResults) ? source.optionResults.map(r => ({ ...r, generating: false })) : [];
+  const subStepUpdatedAt = Math.max(0, Number(source.subStepUpdatedAt || 0) || 0);
+  const hasMappedWork = optionResults.length > 0 || slots.some(slot => slot.imgIds.length > 0);
   const styleSample = source.styleSample && typeof source.styleSample === 'object' && source.styleSample.image
     ? {
       ...source.styleSample,
@@ -9977,7 +10546,7 @@ function normalizeOptionSorterState(saved) {
     ...source,
     slots,
     pool,
-    images: Array.isArray(source.images) ? source.images : [],
+    images,
     previewImageId: imageIds.has(source.previewImageId) ? source.previewImageId : null,
     previewResultId: optionResults.some(r => r?.id === source.previewResultId) ? source.previewResultId : null,
     styleSampleResultId: optionResults.some(r => r?.id === source.styleSampleResultId) ? source.styleSampleResultId : (styleSample?.sourceResultId || null),
@@ -10030,7 +10599,8 @@ function normalizeOptionSorterState(saved) {
     optionLastGeneratedResultIds: Array.isArray(source.optionLastGeneratedResultIds)
       ? source.optionLastGeneratedResultIds.filter(id => optionResults.some(result => result?.id === id))
       : [],
-    subStep: source.subStep === 'sort' ? 'sort' : 'input',
+    subStepUpdatedAt,
+    subStep: source.subStep === 'sort' || (!subStepUpdatedAt && hasMappedWork) ? 'sort' : 'input',
   };
   optSyncSlotCountToImages(normalized);
   return normalized;

@@ -2566,6 +2566,39 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
         body: plan.optionUpdate.body,
       }, `${plan.optionUpdate.method === 'POST' ? 'Create' : 'Update'} Cafe24 product options ${plan.productNo}`);
       await factoryExecuteCafe24ControlBody(optionBody, { attempts: 45, delayMs: 800 });
+      const forceInventoryQuantity = /^\d+$/.test(String(options.forceInventoryQuantity || '').trim())
+        ? String(options.forceInventoryQuantity).trim()
+        : '';
+      if (forceInventoryQuantity) {
+        const structureEcho = await factoryWaitForCafe24OptionEcho(
+          plan.productNo,
+          plan.mallId,
+          { ...plan, inventoryUpdates: [] },
+          { attempts: 30, delayMs: 1000 },
+        );
+        if (!structureEcho.detail || !structureEcho.verification?.matched) {
+          throw new Error(`Cafe24 새 옵션 품목코드 재조회 실패: ${structureEcho.verification?.message || '옵션 구조 확인 불가'}`);
+        }
+        const refreshedRows = factoryCafe24VariantRows({
+          product: {
+            cafe24Candidates: [normalizeCafe24ProductCandidate(structureEcho.detail, `options-created:${plan.productNo}`, 999, 0)],
+            selectedCafe24CandidateKey: String(plan.productNo),
+          },
+        }, plan.optionValues);
+        if (!refreshedRows.length || refreshedRows.some(row => !row.variant_code)) {
+          throw new Error('Cafe24 새 옵션 품목코드를 전부 확인하지 못했습니다.');
+        }
+        plan.inventoryUpdates = refreshedRows.map(row => {
+          const inventory = factoryCafe24AutoInventoryPayload(row);
+          inventory.quantity = factoryCafe24PayloadValue('quantity', forceInventoryQuantity);
+          return {
+            variantCode: row.variant_code,
+            path: `/api/v2/admin/products/${encodeURIComponent(plan.productNo)}/variants/${encodeURIComponent(row.variant_code)}/inventories`,
+            body: inventory,
+            row,
+          };
+        });
+      }
     }
     for (const [index, item] of plan.variantUpdates.entries()) {
       const stepState = factory;
@@ -2588,7 +2621,7 @@ async function factorySyncCafe24OptionsAndVariants(options = {}) {
       }
     }
     const current = factory;
-    current.product.cafe24ApiStatus = `Cafe24 옵션/품목 실행 완료, 재조회 확인 중: 옵션그룹 ${plan.optionGroupCount}개 · 옵션값 ${plan.optionValueTotal}개 · 품목 ${plan.variantUpdates.length}건`;
+    current.product.cafe24ApiStatus = `Cafe24 옵션/품목 실행 완료, 재조회 확인 중: 옵션그룹 ${plan.optionGroupCount}개 · 옵션값 ${plan.optionValueTotal}개 · 재고 ${plan.inventoryUpdates.length}건`;
     factoryLog(current.product.cafe24ApiStatus, 'ok', current);
     try {
       const echo = await factoryWaitForCafe24OptionEcho(plan.productNo, plan.mallId, plan, {
@@ -4070,11 +4103,7 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
       factoryLog(`동일 상품명 Cafe24 확인 보류: ${e.message || e}. 새 상품 등록 절차를 계속합니다.`, 'error', factory);
     }
   }
-  const forceInventoryQuantityInput = String(
-    options.forceInventoryQuantity ??
-    (typeof document !== 'undefined' ? document.getElementById('factoryCafe24InventoryAll')?.value : '') ??
-    ''
-  ).trim();
+  const forceInventoryQuantityInput = String(options.forceInventoryQuantity ?? '').trim();
   const forceInventoryQuantity = /^\d+$/.test(forceInventoryQuantityInput)
     ? forceInventoryQuantityInput
     : '';
@@ -4149,7 +4178,7 @@ async function factoryCreateCafe24ProductFromFinalDb(options = {}) {
     let created = factoryExtractCafe24ProductFromBody(body);
     if (!created?.product_no) {
       emitCreateProgress('Cafe24 등록 응답에서 상품번호 확인 중입니다.', 66, 'info');
-      created = await factoryFindLatestCafe24ProductByName(product.product_name, CAFE24_CONTROL_API.defaultMallId);
+      created = await factoryFindLiveCafe24ProductByExactName(product.product_name, CAFE24_CONTROL_API.defaultMallId);
     }
     const current = factory;
     if (created) {
@@ -4435,8 +4464,10 @@ function factorySetDbFieldManualValue(fieldId, value, options = {}) {
     draft.manualSourceValue = String(value || '');
     factory.product.cafe24TagsDraft = draft;
   }
-  factoryRefreshCafe24PrimaryActionButtons();
-  factoryRefreshCafe24DedicatedActionButtons();
+  if (typeof classicRuntimeBatchWorkerMode === 'undefined' || !classicRuntimeBatchWorkerMode) {
+    factoryRefreshCafe24PrimaryActionButtons();
+    factoryRefreshCafe24DedicatedActionButtons();
+  }
   if (!providedFactory) scheduleLastWorkSave();
   return true;
 }
@@ -6104,8 +6135,24 @@ function factoryFilterNewCafe24Candidates(incoming = [], existing = []) {
   return out;
 }
 
-async function factorySearchSinhwaReviewCandidates(terms = [], limit = 20) {
+async function factorySearchSinhwaReviewCandidates(terms = [], limit = 20, options = {}) {
   if (!terms.length) return [];
+  const preferredJcode = Number(options.preferredJcode);
+  if (Number.isInteger(preferredJcode) && preferredJcode > 0) {
+    const detail = await fetchSinhwaProductDetail(preferredJcode, { apiHubOnly: true });
+    if (!detail || Number(detail.jcode || detail.id) !== preferredJcode) {
+      throw new Error(`선택한 신화사DB jcode ${preferredJcode} 상세를 확인하지 못했습니다.`);
+    }
+    const candidate = normalizeSinhwaDbCandidate(detail, String(preferredJcode), 100, 0);
+    const match = normalizeSinhwaDbMatch(candidate, detail, String(preferredJcode), [detail]);
+    return factorySlimReviewCandidateList([{
+      ...candidate,
+      ...match,
+      score: 100,
+      match_score: 100,
+      image: match.images?.[0]?.thumb_url || match.images?.[0]?.url || candidate.image || '',
+    }], 'sinhwa', 1);
+  }
   const termInfo = { terms, manualTerms: terms, nameTerms: terms, clueTerms: [] };
   const found = await findSinhwaDbCandidateMatches(terms, {
     termInfo,
@@ -7162,7 +7209,7 @@ async function factoryApplyDbCandidateFromReview(index, options = {}) {
     match.match_score = candidate.score || candidate.match_score || match.match_score || 0;
     const current = factory;
     if (!factoryCandidateReviewCanApply(candidate, current)) return factoryBlockCandidateReviewSelection(current, '신화사DB', options);
-    const preserveManualFields = Boolean(String(current.product.selectedDbCandidateKey || '').trim())
+    const preserveManualFields = options.preserveManualFields === true || Boolean(String(current.product.selectedDbCandidateKey || '').trim())
       && String(current.product.selectedDbCandidateKey || '').trim() === String(key || '').trim();
     factoryClearProductScopedDbManualFields(current, 'sinhwa-candidate-change', {
       preserveCafe24: true,
@@ -7217,7 +7264,7 @@ function factoryApplyCafe24CandidateSelectionFromReview(index, options = {}) {
 
   factory.product.candidateReviewStatus = 'Cafe24 상품을 확정했습니다. 상세 입력값과 옵션을 이어서 불러옵니다.';
   const current = factory;
-  const preserveManualFields = Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
+  const preserveManualFields = options.preserveManualFields === true || Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
     && String(current.product.selectedCafe24CandidateKey || '').trim() === String(key || '').trim();
   factoryClearProductScopedDbManualFields(current, 'cafe24-candidate-change', {
     preserveDb: true,
@@ -7370,7 +7417,7 @@ async function factoryApplyCafe24CandidateFromReview(index, options = {}) {
   if (!factoryCandidateReviewCanApply(candidate, current)) return factoryBlockCandidateReviewSelection(current, 'Cafe24', options);
   const selectedKey = factoryCafe24CandidateKey(selected) || key;
   if (phase !== 'detail') {
-    const preserveManualFields = Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
+    const preserveManualFields = options.preserveManualFields === true || Boolean(String(current.product.selectedCafe24CandidateKey || '').trim())
       && String(current.product.selectedCafe24CandidateKey || '').trim() === String(selectedKey || '').trim();
     factoryClearProductScopedDbManualFields(current, 'cafe24-candidate-change', {
       preserveDb: true,
@@ -7598,7 +7645,9 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
   factoryReportCandidateParallelProgress(factory, 'cafe24', 45, 'running', 'Cafe24 후보 요청 전송');
 
   const [dbResult, cafe24Result] = await Promise.allSettled([
-    factorySearchSinhwaReviewCandidates(terms, 20).then(candidates => {
+    factorySearchSinhwaReviewCandidates(terms, 20, {
+      preferredJcode: factory.product.candidateAutoApply ? factory.product.jcode : null,
+    }).then(candidates => {
       factoryReportCandidateParallelProgress(factory, 'sinhwa', 90, 'running', `후보 ${Array.isArray(candidates) ? candidates.length : 0}건 응답 · 결과 정리 중`, {
         completedItemCount: Array.isArray(candidates) ? candidates.length : 0,
       });
@@ -7725,11 +7774,19 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
 
   if (current.product.candidateAutoApply) {
     if (dbCount && !retainedDbSelection) {
-      await factoryApplyDbCandidateFromReview(0, { render: false, factory: current });
+      await factoryApplyDbCandidateFromReview(0, {
+        render: false,
+        factory: current,
+        preserveManualFields: options.preserveManualFields === true,
+      });
       ensureCollectionScope();
     }
     if (cafeCount && !retainedCafe24Selection) {
-      await factoryApplyCafe24CandidateFromReview(0, { render: false, factory: current });
+      await factoryApplyCafe24CandidateFromReview(0, {
+        render: false,
+        factory: current,
+        preserveManualFields: options.preserveManualFields === true,
+      });
       ensureCollectionScope();
     }
     current.product.candidateReviewStatus = `최상위 후보 자동 확정 완료: 신화사DB ${retainedDbSelection ? '기존 확정 유지' : (dbCount ? '적용' : '없음')} · Cafe24 ${retainedCafe24Selection ? '기존 확정 유지' : (cafeCount ? '적용' : '없음')}`;

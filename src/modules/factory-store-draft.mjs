@@ -60,6 +60,10 @@ function createRevocableDraft(value) {
     if (proxies.has(target)) return proxies.get(target);
     const { proxy, revoke } = Proxy.revocable(target, {
       get(current, key, receiver) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(current, key);
+        if (descriptor && 'value' in descriptor && descriptor.configurable === false && descriptor.writable === false) {
+          return descriptor.value;
+        }
         return wrap(Reflect.get(current, key, receiver));
       },
       set(current, key, nextValue, receiver) {

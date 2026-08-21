@@ -322,6 +322,8 @@ function factoryCdpFixtureReadyExpression() {
     && typeof factoryRuntimeStore.getOperationToken === 'function'
     && classicRuntimeHydrationReady === true
     && classicRuntimeInitialRenderComplete === true
+    && (typeof classicRuntimeDeferredHydrationPromise === 'undefined'
+      || classicRuntimeDeferredHydrationPromise === null)
   ))()`;
 }
 

@@ -19,6 +19,160 @@ function sourceSlice(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+test('같은 상품과 입력 이미지의 저장 후보만 명시적 복원에서 실행 ID 변경을 허용한다', () => {
+  const source = fs.readFileSync(CORE_05, 'utf8');
+  const matcherSource = sourceSlice(
+    source,
+    'function compMarketCandidateMatchesCurrentWork(',
+    'function compMarketFilterCandidatesForCurrentWork(',
+  );
+  const context = vm.createContext({
+    compMarketIsUsableCandidate: () => true,
+    compMarketCurrentWorkScope: () => null,
+    compMarketCurrentScopeHasAnyKey: () => true,
+    compMarketCurrentScopeIsComplete: () => true,
+    compMarketHasWorkPayloadStamp: () => true,
+    compMarketWorkKeysCompatible: (left, right) => left === right,
+    compMarketScopeKeyText: value => String(value || '').replace(/\s+/g, '').toLowerCase(),
+    compMarketCandidateNormalizeText: value => String(value || '').replace(/\s+/g, '').toLowerCase(),
+    compMarketCandidateTitleText: item => String(item.title || ''),
+    compMarketCandidateNativeText: item => String(item.title || ''),
+    compMarketTextCompatible: (left, right) => String(left || '').includes(String(right || '')) || String(right || '').includes(String(left || '')),
+    compMarketCandidateQueryTexts: () => [],
+    compMarketTextLooksForeignForCurrent: () => false,
+    compMarketProductCategoryTokens: () => ['파우치'],
+  });
+  vm.runInContext(`${matcherSource}; this.matches = compMarketCandidateMatchesCurrentWork;`, context);
+  const current = {
+    scopeKey: 'work-current::run-new::모시꽃수파우치::same-image',
+    currentRunId: 'run-new',
+    productKey: '모시꽃수파우치',
+    inputImageFingerprint: 'same-image',
+    stageId: 'competitors',
+    productName: '모시꽃수파우치',
+  };
+  const saved = {
+    title: '모시꽃수파우치 경쟁사 상품',
+    factoryWorkKey: 'work-old::run-old::모시꽃수파우치::same-image',
+    currentRunId: 'run-old',
+    productKey: '모시꽃수파우치',
+    factoryProductKey: '모시꽃수파우치',
+    scopeProductKey: '모시꽃수파우치',
+    inputImageFingerprint: 'same-image',
+    stageId: 'competitors',
+    workProductName: '모시꽃수파우치',
+  };
+
+  assert.equal(context.matches(saved, current), false);
+  assert.equal(
+    context.matches(saved, current, { allowHistoricalRun: true }),
+    false,
+    '현재 작업으로 재스탬프되지 않은 다른 실행 후보는 같은 상품이어도 표시하면 안 됩니다.',
+  );
+  assert.equal(
+    context.matches({ ...saved, _recovered_search_result: true, previousWorkCandidate: true }, current, { allowHistoricalRun: true }),
+    true,
+    '명시적으로 복구되어 현재 작업에 이어진 후보만 이전 실행 ID를 허용합니다.',
+  );
+  assert.equal(context.matches({ ...saved, inputImageFingerprint: 'different-image' }, current), false);
+  assert.equal(context.matches({
+    ...saved,
+    productKey: '다른상품',
+    factoryProductKey: '다른상품',
+    scopeProductKey: '다른상품',
+  }, current), false);
+});
+
+test('같은 상품·입력·단계의 이전 실행 후보는 선택판에서도 숨기지 않는다', () => {
+  const source = fs.readFileSync(CORE_05, 'utf8');
+  const visibilitySource = sourceSlice(
+    source,
+    'function compMarketCandidateVisibleForCurrentWork(',
+    'function compMarketRowWorkPayload(',
+  );
+  const allResultsSource = sourceSlice(
+    source,
+    'function compMarketAllCandidateResults(',
+    'function factoryAutomationCounts(',
+  );
+  const current = { currentRunId: 'run-new' };
+  const candidate = { id: 'candidate-old-run', stable: true };
+  const context = vm.createContext({
+    compMarketResultId: item => item.id,
+    compMarketCurrentWorkScope: () => current,
+    compMarketCandidateMatchesCurrentWork: (_item, _scope, options) => options?.allowHistoricalRun === true,
+    compMarketCandidateDedupeKey: item => item.id,
+    compMarketFactoryCompetitorFallbackResults: () => [],
+  });
+  vm.runInContext(`${visibilitySource}\n${allResultsSource}\nthis.all = compMarketAllCandidateResults;`, context);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.all({ results: [candidate], groupedResults: {}, selectedIds: [] }))),
+    [candidate],
+  );
+});
+
+test('저장된 경쟁사 후보 복원은 마켓별 목표 수로 전체 후보를 잘라내지 않는다', () => {
+  const source = fs.readFileSync(CORE_05, 'utf8');
+  const restoreSource = sourceSlice(
+    source,
+    'function compMarketFactoryCompetitorFallbackResults(',
+    'function compMarketRestoreResultsFromFactoryCompetitors(',
+  );
+  const savedRows = Array.from({ length: 14 }, (_, index) => ({ id: `saved-${index + 1}` }));
+  const context = vm.createContext({
+    compMarketCurrentScopeIsComplete: () => true,
+    factoryRuntimeReadFactory: () => ({}),
+    factoryCurrentWorkCompetitors: () => savedRows,
+    compMarketCandidateIsVmSearchResult: () => true,
+    compMarketHasWorkPayloadStamp: () => true,
+    compMarketCandidateMatchesCurrentWork: () => true,
+    compMarketTrimResultRowsForState: rows => rows,
+  });
+  vm.runInContext(`${restoreSource}; this.restoreFactoryRows = compMarketFactoryCompetitorFallbackResults;`, context);
+
+  const restored = context.restoreFactoryRows({ topN: 4, totalTarget: 20 }, { productKey: '모시꽃수파우치' });
+
+  assert.equal(restored.length, 14);
+});
+
+test('부분 후보 스냅샷은 더 많은 작업파일 후보를 가리지 않고 A+B로 합쳐진다', () => {
+  const source = fs.readFileSync(CORE_05, 'utf8');
+  const restoreSource = sourceSlice(
+    source,
+    'function compMarketRestoreResultsFromFactoryCompetitors(',
+    'function compMarketTrimImageRowsForState(',
+  );
+  const savedRows = Array.from({ length: 14 }, (_, index) => ({
+    id: `saved-${index + 1}`,
+    platform: index % 2 ? 'gmarket' : 'coupang',
+  }));
+  const market = {
+    results: savedRows.slice(0, 4),
+    groupedResults: { coupang: savedRows.slice(0, 4) },
+    selectedIds: ['saved-2'],
+    selectedSites: ['coupang', 'gmarket'],
+    topN: 4,
+  };
+  const context = vm.createContext({
+    Date,
+    compMarketCurrentWorkScope: () => ({}),
+    compMarketFactoryCompetitorFallbackResults: () => savedRows,
+    compMarketDedupeCandidateRows: rows => Array.from(
+      new Map(rows.map(row => [row.id, row])).values(),
+    ),
+    compMarketGroupProducts: rows => ({ vm: rows }),
+  });
+  vm.runInContext(`${restoreSource}; this.restoreFactoryRows = compMarketRestoreResultsFromFactoryCompetitors;`, context);
+
+  const restored = context.restoreFactoryRows(market, { productKey: '모시꽃수파우치' });
+
+  assert.equal(restored.length, 14);
+  assert.equal(market.results.length, 14);
+  assert.equal(market.groupedResults.vm.length, 14);
+  assert.deepEqual(market.selectedIds, ['saved-2']);
+});
+
 test('F5 후보 보관함 복원은 빈 VM 소스 배열에 다시 덮어쓰이지 않는다', () => {
   const source = fs.readFileSync(CORE_05, 'utf8');
   const ensureSource = sourceSlice(

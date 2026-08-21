@@ -37,8 +37,11 @@ export function renderModelSettingsView(view = {}, capabilities) {
 
   const renderImgModelCard = (m) => {
     const sel = m.id === cfg.imageModel;
-    const provider = (m.provider || (m.id.startsWith('gpt-image') ? 'openai' : 'gemini')) === 'openai' ? 'OpenAI' : 'Gemini';
-    const priceLine = m.imageOut
+    const providerId = m.provider || (m.id.startsWith('gpt-image') ? 'openai' : 'gemini');
+    const provider = providerId === 'api_hub_openai' ? 'OpenAI API Hub' : providerId === 'openai' ? 'OpenAI' : 'Gemini';
+    const priceLine = providerId === 'api_hub_openai'
+      ? 'API Hub 저장 연결 · Responses 이미지 생성'
+      : m.imageOut
       ? `text in $${m.inputPerM}/M · text out $${m.outputPerM}/M · image out $${m.imageOut}/image`
       : `text in $${m.inputPerM}/M · image in $${m.imageInputPerM || m.inputPerM}/M · image out $${m.outputPerM}/M`;
     return `<div class="model-card ${sel ? 'selected' : ''}" data-pick-imgmodel="${m.id}">
@@ -118,7 +121,7 @@ export function renderModelSettingsView(view = {}, capabilities) {
     <!-- ── 이미지 생성 모델 ── -->
     <div class="settings-section">
       <h3><span class="material-icons-outlined" style="font-size:18px;color:var(--orange)">image</span> 이미지 생성 모델</h3>
-      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지와 이미지컷 생성에 사용됩니다. OpenAI 모델은 OpenAI API Key, Gemini 모델은 Vertex Backend URL 또는 Gemini API Key가 필요합니다.</p>
+      <p style="font-size:12px;color:var(--text-m);margin-bottom:12px">섹션 이미지와 이미지컷 생성에 사용됩니다. OpenAI API Hub 경로는 저장된 연결을 사용하고, 직접 OpenAI 모델은 API Key, Gemini 모델은 Vertex Backend URL 또는 Gemini API Key가 필요합니다.</p>
       <div class="model-list">
         ${imageModels.map(m => renderImgModelCard(m)).join('')}
       </div>

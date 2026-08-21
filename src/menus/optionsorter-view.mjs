@@ -13,6 +13,11 @@ export function renderOptionSorterView(view, helpers) {
     : (slotNamePresets[0]?.id || '');
   const sourceArchiveStatus = String(os.optionSourceArchiveStatus || '').trim();
   const resultArchiveStatus = String(os.optionResultArchiveStatus || '').trim();
+  const storedResultCount = Array.isArray(os.optionResults) ? os.optionResults.length : 0;
+  const storedGroupShotCount = Array.isArray(os.optionResults)
+    ? os.optionResults.filter(result => result?.resultKind === 'color-group-shot').length
+    : 0;
+  const storedSheetCount = Math.max(0, storedResultCount - storedGroupShotCount);
 
   // ── 정렬 화면 ──────────────────────────────────────────────────
   if (os.subStep === 'sort') {
@@ -123,6 +128,31 @@ export function renderOptionSorterView(view, helpers) {
           </div>`).join('')}
       </div>
     </div>
+
+    ${storedResultCount ? `<div class="app-notice" style="margin:-6px 0 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="material-icons-outlined">collections</span>
+      <span style="flex:1;min-width:180px"><b>보관된 생성컷 ${storedResultCount}장</b> · 옵션표 ${storedSheetCount}장 · 단체컷 ${storedGroupShotCount}장. 원본 사진과 슬롯 배정은 그대로 유지됩니다.</span>
+    </div>` : ''}
+
+    ${storedResultCount ? `<section id="optStoredOptionResultsPreview" style="background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:16px;margin:-2px 0 20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <h2 style="font-size:15px;font-weight:800">생성된 옵션컷 ${storedResultCount}장</h2>
+          <p style="font-size:12px;color:var(--text-m);margin-top:4px">옵션표 ${storedSheetCount}장 · 단체컷 ${storedGroupShotCount}장. 아래 카드가 현재 작업에 보관된 실제 생성 결과입니다.</p>
+        </div>
+        <button class="btn-sm" id="optOpenStoredOptionResults">전체 보기·편집</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px">
+        ${os.optionResults.map((result, index) => {
+          const kind = result?.resultKind === 'color-group-shot' ? '단체컷' : '옵션표';
+          const label = String(result?.optionName || result?.name || `${kind} ${index + 1}장`);
+          return `<figure data-opt-stored-result-preview="${escapeHtml(result?.id || `stored-${index}`)}" style="margin:0;min-width:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--bg)">
+            <div style="aspect-ratio:1/1;background:rgba(255,255,255,.03)">${optRenderImageOrPlaceholder(result, `alt="${escapeHtml(label)}" style="display:block;width:100%;height:100%;object-fit:cover"`, '생성컷 복원 중')}</div>
+            <figcaption style="padding:8px 9px;font-size:12px;font-weight:700;line-height:1.4;word-break:keep-all">${escapeHtml(kind)} · ${escapeHtml(label)}</figcaption>
+          </figure>`;
+        }).join('')}
+      </div>
+    </section>` : ''}
 
     <button class="btn-primary" id="optGoSort"
       style="width:100%;padding:14px;font-size:15px;font-weight:700;border-radius:12px;gap:8px"

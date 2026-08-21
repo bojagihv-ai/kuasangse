@@ -763,6 +763,25 @@ test('Given scoped session-assets write fails When import transaction runs Then 
   assert.deepEqual(records.get(key('sessionAssets', oldAssets.id)), oldAssets);
 });
 
+test('worker server adapter includes the configured detail backend in its default targets', async () => {
+  const { createServerLastWorkAdapter } = await load('server-last-work-adapter.mjs');
+  const requests = [];
+  const adapter = createServerLastWorkAdapter({
+    root: {
+      location: { origin: 'http://worker.test' },
+      localStorage: { getItem: key => key === 'gemini_backend_url' ? 'http://detail.test/' : null },
+    },
+    fetchImpl: async url => {
+      requests.push(url);
+      return { ok: true, async json() { return { ok: true, accepted: true, revision: 1 }; } };
+    },
+  });
+
+  await adapter.write(envelope('A', 1, 1), { assertAuthority() {}, leaseId: 'lease-a', fencingToken: 1 });
+
+  assert.match(requests[0], /^http:\/\/detail\.test\/api\/last-work/);
+});
+
 test('Given server response is delayed When local authority changes Then completion is rejected as stale', async () => {
   // Given: A has authority when the request starts and the response is held in flight.
   const { createServerLastWorkAdapter } = await load('server-last-work-adapter.mjs');

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
+import mimetypes
 import re
 import secrets
+from io import BytesIO
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final, Protocol, TypeAlias, assert_never
+from urllib.parse import unquote_to_bytes
 from uuid import uuid4
 
 from flask import Flask, Response, jsonify, request, stream_with_context
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .runtime_cache import JsonObject, JsonValue
 from .pdp_client import PdpHttpError
 from .cafe24_bridge import Cafe24BridgeError, Cafe24CommandBridge, UnavailableCafe24CommandBridge, build_cafe24_command, build_cafe24_reconcile_command
-from .cafe24_staging import APPROVAL_BINDING_FIELDS, Cafe24ApprovalGate, Cafe24StagingError, build_preview, verify_readback
+from .cafe24_staging import APPROVAL_BINDING_FIELDS, SAFE_DEFAULTS, Cafe24ApprovalGate, Cafe24StagingError, build_preview, verify_readback
 from .handoff import HandoffError, HandoffStore
 from .factory_sync import FactorySyncBridge, FactorySyncError
 from .candidate_selector import CandidateSelectionError, decide_candidates
@@ -50,9 +58,362 @@ FACTORY_DECISION_TYPES: Final = {
     "final_detail": "final_detail",
 }
 SENSITIVE_EVENT_FIELD: Final = re.compile(
-    r"authorization|bearer|secret|password|credential|access.?token|refresh.?token|api.?key|service.?key|csrf|cookie|operation.?token",
+    r"authorization|bearer|secret|password|credential|token|api.?key|service.?key|csrf|cookie",
     re.IGNORECASE,
 )
+FACTORY_HISTORY_CATEGORY_MAP: Final = {
+    "03_OUTPUT_경쟁사후보": ("competitor", "general"),
+    "04_OUTPUT_경쟁사선택": ("competitor-page", "general"),
+    "05_OUTPUT_Cafe24후보": ("cafe24-candidate-image", "general"),
+    "06_OUTPUT_Cafe24선택": ("cafe24-candidate-image", "general"),
+    "07_OUTPUT_신화사DB후보": ("other", "general"),
+    "08_OUTPUT_신화사DB선택": ("other", "general"),
+    "09_OUTPUT_대표이미지": ("hero", "representative"),
+    "10_OUTPUT_이미지컷": ("generated", "general"),
+    "11_OUTPUT_사이즈컷": ("size", "size"),
+    "12_OUTPUT_색상옵션컷": ("color-option-output", "option_color"),
+    "13_OUTPUT_섹션이미지": ("section", "sections"),
+    "14_OUTPUT_최종선택": ("stitched-detail", "final_detail"),
+}
+FACTORY_HISTORY_ARCHIVE_STAGE_MAP: Final = {
+    "hero": ("hero", "representative"),
+    "representative": ("hero", "representative"),
+    "size": ("size", "size"),
+    "option_color": ("color-option-output", "option_color"),
+    "general": ("generated", "general"),
+    "sections": ("section", "sections"),
+    "final_detail": ("stitched-detail", "final_detail"),
+}
+HISTORY_THUMBNAIL_SIZE: Final = (480, 360)
+_HISTORY_THUMBNAIL_CACHE: dict[str, tuple[str, bytes]] = {}
+HISTORY_THUMBNAIL_PLACEHOLDER: Final = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360">'
+    b'<title>preview unavailable</title></svg>'
+)
+
+
+def _history_thumbnail(content: bytes, mime_type: str) -> tuple[str, bytes]:
+    cache_key = hashlib.sha256(content).hexdigest()
+    cached = _HISTORY_THUMBNAIL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        with Image.open(BytesIO(content)) as source:
+            source.draft("RGB", HISTORY_THUMBNAIL_SIZE)
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            image.thumbnail(HISTORY_THUMBNAIL_SIZE, Image.Resampling.BILINEAR)
+            encoded = BytesIO()
+            image.save(
+                encoded,
+                format="JPEG",
+                quality=78,
+                optimize=True,
+                progressive=True,
+            )
+    except (OSError, UnidentifiedImageError, ValueError):
+        return "image/svg+xml", HISTORY_THUMBNAIL_PLACEHOLDER
+    result = ("image/jpeg", encoded.getvalue())
+    if len(_HISTORY_THUMBNAIL_CACHE) >= 128:
+        _HISTORY_THUMBNAIL_CACHE.pop(next(iter(_HISTORY_THUMBNAIL_CACHE)))
+    _HISTORY_THUMBNAIL_CACHE[cache_key] = result
+    return result
+
+
+def _history_safe_name(value: object, fallback: str = "asset", max_len: int = 120) -> str:
+    normalized = re.sub(r"[\\/:*?\"<>|\r\n\t]+", "_", str(value or "").strip() or fallback)
+    normalized = re.sub(r"\s+", "_", normalized).strip(" ._")
+    normalized = re.sub(r"_+", "_", normalized)
+    return normalized[:max_len].strip(" ._") or fallback
+
+
+def _history_asset_key(category: object, file_name: object, content_hash: object, source_key: object) -> str:
+    raw = "|".join(str(value or "") for value in (category, file_name, content_hash, source_key))
+    return f"archive-{hashlib.sha256(raw.encode('utf-8', errors='ignore')).hexdigest()[:24]}"
+
+
+def _history_workfile_dir(archive_root: Path, product_name: object, workspace_id: object) -> Path:
+    folder_name = _history_safe_name(f"{product_name}__{workspace_id}", "작업파일")
+    return archive_root / "작업파일별" / folder_name
+
+
+def _history_load_manifest(
+    archive_root: Path,
+    product_name: object,
+    workspace_id: object,
+    product_key: object,
+    run_id: object,
+    job_id: object,
+) -> tuple[Path, list[JsonObject]]:
+    normalized_workspace_id = str(workspace_id).strip()
+    legacy_workfile_dir = _history_workfile_dir(archive_root, product_name, workspace_id)
+    current_folder_name = (
+        f"{_history_safe_name(normalized_workspace_id, 'workfile', max_len=56)}__"
+        f"{hashlib.sha256(normalized_workspace_id.encode('utf-8')).hexdigest()[:12]}"
+    )
+    current_workfile_dir = archive_root / "workfiles" / current_folder_name
+    workfile_dir = legacy_workfile_dir if (legacy_workfile_dir / "manifest.json").is_file() else current_workfile_dir
+    manifest_path = workfile_dir / "manifest.json"
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise FactorySyncError("factory_history_manifest_unavailable") from error
+    expected_workspace_id = f"batch:{str(job_id or '').strip()}"
+    manifest_workspace_id = str(document.get("workspaceId") or "").strip() if isinstance(document, dict) else ""
+    manifest_product_key = str(document.get("productKey") or "").strip() if isinstance(document, dict) else ""
+    manifest_run_id = str(document.get("runId") or document.get("currentRunId") or "").strip() if isinstance(document, dict) else ""
+    if not isinstance(document, dict) or manifest_workspace_id != normalized_workspace_id or manifest_workspace_id != expected_workspace_id:
+        raise FactorySyncError("factory_history_identity_mismatch")
+    records = document.get("assets")
+    if not isinstance(records, list):
+        raise FactorySyncError("factory_history_manifest_invalid")
+    if workfile_dir == current_workfile_dir:
+        if any(
+            str(record.get("productKey") or "").strip() != str(product_key).strip()
+            for record in records
+            if isinstance(record, dict)
+        ):
+            raise FactorySyncError("factory_history_identity_mismatch")
+    elif manifest_product_key != str(product_key).strip() or (manifest_run_id and manifest_run_id != str(run_id).strip()):
+        raise FactorySyncError("factory_history_identity_mismatch")
+    return workfile_dir, [dict(record) for record in records if isinstance(record, dict)]
+
+
+def _history_entry_path(workfile_dir: Path, record: Mapping[str, object]) -> Path | None:
+    files = record.get("files")
+    current_image_path = str(files.get("imagePath") or "").strip() if isinstance(files, Mapping) else ""
+    if current_image_path:
+        root = workfile_dir.resolve()
+        candidate = Path(current_image_path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        return candidate if candidate.is_file() else None
+    category = str(record.get("category") or "").strip()
+    file_name = str(record.get("file") or "").strip()
+    if not category or not file_name or Path(file_name).name != file_name:
+        return None
+    root = workfile_dir.resolve()
+    candidate = (root / category / file_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _history_decode_data_url(value: object) -> tuple[str, bytes] | None:
+    raw = str(value or "")
+    match = re.match(r"^data:([^;,]+)?(;base64)?,(.*)$", raw, re.DOTALL)
+    if not match:
+        return None
+    mime = str(match.group(1) or "application/octet-stream")
+    payload = match.group(3) or ""
+    try:
+        content = base64.b64decode(payload, validate=True) if match.group(2) else unquote_to_bytes(payload)
+    except (binascii.Error, ValueError):
+        return None
+    return mime, content
+
+
+def _history_selection_state(
+    category: str,
+    *,
+    content_hash: object = "",
+    file_name: object = "",
+    final_hashes: set[str] | frozenset[str] = frozenset(),
+    final_files: set[str] | frozenset[str] = frozenset(),
+) -> str:
+    explicit = category.endswith("선택") or category.startswith("14_OUTPUT_")
+    linked_to_final = (
+        bool(str(content_hash or "").strip())
+        and str(content_hash).strip() in final_hashes
+    ) or (
+        bool(str(file_name or "").strip())
+        and str(file_name).strip() in final_files
+    )
+    return "selected" if explicit or linked_to_final else "candidate"
+
+
+def _factory_history_snapshot(
+    factory_sync: FactorySyncBridge,
+    archive_root: Path,
+    job_id: str,
+) -> tuple[JsonObject, JsonObject, JsonObject, Path]:
+    context = factory_sync.product_job_context(job_id)
+    job = context.get("job")
+    payload = context.get("payload")
+    checkpoint = context.get("checkpoint")
+    if not isinstance(job, dict) or not isinstance(payload, dict) or not isinstance(checkpoint, dict):
+        raise FactorySyncError("factory_history_checkpoint_missing")
+    workspace_id = str(checkpoint.get("projectId") or "").strip()
+    product_key = str(checkpoint.get("productKey") or "").strip()
+    run_id = str(checkpoint.get("runId") or "").strip()
+    product_name = str(payload.get("productName") or product_key).strip()
+    if not workspace_id or not product_key or not run_id or not product_name:
+        raise FactorySyncError("factory_history_identity_missing")
+    workfile_dir, records = _history_load_manifest(
+        archive_root,
+        product_name,
+        workspace_id,
+        product_key,
+        run_id,
+        job_id,
+    )
+    output_assets: list[JsonObject] = []
+    category_counts: dict[str, int] = {}
+    selected_by_category: dict[str, int] = {}
+    selected_by_stage: dict[str, int] = {}
+    final_records = [
+        record
+        for record in records
+        if str(record.get("category") or "").strip() == "14_OUTPUT_최종선택"
+    ]
+    final_hashes = frozenset(
+        str(record.get("contentHash") or "").strip()
+        for record in final_records
+        if str(record.get("contentHash") or "").strip()
+    )
+    final_files = frozenset(
+        str(record.get("file") or "").strip()
+        for record in final_records
+        if str(record.get("file") or "").strip()
+    )
+    selected_result_count = 0
+    selected_source_count = 0
+    for record in records:
+        category = str(record.get("category") or "").strip()
+        path = _history_entry_path(workfile_dir, record)
+        if not category or path is None:
+            continue
+        role, stage_key = FACTORY_HISTORY_CATEGORY_MAP.get(
+            category,
+            FACTORY_HISTORY_ARCHIVE_STAGE_MAP.get(str(record.get("stageId") or "").strip(), ("other", "general")),
+        )
+        asset_key = _history_asset_key(
+            category,
+            record.get("file"),
+            record.get("contentHash"),
+            record.get("sourceKey"),
+        )
+        selection_state = _history_selection_state(
+            category,
+            content_hash=record.get("contentHash"),
+            file_name=record.get("file"),
+            final_hashes=final_hashes,
+            final_files=final_files,
+        )
+        explicit_selection = category.endswith("선택") or category.startswith("14_OUTPUT_")
+        linked_to_final = selection_state == "selected" and not explicit_selection
+        category_counts[category] = category_counts.get(category, 0) + 1
+        if selection_state == "selected":
+            selected_by_category[category] = selected_by_category.get(category, 0) + 1
+            selected_by_stage[stage_key] = selected_by_stage.get(stage_key, 0) + 1
+            if explicit_selection:
+                selected_result_count += 1
+            elif linked_to_final:
+                selected_source_count += 1
+        output_assets.append(
+            {
+                "id": asset_key,
+                "assetKey": asset_key,
+                "phase": "output",
+                "stage": stage_key,
+                "role": role,
+                "displayName": str(record.get("title") or record.get("file") or asset_key),
+                "sourceChecksum": str(record.get("contentHash") or ""),
+                "selectionState": selection_state,
+                "metadata": {
+                    "archiveCategory": category,
+                    "archiveFile": str(record.get("file") or ""),
+                    "source": str(record.get("source") or ""),
+                    "sectionId": str(record.get("sectionId") or ""),
+                    "selectionEvidence": "14_OUTPUT_최종선택 파일·해시 일치" if linked_to_final else "",
+                },
+                "storedAssetId": asset_key,
+                "contentReference": f"/api/factory/jobs/{job_id}/history/assets/{asset_key}/image",
+                "thumbnailReference": f"/api/factory/jobs/{job_id}/history/assets/{asset_key}/thumbnail",
+                "factoryStageKey": stage_key,
+                "version": int(checkpoint.get("revision") or 0),
+            },
+        )
+
+    input_assets: list[JsonObject] = []
+    raw_images = payload.get("inputImages")
+    if isinstance(raw_images, list):
+        for index, raw_image in enumerate(raw_images):
+            if not isinstance(raw_image, dict):
+                continue
+            role = "color-option-input" if str(raw_image.get("role") or "") == "color-option" else "base"
+            input_key = f"input-{index}"
+            input_assets.append(
+                {
+                    "id": input_key,
+                    "assetKey": input_key,
+                    "phase": "input",
+                    "stage": "db",
+                    "role": role,
+                    "displayName": str(raw_image.get("name") or raw_image.get("fileName") or input_key),
+                    "sourceChecksum": str(raw_image.get("sha256") or ""),
+                    "selectionState": "selected",
+                    "metadata": {
+                        "ordinal": raw_image.get("ordinal"),
+                        "colorName": str(raw_image.get("colorName") or ""),
+                        "fileName": str(raw_image.get("fileName") or ""),
+                        "sourceRole": str(raw_image.get("role") or ""),
+                    },
+                    "storedAssetId": input_key,
+                    "contentReference": f"/api/factory/jobs/{job_id}/history/assets/{input_key}/image",
+                    "thumbnailReference": f"/api/factory/jobs/{job_id}/history/assets/{input_key}/thumbnail",
+                    "factoryStageKey": "db",
+                    "version": int(checkpoint.get("revision") or 0),
+                },
+            )
+
+    required_values = payload.get("requiredValues")
+    safe_required_values = {
+        str(key): value
+        for key, value in required_values.items()
+        if isinstance(key, str) and isinstance(value, (str, int, float, bool))
+    } if isinstance(required_values, dict) else {}
+    selected_count = sum(selected_by_category.values())
+    work_bundle: JsonObject = {
+        "id": f"history:{job_id}",
+        "bundleKey": f"kuasangse:{workspace_id}",
+        "workfileName": workfile_dir.name,
+        "version": int(checkpoint.get("revision") or 0),
+        "assets": input_assets + output_assets,
+    }
+    history: JsonObject = {
+        "scope": "completed-job",
+        "sourceLabel": "kuasangse 작업파일별 보관소",
+        "preservation": "현재 완료 작업의 workspaceId/productKey/runId로 고정된 읽기 전용 자료",
+        "productName": product_name,
+        "productKey": product_key,
+        "workspaceId": workspace_id,
+        "runId": run_id,
+        "revision": int(checkpoint.get("revision") or 0),
+        "workfileFolderName": workfile_dir.name,
+        "input": {
+            "count": len(input_assets),
+            "sourceKind": str((payload.get("source") or {}).get("kind") or "") if isinstance(payload.get("source"), dict) else "",
+            "mode": str(payload.get("mode") or ""),
+            "jcode": payload.get("jcode"),
+            "requiredValues": safe_required_values,
+        },
+        "output": {
+            "count": len(output_assets),
+            "selectedCount": selected_count,
+            "candidateCount": len(output_assets) - selected_count,
+            "byCategory": category_counts,
+            "selectedByCategory": selected_by_category,
+            "selectedByStage": selected_by_stage,
+            "selectedResultCount": selected_result_count,
+            "selectedSourceCount": selected_source_count,
+        },
+        "job": job,
+    }
+    return work_bundle, history, payload, workfile_dir
 
 
 class PdpApi(Protocol):
@@ -142,6 +503,9 @@ class LocalSessionStore:
     def csrf_for(self, session_id: str | None) -> str | None:
         return None if session_id is None else self._sessions.get(session_id)
 
+    def remember(self, session_id: str, csrf_token: str) -> None:
+        self._sessions[session_id] = csrf_token
+
 
 SESSION_COOKIE: Final = "control_tower_session"
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
@@ -192,6 +556,13 @@ def _factory_stage_candidates(
         {
             "candidateId": str(item["id"]),
             "assetId": str(item.get("assetId") or ""),
+            "identityKey": f"{stage_key}:{item['id']}",
+            "contentDigest": str(item.get("digest") or ""),
+            "thumbnailRef": str(item.get("thumbnailUrl") or item.get("assetId") or ""),
+            "source": str(item.get("source") or "factory"),
+            "model": str(item.get("model") or ""),
+            "confidence": item.get("confidence"),
+            "rationale": str(item.get("rationale") or ""),
         }
         for item in candidates
         if isinstance(item, dict) and isinstance(item.get("id"), str)
@@ -340,6 +711,7 @@ def register_routes(
     workbench_api: PdpWorkbenchApi | None = None,
     factory_sync_bridge: FactorySyncBridge | None = None,
     gpt_judge: GptOAuthJudge | None = None,
+    factory_archive_root: Path | None = None,
 ) -> None:
     api = pdp_api if pdp_api is not None else UnavailablePdpApi()
     bridge = cafe24_bridge if cafe24_bridge is not None else UnavailableCafe24CommandBridge()
@@ -348,6 +720,7 @@ def register_routes(
     cafe24_approvals = Cafe24ApprovalGate()
     factory_sync = factory_sync_bridge if factory_sync_bridge is not None else FactorySyncBridge()
     judge = gpt_judge if gpt_judge is not None else GptOAuthJudge()
+    archive_root = (factory_archive_root or (Path("output") / "local-archive")).resolve()
 
     @app.get("/api/session")
     def session() -> Response:
@@ -360,10 +733,22 @@ def register_routes(
         return response
 
     def require_csrf() -> tuple[Response, int] | None:
-        session_id = request.cookies.get(SESSION_COOKIE) or request.headers.get("X-Control-Tower-Session")
+        cookie_session = request.cookies.get(SESSION_COOKIE)
+        header_session = request.headers.get("X-Control-Tower-Session")
+        session_id = header_session or cookie_session
         expected = sessions.csrf_for(session_id)
         provided = request.headers.get("X-Control-Tower-CSRF")
-        return None if expected is not None and provided == expected else _error("csrf_required", 428, retryable=False, correlation_id=_correlation_id())
+        trusted_cookie = bool(
+            cookie_session
+            and (
+                cookie_session == header_session
+                or sessions.csrf_for(cookie_session) is not None
+            )
+        )
+        if expected is None and trusted_cookie and header_session and provided:
+            sessions.remember(header_session, provided)
+            expected = provided
+        return None if expected is not None and secrets.compare_digest(provided or "", expected) else _error("csrf_required", 428, retryable=False, correlation_id=_correlation_id())
 
     def require_session_cookie() -> tuple[Response, int] | None:
         session_id = request.cookies.get(SESSION_COOKIE)
@@ -453,6 +838,7 @@ def register_routes(
             or not all(isinstance(item, dict) for item in raw_candidates)
             or not isinstance(raw_inputs, list)
             or not all(isinstance(item, dict) for item in raw_inputs)
+            or bool(raw_inputs)
             or not isinstance(raw_options, dict)
         ):
             return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
@@ -463,7 +849,7 @@ def register_routes(
                 identity=raw_identity,
                 policy_snapshot=raw_policy,
                 judge=judge,
-                input_refs=raw_inputs,
+                input_refs=(),
                 model=str(raw_options.get("model") or "latestModel"),
                 reasoning_effort=str(raw_options.get("reasoningEffort") or "medium"),
                 service_tier=str(raw_options.get("serviceTier") or "standard"),
@@ -585,6 +971,37 @@ def register_routes(
         payload = preview.get("payload")
         if not isinstance(payload, dict):
             raise Cafe24StagingError("staging_payload_invalid")
+        if job_id.startswith("factory-job-"):
+            current = factory_sync.current_state()
+            registration = current.get("registration")
+            remote_projection = bridge_result.get("remoteReadback")
+            if (
+                not isinstance(registration, dict)
+                or registration.get("jobId") != job_id
+                or not isinstance(remote_projection, dict)
+            ):
+                raise Cafe24StagingError("stale_run_fingerprint")
+            terminal: JsonObject = {
+                "schema": "factory-cafe24-terminal-publication-receipt:v1",
+                "status": "staged_verified",
+                "registrationMode": str(registration.get("mode") or "update"),
+                "jobId": job_id,
+                "receiptId": f"factory-cafe24-local:{readback['remoteReadbackDigest']}",
+                "eventType": "FACTORY_CAFE24_REMOTE_READBACK",
+                "productId": payload["productId"],
+                "productKey": payload["productKey"],
+                "remoteProductNo": readback["externalProductNo"],
+                "payloadDigest": readback["payloadDigest"],
+                "idempotencyKey": readback["idempotencyKey"],
+                "remoteReadbackDigest": readback["remoteReadbackDigest"],
+                "remoteReadback": dict(remote_projection),
+                "expectedWorkfileRevision": payload["expectedWorkfileRevision"],
+                "expectedRunId": payload["expectedRunId"],
+                "expectedInputFingerprint": payload["expectedInputFingerprint"],
+                "safeDefaults": dict(SAFE_DEFAULTS),
+            }
+            factory_sync.record_publication_receipt(terminal)
+            return terminal
         receipt_payload: JsonObject = {
             "target": "cafe24",
             "targetKey": payload["productId"],
@@ -805,6 +1222,27 @@ def register_routes(
             return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
         return jsonify(result)
 
+    @app.post("/api/cafe24/confirm")
+    def cafe24_confirm() -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        token = payload.get("approvalToken") if payload is not None else None
+        if (
+            payload is None
+            or payload.get("confirmed") is not True
+            or not isinstance(token, str)
+            or not token.strip()
+        ):
+            return _error("confirmation_required", 409, retryable=False, correlation_id=_correlation_id())
+        binding = {key: payload.get(key) for key in APPROVAL_BINDING_FIELDS}
+        try:
+            result = cafe24_approvals.confirm(token, binding)
+        except Cafe24StagingError as error:
+            return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
+        return jsonify(result)
+
     @app.post("/api/cafe24/publish")
     def cafe24_publish() -> Response | tuple[Response, int]:
         csrf_error = require_csrf()
@@ -812,14 +1250,17 @@ def register_routes(
             return csrf_error
         payload = _json_object()
         token = payload.get("approvalToken") if payload is not None else None
+        confirmation_nonce = payload.get("confirmationNonce") if payload is not None else None
         job_id = payload.get("jobId") if payload is not None else None
         if payload is None or not isinstance(token, str) or not token.strip() or not isinstance(job_id, str) or not job_id.strip():
             return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        if not isinstance(confirmation_nonce, str) or not confirmation_nonce.strip():
+            return _error("confirmation_required", 409, retryable=False, correlation_id=_correlation_id())
         binding = {key: payload.get(key) for key in APPROVAL_BINDING_FIELDS}
         grant: JsonObject | None = None
         reservation_open = False
         try:
-            grant = cafe24_approvals.reserve(token, binding)
+            grant = cafe24_approvals.reserve(token, binding, confirmation_nonce)
             reservation_open = True
             command = build_cafe24_command(grant, str(grant["approvalGrantDigest"]), job_id=job_id)
             validated = build_preview(grant["payload"], authority=bridge.inspect())
@@ -837,6 +1278,8 @@ def register_routes(
             if reservation_open and grant is not None:
                 cafe24_approvals.reject(str(grant["approvalGrantDigest"]))
             return _error(error.code, 503, retryable=True, correlation_id=_correlation_id())
+        except FactorySyncError as error:
+            return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
         except ExternalDependencyError:
             return _error("blocked_external", 503, retryable=True, correlation_id=_correlation_id())
         except PdpHttpError:
@@ -864,13 +1307,389 @@ def register_routes(
             return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
         except Cafe24BridgeError as error:
             return _error(error.code, 503, retryable=True, correlation_id=_correlation_id())
+        except FactorySyncError as error:
+            return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
         except (ExternalDependencyError, PdpHttpError):
             return _error("blocked_external", 503, retryable=True, correlation_id=_correlation_id())
         return jsonify({"status": "staged_verified", "externalWrite": False, "command": command, "publicationReceipt": receipt})
 
+    @app.get("/api/factory/jobs")
+    def factory_product_jobs() -> Response:
+        jobs = factory_sync.product_jobs()
+        return jsonify({"jobs": jobs, "total": len(jobs)})
+
+    @app.get("/api/factory/jobs/<job_id>/history")
+    def factory_product_history(job_id: str) -> Response | tuple[Response, int]:
+        try:
+            work_bundle, history, _payload, _workfile_dir = _factory_history_snapshot(
+                factory_sync,
+                archive_root,
+                job_id,
+            )
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else 409
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"workBundle": work_bundle, "history": history})
+
+    @app.get("/api/factory/jobs/<job_id>/history/assets/<asset_key>/<variant>")
+    def factory_product_history_asset(
+        job_id: str,
+        asset_key: str,
+        variant: str,
+    ) -> Response | tuple[Response, int]:
+        if (
+            not re.fullmatch(r"(?:archive-[a-f0-9]{24}|input-\d+)", asset_key)
+            or variant not in {"image", "thumbnail"}
+        ):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            work_bundle, history, _payload, workfile_dir = _factory_history_snapshot(
+                factory_sync,
+                archive_root,
+                job_id,
+            )
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else 409
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        assets = work_bundle.get("assets") if isinstance(work_bundle.get("assets"), list) else []
+        asset = next(
+            (item for item in assets if isinstance(item, dict) and item.get("id") == asset_key),
+            None,
+        )
+        if not isinstance(asset, dict):
+            return _error("factory_history_asset_not_found", 404, retryable=False, correlation_id=_correlation_id())
+        if asset_key.startswith("input-"):
+            context = factory_sync.product_job_context(job_id)
+            payload = context.get("payload")
+            images = payload.get("inputImages") if isinstance(payload, dict) else None
+            index = int(asset_key.removeprefix("input-"))
+            raw_image = images[index] if isinstance(images, list) and 0 <= index < len(images) else None
+            decoded = _history_decode_data_url(raw_image.get("dataUrl") if isinstance(raw_image, dict) else "")
+            if decoded is None:
+                return _error("factory_history_input_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+            mime, content = decoded
+        else:
+            try:
+                _loaded_dir, records = _history_load_manifest(
+                    archive_root,
+                    history.get("productName"),
+                    history.get("workspaceId"),
+                    history.get("productKey"),
+                    history.get("runId"),
+                    job_id,
+                )
+            except FactorySyncError:
+                return _error("factory_history_asset_missing", 404, retryable=False, correlation_id=_correlation_id())
+            record = next(
+                (
+                    item
+                    for item in records
+                    if _history_asset_key(
+                        item.get("category"),
+                        item.get("file"),
+                        item.get("contentHash"),
+                        item.get("sourceKey"),
+                    ) == asset_key
+                ),
+                None,
+            )
+            path = _history_entry_path(workfile_dir, record) if isinstance(record, dict) else None
+            if path is None:
+                return _error("factory_history_asset_missing", 404, retryable=False, correlation_id=_correlation_id())
+            try:
+                content = path.read_bytes()
+            except OSError:
+                return _error("factory_history_asset_missing", 404, retryable=False, correlation_id=_correlation_id())
+            mime = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        if variant == "thumbnail":
+            mime, content = _history_thumbnail(content, mime)
+        response = Response(content, mimetype=mime)
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.post("/api/factory/jobs")
+    def factory_product_create() -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            job = factory_sync.queue_product(payload)
+        except FactorySyncError as error:
+            status = 409 if error.code == "idempotency_conflict" else 422
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "job": job}), 202
+
+    @app.post("/api/factory/jobs/from-workfile")
+    def factory_product_create_from_workfile() -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            result = factory_sync.queue_product_from_workfile(payload)
+        except FactorySyncError as error:
+            status = 409 if error.code in {
+                "factory_workfile_fork_foreign_live_job",
+                "factory_workfile_fork_identity_mismatch",
+                "factory_worker_build_not_admitted",
+                "idempotency_conflict",
+                "stale_workfile_revision",
+            } else 422
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify(result), 202
+
+    @app.post("/api/factory/jobs/<job_id>/resume")
+    def factory_product_resume(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or set(payload) - {"imageModel", "expectedCheckpointRevision", "expectedCheckpointRunId"}:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        match payload.get("imageModel"):
+            case None:
+                image_model = None
+            case str() as value:
+                image_model = value
+            case _:
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        match payload.get("expectedCheckpointRevision"):
+            case None:
+                expected_checkpoint_revision = None
+            case int() as value if type(value) is int:
+                expected_checkpoint_revision = value
+            case _:
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        match payload.get("expectedCheckpointRunId"):
+            case None:
+                expected_checkpoint_run_id = None
+            case str() as value:
+                expected_checkpoint_run_id = value
+            case _:
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            job = factory_sync.resume_product(
+                job_id,
+                image_model=image_model,
+                expected_checkpoint_revision=expected_checkpoint_revision,
+                expected_checkpoint_run_id=expected_checkpoint_run_id,
+            )
+        except FactorySyncError as error:
+            status = (
+                404
+                if error.code == "factory_product_job_not_found"
+                else 422
+                if error.code == "factory_product_image_model_invalid"
+                else 409
+            )
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "job": job}), 202
+
+    @app.post("/api/factory/jobs/<job_id>/workfile-rebind")
+    def factory_product_workfile_rebind(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        allowed_fields = {
+            "fileName",
+            "workfileText",
+            "expectedSha256",
+            "expectedWorkspaceId",
+            "expectedProductId",
+            "expectedProductKey",
+            "expectedRunId",
+            "expectedInputFingerprint",
+            "expectedWorkfileRevision",
+            "expectedHydratedWorkfileRevision",
+            "expectedCheckpointRevision",
+            "expectedCheckpointRunId",
+            "idempotencyKey",
+        }
+        if payload is None or set(payload) != allowed_fields or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            result = factory_sync.queue_product_workfile_rebind(job_id, payload)
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else 409 if error.code in {
+                "stale_product_checkpoint",
+                "factory_workfile_rebind_identity_mismatch",
+                "idempotency_conflict",
+                "stale_workfile_revision",
+                "factory_session_missing",
+            } else 422
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        if result.get("idempotent") is True:
+            receipt = result.get("receipt")
+            if not isinstance(receipt, dict):
+                return _error(
+                    "factory_product_checkpoint_rebind_receipt_invalid",
+                    422,
+                    retryable=False,
+                    correlation_id=_correlation_id(),
+                )
+            return jsonify({
+                "accepted": True,
+                "idempotent": True,
+                "status": "rebound",
+                "receipt": {
+                    key: receipt.get(key)
+                    for key in (
+                        "schema",
+                        "jobId",
+                        "workfileSha256",
+                        "oldRevision",
+                        "oldRunId",
+                        "newRevision",
+                        "newRunId",
+                        "checkpointDigest",
+                    )
+                },
+            })
+        return jsonify({
+            "accepted": True,
+            "status": "queued",
+            "order": {
+                "jobId": job_id,
+                "orderId": result.get("orderId"),
+                "workspaceId": payload.get("expectedWorkspaceId"),
+                "productId": payload.get("expectedProductId"),
+                "productKey": payload.get("expectedProductKey"),
+                "workfileSha256": payload.get("expectedSha256"),
+                "runId": payload.get("expectedRunId"),
+                "workfileRevision": payload.get("expectedWorkfileRevision"),
+                "hydratedWorkfileRevision": payload.get("expectedHydratedWorkfileRevision"),
+                "checkpointRevision": payload.get("expectedCheckpointRevision"),
+                "checkpointRunId": payload.get("expectedCheckpointRunId"),
+            },
+        }), 202
+
+    @app.post("/api/factory/jobs/<job_id>/select")
+    def factory_product_select(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            context = factory_sync.product_job_context(job_id)
+        except FactorySyncError as error:
+            return _error(error.code, 404, retryable=False, correlation_id=_correlation_id())
+        job = context["job"]
+        job_payload = context["payload"]
+        assert isinstance(job, dict) and isinstance(job_payload, dict)
+        stage_key = str(payload.get("stageKey") or "").strip()
+        decision_mode = str(payload.get("decisionMode") or "").strip()
+        revision = payload.get("expectedRevision")
+        selection_target = (
+            job.get("status") == "waiting_manual" and job.get("stageKey") == stage_key
+        ) or (job.get("status") == "completed" and decision_mode == "manual")
+        if (
+            not selection_target
+            or decision_mode not in {"manual", "auto"}
+            or type(revision) is not int
+            or revision < 0
+        ):
+            return _error("decision_target_required", 422, retryable=False, correlation_id=_correlation_id())
+        projection = factory_sync.current_state()
+        session = projection.get("session")
+        if not isinstance(session, dict) or projection.get("connected") is not True:
+            return _error("factory_session_missing", 409, retryable=False, correlation_id=_correlation_id())
+        identity_pairs = (
+            ("productId", "productId"),
+            ("productKey", "productKey"),
+            ("expectedRunId", "runId"),
+            ("expectedInputFingerprint", "inputFingerprint"),
+            ("expectedRevision", "revision"),
+        )
+        if any(payload.get(request_key) != session.get(session_key) for request_key, session_key in identity_pairs):
+            return _error("stale_run_fingerprint", 409, retryable=False, correlation_id=_correlation_id())
+        candidates = _factory_stage_candidates(projection, stage_key)
+        candidate_ids = [str(candidate["candidateId"]) for candidate in candidates]
+        selected_id = str(payload.get("candidateId") or "").strip()
+        if decision_mode == "manual":
+            if selected_id not in candidate_ids:
+                return _error("candidate_membership_invalid", 422, retryable=False, correlation_id=_correlation_id())
+            receipt = _manual_selection_receipt(payload, selected_id)
+            selection_status = "selected"
+        else:
+            policy_snapshot = job_payload.get("policySnapshot")
+            raw_options = payload.get("judgementOptions")
+            if not isinstance(policy_snapshot, dict) or not isinstance(raw_options, dict):
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+            try:
+                selection = decide_candidates(
+                    FACTORY_DECISION_TYPES.get(stage_key, stage_key),
+                    candidates,
+                    identity={
+                        "jobId": job_id,
+                        "productId": session["productId"],
+                        "productKey": session["productKey"],
+                        "runId": session["runId"],
+                        "inputFingerprint": session["inputFingerprint"],
+                        "revision": session["revision"],
+                        "eventId": str(projection.get("cursor") or ""),
+                    },
+                    policy_snapshot=policy_snapshot,
+                    judge=judge,
+                    model=str(raw_options.get("model") or "latestModel"),
+                    reasoning_effort=str(raw_options.get("reasoningEffort") or "medium"),
+                    service_tier=str(raw_options.get("serviceTier") or "standard"),
+                    preset=str(raw_options.get("preset") or "fast_single"),
+                )
+            except CandidateSelectionError as error:
+                return _error(error.code, 422, retryable=False, correlation_id=_correlation_id())
+            except GptOAuthError as error:
+                return _error(
+                    error.code,
+                    503 if error.retryable else 422,
+                    retryable=error.retryable,
+                    correlation_id=_correlation_id(),
+                )
+            receipt = selection.receipt or {}
+            selection_status = selection.status
+            selected_id = str(selection.candidate_id or "")
+        if selection_status != "selected" or not selected_id:
+            if selection_status == "manual_required":
+                factory_sync.hold_product_decision(job_id, stage_key)
+            return jsonify({
+                "accepted": False,
+                "status": "decision_recorded",
+                "selectionStatus": selection_status,
+                "decisionReceipt": receipt,
+            })
+        queue_payload: JsonObject = {
+            "productId": session["productId"],
+            "productKey": session["productKey"],
+            "stageKey": stage_key,
+            "candidateId": selected_id,
+            "expectedRevision": session["revision"],
+            "expectedRunId": session["runId"],
+            "expectedInputFingerprint": session["inputFingerprint"],
+            "idempotencyKey": str(payload.get("idempotencyKey") or f"factory-job:{job_id}:{stage_key}:{selected_id}:{revision}"),
+        }
+        try:
+            order = factory_sync.queue_selection(queue_payload)
+        except FactorySyncError as error:
+            return _error(error.code, 409, retryable=False, correlation_id=_correlation_id())
+        return jsonify({
+            "accepted": True,
+            "status": "factory_queued",
+            "selectionStatus": "saving",
+            "decisionReceipt": receipt,
+            "order": order,
+        }), 202
+
     @app.get("/api/factory/state")
     def factory_state() -> Response:
-        return jsonify(factory_sync.current_state())
+        return jsonify(_public_event_value(factory_sync.current_state()))
 
     @app.post("/api/factory/session/hello")
     def factory_session_hello() -> Response | tuple[Response, int]:
@@ -884,7 +1703,12 @@ def register_routes(
             http_session_id = request.cookies.get(SESSION_COOKIE) or request.headers.get("X-Control-Tower-Session")
             result = factory_sync.hello({**payload, "_httpSessionId": str(http_session_id or "")})
         except FactorySyncError as error:
-            conflict_codes = {"stale_factory_session", "stale_session_cursor", "stale_run_fingerprint"}
+            conflict_codes = {
+                "factory_worker_build_mismatch",
+                "stale_factory_session",
+                "stale_session_cursor",
+                "stale_run_fingerprint",
+            }
             return _error(
                 error.code,
                 409 if error.code in conflict_codes else 422,
