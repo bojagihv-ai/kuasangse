@@ -4104,7 +4104,11 @@ function stripCutsImages(cuts = {}, options = {}) {
   copy.hasSourceImage = !!(copy.sourceBase64 || copy.sourcePreview);
   copy.hasWorkImage = !!(copy.workImageBase64 || copy.workImagePreview);
   stripCutsRuntimeFlags(copy);
-  if (!preserveRecentResults) {
+  // preserveRecentResults 는 '최근 생성 결과' 보존 여부다.
+  // 원본/작업 입력 이미지는 그와 무관한 관심사라 dropInputImages 로 따로 통제한다.
+  // 직렬화 경로만 true 를 넘긴다. 런타임 state 대입 경로는 이미지를 그대로 유지해야 한다.
+  const dropInputImages = options.dropInputImages === true || !preserveRecentResults;
+  if (dropInputImages) {
     delete copy.sourceBase64;
     delete copy.sourcePreview;
     delete copy.workImageBase64;
@@ -4513,6 +4517,7 @@ function buildLightweightSessionPayload(payload) {
     aiRepair: stripAiRepairDraft(payload.aiRepair),
     cuts: stripCutsImages(payload.cuts, {
       preserveRecentResults: true,
+      dropInputImages: true,
       generalResultLimit: 16,
       sizeResultLimit: 8,
     }),
@@ -4921,6 +4926,7 @@ function currentSessionAssetsPayload(options = {}) {
     aiRepair: includeImages ? cloneData(state.aiRepair || {}) : stripAiRepairDraft(state.aiRepair || {}),
     cuts: includeImages ? stripCutsRuntimeFlags(cloneData(state.cuts || {})) : stripCutsImages(state.cuts || {}, {
       preserveRecentResults: preserveRecentWorkingImages,
+      dropInputImages: true,
     }),
     compPage: {
       ...stripCompPageImages(compPageSnapshot),

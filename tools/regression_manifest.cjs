@@ -144,6 +144,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('RUNTIME-BUILD-03', '공통/실행 기준', 'ESM 런타임 모듈 변경의 build ID·캐시 무효화', 'tests/frontend/runtime_bundle_build_id.test.cjs', 'fast'),
     nodeFile('ANALYSIS-LLM-01', 'AI 분석 연동', '모델 설정 저장·경쟁사 분석 LLM 선택 계약', 'tests/frontend/competitor_analysis_model_selection.test.cjs', 'fast'),
     nodeFile('MARKET-ANALYZE-01', '4 경쟁사', '분석 시작 실패 시 분석 중 고착 해제·실행 직전 OAuth 재확인', 'tests/frontend/competitor_analyze_start_failure_recovery.test.cjs', 'fast'),
+    nodeFile('SAVE-CUTS-01', '7 저장/내보내기', '작업파일 직렬화 시 이미지컷 입력 이미지 중복 제거', 'tests/frontend/cuts_input_image_serialization.test.cjs', 'fast'),
     nodeFile('LLM-FALLBACK-01', 'AI 분석 연동', '사용량 한도 시 지정 폴백 모델 전환·비한도 오류 비전환', 'tests/frontend/llm_usage_limit_fallback.test.cjs', 'fast'),
     nodeFile('DETAIL-05', '6 상세페이지', '일괄 생성 실행 예정 기준·방식 가시성', 'tests/frontend/section_batch_execution_preview.test.cjs', 'fast'),
     nodeFile('DETAIL-06', '6 상세페이지', '섹션 2장 병렬 실행·로컬 아카이브 이미지 주소', 'tests/frontend/section_batch_parallel_archive_url.test.cjs', 'fast'),

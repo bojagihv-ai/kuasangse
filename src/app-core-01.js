@@ -180,7 +180,9 @@ const IMAGE_MODELS = [
 const LLM_FALLBACK_PROVIDERS = ['none', 'openai', 'ollama'];
 
 function normalizeLlmFallbackConfig(c) {
-  const provider = LLM_FALLBACK_PROVIDERS.includes(c.fallbackProvider) ? c.fallbackProvider : 'ollama';
+  // 기본 폴백은 OpenAI API. 로컬 Ollama 는 27B 상주 시 15GB 를 물어 같은 PC 의
+  // 다른 공정(조립공장 생성 등) 타이밍에 영향을 주므로 명시 선택했을 때만 쓴다.
+  const provider = LLM_FALLBACK_PROVIDERS.includes(c.fallbackProvider) ? c.fallbackProvider : 'openai';
   c.fallbackProvider = provider;
   c.fallbackEnabled = c.fallbackEnabled !== false && provider !== 'none';
   const allowed = (LLM_PROVIDERS[provider]?.models || []).map(m => m.id);

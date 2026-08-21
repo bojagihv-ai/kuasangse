@@ -208,3 +208,24 @@ test('로컬 Ollama 는 이미지 생성을 지원하지 않는다고 명확히 
     '이미지 생성 요청은 조용히 실패하지 않고 명확히 거절해야 한다');
   assert.match(classBody, /\/v1/, 'OpenAI 호환 엔드포인트(/v1)를 사용해야 한다');
 });
+
+test('폴백 기본값은 OpenAI API 이고 로컬 Ollama 는 명시 선택일 때만 쓴다', () => {
+  // 로컬 27B 는 상주 시 15GB 를 물어 같은 PC 의 다른 공정 타이밍을 흔든다(GENERATE-01 사례).
+  const normalize = extractFunction(CORE_01, 'normalizeLlmFallbackConfig');
+  const context = vm.createContext({ LLM_PROVIDERS: PROVIDERS, OLLAMA_DEFAULT_BASE_URL: 'http://127.0.0.1:11434' });
+  const fallbackProvidersConst = extractConst(CORE_01, 'LLM_FALLBACK_PROVIDERS');
+  vm.runInContext(`${fallbackProvidersConst}\n${normalize}\nrun = normalizeLlmFallbackConfig;`, context);
+
+  const fresh = context.run({});
+  assert.equal(fresh.fallbackProvider, 'openai', '설정이 없으면 OpenAI API 로 폴백해야 한다');
+  assert.equal(fresh.fallbackModel, 'gpt-5.4-mini');
+  assert.equal(fresh.fallbackEnabled, true);
+
+  const explicit = context.run({ fallbackProvider: 'ollama' });
+  assert.equal(explicit.fallbackProvider, 'ollama', '명시 선택은 존중해야 한다');
+  assert.equal(explicit.fallbackModel, 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL');
+
+  const off = context.run({ fallbackProvider: 'none' });
+  assert.equal(off.fallbackEnabled, false);
+  assert.equal(off.fallbackModel, '');
+});
