@@ -24,6 +24,8 @@ export function resolveModelSettingsCapabilities(capabilities = {}) {
     getImageProvider: requiredFunction(capabilities, 'getImageProvider'),
     getRuntimeOpenAIKey: requiredFunction(capabilities, 'getRuntimeOpenAIKey'),
     renderGptOAuthPanel: requiredFunction(capabilities, 'renderGptOAuthPanel'),
+    refreshClaudeOAuthStatus: requiredFunction(capabilities, 'refreshClaudeOAuthStatus'),
+    openClaudeOAuthLogin: requiredFunction(capabilities, 'openClaudeOAuthLogin'),
     disabledAttr: requiredFunction(capabilities, 'disabledAttr'),
     isGptOAuthConnected: requiredFunction(capabilities, 'isGptOAuthConnected'),
     getReasoningLabel: requiredFunction(capabilities, 'getReasoningLabel'),

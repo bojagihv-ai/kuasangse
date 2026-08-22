@@ -29,6 +29,7 @@ const LLM_PROVIDERS = {
     label: 'ChatGPT 로그인 OAuth',
     icon: '◇',
     color: '#22c55e',
+    vision: true,
     models: [
       { id: 'gpt-5.6-sol',          label: 'GPT-5.6 Sol · 최신',       desc: 'GPT-5.6 플래그십 · API Hub 최신 기본값 · 미리보기 권한 필요', inputPerM: 0, outputPerM: 0 },
       { id: 'gpt-5.6-terra',        label: 'GPT-5.6 Terra',            desc: 'GPT-5.6 균형형 · 미리보기 권한 필요', inputPerM: 0, outputPerM: 0 },
@@ -43,6 +44,7 @@ const LLM_PROVIDERS = {
     label: 'Google Gemini',
     icon: '✦',
     color: '#6366f1',
+    vision: true,
     models: [
       { id: 'gemini-3.5-flash',       label: 'Gemini 3.5 Flash',       desc: '최신 안정 기본값 · 이미지/후보 판정 권장', inputPerM: 0, outputPerM: 0 },
       { id: 'gemini-3.1-flash-lite',  label: 'Gemini 3.1 Flash Lite',  desc: '저비용 대량 처리 · 고속', inputPerM: 0, outputPerM: 0 },
@@ -54,6 +56,7 @@ const LLM_PROVIDERS = {
     label: 'OpenAI ChatGPT',
     icon: '◆',
     color: '#10a37f',
+    vision: true,
     models: [
       { id: 'gpt-5.4-mini',   label: 'GPT-5.4 mini',   desc: '가성비(기본추천) · 실무 전반',      inputPerM: 0.75,  outputPerM: 4.50  },
       { id: 'gpt-5.4',        label: 'GPT-5.4',        desc: '최고성능 · 복잡한 추론/전략',      inputPerM: 2.50,  outputPerM: 15.00 },
@@ -71,12 +74,38 @@ const LLM_PROVIDERS = {
     icon: '▣',
     color: '#f59e0b',
     local: true,
+    vision: true,
     models: [
       { id: 'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q3_K_XL', label: 'Qwen3.8 27B · 판독 정확', desc: '로컬 vision · 실측 34초 · 이미지 내용을 가장 정확히 읽음(권장)', inputPerM: 0, outputPerM: 0 },
       { id: 'gemma4:e4b',   label: 'Gemma4 e4b · 빠름', desc: '로컬 vision · 실측 27초 · 빠르지만 판독이 일반론으로 흐를 수 있음', inputPerM: 0, outputPerM: 0 },
     ],
   },
+  // API Hub 의 Claude OAuth 브리지(claude-subscription-oauth).
+  // Claude.ai 구독 로그인을 Claude Code CLI 로 호출한다. API 키를 쓰지 않는다.
+  // 브리지가 프롬프트 텍스트만 받으므로 이미지 판독·생성은 지원하지 않는다.
+  claude_oauth: {
+    label: 'Claude 구독 로그인 OAuth',
+    icon: '✳',
+    color: '#d97757',
+    vision: false,
+    imageGeneration: false,
+    models: [
+      { id: 'claude-opus-5',   label: 'Claude Opus 5 · 권장',  desc: '기본값. 1M 컨텍스트, 대부분의 작업에 적합한 플래그십.', inputPerM: 0, outputPerM: 0 },
+      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5',       desc: '가볍고 빠른 통로. 단순 분류·추출에 적합.',              inputPerM: 0, outputPerM: 0 },
+      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5',     desc: '가장 빠르고 저렴. 200K 컨텍스트.',                      inputPerM: 0, outputPerM: 0 },
+      { id: 'claude-fable-5',  label: 'Claude Fable 5',        desc: '가장 어려운 추론·장기 작업용. 느리고 비용이 높다.',      inputPerM: 0, outputPerM: 0 },
+    ],
+  },
 };
+
+// API Hub 브리지가 요구하는 노력 단계. 모델 설정 UI 는 5개를 모두 노출해야 한다.
+const CLAUDE_OAUTH_EFFORTS = [
+  { id: 'low',    label: '낮음/빠름',   desc: '단순 조회 기본값' },
+  { id: 'medium', label: '보통',        desc: '애매한 질문을 더 꼼꼼히 판단' },
+  { id: 'high',   label: '높음/깊게',   desc: '기본 권장. 품질과 비용의 균형점' },
+  { id: 'xhigh',  label: '매우 높음',   desc: '코딩·에이전트 작업에 가장 적합' },
+  { id: 'max',    label: '최대',        desc: '비용보다 정확도가 중요할 때' },
+];
 
 const OLLAMA_DEFAULT_BASE_URL = 'http://127.0.0.1:11434';
 
@@ -177,12 +206,25 @@ const IMAGE_MODELS = [
 // 설정 저장/불러오기
 // 사용량 한도로 기본 provider 가 막혔을 때 자동으로 넘어갈 폴백 대상.
 // 기본 실행 provider 는 gpt_oauth 로 유지하고, 폴백만 사용자가 지정한다.
-const LLM_FALLBACK_PROVIDERS = ['none', 'openai', 'ollama'];
+const LLM_FALLBACK_PROVIDERS = ['none', 'claude_oauth', 'openai', 'ollama'];
+// 지정한 폴백이 요청 메서드를 못 하면 이 순서로 다음 후보를 찾는다.
+const LLM_FALLBACK_PRIORITY = ['claude_oauth', 'openai', 'ollama'];
+const LLM_VISION_METHODS = ['analyzeImage', 'analyzeCompetitorImages'];
+const LLM_IMAGE_GEN_METHODS = ['generateImage'];
+
+function providerSupportsLlmMethod(providerId, method) {
+  const provider = LLM_PROVIDERS[providerId];
+  if (!provider) return false;
+  if (LLM_IMAGE_GEN_METHODS.includes(method)) return provider.imageGeneration !== false;
+  if (LLM_VISION_METHODS.includes(method)) return provider.vision !== false;
+  return true;
+}
 
 function normalizeLlmFallbackConfig(c) {
-  // 기본 폴백은 OpenAI API. 로컬 Ollama 는 27B 상주 시 15GB 를 물어 같은 PC 의
-  // 다른 공정(조립공장 생성 등) 타이밍에 영향을 주므로 명시 선택했을 때만 쓴다.
-  const provider = LLM_FALLBACK_PROVIDERS.includes(c.fallbackProvider) ? c.fallbackProvider : 'openai';
+  // 기본 폴백은 Claude 구독 로그인 OAuth. 구독을 쓰므로 추가 비용이 없다.
+  // 다만 이미지 판독은 지원하지 않아, vision 이 필요한 호출에서는
+  // providerSupportsLlmMethod 가 자동으로 다음 후보(OpenAI / Ollama)로 넘긴다.
+  const provider = LLM_FALLBACK_PROVIDERS.includes(c.fallbackProvider) ? c.fallbackProvider : 'claude_oauth';
   c.fallbackProvider = provider;
   c.fallbackEnabled = c.fallbackEnabled !== false && provider !== 'none';
   const allowed = (LLM_PROVIDERS[provider]?.models || []).map(m => m.id);
@@ -193,12 +235,13 @@ function normalizeLlmFallbackConfig(c) {
   }
   const base = String(c.ollamaBaseUrl || '').trim().replace(/\/+$/, '');
   c.ollamaBaseUrl = base || OLLAMA_DEFAULT_BASE_URL;
+  c.claudeOAuthEffort = normalizeClaudeOAuthEffort(c.claudeOAuthEffort);
   return c;
 }
 
 function normalizeModelConfig(cfg) {
   const c = { ...(cfg || {}) };
-  const provider = ['gpt_oauth', 'gemini', 'openai', 'ollama'].includes(c.llmProvider) ? c.llmProvider : 'gpt_oauth';
+  const provider = ['gpt_oauth', 'gemini', 'openai', 'ollama', 'claude_oauth'].includes(c.llmProvider) ? c.llmProvider : 'gpt_oauth';
   c.llmProvider = provider;
   normalizeLlmFallbackConfig(c);
 
@@ -2867,6 +2910,180 @@ IMPORTANT: include all 15 section_id values.`;
 }
 
 // ════════════════════════════════════════════════════════════════
+// CLAUDE SUBSCRIPTION OAUTH (API Hub 브리지)
+// ════════════════════════════════════════════════════════════════
+// API Hub 가 Claude Code CLI 로 Claude.ai 구독 로그인 세션을 호출한다.
+// 앱은 OAuth 를 직접 구현하지 않고 브리지 엔드포인트만 부른다(브리지 규약).
+// 브리지는 프롬프트 텍스트만 받으므로 이미지 판독·생성은 지원하지 않는다.
+const CLAUDE_OAUTH_API_BASE = GPT_OAUTH_API_BASE;
+
+function normalizeClaudeOAuthModelId(value) {
+  const allowed = (LLM_PROVIDERS.claude_oauth?.models || []).map(m => m.id);
+  const raw = String(value || '').trim();
+  return allowed.includes(raw) ? raw : (allowed[0] || 'claude-opus-5');
+}
+
+function normalizeClaudeOAuthEffort(value) {
+  const allowed = CLAUDE_OAUTH_EFFORTS.map(e => e.id);
+  const raw = String(value || '').trim();
+  return allowed.includes(raw) ? raw : 'high';
+}
+
+function isClaudeOAuthConnected() {
+  const s = state?.claudeOAuthStatus;
+  if (!s || typeof s !== 'object') return false;
+  // 브리지가 명시한 passCondition 을 그대로 따른다.
+  return s.claudeLoginReady === true
+    && s.mode === 'claude-subscription-oauth'
+    && s.usesApiKey === false;
+}
+
+async function refreshClaudeOAuthStatus(options = {}) {
+  if (!state) return null;
+  state.claudeOAuthStatusLoading = true;
+  state.claudeOAuthStatusError = '';
+  if (!options.silent) render();
+  try {
+    const res = await fetch(`${CLAUDE_OAUTH_API_BASE}/api/claude-oauth/status`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || data?.message || `API Hub HTTP ${res.status}`);
+    }
+    state.claudeOAuthStatus = data.oauthStatus || null;
+    state.claudeOAuthOptions = data.options || null;
+    state.claudeOAuthLastCheckedAt = Date.now();
+    state.claudeOAuthStatusError = '';
+    return state.claudeOAuthStatus;
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+      state.claudeOAuthStatusError = `API Hub 연결 실패 (${CLAUDE_OAUTH_API_BASE}). 바탕화면 API Hub를 실행한 뒤 다시 시도하세요.`;
+    } else {
+      state.claudeOAuthStatusError = msg;
+    }
+    return null;
+  } finally {
+    state.claudeOAuthStatusLoading = false;
+    if (!options.silent) render();
+  }
+}
+
+// 실행 직전에 낡거나 실패한 캐시만 다시 확인한다(GPT OAuth 와 같은 이유).
+async function ensureClaudeOAuthStatusFresh(options = {}) {
+  if (!state) return null;
+  if (state.claudeOAuthStatusLoading) return state.claudeOAuthStatus || null;
+  const checkedAt = Number(state.claudeOAuthLastCheckedAt || 0);
+  const stale = !checkedAt || (Date.now() - checkedAt) > GPT_OAUTH_STATUS_STALE_MS;
+  const needsRecheck = !!state.claudeOAuthStatusError || !state.claudeOAuthStatus || !isClaudeOAuthConnected() || stale;
+  if (!needsRecheck) return state.claudeOAuthStatus;
+  try {
+    return await refreshClaudeOAuthStatus({ silent: options.silent !== false });
+  } catch (_) {
+    return state.claudeOAuthStatus || null;
+  }
+}
+
+async function openClaudeOAuthLogin(force = false) {
+  state.claudeOAuthStatusLoading = true;
+  state.claudeOAuthStatusError = '';
+  render();
+  try {
+    const path = force ? '/api/claude-oauth/relogin' : '/api/claude-oauth/login';
+    const res = await fetch(`${CLAUDE_OAUTH_API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || `Claude 로그인 실행 실패 (${res.status})`);
+    setUiNotice(
+      data?.alreadyReady
+        ? 'Claude 구독 로그인은 이미 준비된 상태입니다.'
+        : 'Claude.ai 로그인 창을 열었습니다. 승인 후 상태 새로고침을 눌러주세요.',
+      'info',
+    );
+  } catch (e) {
+    const msg = e?.message || String(e);
+    state.claudeOAuthStatusError = /failed to fetch|networkerror/i.test(msg)
+      ? `API Hub 연결 실패 (${CLAUDE_OAUTH_API_BASE}). API Hub를 실행한 뒤 다시 시도하세요.`
+      : msg;
+  } finally {
+    state.claudeOAuthStatusLoading = false;
+    render();
+    setTimeout(() => refreshClaudeOAuthStatus({ silent: false }), 1600);
+  }
+}
+
+// GptOAuthAPI 를 상속해 전송 계층만 바꾼다. 대형 분석 프롬프트를 다시 쓰지 않는다.
+class ClaudeOAuthAPI extends GptOAuthAPI {
+  constructor(model, options = {}) {
+    super('gpt-5.6-sol', options);
+    this.model = normalizeClaudeOAuthModelId(model);
+    this.effort = normalizeClaudeOAuthEffort(options.effort || state?.modelConfig?.claudeOAuthEffort);
+    this.baseUrl = String(options.baseUrl || CLAUDE_OAUTH_API_BASE).replace(/\/+$/, '');
+    this.authMode = 'claude-subscription-oauth';
+  }
+
+  async _exec(prompt, options = {}) {
+    const body = {
+      prompt: String(prompt || ''),
+      model: normalizeClaudeOAuthModelId(options.model || this.model),
+      effort: normalizeClaudeOAuthEffort(options.effort || this.effort),
+      timeoutMs: Number.isFinite(options.timeoutMs) ? options.timeoutMs : 180000,
+      jsonOnly: options.jsonOnly !== false,
+    };
+    if (options.imageBase64 || (Array.isArray(options.images) && options.images.length)) {
+      throw new Error('Claude 구독 로그인 OAuth 브리지는 이미지 판독을 지원하지 않습니다. 이미지 분석은 GPT OAuth·OpenAI·로컬 Ollama를 사용하세요.');
+    }
+    const controller = new AbortController();
+    const timeoutMs = Math.min(Math.max(Number(body.timeoutMs || 180000) + 15000, 45000), 315000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    let data;
+    try {
+      res = await fetch(`${this.baseUrl}/api/claude-oauth/exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      data = await res.json().catch(() => ({ ok: false, error: `Claude OAuth bridge HTTP ${res.status}` }));
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        throw new Error(`Claude OAuth 호출이 ${Math.round(timeoutMs / 1000)}초를 초과했습니다. API Hub 상태를 확인한 뒤 다시 실행해주세요.`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok || !data.ok) {
+      if (data?.loginRequired) {
+        throw new Error('Claude 구독 로그인이 필요합니다. 모델 설정에서 Claude 로그인을 실행해주세요.');
+      }
+      throw new Error(String(data?.error || `Claude OAuth bridge 호출 실패 (${res.status})`));
+    }
+    // 브리지가 명시한 successContract 를 그대로 검증한다.
+    if (data.usedClaudeOAuth !== true || data.rawTokenReturned === true) {
+      throw new Error('Claude OAuth 응답 검증에 실패했습니다. usedClaudeOAuth/rawTokenReturned 상태를 확인해주세요.');
+    }
+    tokenTracker.record(body.model, null, null, false, options.purpose || 'Claude OAuth');
+    return String(data.text || '');
+  }
+
+  async analyzeImage() {
+    throw new Error('Claude 구독 로그인 OAuth 브리지는 이미지 판독을 지원하지 않습니다.');
+  }
+
+  async analyzeCompetitorImages() {
+    throw new Error('Claude 구독 로그인 OAuth 브리지는 이미지 판독을 지원하지 않습니다. 이미지 분석 폴백은 OpenAI API 또는 로컬 Ollama를 사용하세요.');
+  }
+
+  async generateImage() {
+    throw new Error('Claude 구독 로그인 OAuth 브리지는 이미지 생성을 지원하지 않습니다.');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
 // LLM ROUTER — 선택된 프로바이더/모델로 자동 분기
 // ════════════════════════════════════════════════════════════════
 function getLLMClient() {
@@ -2891,6 +3108,13 @@ function getLLMClient() {
   if (cfg.llmProvider === 'ollama') {
     return new OllamaAPI(cfg.llmModel, cfg.ollamaBaseUrl);
   }
+  if (cfg.llmProvider === 'claude_oauth') {
+    if ((state.claudeOAuthStatus || state.claudeOAuthStatusError) && !isClaudeOAuthConnected()) {
+      throw new Error(state.claudeOAuthStatusError
+        || 'Claude 구독 로그인 상태를 확인할 수 없습니다. 모델 설정에서 상태 새로고침 또는 Claude 로그인을 진행해주세요.');
+    }
+    return new ClaudeOAuthAPI(cfg.llmModel, { effort: cfg.claudeOAuthEffort });
+  }
   if (!hasGeminiConnection()) throw new Error('Gemini 연결 설정(API Key 또는 Backend URL)이 필요합니다.');
   return createGeminiClient(cfg.llmModel);
 }
@@ -2904,16 +3128,27 @@ function isLlmUsageLimitError(error) {
   return LLM_USAGE_LIMIT_PATTERN.test(String(error?.message || error || ''));
 }
 
-function llmFallbackPlan(cfg = normalizeModelConfig(state.modelConfig)) {
+function llmFallbackPlan(cfg = normalizeModelConfig(state.modelConfig), method = '') {
   if (!cfg.fallbackEnabled || cfg.fallbackProvider === 'none') return null;
-  if (cfg.fallbackProvider === cfg.llmProvider && cfg.fallbackModel === cfg.llmModel) return null;
-  const label = LLM_PROVIDERS[cfg.fallbackProvider]?.label || cfg.fallbackProvider;
-  const modelLabel = (LLM_PROVIDERS[cfg.fallbackProvider]?.models || [])
-    .find(m => m.id === cfg.fallbackModel)?.label || cfg.fallbackModel;
-  return { provider: cfg.fallbackProvider, model: cfg.fallbackModel, label, modelLabel, cfg };
+  // 지정한 폴백을 먼저 보고, 그 provider 가 요청 메서드를 못 하면 다음 후보로 넘어간다.
+  const ordered = [cfg.fallbackProvider, ...LLM_FALLBACK_PRIORITY.filter(id => id !== cfg.fallbackProvider)];
+  for (const providerId of ordered) {
+    if (providerId === 'none' || !LLM_PROVIDERS[providerId]) continue;
+    if (method && !providerSupportsLlmMethod(providerId, method)) continue;
+    const preferred = providerId === cfg.fallbackProvider ? String(cfg.fallbackModel || '') : '';
+    const models = LLM_PROVIDERS[providerId].models || [];
+    const model = models.some(m => m.id === preferred) ? preferred : (models[0]?.id || '');
+    if (!model) continue;
+    if (providerId === cfg.llmProvider && model === cfg.llmModel) continue;
+    const label = LLM_PROVIDERS[providerId].label || providerId;
+    const modelLabel = models.find(m => m.id === model)?.label || model;
+    return { provider: providerId, model, label, modelLabel, cfg };
+  }
+  return null;
 }
 
 function createLlmFallbackClient(plan) {
+  if (plan.provider === 'claude_oauth') return new ClaudeOAuthAPI(plan.model, { effort: plan.cfg.claudeOAuthEffort });
   if (plan.provider === 'ollama') return new OllamaAPI(plan.model, plan.cfg.ollamaBaseUrl);
   if (plan.provider === 'openai') {
     const key = getRuntimeOpenAIKey();
@@ -2931,7 +3166,7 @@ async function runLlmWithFallback(method, args = [], options = {}) {
   try {
     return await primary[method](...args);
   } catch (primaryError) {
-    const plan = llmFallbackPlan(cfg);
+    const plan = llmFallbackPlan(cfg, method);
     if (!plan || !isLlmUsageLimitError(primaryError)) throw primaryError;
     let fallbackClient;
     try {

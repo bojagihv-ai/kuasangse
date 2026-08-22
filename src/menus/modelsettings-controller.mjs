@@ -206,6 +206,21 @@ export function createModelSettingsController(config) {
         return invokeCapability('useGptOAuthAsLlm');
       },
     },
+    selectClaudeOAuthEffort: {
+      capability: 'settings:write',
+      execute(effortId) {
+        assertMutable();
+        return updateModelConfig({ claudeOAuthEffort: String(effortId || '') });
+      },
+    },
+    refreshClaudeOAuthStatus: {
+      capability: 'settings:write',
+      execute: () => invokeCapability('refreshClaudeOAuthStatus'),
+    },
+    openClaudeOAuthLogin: {
+      capability: 'settings:write',
+      execute: force => invokeCapability('openClaudeOAuthLogin', force === true),
+    },
     refreshGptOAuthStatus: {
       capability: 'gpt-oauth:read',
       execute: () => invokeCapability('refreshGptOAuthStatus'),

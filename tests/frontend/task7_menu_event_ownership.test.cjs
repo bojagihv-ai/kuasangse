@@ -343,6 +343,7 @@ async function createRouteMenu(route, calls = []) {
       providers: { gemini: { models: [{ id: 'model' }] } }, imageModels: [{ id: 'image-model' }],
       normalizeConfig: value => ({ llmProvider: 'gemini', llmModel: 'model', imageModel: 'image-model', ...(value || {}) }),
       getImageProvider: () => 'gemini', getRuntimeOpenAIKey: () => '', renderGptOAuthPanel: () => '',
+      refreshClaudeOAuthStatus: () => {}, openClaudeOAuthLogin: () => {},
       disabledAttr: () => '', isGptOAuthConnected: () => true, getReasoningLabel: String,
       getServiceTierLabel: String, escapeHtml: String, assertMutable() {}, updatePreferences() {},
       savePreferences() {}, saveCredentials() {}, loadVertexConfig: async () => ({}),

@@ -158,6 +158,11 @@ export function bindModelSettingsEvents({ root, contract, controller, config }) 
       return void contract.invoke('useGptOAuthAsLlm', eventNode(root, '[id$="gptOAuthModelSelect"]')?.value || '');
     }
     if (delegatedTarget(root, event, '[id$="probeGptOAuthBtn"]')) return void contract.invoke('probeGptOAuth');
+    if (delegatedTarget(root, event, '[id$="refreshClaudeOAuthStatusBtn"]')) return void contract.invoke('refreshClaudeOAuthStatus');
+    if (delegatedTarget(root, event, '[id$="openClaudeOAuthLoginBtn"]')) return void contract.invoke('openClaudeOAuthLogin', false);
+    if (delegatedTarget(root, event, '[id$="forceClaudeOAuthLoginBtn"]')) return void contract.invoke('openClaudeOAuthLogin', true);
+    const effortNode = delegatedTarget(root, event, '[data-pick-claude-effort]');
+    if (effortNode) return void contract.invoke('selectClaudeOAuthEffort', effortNode.dataset.pickClaudeEffort);
     if (delegatedTarget(root, event, '[id$="refreshGptOAuthStatusBtn"]')) return void contract.invoke('refreshGptOAuthStatus');
     if (delegatedTarget(root, event, '[id$="openGptOAuthLoginBtn"]')) return void contract.invoke('openGptOAuthLogin', false);
     if (delegatedTarget(root, event, '[id$="forceGptOAuthLoginBtn"]')) return void contract.invoke('openGptOAuthLogin', true);

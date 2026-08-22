@@ -13724,6 +13724,8 @@ function installRuntimeMenuModules(moduleNamespaces = {}) {
         return state.modelConfig;
       },
       refreshGptOAuthStatus: () => refreshGptOAuthStatus({ silent: false }),
+      refreshClaudeOAuthStatus: () => refreshClaudeOAuthStatus({ silent: false }),
+      openClaudeOAuthLogin: force => openClaudeOAuthLogin(force === true),
       probeGptOAuth: () => probeGptOAuthLiveCall({ silent: false }),
       openGptOAuthLogin: force => openGptOAuthLogin(force === true),
       requestRender: render,
@@ -16127,7 +16129,10 @@ async function factoryRuntimeControlProjection() {
   if (!Array.isArray(preflight.imageDigests) || !preflight.imageDigests.length) blockers.push('image_digests');
   if (preflight.reason && preflight.status !== 'ready') blockers.push(String(preflight.reason));
   for (const stage of stages) {
-    if (!(stage.selectedIds || []).length) blockers.push(`${stage.key}_a_cut`);
+    // 후보가 하나도 생성되지 않은 단계는 이 상품에 해당하지 않는다.
+    // (색상이 하나뿐이라 옵션컷이 없는 경우 등) 고를 수 없는 것을 차단 사유로 삼지 않는다.
+    const stageHasCandidates = Array.isArray(stage.candidates) && stage.candidates.length > 0;
+    if (stageHasCandidates && !(stage.selectedIds || []).length) blockers.push(`${stage.key}_a_cut`);
   }
   const registrationImageFingerprint = factoryProjectFileImageFingerprint(
     (Array.isArray(preflight.imageDigests) ? preflight.imageDigests : [])
@@ -16507,12 +16512,18 @@ function factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot = {}, che
 }
 
 async function factoryRuntimeControlSaveProductCheckpoint(payload = {}, status = '', stageKey = '') {
+  // 배치 실행 도중 작업파일 컨텍스트를 잃으면 draft scope 에 머문 채로 문서 scope 권한을
+  // 요구하게 되어 저장이 막힌다. 이 작업의 프로젝트로 되돌려 문서 scope 를 정확히 요청한다.
+  const checkpointJobId = String(payload.jobId || '').trim();
+  if (checkpointJobId && !String(state.currentProjectId || '').trim()) {
+    state.currentProjectId = `batch:${checkpointJobId}`;
+  }
   const productAuthorityScope = getCurrentDocumentWorkspaceScope(state.currentProjectId);
   const productAuthority = await ensureWorkspaceEditAuthority(productAuthorityScope, {
     force: true,
     confirmedTakeover: true,
   });
-  if (productAuthority?.mode !== 'editing' || productAuthority.scopeId !== productAuthorityScope) {
+  if (!['editing', 'offline-edit'].includes(productAuthority?.mode) || productAuthority.scopeId !== productAuthorityScope) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
   const saved = await saveCurrentProject({ retainProjectAuthority: true });
@@ -16579,7 +16590,7 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
     force: true,
     confirmedTakeover: true,
   });
-  if (productAuthority?.mode !== 'editing' || productAuthority.scopeId !== productAuthorityScope) {
+  if (!['editing', 'offline-edit'].includes(productAuthority?.mode) || productAuthority.scopeId !== productAuthorityScope) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
   if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {
@@ -16709,7 +16720,7 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
       force: true,
       confirmedTakeover: true,
     });
-    if (authority?.mode !== 'editing' || authority.scopeId !== authorityScope) {
+    if (!['editing', 'offline-edit'].includes(authority?.mode) || authority.scopeId !== authorityScope) {
       throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
     }
     await factoryRuntimeUpdateOwnedFactory(
@@ -16795,7 +16806,7 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
     force: true,
     confirmedTakeover: true,
   });
-  if (productAuthority?.mode !== 'editing' || productAuthority.scopeId !== productAuthorityScope) {
+  if (!['editing', 'offline-edit'].includes(productAuthority?.mode) || productAuthority.scopeId !== productAuthorityScope) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
   if (payload.startFresh !== true && typeof hydrateServerLastWorkSnapshot === 'function') {

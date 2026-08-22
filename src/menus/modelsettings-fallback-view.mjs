@@ -11,6 +11,36 @@ function renderFallbackModelCards(models, selectedId) {
     </div>`).join('');
 }
 
+// API Hub 브리지 규약: 노력 5단계와 상태/로그인/강제 재로그인 버튼을 모두 노출한다.
+const CLAUDE_EFFORTS = [
+  { id: 'low', label: '낮음/빠름', desc: '단순 조회' },
+  { id: 'medium', label: '보통', desc: '애매한 판단' },
+  { id: 'high', label: '높음/깊게', desc: '기본 권장' },
+  { id: 'xhigh', label: '매우 높음', desc: '코딩·에이전트' },
+  { id: 'max', label: '최대', desc: '정확도 우선' },
+];
+
+function renderClaudeOAuthControls(cfg) {
+  const current = cfg.claudeOAuthEffort || 'high';
+  const efforts = CLAUDE_EFFORTS.map(e => `
+    <button type="button" class="provider-tab ${current === e.id ? 'active-openai' : ''}"
+            data-pick-claude-effort="${e.id}" style="min-width:96px">
+      <div class="pt-label">${e.label}</div><div class="pt-sub">${e.desc}</div>
+    </button>`).join('');
+  return `
+      <p style="font-size:12px;color:var(--text-m);margin:12px 0 6px">추론 노력 단계</p>
+      <div class="provider-tabs">${efforts}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn-sm" type="button" id="settingsRefreshClaudeOAuthStatusBtn">상태 새로고침</button>
+        <button class="btn-sm" type="button" id="settingsOpenClaudeOAuthLoginBtn">Claude 로그인</button>
+        <button class="btn-sm" type="button" id="settingsForceClaudeOAuthLoginBtn">강제 재로그인</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-m);margin-top:8px;line-height:1.5">
+        API Hub 의 Claude OAuth 브리지를 사용합니다. Anthropic API 키를 쓰지 않습니다.
+        <b>이미지 판독은 지원하지 않아</b>, 이미지 분석이 한도에 걸리면 OpenAI API 또는 로컬 Ollama 로 자동으로 넘어갑니다.
+      </div>`;
+}
+
 export function renderFallbackSection(cfg, providers) {
   const primaryLabel = providers[cfg.llmProvider]?.label || cfg.llmProvider;
   const fallbackModels = providers[cfg.fallbackProvider]?.models || [];
@@ -28,6 +58,11 @@ export function renderFallbackSection(cfg, providers) {
           <div class="pt-icon" style="color:var(--text-m)">—</div>
           <div class="pt-label">사용 안 함</div>
           <div class="pt-sub">한도 시 그대로 실패 보고</div>
+        </div>
+        <div class="provider-tab ${cfg.fallbackProvider === 'claude_oauth' ? 'active-openai' : ''}" data-pick-fallback-provider="claude_oauth">
+          <div class="pt-icon" style="color:#d97757">✳</div>
+          <div class="pt-label">Claude 구독 로그인</div>
+          <div class="pt-sub">구독 사용 · 추가 비용 없음</div>
         </div>
         <div class="provider-tab ${cfg.fallbackProvider === 'openai' ? 'active-openai' : ''}" data-pick-fallback-provider="openai">
           <div class="pt-icon" style="color:#10a37f">◆</div>
@@ -57,6 +92,8 @@ export function renderFallbackSection(cfg, providers) {
         경쟁사 전체 분석은 27B급에서 3분 이상 걸릴 수 있고, Gemma4 e4b 는 더 빠른 대신 판독이 일반론으로 흐를 수 있습니다.
       </div>
       ` : ''}
+
+      ${cfg.fallbackProvider === 'claude_oauth' ? renderClaudeOAuthControls(cfg) : ''}
 
       ${cfg.fallbackProvider === 'openai' ? `
       <div style="font-size:11px;color:var(--text-m);margin-top:8px">

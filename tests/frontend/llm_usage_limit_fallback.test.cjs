@@ -36,6 +36,12 @@ function extractConst(source, name) {
 const PROVIDERS = {
   gpt_oauth: { label: 'ChatGPT 로그인 OAuth', models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' }] },
   openai: { label: 'OpenAI ChatGPT', models: [{ id: 'gpt-5.4-mini', label: 'GPT-5.4 mini' }] },
+  claude_oauth: {
+    label: 'Claude 구독 로그인 OAuth',
+    vision: false,
+    imageGeneration: false,
+    models: [{ id: 'claude-opus-5', label: 'Claude Opus 5 · 권장' }],
+  },
   ollama: {
     label: '로컬 Ollama',
     local: true,
@@ -68,6 +74,11 @@ function createHarness({ config = {}, openaiKey = 'sk-test', fallbackImpl } = {}
       constructor(model, baseUrl) { calls.ollamaCtor.push({ model, baseUrl }); this.model = model; }
       analyzeCompetitorImages(...args) { calls.fallback += 1; return fallbackImpl ? fallbackImpl(...args) : { ok: 'ollama' }; }
     },
+    ClaudeOAuthAPI: class {
+      constructor(model, opts) { calls.claudeCtor = calls.claudeCtor || []; calls.claudeCtor.push({ model, opts }); this.model = model; }
+      analyzeCompetitorHTML() { calls.fallback += 1; return { ok: 'claude' }; }
+      analyzeCompetitorImages() { throw new Error('Claude 구독 로그인 OAuth 브리지는 이미지 판독을 지원하지 않습니다.'); }
+    },
     OpenAIAPI: class {
       constructor(key, model) { calls.openaiCtor.push({ key, model }); this.model = model; }
       analyzeCompetitorImages(...args) { calls.fallback += 1; return fallbackImpl ? fallbackImpl(...args) : { ok: 'openai' }; }
@@ -76,7 +87,11 @@ function createHarness({ config = {}, openaiKey = 'sk-test', fallbackImpl } = {}
   });
   vm.runInContext([
     extractConst(CORE_01, 'LLM_USAGE_LIMIT_PATTERN'),
+    extractConst(CORE_01, 'LLM_FALLBACK_PRIORITY'),
+    extractConst(CORE_01, 'LLM_VISION_METHODS'),
+    extractConst(CORE_01, 'LLM_IMAGE_GEN_METHODS'),
     extractFunction(CORE_01, 'isLlmUsageLimitError'),
+    extractFunction(CORE_01, 'providerSupportsLlmMethod'),
     extractFunction(CORE_01, 'llmFallbackPlan'),
     extractFunction(CORE_01, 'createLlmFallbackClient'),
     `async ${extractFunction(CORE_01, 'runLlmWithFallback')}`,
@@ -177,15 +192,18 @@ test('폴백도 실패하면 두 실패를 한 메시지로 합쳐 보고한다'
   );
 });
 
-test('기본 provider·모델과 폴백이 같으면 무의미한 재시도를 하지 않는다', async () => {
+test('기본과 같은 모델은 건너뛰고 능력 있는 다음 후보로 이어간다', async () => {
+  // 같은 모델로 다시 부르는 것은 무의미하다. 다만 폴백을 포기하지는 않고
+  // 체인의 다음 후보(요청 메서드를 실제로 수행할 수 있는 provider)로 넘어간다.
   const { context, calls } = createHarness({
     config: { llmProvider: 'ollama', llmModel: 'gemma4:e4b', fallbackProvider: 'ollama', fallbackModel: 'gemma4:e4b' },
   });
-  await assert.rejects(
-    () => context.runIt('analyzeCompetitorImages', [[]], { client: failWith('사용량 한도') }),
-    /사용량 한도/,
-  );
-  assert.equal(calls.fallback, 0, '같은 모델로 다시 시도하면 안 된다');
+  const result = await context.runIt('analyzeCompetitorImages', [[]], { client: failWith('사용량 한도') });
+
+  assert.equal(calls.fallback, 1, '체인의 다음 후보로는 넘어가야 한다');
+  assert.deepEqual(calls.ollamaCtor, [], '같은 ollama 모델로 다시 시도하면 안 된다');
+  assert.equal(result.ok, 'openai', 'vision 이 되는 다음 후보가 응답해야 한다');
+  assert.equal(JSON.parse(JSON.stringify(result.__fallbackUsed)).provider, 'openai');
 });
 
 test('Ollama 폴백 모델은 vision 지원 모델만 등록한다', () => {
@@ -209,16 +227,16 @@ test('로컬 Ollama 는 이미지 생성을 지원하지 않는다고 명확히 
   assert.match(classBody, /\/v1/, 'OpenAI 호환 엔드포인트(/v1)를 사용해야 한다');
 });
 
-test('폴백 기본값은 OpenAI API 이고 로컬 Ollama 는 명시 선택일 때만 쓴다', () => {
+test('폴백 기본값은 Claude 구독 로그인이고 나머지는 명시 선택일 때만 쓴다', () => {
   // 로컬 27B 는 상주 시 15GB 를 물어 같은 PC 의 다른 공정 타이밍을 흔든다(GENERATE-01 사례).
   const normalize = extractFunction(CORE_01, 'normalizeLlmFallbackConfig');
-  const context = vm.createContext({ LLM_PROVIDERS: PROVIDERS, OLLAMA_DEFAULT_BASE_URL: 'http://127.0.0.1:11434' });
+  const context = vm.createContext({ LLM_PROVIDERS: PROVIDERS, OLLAMA_DEFAULT_BASE_URL: 'http://127.0.0.1:11434', normalizeClaudeOAuthEffort: v => v || 'high' });
   const fallbackProvidersConst = extractConst(CORE_01, 'LLM_FALLBACK_PROVIDERS');
   vm.runInContext(`${fallbackProvidersConst}\n${normalize}\nrun = normalizeLlmFallbackConfig;`, context);
 
   const fresh = context.run({});
-  assert.equal(fresh.fallbackProvider, 'openai', '설정이 없으면 OpenAI API 로 폴백해야 한다');
-  assert.equal(fresh.fallbackModel, 'gpt-5.4-mini');
+  assert.equal(fresh.fallbackProvider, 'claude_oauth', '설정이 없으면 Claude 구독 로그인으로 폴백해야 한다');
+  assert.equal(fresh.fallbackModel, 'claude-opus-5');
   assert.equal(fresh.fallbackEnabled, true);
 
   const explicit = context.run({ fallbackProvider: 'ollama' });
