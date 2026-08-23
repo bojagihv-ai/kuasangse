@@ -12,7 +12,7 @@ import { createPersistenceOperationCache } from './persistence/operation-cache.m
 import { sanitizeWorkspaceSnapshot } from './persistence/serialization.mjs';
 import { comparePersistenceCandidates } from './persistence-envelope.mjs';
 
-export function createWorkspacePersistence({ adapters, authority = null } = {}) {
+export function createWorkspacePersistence({ adapters, authority = null, onDiagnostics = null } = {}) {
   if (!adapters || typeof adapters !== 'object') {
     throw new TypeError('persistence adapters are required');
   }
@@ -89,7 +89,12 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
       });
     }
     const candidates = [];
+    // 소스별 실패는 다음 소스로 넘어가는 게 맞지만, 전부 실패한 경우까지
+    // '저장본 없음'과 똑같이 보이면 안 된다. 실패를 모아 구분한다.
+    const failures = [];
+    let attempted = 0;
     for (const source of restoreSources(sources)) {
+      attempted += 1;
       try {
         const rawRecord = await adapters[source].read(scope);
         const record = rawRecord ? sanitizePersistenceEnvelope(rawRecord, source) : null;
@@ -102,11 +107,24 @@ export function createWorkspacePersistence({ adapters, authority = null } = {}) 
           && restoreCandidateMatchesAuthority(record, rawRecord, source)) {
           candidates.push({ source, record });
         }
-      } catch (_) {}
+      } catch (error) {
+        failures.push({ source, message: String(error?.message || error) });
+      }
     }
     candidates.sort(comparePersistenceCandidates);
     const selected = candidates[0] || null;
-    if (!selected) return null;
+    if (!selected) {
+      // 시도한 소스가 전부 예외로 끝났다면 이건 '없음'이 아니라 '복원 실패'다.
+      if (attempted > 0 && failures.length === attempted) {
+        onDiagnostics?.({
+          kind: 'restore-all-sources-failed',
+          scopeId: scope,
+          attempted,
+          failures,
+        });
+      }
+      return null;
+    }
     const revision = selected.record.metadata?.revision;
     if (revision) {
       authorityRuntime.observeRevision({

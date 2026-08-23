@@ -31,8 +31,8 @@ const PERSISTENCE_CAPABILITY_MARKER = Symbol.for('kuasangse.workspace.persistenc
 export { WORKSPACE_PERSISTENCE_SCHEMA, WORKSPACE_PERSISTENCE_VERSION };
 export { WorkspaceAuthorityError, createGuardedWorkspaceMutations };
 
-export function createWorkspacePersistence({ adapters, authority = null } = {}) {
-  return createWorkspacePersistenceOrchestrator({ adapters, authority });
+export function createWorkspacePersistence({ adapters, authority = null, onDiagnostics = null } = {}) {
+  return createWorkspacePersistenceOrchestrator({ adapters, authority, onDiagnostics });
 }
 
 export function createBrowserWorkspacePersistence(root) {
@@ -48,7 +48,25 @@ export function createBrowserWorkspacePersistence(root) {
     workfile: createWorkfileAdapter({ root }),
     archive: createArchiveAdapter({ root }),
   });
-  const orchestrator = createWorkspacePersistence({ adapters, authority });
+  // 복원 소스가 전부 실패한 경우는 '저장본 없음'과 구분해 기존 저하 보고 채널로 알린다.
+  const reportDegraded = typeof root?.reportRuntimeDegradedOnce === 'function'
+    ? root.reportRuntimeDegradedOnce
+    : null;
+  const orchestrator = createWorkspacePersistence({
+    adapters,
+    authority,
+    onDiagnostics: reportDegraded
+      ? info => {
+          if (info?.kind !== 'restore-all-sources-failed') return;
+          const detail = (info.failures || []).map(f => `${f.source}: ${f.message}`).join(' / ');
+          reportDegraded(
+            `workspace-restore:${info.scopeId}`,
+            '저장된 작업을 불러오지 못했습니다. 저장본이 없는 것이 아니라 복원 경로가 모두 실패했습니다',
+            detail,
+          );
+        }
+      : null,
+  });
   const guardedMutations = createGuardedWorkspaceMutations({ adapters, authority });
 
   const fetchArchiveResource = (url, options = {}) => fetchArchiveWithAuthority({

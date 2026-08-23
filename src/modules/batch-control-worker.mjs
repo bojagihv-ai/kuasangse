@@ -11,10 +11,10 @@ import {
   projectionIdentity,
   record,
   text,
-  validateOrder,
   WORKER_ENDPOINTS,
 } from './batch-control-contract.mjs';
 import { createRecurringTask, createSingleFlight } from './batch-control-polling.mjs';
+import { acceptWorkOrder } from './batch-control-order-intake.mjs';
 import { installBatchControlWorkerWithFactory } from './batch-control-worker-install.mjs';
 import { createFactoryWorkfileHydrationSubmission } from './factory-workfile-webmcp.mjs';
 
@@ -169,9 +169,9 @@ export function createBatchControlWorker({
       capabilityVersion: BATCH_CONTROL_WORKER_CAPABILITY_VERSION,
     });
     if (!claimed || !claimed.order) return Object.freeze({ status: 'idle', workerId });
-    activeOrder = validateOrder(claimed.order);
-    eventSequence = 0;
-    await post(WORKER_ENDPOINTS.ack(activeOrder.orderId), { ...activeOrder, workerId, accepted: true, eventSequence: ++eventSequence });
+    const onIntakeError = error => console.error('Batch worker order rejected before ack', error);
+    activeOrder = await acceptWorkOrder({ order: claimed.order, workerId, post, endpoints: WORKER_ENDPOINTS, onError: onIntakeError });
+    eventSequence = 1;
     try {
       if (
         activeOrder.command.kind === 'factory-workfile'

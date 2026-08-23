@@ -2443,7 +2443,7 @@ async function factorySyncCafe24CategoryLink(options = {}) {
         current.product.cafe24ApiStatus = `Cafe24 카테고리 재조회 확인 완료: ${verification.message}`;
         factoryRememberCafe24SyncResult(current, 'category', {
           productNo,
-          endpoint: '/api/v2/admin/categories/{category_no}/products',
+          endpoint: '/api/v2/admin/products/{product_no} · add_category_no',
           ok: verification.matched,
           summary: verification.message,
           detail: categoryText,
@@ -2457,13 +2457,18 @@ async function factorySyncCafe24CategoryLink(options = {}) {
     for (const row of rowsToConnect) {
       const numericProductNo = Number(productNo);
       const productNoPayload = Number.isFinite(numericProductNo) ? numericProductNo : productNo;
-      const body = await callCafe24Console('POST', `/api/v2/admin/categories/${encodeURIComponent(row.category_no)}/products`, {
+      // 분류 연결은 상품 갱신으로 한다. categories/{no}/products 는 현재 Cafe24 가
+      // parameter.product_no 를 잘못된 filter 로 보고 422 로 거절해, 분류가 영영 붙지 않는다.
+      const body = await callCafe24Console('PUT', `/api/v2/admin/products/${encodeURIComponent(productNoPayload)}`, {
         mallId,
         body: {
-          product_no: [productNoPayload],
-          display_group: row.display_group || '1',
-          recommend: row.recommend === 'T' ? 'T' : 'F',
-          new: row.new === 'T' ? 'T' : 'F',
+          request: {
+            add_category_no: [{
+              category_no: Number(row.category_no),
+              recommend: row.recommend === 'T' ? 'T' : 'F',
+              new: row.new === 'T' ? 'T' : 'F',
+            }],
+          },
         },
       }, `Connect Cafe24 category ${row.category_no} product ${productNo}`);
       await factoryExecuteCafe24ControlBody(body, { attempts: 45, delayMs: 800 });
@@ -2479,7 +2484,7 @@ async function factorySyncCafe24CategoryLink(options = {}) {
         const verification = factoryVerifyCafe24CategoryEcho(categoryRows, parseCafe24Raw(detail) || detail.raw || detail);
         factoryRememberCafe24SyncResult(current, 'category', {
           productNo,
-          endpoint: '/api/v2/admin/categories/{category_no}/products',
+          endpoint: '/api/v2/admin/products/{product_no} · add_category_no',
           ok: verification.matched,
           summary: verification.message,
           detail: categoryText,
@@ -2492,7 +2497,7 @@ async function factorySyncCafe24CategoryLink(options = {}) {
       } else {
         factoryRememberCafe24SyncResult(current, 'category', {
           productNo,
-          endpoint: '/api/v2/admin/categories/{category_no}/products',
+          endpoint: '/api/v2/admin/products/{product_no} · add_category_no',
           ok: false,
           summary: '카테고리 연결 후 상세 재조회 결과가 비어 있습니다.',
           detail: categoryText,

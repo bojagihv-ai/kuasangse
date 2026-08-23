@@ -6366,11 +6366,19 @@ test('fresh resumed worker acquires exact product authority before server candid
 
 test('Product B checkpoint refreshes stale project authority before preserving the selected size A-cut', async () => {
   const core = source('src/app-core-03.js');
-  const checkpointSource = sourceSlice(
-    core,
-    'async function factoryRuntimeControlSaveProductCheckpoint(',
-    'async function factoryRuntimeControlRestoreProductCheckpoint(',
-  );
+  const checkpointSource = [
+    // 저장 경로가 쓰는 프로젝트 확정 헬퍼까지 함께 평가해야 실제 scope 계산을 검증한다.
+    sourceSlice(
+      core,
+      'function factoryRuntimeControlCheckpointProjectId(',
+      'function factoryRuntimeControlValidateProductCheckpoint(',
+    ),
+    sourceSlice(
+      core,
+      'async function factoryRuntimeControlSaveProductCheckpoint(',
+      'async function factoryRuntimeControlRestoreProductCheckpoint(',
+    ),
+  ].join('\n');
   const jobId = 'factory-job-a66111b339304b5ab3f2b8de4fedf751';
   const projectId = `batch:${jobId}`;
   const scopeId = `project:${projectId}`;

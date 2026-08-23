@@ -16273,10 +16273,20 @@ async function factoryRuntimeControlSelectACut(payload = {}) {
   if (typeof saveLastWorkNow === 'function') {
     await saveLastWorkNow({ sync: false });
   }
-  const projection = await factoryRuntimeControlProjection();
-  const selected = projection.stages.find(item => item.key === stageKey);
+  const verified = await factoryRuntimeControlProjection();
+  const selected = verified.stages.find(item => item.key === stageKey);
   if (!selected || !selected.selectedIds.includes(candidateId)) {
     throw factoryRuntimeBatchCommandError('factory_a_cut_selection_not_persisted');
+  }
+  // 선택을 체크포인트에 남기지 않으면 다음 배치 실행이 선택 이전 체크포인트를 복원하며
+  // 방금 고른 A컷이 사라져 factory_decision_required 로 막힌다.
+  const selectionJobId = String(payload.jobId || '').trim();
+  let checkpoint = null;
+  let projection = verified;
+  if (selectionJobId) {
+    const saved = await factoryRuntimeControlSaveProductCheckpoint(payload, 'waiting_manual', stageKey);
+    checkpoint = saved.checkpoint;
+    projection = saved.projection;
   }
   const receiptBasis = [
     projection.session.productKey,
@@ -16300,6 +16310,7 @@ async function factoryRuntimeControlSelectACut(payload = {}) {
     revision: projection.session.revision,
     idempotencyKey: String(payload.idempotencyKey || '').trim(),
     selectedAt: new Date().toISOString(),
+    ...(checkpoint ? { status: 'waiting_manual', checkpoint } : {}),
     projection,
   });
 }
@@ -16395,6 +16406,19 @@ function factoryRuntimeControlCheckpointProjectId(jobId = '') {
   return `batch:${String(jobId || '').trim()}`;
 }
 
+// 배치 진입점(시작·복원·저장)이 모두 같은 문서 scope 를 요구하도록 이 작업의 프로젝트를 확정한다.
+// 워커가 재시작해 컨텍스트가 비었거나 앞 작업의 프로젝트가 남아 있으면 draft scope 또는 남의
+// 문서 scope 로 권한을 요구하게 되어 저장이 막힌다.
+function factoryRuntimeControlAdoptProductProject(jobId = '') {
+  const id = String(jobId || '').trim();
+  if (!id) return String(state.currentProjectId || '').trim();
+  const projectId = factoryRuntimeControlCheckpointProjectId(id);
+  if (String(state.currentProjectId || '').trim() !== projectId) {
+    state.currentProjectId = projectId;
+  }
+  return projectId;
+}
+
 function factoryRuntimeControlValidateProductCheckpoint(value = {}, jobId = '') {
   const expectedJobId = String(jobId || '').trim();
   const keys = [
@@ -16484,9 +16508,17 @@ function factoryRuntimeControlProjectionMatchesCheckpoint(projection = {}, check
     && String(registration.mode || '').trim() === 'update'
     && String(registration.productId || '').trim() === restoredProductId
   ) || staleProductBeforeHydration;
+  // 체크포인트는 되돌아갈 지점이지 판을 고정하는 표가 아니다. 저장이 한 번이라도 앞서 나가면
+  // 완전 일치를 요구하는 순간 같은 작업인데도 영영 복원할 수 없게 된다. 신원은 그대로 엄격히
+  // 확인하고, 판은 체크포인트와 같거나 더 나아간 것까지 같은 작업으로 받아들인다.
+  const restoredRevision = Number(session.revision);
+  const checkpointRevision = Number(checkpoint.revision);
+  const revisionIsAtOrAhead = Number.isFinite(restoredRevision)
+    && Number.isFinite(checkpointRevision)
+    && restoredRevision >= checkpointRevision;
   return String(registration.jobId || '').trim() === String(jobId || '').trim()
     && productIdMatches
-    && Number(session.revision) === Number(checkpoint.revision)
+    && revisionIsAtOrAhead
     && ['workspaceId', 'productKey', 'runId', 'inputFingerprint'].every(field => (
       String(session[field] || '').trim()
       === String(field === 'workspaceId' ? checkpoint.projectId : checkpoint[field] || '').trim()
@@ -16512,18 +16544,24 @@ function factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot = {}, che
 }
 
 async function factoryRuntimeControlSaveProductCheckpoint(payload = {}, status = '', stageKey = '') {
-  // 배치 실행 도중 작업파일 컨텍스트를 잃으면 draft scope 에 머문 채로 문서 scope 권한을
-  // 요구하게 되어 저장이 막힌다. 이 작업의 프로젝트로 되돌려 문서 scope 를 정확히 요청한다.
-  const checkpointJobId = String(payload.jobId || '').trim();
-  if (checkpointJobId && !String(state.currentProjectId || '').trim()) {
-    state.currentProjectId = `batch:${checkpointJobId}`;
+  const productAuthorityScope = getCurrentDocumentWorkspaceScope(
+    factoryRuntimeControlAdoptProductProject(payload.jobId),
+  );
+  // 상세페이지 빌드처럼 오래 도는 단계 직후에는 잠금이 잠시 draft 로 되돌아가 있을 수 있다.
+  // 첫 시도 실패로 작업을 막아버리면 그때까지 만든 컷과 상세페이지를 통째로 잃는다.
+  const authorityAcceptable = value => (
+    ['editing', 'offline-edit'].includes(value?.mode) && value?.scopeId === productAuthorityScope
+  );
+  let productAuthority = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    productAuthority = await ensureWorkspaceEditAuthority(productAuthorityScope, {
+      force: true,
+      confirmedTakeover: true,
+    });
+    if (authorityAcceptable(productAuthority)) break;
+    await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)));
   }
-  const productAuthorityScope = getCurrentDocumentWorkspaceScope(state.currentProjectId);
-  const productAuthority = await ensureWorkspaceEditAuthority(productAuthorityScope, {
-    force: true,
-    confirmedTakeover: true,
-  });
-  if (!['editing', 'offline-edit'].includes(productAuthority?.mode) || productAuthority.scopeId !== productAuthorityScope) {
+  if (!authorityAcceptable(productAuthority)) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
   const saved = await saveCurrentProject({ retainProjectAuthority: true });
@@ -17140,13 +17178,31 @@ async function factoryRuntimeControlRunProduct(payload = {}) {
   const expectedStageKey = String(payload.expectedStageKey || '').trim();
   if (expectedStageKey) {
     const expected = (before.stages || []).find(stage => stage.key === expectedStageKey);
-    if (!expected || !Array.isArray(expected.selectedIds) || expected.selectedIds.length === 0) {
+    // 후보가 비어 복원 직후처럼 고를 것이 없을 때만 관제탑이 다시 만들라고 표시해 준다.
+    // 표식 없이 '후보가 비어 보이면 통과' 로 두면, 방금 고른 컷이 아직 반영되는 중인
+    // 찰나에 실행이 들어와 그 단계를 통째로 다시 만들며 선택을 지운다.
+    const regenerateStage = payload.regenerateStage === true;
+    if (!expected || (!regenerateStage && !(expected.selectedIds || []).length)) {
       throw factoryRuntimeBatchCommandError('factory_decision_required');
     }
   }
-  const success = await factoryRunGoalLoop({
-    forceDetail: factoryRuntimeControlExecutionMode(payload) === 'auto' && factoryRuntimeControlNeedsDetailRebuild(),
-  });
+  // 상세페이지 자산이 없으면 수동 진행에서도 반드시 만들어야 한다. 모드로만 막으면 A컷을 모두
+  // 고른 뒤에도 detail-asset 이 빈 채로 '완료' 로 보고되어 Cafe24 등록이 영구히 막힌다.
+  let success;
+  try {
+    success = await factoryRunGoalLoop({
+      forceDetail: factoryRuntimeControlNeedsDetailRebuild(),
+    });
+  } catch (error) {
+    // 여기서 그냥 던지면 방금 만든 후보와 상세페이지가 체크포인트에 남지 않아 통째로 사라지고,
+    // 다시 살릴 때 아무것도 없는 이른 시점으로 되돌아간다. 만든 것부터 남기고 원인을 올린다.
+    try {
+      await factoryRuntimeControlSaveProductCheckpoint(payload, 'blocked', expectedStageKey);
+    } catch (checkpointError) {
+      void checkpointError;
+    }
+    throw error;
+  }
   const resultProjection = await factoryRuntimeControlProjection();
   const waitingStage = factoryRuntimeControlWaitingStage(resultProjection, payload);
   const goalRun = factoryRuntimeReadFactory().goalRun || {};
@@ -17176,6 +17232,83 @@ async function factoryRuntimeControlRunProduct(payload = {}) {
   });
 }
 
+const FACTORY_CAFE24_FIELD_MAP = Object.freeze({
+  categoryId: { fieldId: 'category', label: '분류' },
+  salePrice: { fieldId: 'sale_price', label: '판매가' },
+  supplyPrice: { fieldId: 'purchase_price', label: '공급가 / 원가' },
+  displayStatus: { fieldId: 'display_status', label: '진열상태' },
+  sellingStatus: { fieldId: 'selling_status', label: '판매상태' },
+});
+
+function factoryRuntimeControlCafe24Values(payload = {}) {
+  const source = payload?.cafe24 && typeof payload.cafe24 === 'object' ? payload.cafe24 : {};
+  const values = [];
+  for (const [key, field] of Object.entries(FACTORY_CAFE24_FIELD_MAP)) {
+    const raw = String(source[key] ?? '').trim();
+    if (raw) values.push({ ...field, value: raw });
+  }
+  return values;
+}
+
+async function factoryRuntimeControlRegisterCafe24(payload = {}) {
+  const jobId = String(payload.jobId || '').trim();
+  if (!jobId) throw factoryRuntimeBatchCommandError('factory_product_payload_invalid');
+  factoryRuntimeControlAdoptProductProject(jobId);
+  if (typeof factoryCommitAutomationWizardFieldValue !== 'function'
+    || typeof factoryRuntimeBridgeAction !== 'function') {
+    throw factoryRuntimeBatchCommandError('factory_cafe24_capability_unavailable');
+  }
+  // 관제탑이 지정한 등록 대상 값을 먼저 확정한다. 이것을 넣지 않으면 등록 화면이 없는
+  // 배치에서 분류·판매가가 비어 등록이 막힌다.
+  for (const field of factoryRuntimeControlCafe24Values(payload)) {
+    await factoryRuntimeBridgeAction(
+      'factory/fields:commitField',
+      undefined,
+      draft => {
+        factoryCommitAutomationWizardFieldValue(field.fieldId, field.value, field.label, false, draft);
+        return field.fieldId;
+      },
+      { render: false, forceSave: true },
+    );
+  }
+  if (typeof factoryRunFinalRegistration !== 'function') {
+    throw factoryRuntimeBatchCommandError('factory_cafe24_capability_unavailable');
+  }
+  const registered = await factoryRunFinalRegistration({ headless: true, render: false });
+  const projection = await factoryRuntimeControlProjection();
+  const factory = factoryRuntimeReadFactory();
+  const productNo = String(
+    factory?.product?.finalRegistration?.productNo
+    || factory?.product?.finalDb?.product_no
+    || '',
+  ).trim();
+  if (registered !== true) {
+    const reason = String(
+      factory?.product?.finalRegistration?.message
+      || factoryRuntimeControlCafe24BlockReason(projection)
+      || 'factory_cafe24_registration_declined',
+    ).trim();
+    throw factoryRuntimeBatchCommandError(`factory_cafe24_registration_declined: ${reason}`);
+  }
+  const saved = await factoryRuntimeControlSaveProductCheckpoint(payload, 'completed', 'cafe24');
+  return Object.freeze({
+    schema: 'factory-cafe24-registration-receipt:v1',
+    jobId,
+    productNo,
+    registeredAt: new Date().toISOString(),
+    projection: saved.projection,
+    checkpoint: saved.checkpoint,
+  });
+}
+
+function factoryRuntimeControlCafe24BlockReason(projection = {}) {
+  const registration = projection?.registration && typeof projection.registration === 'object'
+    ? projection.registration
+    : {};
+  const blockers = Array.isArray(registration.blockers) ? registration.blockers : [];
+  return blockers.length ? `등록 차단: ${blockers.join(', ')}` : '';
+}
+
 async function factoryRuntimeControlCommand(value = {}) {
   if (value?.capabilityVersion !== 'factory-control-command:v1') {
     throw factoryRuntimeBatchCommandError('factory_control_command_version_unsupported');
@@ -17183,6 +17316,7 @@ async function factoryRuntimeControlCommand(value = {}) {
   if (value.command === 'getFactoryProjection') return factoryRuntimeControlProjection();
   if (value.command === 'selectFactoryACut') return factoryRuntimeControlSelectACut(value.payload || {});
   if (value.command === 'runFactoryProduct') return factoryRuntimeControlRunProduct(value.payload || {});
+  if (value.command === 'registerFactoryCafe24') return factoryRuntimeControlRegisterCafe24(value.payload || {});
   throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
 }
 

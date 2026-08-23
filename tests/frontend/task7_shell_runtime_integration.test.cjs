@@ -399,13 +399,16 @@ test('Task 7 loader event bridge fails closed when the classic endpoint is absen
   );
 });
 
-test('Task 15 Cafe24 classic command uses the long-running bridge timeout', () => {
+test('Task 15 조립공장 명령은 장시간 브리지 응답 제한을 공유한다', () => {
   const loader = source(APP_LOADER);
 
-  assert.match(loader, /CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS\s*=\s*900000/);
+  // 상세 15개 생성과 저장까지 끝날 수 있어야 하므로 60분이다.
+  // batch_control_worker_contract.test.cjs 가 같은 값을 근거와 함께 요구한다.
+  assert.match(loader, /CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS\s*=\s*3600000/);
+  // Cafe24 명령뿐 아니라 제품 전체 공정 명령도 같은 제한을 쓴다.
   assert.match(
     extractFunction(loader, 'requestClassicRuntime'),
-    /command\s*===\s*['"]factory-cafe24-command['"][\s\S]*CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS/,
+    /\['factory-cafe24-command', 'factory-control-command'\]\.includes\(command\)[\s\S]*CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS/,
   );
 });
 
@@ -508,7 +511,21 @@ test('Task 7 classic hydration is coordinator-owned and the initial render is a 
     /classicRuntimeDeferredHydrationPromise\s*=\s*deferredHydration[\s\S]*classicRuntimeDeferredHydrationPromise\s*===\s*deferredHydration[\s\S]*classicRuntimeDeferredHydrationPromise\s*=\s*null/,
   );
   assert.equal((hydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 1);
-  assert.equal((backgroundHydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 1);
+  // 백그라운드 하이드레이션의 권한 획득은 목적이 다른 정확히 두 번이다.
+  //   1) 하이드레이션 대상 스코프
+  //   2) 끝난 뒤 이 탭의 draft 브랜치 권한 복구(force)
+  // 개수만 세면 목적 없는 획득이 늘어도 통과하므로 각각을 못 박는다.
+  assert.equal((backgroundHydration.match(/ensureWorkspaceEditAuthority\(/g) || []).length, 2);
+  assert.match(
+    backgroundHydration,
+    /ensureWorkspaceEditAuthority\(activeHydrationIdentity\.scopeId\)/,
+    '하이드레이션 대상 스코프 권한을 먼저 확보해야 합니다.',
+  );
+  assert.match(
+    backgroundHydration,
+    /\/\^draft:\/i\.test\(branchScope\)[\s\S]{0,200}ensureWorkspaceEditAuthority\(branchScope, \{ force: true \}\)/,
+    'draft 브랜치 권한 복구는 draft 스코프에서만 강제 획득해야 합니다.',
+  );
   assert.doesNotMatch(hydration, /\brender\s*\(/);
   assert.doesNotMatch(asyncCore, /__KUASANGSE_STARTUP_RESTORE_PROMISE__/);
 

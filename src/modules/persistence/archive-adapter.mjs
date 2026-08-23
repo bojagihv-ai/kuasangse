@@ -68,8 +68,11 @@ export async function fetchArchiveWithAuthority({
     };
     const response = await adapter.fetchResponse(url, { ...options, body: JSON.stringify(guardedPayload) });
     const latest = authority.snapshot();
-    if (latest.scopeId !== scopeId || latest.leaseId !== current.leaseId
-      || Number(latest.fencingToken) !== Number(current.fencingToken)) {
+    // 이 시점의 쓰기는 서버가 leaseId·fencingToken·expectedRevision 으로 이미 검증해 반영했다.
+    // 왕복 사이에 같은 스코프 안에서 lease 가 갱신·재획득된 것뿐이라면(하이드레이션 끝의
+    // draft 브랜치 권한 복구 등) 성공한 쓰기를 실패로 뒤집을 이유가 없다. 되돌려지지도 않는다.
+    // 스코프가 바뀐 경우만 위험하다. 결과를 다른 작업에 적용하면 그 작업이 오염된다.
+    if (latest.scopeId !== scopeId) {
       throw createAuthorityError('STALE_FENCE', 'archive mutation completed after authority changed', latest);
     }
     return response;

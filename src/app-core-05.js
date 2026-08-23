@@ -6933,13 +6933,17 @@ async function factoryRunFinalRegistration(options = {}) {
       throw e;
     }
   }
-  factoryUpdateFromInputs(factory);
-  factoryApplyFinalRegistrationBasicInfoInputs({
-    silent: true,
-    render: false,
-    container: options.container,
-    factory,
-  });
+  // 배치(조립공장 워커)에는 등록 화면이 없다. 그때 DOM 입력을 읽으면 관제탑이 넣어 둔
+  // 분류·판매가·진열 값이 빈 값으로 덮여 등록이 조용히 어긋난다. 화면이 있을 때만 읽는다.
+  if (options.headless !== true) {
+    factoryUpdateFromInputs(factory);
+    factoryApplyFinalRegistrationBasicInfoInputs({
+      silent: true,
+      render: false,
+      container: options.container,
+      factory,
+    });
+  }
   let sync = factoryEnsureOpenMarketSync(factory);
   if (sync.finalRegistrationRunning) {
     factoryOpenMarketLog('최종 등록이 이미 진행 중입니다. 현재 작업이 끝난 뒤 다시 실행해주세요.', 'error', factory);
