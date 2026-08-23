@@ -10129,7 +10129,17 @@ async function factoryRunGoalLoop(options = {}) {
     if (factory.goalRun.failureReason || !didWork) break;
   }
   const stoppedByUser = !!factory.goalRun.stopRequested;
-  const success = !stoppedByUser && !factory.goalRun.failureReason && ordered.filter(stageId => stageId !== 'db').every(stageId => factoryGoalAssetCount(stageId, factory) >= Math.max(0, Number(factory.goalRun.targets?.[stageId] || 0)));
+  // '검수형 루프 대기' 는 실패가 아니라 사람이 확인하도록 잠시 멈춘 것이다. 이것을 실패로 세면
+  // 단계별 수동 진행으로 만든 제품은 목표를 다 채우고도 영원히 완료가 되지 않는다.
+  const reviewPauseOnly = factory.goalRun.failureReason === '검수형 루프 대기';
+  const targetsMet = ordered
+    .filter(stageId => stageId !== 'db')
+    .every(stageId => factoryGoalAssetCount(stageId, factory) >= Math.max(0, Number(factory.goalRun.targets?.[stageId] || 0)));
+  const success = !stoppedByUser && (!factory.goalRun.failureReason || reviewPauseOnly) && targetsMet;
+  if (success && reviewPauseOnly) {
+    factory.goalRun.failureReason = '';
+    factory.goalRun.nextAction = '';
+  }
   if (success) {
     try {
       await factoryArchiveSession({

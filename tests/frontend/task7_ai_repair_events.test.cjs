@@ -193,7 +193,12 @@ test('RED: preview menu wires AI repair actions through injected capabilities', 
   assert.match(source, /preview-ai-repair-events\.mjs/);
   assert.match(source, /createPreviewAiRepairEvents/);
   assert.match(source, /aiRepairEvents\.bind/);
-  assert.match(source, /runAiRepair/);
+  // runAiRepair 액션은 추출된 헬퍼가 소유한다(이 파일이 검증하는 분리의 목적이다).
+  // 메뉴는 위임만 하므로 액션 이름은 계약과 헬퍼에서 확인한다.
+  const contract = fs.readFileSync(path.join(ROOT, 'src', 'menus', 'preview-menu-contract.mjs'), 'utf8');
+  assert.match(contract, /'runAiRepair'/);
+  const events = fs.readFileSync(path.join(ROOT, 'src', 'menus', 'preview-ai-repair-events.mjs'), 'utf8');
+  assert.match(events, /call\('runAiRepair'/);
 });
 
 test('RED: AI repair helper fences workspace revision and keeps global state/persistence out of ESM', async () => {

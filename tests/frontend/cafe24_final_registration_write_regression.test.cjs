@@ -340,6 +340,7 @@ test('생산관제 체크포인트는 같은 작업의 참고 #2994에서 update
     productKey: '방울수저집',
     runId: 'run-1',
     inputFingerprint: 'fingerprint-1',
+    revision: 4,
   };
   const projection = {
     session: {
@@ -348,6 +349,8 @@ test('생산관제 체크포인트는 같은 작업의 참고 #2994에서 update
       productKey: '방울수저집',
       runId: 'run-1',
       inputFingerprint: 'fingerprint-1',
+      // 판은 체크포인트와 같거나 더 나아간 것까지 같은 작업으로 받아들인다.
+      revision: 5,
     },
     registration: {
       jobId: 'factory-job-1',
@@ -371,6 +374,7 @@ test('서버 보호본 병합 전 로컬 #2994는 첫 복원 검사에서만 #30
     productKey: '방울수저집',
     runId: 'run-1',
     inputFingerprint: 'fingerprint-1',
+    revision: 4,
   };
   const staleLocalProjection = {
     session: {
@@ -379,6 +383,7 @@ test('서버 보호본 병합 전 로컬 #2994는 첫 복원 검사에서만 #30
       productKey: checkpoint.productKey,
       runId: checkpoint.runId,
       inputFingerprint: checkpoint.inputFingerprint,
+      revision: 4,
     },
     registration: {
       jobId: 'factory-job-1',
@@ -391,6 +396,35 @@ test('서버 보호본 병합 전 로컬 #2994는 첫 복원 검사에서만 #30
   assert.equal(matches(staleLocalProjection, checkpoint, 'factory-job-1', {
     allowStaleProductBeforeHydration: true,
   }), true);
+});
+
+test('생산관제 체크포인트는 리비전을 확인할 수 없으면 복원을 거절한다', () => {
+  // 무인 등록 경로라 판이 체크포인트보다 앞선지 확인할 수 없으면 fail-closed 가 맞다.
+  // 서버 저장본에 workspaceRevision 이 없을 때 이 경우가 나온다
+  // (factoryRuntimeControlServerSnapshotMatchesCheckpoint 의 Number(undefined) → NaN).
+  const matches = compile(CORE_BATCH, 'factoryRuntimeControlProjectionMatchesCheckpoint', {});
+  const base = {
+    projectId: 'batch:factory-job-1',
+    productId: 'cafe24:3011',
+    productKey: '방울수저집',
+    runId: 'run-1',
+    inputFingerprint: 'fingerprint-1',
+  };
+  const session = revision => ({
+    workspaceId: base.projectId,
+    productId: base.productId,
+    productKey: base.productKey,
+    runId: base.runId,
+    inputFingerprint: base.inputFingerprint,
+    ...(revision === undefined ? {} : { revision }),
+  });
+  const registration = { jobId: 'factory-job-1', productId: base.productId, mode: 'update' };
+
+  assert.equal(matches({ session: session(4), registration }, { ...base, revision: 4 }, 'factory-job-1'), true);
+  assert.equal(matches({ session: session(5), registration }, { ...base, revision: 4 }, 'factory-job-1'), true, '판이 앞서면 같은 작업이다');
+  assert.equal(matches({ session: session(3), registration }, { ...base, revision: 4 }, 'factory-job-1'), false, '판이 뒤처지면 복원하면 안 된다');
+  assert.equal(matches({ session: session(undefined), registration }, { ...base, revision: 4 }, 'factory-job-1'), false, '판의 리비전을 모르면 거절한다');
+  assert.equal(matches({ session: session(4), registration }, { ...base }, 'factory-job-1'), false, '체크포인트 리비전을 모르면 거절한다');
 });
 
 test('Cafe24 사전점검은 복구된 update 대상 #3011을 승인 대상으로 고정한다', async () => {

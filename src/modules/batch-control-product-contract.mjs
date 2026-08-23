@@ -94,6 +94,7 @@ const PRODUCT_RUN_KEYS = Object.freeze([
   'adoptHydratedWorkfile',
   'hydratedRevision',
   'checkpoint',
+  'regenerateStage',
 ]);
 const POLICY_DECISION_KEYS = Object.freeze([
   'sinhwa_db_product',
@@ -114,6 +115,8 @@ const POLICY_DECISION_KEYS = Object.freeze([
 ]);
 const PRODUCT_REQUIRED_VALUE_KEYS = Object.freeze([
   'category', 'material', 'originCountry', 'size', 'salePrice', 'stock', 'usage', 'optionMode',
+  // 관제탑에서 고르는 Cafe24 등록 대상 값. 비어 있어도 되지만 오면 받아야 한다.
+  'cafe24CategoryId', 'supplyPrice', 'displayStatus', 'sellingStatus',
 ]);
 const PRODUCT_IMAGE_KEYS = Object.freeze([
   'role', 'ordinal', 'name', 'fileName', 'colorName', 'sha256', 'dataUrl',

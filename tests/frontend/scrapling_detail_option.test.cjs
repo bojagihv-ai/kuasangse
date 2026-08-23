@@ -19,7 +19,11 @@ test('Scrapling 상세수집은 기존 VM 기본값과 분리된 선택 버튼�
   assert.match(modularView, /data-comp-market-quick-action="detail-scrapling"/);
   assert.match(modularView, /B안\s*·\s*Scrapling 상세수집/);
   assert.match(modularRuntime, /quickAction === 'detail-scrapling'/);
-  assert.match(modularRuntime, /runCompMarketScraplingDetailCapture\(receipt\.value/);
+  // VM 기본 경로와 갈라지는 분기 자체가 계약이다. 인자는 선택 스냅샷 + 연산 토큰으로 강화됐다.
+  assert.match(
+    modularRuntime,
+    /quickAction === 'detail-scrapling'\s*\?\s*await runCompMarketScraplingDetailCapture\(selectedIds,/,
+  );
   assert.match(runtime, /if \(action === 'detail-scrapling'\)/);
   assert.match(runtime, /runCompMarketScraplingDetailCapture/);
   assert.match(runtime, /\/api\/scrapling\/detail-capture/);

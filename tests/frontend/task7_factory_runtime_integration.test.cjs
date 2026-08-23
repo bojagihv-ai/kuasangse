@@ -135,6 +135,7 @@ async function startIntegrationHarness(options = {}) {
   const runDbCalls = [];
   const fieldsCalls = [];
   const scheduledSaves = [];
+  const forcedSaves = [];
   const competitorCalls = [];
   const assetsCalls = [];
   const sectionsCalls = [];
@@ -303,7 +304,7 @@ async function startIntegrationHarness(options = {}) {
       target.product.userProductName = String(name || '');
     },
     (...args) => { scheduledSaves.push(args); },
-    () => {},
+    (...args) => { forcedSaves.push(args); },
     () => true,
     value => {
       runDbCalls.push(value);
@@ -598,6 +599,7 @@ async function startIntegrationHarness(options = {}) {
     runDbCalls,
     fieldsCalls,
     scheduledSaves,
+    forcedSaves,
     competitorCalls,
     assetsCalls,
     sectionsCalls,
@@ -1008,7 +1010,16 @@ test('Task 7 fields commits no-options through the owned transaction before pers
   assert.equal(store.getSnapshot().factory.stages.options.status, 'done');
   assert.equal(fixture.fieldsCalls.includes('option:none'), true);
   assert.equal(fixture.fieldsCalls.includes('option-save:false'), true);
-  assert.deepEqual(fixture.scheduledSaves.at(-1), [1600, { force: true }]);
+  // 저장은 디바운스 예약이 아니라 브릿지의 forceSave 경로로 옮겨졌다.
+  // 저장 인자에 커밋 결과가 실려 있어야 '커밋 후 저장' 순서가 증명된다.
+  assert.deepEqual(fixture.scheduledSaves, [], '강제 저장 경로가 디바운스 예약으로 새면 안 됩니다.');
+  const forcedSave = fixture.forcedSaves.at(-1)?.[0];
+  assert.equal(forcedSave?.sync, false);
+  assert.equal(
+    forcedSave?.factory?.automation?.optionMode,
+    'none',
+    '커밋 전 스냅샷을 저장하면 옵션 없음 선택이 저장본에서 빠집니다.',
+  );
   assert.match(tab.render(tab.select()), /현재 선택[\s\S]*옵션 없음/);
   assert.equal(store.getOperationToken().revision, 1);
   assert.equal(fixture.renderCount(), 1);

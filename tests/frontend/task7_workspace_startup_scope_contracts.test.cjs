@@ -58,7 +58,19 @@ test('startup hydration switches authority once and continues only in the restor
 
   const result = await context.runHydration();
   assert.deepEqual({ ...result }, { schema: 'classic', version: 1, hydrated: true, stale: false });
-  assert.deepEqual(JSON.parse(context.readAuthorityCalls()), ['project:old-project', 'draft:new-work']);
+  // 하이드레이션 끝에 이 탭의 draft 브랜치 권한을 force:true 로 다시 확보하는
+  // 방어적 재획득이 한 번 더 있다(app-core-06 continueClassicRuntimeHydrationInBackground).
+  // 같은 스코프 재획득은 '전환'이 아니므로 연속 중복을 접어 전환 순서를 본다.
+  const authorityCalls = JSON.parse(context.readAuthorityCalls());
+  assert.deepEqual(
+    authorityCalls.filter((scope, index) => scope !== authorityCalls[index - 1]),
+    ['project:old-project', 'draft:new-work'],
+  );
+  assert.deepEqual(
+    [...new Set(authorityCalls)],
+    ['project:old-project', 'draft:new-work'],
+    '복원된 스코프 밖의 권한을 잡으면 안 됩니다.',
+  );
   assert.deepEqual(JSON.parse(context.readHydratedScopes()), ['draft:new-work']);
 });
 test('current last-work scope keeps the tab-local draft despite stale factory mirrors', () => {

@@ -340,7 +340,9 @@ test('fresh VM collection replaces stale search identity and grouped results', (
 
   assert.match(handler, /updated\.searchId = preservedSearchId;/);
   assert.match(handler, /updated\.vmSearchId = preservedSearchId;/);
-  assert.match(handler, /updated\.groupedResults = typeof compMarketGroupProducts/);
+  // 신선한 그룹핑은 상수로 추출됐다. 조건 없이 새로 계산해 vm/전체 양쪽에 넣는지를 본다.
+  assert.match(handler, /const freshGroupedResults = typeof compMarketGroupProducts === 'function'/);
+  assert.match(handler, /groupedResults: freshGroupedResults,\s*vmGroupedResults: freshGroupedResults,/);
   assert.doesNotMatch(handler, /updated\.searchId = updated\.searchId \|\| preservedSearchId/);
   assert.doesNotMatch(handler, /if \(!updated\.groupedResults \|\|[^]*?updated\.groupedResults = typeof compMarketGroupProducts/);
   assert.doesNotMatch(handler, /factoryRunMarketplaceAssistedCandidateFallback/);

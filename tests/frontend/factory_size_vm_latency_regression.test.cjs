@@ -864,7 +864,9 @@ test('synchronous competitor selections patch only the active factory tab', () =
     'function factoryPatchAutomationCompetitorSelection(',
     'function factoryPatchAutomationAssetsTab(',
   );
-  assert.match(selectionPatchSource, /#factoryCompetitorImagePicker/);
+  // 경쟁사 '선택' 패치가 대상으로 삼는 것은 후보 선택 패널이다.
+  // (#factoryCompetitorImagePicker 는 이미지 선택용 별도 패널이라 여기서 안 건드린다.)
+  assert.match(selectionPatchSource, /#factoryCompetitorPickerPanel/);
   assert.match(selectionPatchSource, /#factoryCompetitorStatusPanel/);
   assert.match(selectionPatchSource, /#factoryCompetitorVmPanel/);
   assert.match(selectionPatchSource, /aria-label="상세페이지 이미지 크게보기"/);

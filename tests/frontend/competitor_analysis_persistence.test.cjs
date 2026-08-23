@@ -980,9 +980,12 @@ test('같은 작업의 더 완전한 옵션 상태는 얇은 서버 저장본을
     /const serverHasBetterOptionSorter = optionSorterSnapshotIsMoreComplete\(\s*serverAssetPayload\.optionSorter,\s*state\.optionSorter,\s*\);[\s\S]*?\|\| serverHasBetterOptionSorter/,
     '서버 저장본의 색상명이 현재 기본 번호보다 완전하면 같은 작업에 적용해야 합니다.',
   );
+  // 계약은 '현재가 더 완전하면 재저장을 예약한다' 이다. 그 사이의 스코프 가드는 허용한다.
+  // (cross-scope 복원에서는 재저장이 getCurrentLastWorkWorkspaceScope() 로 나가서
+  //  읽어온 프로젝트 저장본을 보강하지 못하므로 건너뛰는 것이 맞다.)
   assert.match(
     hydrateSource,
-    /if \(!shouldApply\) \{\s*shouldResaveAfterHydrate = options\.takeoverSync !== true && currentStateOutranksServer;\s*return false;/,
+    /if \(!shouldApply\) \{\s*shouldResaveAfterHydrate = options\.takeoverSync !== true[\s\S]{0,120}?&& currentStateOutranksServer;\s*return false;/,
     '화면만 보정하고 얇은 서버 저장본을 남기면 새 탭에서 다시 기본 번호로 돌아갑니다.',
   );
 });

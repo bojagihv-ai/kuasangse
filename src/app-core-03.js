@@ -6537,7 +6537,10 @@ async function exportCurrentProjectFile(options = {}) {
     });
     if (!commitResult.accepted) throw new Error(commitResult.failures?.[0]?.message || '권위 저장소 저장 실패');
     if (!commitResult.clean) throw new Error(commitResult.failures?.[0]?.message || '작업파일 또는 필수 저장소 저장에 실패했습니다.');
-    if (!fileHandle) {
+    // 배치(조립공장 워커)에서는 브라우저 다운로드를 일으키지 않는다. 크롬이 저장 위치를 물으면
+    // 그 대화상자가 페이지를 멈춰 세워 세션 하트비트가 끊기고, 제품마다 7MB 파일이 운영자의
+    // 다운로드 폴더에 쌓인다. 작업파일 내용은 바로 위 commit 에서 이미 권위 저장소에 들어간다.
+    if (!fileHandle && options.skipBrowserDownload !== true) {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -16511,11 +16514,16 @@ function factoryRuntimeControlProjectionMatchesCheckpoint(projection = {}, check
   // 체크포인트는 되돌아갈 지점이지 판을 고정하는 표가 아니다. 저장이 한 번이라도 앞서 나가면
   // 완전 일치를 요구하는 순간 같은 작업인데도 영영 복원할 수 없게 된다. 신원은 그대로 엄격히
   // 확인하고, 판은 체크포인트와 같거나 더 나아간 것까지 같은 작업으로 받아들인다.
+  // 저장된 문서를 다시 불러오면 판 카운터가 매번 다르게 매겨진다. 같은 문서를 연속으로 두 번
+  // 불러와도 11 과 7 로 달라지는 것을 실측했다. 그래서 로컬 문서를 불러온 경로에서는 판을
+  // 비교하지 않는다. 서버 스냅샷 중 어느 것을 고를지 판단하는 경로는 종전대로 판을 쓴다.
   const restoredRevision = Number(session.revision);
   const checkpointRevision = Number(checkpoint.revision);
-  const revisionIsAtOrAhead = Number.isFinite(restoredRevision)
+  const revisionIsAtOrAhead = options.ignoreRevision === true || (
+    Number.isFinite(restoredRevision)
     && Number.isFinite(checkpointRevision)
-    && restoredRevision >= checkpointRevision;
+    && restoredRevision >= checkpointRevision
+  );
   return String(registration.jobId || '').trim() === String(jobId || '').trim()
     && productIdMatches
     && revisionIsAtOrAhead
@@ -16564,7 +16572,18 @@ async function factoryRuntimeControlSaveProductCheckpoint(payload = {}, status =
   if (!authorityAcceptable(productAuthority)) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
-  const saved = await saveCurrentProject({ retainProjectAuthority: true });
+  // 저장 직전에 다른 저장이 끼어들면 서버가 낡은 판이라며 409 로 되돌린다. 그러면 상세페이지까지
+  // 다 만들어 놓고 마지막 저장에서 작업이 막힌다. 편집권을 다시 잡아 최신 판으로 한 번 더 시도한다.
+  let saved = await saveCurrentProject({ retainProjectAuthority: true });
+  if (saved !== true) {
+    const rebased = await ensureWorkspaceEditAuthority(productAuthorityScope, {
+      force: true,
+      confirmedTakeover: true,
+    });
+    if (authorityAcceptable(rebased)) {
+      saved = await saveCurrentProject({ retainProjectAuthority: true });
+    }
+  }
   if (saved !== true) {
     const detail = String(state.error || '').trim();
     throw factoryRuntimeBatchCommandError(`factory_product_checkpoint_save_failed${detail ? `: ${detail}` : ''}`);
@@ -16620,6 +16639,7 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
   projection ||= await factoryRuntimeControlProjection();
   if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, {
     allowStaleProductBeforeHydration: canHydrateServerCheckpoint,
+    ignoreRevision: restored === true,
   })) {
     throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
   }
@@ -16993,6 +17013,7 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
     ? await exportCurrentProjectFile({
       name: workfileBaseName || productName,
       downloadOnly: true,
+      skipBrowserDownload: true,
     })
     : true;
   if (!savedWorkfile) {
@@ -17010,7 +17031,7 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
         savedWorkfileReceipt?.fileName || `${workfileBaseName || productName}.kuasangse`,
       ).trim();
       draft.workspace.workfileSource = String(
-        savedWorkfileReceipt?.source || (canExportWorkfile ? 'browser-download' : 'runtime-only'),
+        savedWorkfileReceipt?.source || (canExportWorkfile ? 'authoritative-store' : 'runtime-only'),
       ).trim();
       draft.workspace.workfileSha256 = String(savedWorkfileReceipt?.sha256 || '').trim();
       draft.workspace.workfileBytes = Number(savedWorkfileReceipt?.bytes || 0);

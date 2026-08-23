@@ -57,6 +57,7 @@ test('app-core-05 mutator cores require an explicit owned draft', () => {
     'factoryEnsureAutomationRunScope',
     'factoryEnsureOpenMarketSync',
     'factoryApplyFinalCafe24StatusToDb',
+    'factoryCafe24FinalizeRegistrationReceipt',
     'factoryFinalRegistrationDetailModel',
     'factoryEnsureCurrentDetailHtmlAsset',
     'factoryClearFinalRegistrationStaleResult',

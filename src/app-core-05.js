@@ -6503,7 +6503,10 @@ function factoryCafe24CompareRegistrationReadback(preflight = {}, detail = null,
   });
 }
 
-async function factoryCafe24FinalizeRegistrationReceipt(factory = factoryRuntimeReadFactory(), options = {}) {
+// factory 는 반드시 소유한 draft 여야 한다. 커밋된 스냅샷은 깊게 동결돼 있고
+// app-core-05 는 non-strict 라, 셀렉터 기본값을 쓰면 아래 영수증 대입이
+// 예외 없이 조용히 버려진다.
+async function factoryCafe24FinalizeRegistrationReceipt(factory, options = {}) {
   const preflight = options.preflight || factory.product?.cafe24RegistrationReceipt;
   if (!preflight) return null;
   const target = typeof factoryCafe24TargetInfo === 'function' ? factoryCafe24TargetInfo(factory) : {};

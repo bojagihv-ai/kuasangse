@@ -32,7 +32,7 @@ test('factory view snapshot freezes reconciled factory data before tab select', 
   );
   const viewSource = sourceSlice(
     source,
-    'function factoryRuntimeReadViewSnapshot()',
+    'function factoryRuntimeCandidateRows(',
     'function factoryRuntimeNormalizeFactorySnapshot(',
   );
   const factory = {
