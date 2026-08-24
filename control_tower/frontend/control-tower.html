@@ -3883,7 +3883,9 @@
               <div class="drop-grid">
                 <label class="factory-drop" for="base-images"><strong>제품 사진 *</strong><span>최소 1장 · JPG, PNG, WEBP</span><input id="base-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
                 <label class="factory-drop" for="color-images"><strong>색상 옵션 이미지</strong><span>선택 사항 · 이미지마다 색상명 지정</span><input id="color-images" type="file" accept="image/jpeg,image/png,image/webp" multiple></label>
+                <label class="factory-drop" for="intake-workfile"><strong>이어서 할 작업파일</strong><span>선택 사항 · <code>.kuasangse</code> 를 붙이면 그 작업을 이어서 진행합니다</span><input id="intake-workfile" type="file" accept=".kuasangse,application/json"><span class="workfile-file-control" aria-hidden="true"><span class="workfile-file-button">파일 선택</span><span id="intake-workfile-name" class="workfile-file-name">선택한 파일 없음</span></span></label>
               </div>
+              <p id="intake-workfile-status" class="status-message" role="status" aria-live="polite">작업파일을 붙이지 않으면 새 작업으로 시작합니다.</p>
               <div id="image-intake-list" class="image-intake-list" aria-live="polite"></div>
             </div>
 
@@ -4249,7 +4251,7 @@
   <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs?factoryQueue=2";
+    import { mountProductIntake } from "./src/product-intake.mjs?factoryQueue=3";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");

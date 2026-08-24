@@ -4,6 +4,7 @@ import {
   createManualManifest,
   ProductIntakeError,
 } from './product-intake-model.mjs';
+import { resolveWorkfileIdentity } from './workfile-identity-model.mjs';
 
 export {
   buildDbSnapshotRequest,
@@ -71,6 +72,9 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
     pendingWorkfileJcode: null,
     baseImages: [],
     colorImages: [],
+    // 제품 사진을 등록할 때 이어서 할 작업파일도 같은 자리에서 받는다. 붙이지 않으면
+    // 새 작업으로 시작한다.
+    attachedWorkfile: null,
   };
   const notifyWorkfileLink = detail => {
     const jcode = Number(detail.jcode);
@@ -269,8 +273,80 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
       void searchSources();
     }
   });
+  const derivedProductId = (parsed, identity) => {
+    const payload = parsed?.project?.payload || {};
+    const factory = payload.factory || payload.assetPayload?.factory || {};
+    const product = factory.product || {};
+    const productNo = text(
+      product.confirmedCafe24ProductKey
+      || product.selectedCafe24CandidateKey
+      || product.finalDb?.product_no,
+    );
+    if (/^[1-9][0-9]*$/.test(productNo)) return `cafe24:${productNo}`;
+    const key = text(identity.productKey);
+    return key ? `factory:${key}` : '';
+  };
+
+  const setWorkfileNotice = (copy, tone = '') => {
+    const status = document.getElementById('intake-workfile-status');
+    if (!status) return;
+    status.textContent = copy;
+    status.dataset.tone = tone;
+  };
+
+  const attachWorkfile = async file => {
+    const label = document.getElementById('intake-workfile-name');
+    if (!file) {
+      state.attachedWorkfile = null;
+      if (label) label.textContent = '선택한 파일 없음';
+      setWorkfileNotice('작업파일을 붙이지 않으면 새 작업으로 시작합니다.');
+      return;
+    }
+    if (label) label.textContent = file.name;
+    setWorkfileNotice(`${file.name} 신원 확인 중…`);
+    try {
+      const workfileText = await file.text();
+      const parsed = JSON.parse(workfileText);
+      const identity = resolveWorkfileIdentity(parsed);
+      // 저장된 작업파일에는 productId 가 따로 적혀 있지 않은 경우가 많다. 조립공장과
+      // 같은 규칙으로 유도한다: Cafe24 에 올린 제품은 cafe24:번호, 아직 안 올린 제품은
+      // factory:제품키.
+      const productId = text(identity.productId) || derivedProductId(parsed, identity);
+      // 신원이 하나라도 비면 조립공장이 어느 작업을 이어야 할지 알 수 없다. 그때는
+      // 붙이지 않은 것으로 두고 이유를 말한다.
+      const missing = ['workspaceId', 'productKey', 'runId', 'inputFingerprint']
+        .filter(field => !text(identity[field]));
+      if (!productId) missing.push('productId');
+      if (missing.length || !Number.isInteger(identity.revision) || identity.revision < 0) {
+        state.attachedWorkfile = null;
+        setWorkfileNotice(`${file.name} 은 이어서 할 작업 정보가 없어 붙일 수 없습니다. 새 작업으로 시작합니다.`, 'warning');
+        return;
+      }
+      const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(workfileText));
+      const sha256 = [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+      state.attachedWorkfile = {
+        fileName: file.name,
+        source: {
+          kind: 'workfile',
+          sha256,
+          revision: identity.revision,
+          runId: identity.runId,
+          workspaceId: identity.workspaceId,
+          productId,
+          productKey: identity.productKey,
+          inputFingerprint: identity.inputFingerprint,
+        },
+      };
+      setWorkfileNotice(`${identity.productKey} · 저장 차수 ${identity.revision} 작업을 이어서 진행합니다.`, 'ok');
+    } catch (error) {
+      state.attachedWorkfile = null;
+      setWorkfileNotice(`${file.name} 을 읽지 못했습니다 · ${text(error?.message || error)}`, 'error');
+    }
+  };
+
   document.getElementById('base-images').addEventListener('change', event => void readFiles(event.target.files, 'base'));
   document.getElementById('color-images').addEventListener('change', event => void readFiles(event.target.files, 'color'));
+  document.getElementById('intake-workfile')?.addEventListener('change', event => void attachWorkfile(event.target.files?.[0] || null));
   window.addEventListener('control-tower:workfile-classified', event => {
     const classification = event.detail?.classification;
     const jcode = Number(classification?.product?.jcode);
@@ -319,8 +395,15 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
             workfileName: workfileNameFor(manifest.productName),
             imageModel: text(document.getElementById('image-model-select').value),
             mode,
-            source: { kind: 'manual' },
-            idempotencyKey: `factory-${batchId}-manual-${manifest.inputImages[0].sha256}`,
+            ...(state.attachedWorkfile
+              ? {
+                workfileName: state.attachedWorkfile.fileName,
+                source: state.attachedWorkfile.source,
+              }
+              : { source: { kind: 'manual' } }),
+            idempotencyKey: state.attachedWorkfile
+              ? `factory-${batchId}-workfile-${state.attachedWorkfile.source.sha256}`
+              : `factory-${batchId}-manual-${manifest.inputImages[0].sha256}`,
             policySnapshot,
             cafe24ApprovalMode: 'existing_one_time_target_gate',
           }),
