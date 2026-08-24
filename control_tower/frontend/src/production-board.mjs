@@ -8,7 +8,7 @@ import {
   durationLabel,
   projectProductionBoard,
   summarizeBatchSelection,
-} from './production-board-model.mjs?parallelBoard=3';
+} from './production-board-model.mjs?parallelBoard=7';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -367,11 +367,22 @@ export function mountProductionBoard(runtime, {
       retry.disabled = busy;
       rowActions.append(retry);
     }
-    if (row.status === 'completed' && !row.cafe24Registered) {
+    if (row.nextAction?.kind === 'pick') {
+      // "컷 선택 대기" 라고만 쓰여 있고 고르는 길이 안 보이면 사람이 움직일 수 없다.
+      const pick = button(
+        'board-mini-action board-action-primary',
+        `${row.cells.find(cell => cell.stageKey === row.nextAction.stageKey)?.stageLabel || ''} 컷 고르기`,
+        { action: 'open', jobId: row.jobId, stageKey: row.nextAction.stageKey },
+      );
+      pick.disabled = busy;
+      rowActions.append(pick);
+    }
+    if ((row.status === 'completed' || row.cafe24Declined) && !row.cafe24Registered) {
       // 조립공장에는 등록 화면이 없다. 분류·공급가·진열은 이 작업의 투입값을 그대로 싣는다.
-      // 투입값이 없는 작업은 바로 지시하지 않고 여기서 값을 받는다.
+      // 투입값이 없는 작업은 바로 지시하지 않고 여기서 값을 받는다. 등록값이 없어 차단된
+      // 작업도 원문 코드 대신 이 입력으로 풀 수 있어야 한다.
       const register = button(
-        'board-mini-action',
+        'board-mini-action board-action-primary',
         row.cafe24ValuesReady ? 'Cafe24 등록' : 'Cafe24 값 입력',
         { action: row.cafe24ValuesReady ? 'cafe24' : 'cafe24-values', jobId: row.jobId },
       );
@@ -419,6 +430,9 @@ export function mountProductionBoard(runtime, {
       } else {
         node.append(element('span', 'board-cell-glyph', CELL_GLYPHS[cell.state] || '·'));
       }
+      // 표 머리글은 스크롤로 사라진다. 어느 칸이 어느 컷인지 칸 자신이 말해야 한다.
+      node.append(element('span', 'board-cell-stage-name', cell.stageLabel));
+      if (cell.pickable) node.append(element('span', 'board-cell-pick-hint', '고르기'));
       if (cell.candidateCount && cell.state !== 'selected') {
         node.append(element('span', 'board-cell-count', `${cell.candidateCount}`));
       }
@@ -428,6 +442,11 @@ export function mountProductionBoard(runtime, {
     }
 
     const progress = element('div', 'board-cell board-cell-progress');
+    if (row.nextAction?.copy) {
+      const next = element('span', 'board-next-action', row.nextAction.copy);
+      next.dataset.tone = row.nextAction.tone || 'neutral';
+      progress.append(next);
+    }
     progress.append(element('span', 'board-step-label', row.stepLabel));
     if (row.machineMs || row.waitMs) {
       const spent = element(

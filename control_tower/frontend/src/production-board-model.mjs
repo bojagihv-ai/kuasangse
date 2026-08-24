@@ -102,7 +102,35 @@ const OPERATOR_MESSAGES = Object.freeze({
   candidate_membership_invalid: '고른 컷이 현재 후보에 없습니다. 후보를 다시 확인하세요.',
   factory_decision_required: '자동 판단이 보류됐습니다. 직접 컷을 골라 주세요.',
   factory_product_state_write_failed: '작업 상태를 저장하지 못했습니다. 디스크 여유를 확인하세요.',
+  factory_product_checkpoint_restore_mismatch: '저장된 지점과 현재 문서가 달라 복원하지 못했습니다. 다시 시도하세요.',
+  factory_product_checkpoint_hydration_failed: '저장된 작업을 불러오지 못했습니다. 다시 시도하세요.',
+  factory_cafe24_job_not_ready: '조립공장 생성이 끝난 뒤에 Cafe24 등록을 지시할 수 있습니다.',
+  factory_cafe24_target_mismatch: '조립공장이 다른 제품을 열고 있어 등록하지 못했습니다. 다시 시도하세요.',
+  factory_cafe24_values_invalid: 'Cafe24 등록값 형식이 잘못됐습니다. 값을 다시 확인하세요.',
 });
+
+// Cafe24 등록이 무엇 때문에 막혔는지, 코드가 아니라 사람 말로 보여준다.
+const CAFE24_BLOCKER_LABELS = Object.freeze({
+  product_id: '상품번호 없음',
+  product_key: '작업 식별값 없음',
+  run_id: '작업 식별값 없음',
+  input_fingerprint: '작업 식별값 없음',
+  category_id: '분류번호 없음',
+  html_digest: '상세페이지 확정 필요',
+  image_digests: '등록 이미지 없음',
+  'current-section-export': '상세페이지 내보내기 미완',
+});
+
+function cafe24BlockerLabel(token) {
+  const key = text(token);
+  if (CAFE24_BLOCKER_LABELS[key]) return CAFE24_BLOCKER_LABELS[key];
+  const aCut = key.match(/^(.+)_a_cut$/);
+  if (aCut) {
+    const stage = BOARD_STAGES.find(item => item.key === aCut[1]);
+    return `${stage ? stage.label : aCut[1]} 컷 미선택`;
+  }
+  return key ? withStageLabels(key) : '';
+}
 
 const CODE_SHAPE = /^[a-z][a-z0-9_]*(?::[^\s]+)?$/;
 
@@ -135,6 +163,17 @@ export function operatorMessage(value) {
   const code = text(head);
   const known = OPERATOR_MESSAGES[code];
   if (known) return { copy: known, code: message };
+  if (code === 'factory_cafe24_registration_declined') {
+    const reasons = (message.split(/등록 차단\s*:/)[1] || '')
+      .split(',').map(cafe24BlockerLabel).filter(Boolean);
+    const unique = [...new Set(reasons)];
+    return {
+      copy: unique.length
+        ? `Cafe24 등록이 막혔습니다 · ${unique.join(' · ')}`
+        : 'Cafe24 등록이 막혔습니다. 등록값을 확인하세요.',
+      code: message,
+    };
+  }
   if (/selection required/i.test(message)) return { copy: '이 단계의 A컷 선택이 필요합니다.', code: '' };
   if (/factory worker failed/i.test(message)) return { copy: '조립공장 실행이 실패했습니다.', code: message };
   if (CODE_SHAPE.test(message) || (CODE_SHAPE.test(code) && rest.length && !/[가-힣]/.test(message))) {
@@ -209,6 +248,55 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     const selectedStageCount = stages.size
       ? integer(progress.selectedStageCount)
       : fromArchive.size || integer(progress.selectedStageCount);
+    const messageInfo = operatorMessage(job.message);
+    const cafe24Registered = text(job.stageKey) === 'cafe24' && status === 'completed';
+    const cafe24Values = record(job.cafe24Values);
+    const cafe24ValuesReady = !!text(cafe24Values.categoryId);
+    const cafe24Declined = messageInfo.code.startsWith('factory_cafe24_registration_declined');
+    // "5/6단계" 는 다음에 무엇을 해야 하는지 말해 주지 않는다. 행마다 다음 할 일
+    // 한 줄을 만들어 사람이 세지 않고도 바로 움직일 수 있게 한다.
+    const pickableCell = cells.find(cell => cell.pickable);
+    const firstUnfinished = cells.find(cell => !cell.selectedId);
+    const nextAction = (() => {
+      if (cafe24Registered) return { kind: 'registered', copy: 'Cafe24 등록까지 끝났습니다', tone: 'ok' };
+      if (status === 'completed' || cafe24Declined) {
+        if (!cafe24ValuesReady) return { kind: 'cafe24-values', copy: '다음: Cafe24 등록값 입력', tone: 'attention' };
+        return { kind: 'cafe24', copy: '다음: Cafe24 등록', tone: 'attention' };
+      }
+      if (pickableCell) {
+        return {
+          kind: 'pick',
+          stageKey: pickableCell.stageKey,
+          copy: `다음: ${pickableCell.stageLabel} 컷 고르기 · 후보 ${pickableCell.candidateCount}개`,
+          tone: 'attention',
+        };
+      }
+      if (status === 'running') {
+        return {
+          kind: 'running',
+          copy: firstUnfinished ? `지금: ${firstUnfinished.stageLabel} 만드는 중` : '마무리 저장 중',
+          tone: 'active',
+        };
+      }
+      if (status === 'waiting_manual') {
+        // "컷 선택 대기" 라고 써 놓고 고를 후보가 하나도 없으면, 사람은 무엇을 눌러야
+        // 하는지 알 수 없다. 후보가 사라진 상태임을 그대로 말해 준다.
+        // 기다리는 그 단계에 고를 후보가 있는지가 핵심이다. 다른 단계에 후보가 남아
+        // 있다고 "재개"만 띄우면, 왜 고를 수 없는지 설명이 안 된다.
+        const waitingCell = cells.find(cell => cell.stageKey === waitingStageKey) || firstUnfinished;
+        const stageLabel = waitingCell ? waitingCell.stageLabel : '';
+        return {
+          kind: 'resume',
+          copy: waitingCell && waitingCell.candidateCount > 0
+            ? `다음: 작업 재개 · ${stageLabel} 이어서 진행`
+            : `다음: 작업 재개 · ${stageLabel ? `${stageLabel} 후보를 다시 만듭니다` : '남은 단계를 이어갑니다'}`,
+          tone: 'attention',
+        };
+      }
+      if (status === 'queued') return { kind: 'queued', copy: '조립공장 차례를 기다리는 중', tone: 'neutral' };
+      if (status === 'blocked') return { kind: 'retry', copy: '다음: 다시 시도 누르기', tone: 'error' };
+      return { kind: 'idle', copy: '', tone: 'neutral' };
+    })();
     return {
       jobId,
       index,
@@ -221,8 +309,8 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       statusLabel: STATUS_LABELS[status] || status,
       statusTone: STATUS_TONES[status] || 'neutral',
       dispatched: job.dispatched === true,
-      message: operatorMessage(job.message).copy,
-      messageCode: operatorMessage(job.message).code,
+      message: messageInfo.copy,
+      messageCode: messageInfo.code,
       attempts: integer(job.attempts),
       imageCount: integer(job.imageCount),
       percent: Math.max(0, Math.min(100, integer(progress.percent))),
@@ -233,12 +321,14 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       reservedStageKey,
       reservedCandidateId,
       hasReservation: Boolean(reservedStageKey && reservedCandidateId),
-      cafe24Registered: text(job.stageKey) === 'cafe24' && status === 'completed',
+      cafe24Registered,
       // 분류 입력이 생기기 전에 투입된 작업은 등록 대상 값이 비어 있다. 그대로 등록을
       // 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이 어디를
       // 고쳐야 하는지 알 수 없다.
-      cafe24Values: record(job.cafe24Values),
-      cafe24ValuesReady: !!text(record(job.cafe24Values).categoryId),
+      cafe24Values,
+      cafe24ValuesReady,
+      cafe24Declined,
+      nextAction,
       autoResumePending: job.autoResumePending === true,
       machineMs: integer(record(job.timing).totalMachineMs),
       waitMs: integer(record(job.timing).totalWaitMs),

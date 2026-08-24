@@ -11,7 +11,15 @@ test('완료된 작업에는 Cafe24 등록 버튼이 뜬다', () => {
   // 조립공장에는 등록 화면이 없다. 이 버튼이 없으면 사람이 등록을 시작할 방법 자체가 없다.
   const board = source('production-board.mjs');
   assert.ok(board.includes("row.cafe24ValuesReady ? 'cafe24' : 'cafe24-values'"), 'Cafe24 등록 버튼이 없습니다');
-  assert.ok(board.includes("row.status === 'completed' && !row.cafe24Registered"));
+  assert.ok(board.includes("(row.status === 'completed' || row.cafe24Declined) && !row.cafe24Registered"));
+});
+
+test('등록값이 없어 차단된 작업도 여기서 풀 수 있다', () => {
+  // 원문 코드만 보여주고 길을 막으면, 값만 채우면 되는 작업이 영영 등록되지 않는다.
+  const board = source('production-board.mjs');
+  assert.ok(board.includes('row.cafe24Declined'), '차단된 등록을 다시 시도할 길이 없습니다');
+  const model = source('production-board-model.mjs');
+  assert.ok(model.includes('cafe24Declined'), '등록 거절 여부를 모델이 알려주지 않습니다');
 });
 
 test('등록값이 없는 작업은 먼저 값을 받는다', () => {
@@ -39,7 +47,8 @@ test('받은 값은 등록 지시에 실어 보낸다', () => {
 test('투입값이 있는지 모델이 알려준다', () => {
   const model = source('production-board-model.mjs');
   assert.ok(model.includes('cafe24ValuesReady'), '등록값 유무를 알려주지 않습니다');
-  assert.ok(model.includes('cafe24Values: record(job.cafe24Values)'), '기존 값을 전달하지 않습니다');
+  assert.ok(model.includes('const cafe24Values = record(job.cafe24Values)'), '기존 값을 읽지 않습니다');
+  assert.ok(model.includes('      cafe24Values,'), '기존 값을 행에 전달하지 않습니다');
 });
 
 test('등록 버튼은 관제탑 등록 지시 엔드포인트를 부른다', () => {

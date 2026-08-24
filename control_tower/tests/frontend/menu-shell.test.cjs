@@ -148,3 +148,18 @@ test('조립공장이 끊기면 탭 배지를 끊김으로 도배하지 않는�
   // 원래 라벨 계약은 그대로 남는다.
   assert.equal(module.menuBadgeText({ status: 'disconnected' }), '끊김');
 });
+
+test('메뉴를 바꾸면 작업공간을 맨 위로 되돌린다', async () => {
+  // 패널마다 길이가 달라, 아래로 내려간 자리를 그대로 두면 새 화면의 끝이나 내용이
+  // 끝난 빈 자리를 보게 된다. 실측: 입력·소스에서 맨 아래로 간 뒤 개요로 옮기면
+  // 스크롤이 559(그 패널의 맨 아래)에 남았다.
+  const source = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', '..', 'frontend', 'src', 'menu-shell.mjs'),
+    'utf8',
+  );
+  const at = source.indexOf('for (const panel of panels) panel.hidden');
+  assert.notEqual(at, -1);
+  const region = source.slice(at, at + 500);
+  assert.ok(region.includes(".querySelector?.('.page')"), '작업공간을 찾지 않습니다');
+  assert.ok(region.includes('top: 0') || region.includes('scrollTop = 0'), '맨 위로 되돌리지 않습니다');
+});

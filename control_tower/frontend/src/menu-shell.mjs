@@ -136,6 +136,11 @@ export function bindMenuShell({ documentRef = globalThis.document, onChange = ()
       tab.tabIndex = active ? 0 : -1;
     }
     for (const panel of panels) panel.hidden = panel.dataset.menuPanel !== state.activeKey;
+    // 패널마다 길이가 달라, 아래로 내려간 자리를 그대로 두면 새 화면의 중간이나 끝을
+    // 보게 된다. 짧은 패널로 옮기면 내용이 끝난 빈 자리만 보인다.
+    const workspace = documentRef?.querySelector?.('.page');
+    if (workspace && typeof workspace.scrollTo === 'function') workspace.scrollTo({ top: 0 });
+    else if (workspace) workspace.scrollTop = 0;
     if (focus) documentRef.getElementById(menuTabId(state.activeKey))?.focus();
     onChange(state.activeKey, state);
     return state;

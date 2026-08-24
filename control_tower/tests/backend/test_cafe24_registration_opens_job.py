@@ -101,3 +101,33 @@ def test_public_job_reports_the_values_that_were_supplied(tmp_path: Path) -> Non
 
     assert public["cafe24Values"]["categoryId"] == "119"
     assert public["cafe24Values"]["supplyPrice"] == "500"
+
+
+def test_blocked_job_with_a_completed_checkpoint_can_be_registered_again(tmp_path: Path) -> None:
+    # 등록값이 없어 거절되면 작업은 차단으로 남는다. 생성은 이미 끝나 있으므로, 값을
+    # 채워 다시 지시하는 길을 막으면 사람이 코드를 고치기 전까지 영영 등록할 수 없다.
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id, _ = _completed(bridge, "declined")
+    job = bridge._product_jobs[job_id]
+    # 실제 거절 흐름: 생성 완료 시점의 저장 지점이 남은 채 등록만 거절돼 차단된다.
+    job.checkpoint = {**(job.checkpoint or {}), "status": "completed"}
+    job.status = "blocked"
+    job.message = "factory_cafe24_registration_declined: 등록 차단: category_id"
+
+    order = bridge.queue_cafe24_registration(job_id, {"categoryId": "119"})
+
+    assert _payload(order)["cafe24"]["categoryId"] == "119"
+    assert _payload(order)["checkpoint"]["jobId"] == job_id
+
+
+def test_blocked_job_without_a_finished_build_still_cannot_register(tmp_path: Path) -> None:
+    # 생성이 끝나지 않은 작업까지 열어 주면 반쪽짜리 상세페이지가 스토어로 나간다.
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id, _ = _completed(bridge, "halfbuilt")
+    job = bridge._product_jobs[job_id]
+    job.status = "blocked"
+    job.checkpoint = {**(job.checkpoint or {}), "status": "waiting_manual"}
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.queue_cafe24_registration(job_id, {})
+    assert error.value.code == "factory_cafe24_job_not_ready"

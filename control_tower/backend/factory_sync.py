@@ -1385,7 +1385,14 @@ class FactorySyncBridge:
             if job is None:
                 raise FactorySyncError("factory_product_job_not_found")
             self._require_admitted_runtime_build_locked()
-            if job.status != "completed":
+            # 등록값이 없어 등록이 거절되면 작업은 차단으로 남는다. 생성은 이미 끝나
+            # 저장 지점이 완료로 남아 있으므로, 값을 채워 다시 지시하는 길을 막지 않는다.
+            declined_but_built = (
+                job.status == "blocked"
+                and isinstance(job.checkpoint, dict)
+                and job.checkpoint.get("status") == "completed"
+            )
+            if job.status != "completed" and not declined_but_built:
                 raise FactorySyncError("factory_cafe24_job_not_ready")
             if job.current_order_id:
                 raise FactorySyncError("factory_product_job_busy")
