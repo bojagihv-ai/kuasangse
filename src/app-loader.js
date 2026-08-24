@@ -375,6 +375,7 @@
           throw new Error('batch worker controlTowerBase는 loopback HTTP 주소만 허용합니다.');
         }
         const workerNamespace = loadedModules?.['src/modules/batch-control-worker.mjs'];
+        const timerNamespace = loadedModules?.['src/modules/unthrottled-interval.mjs'];
         const cafe24BridgeNamespace = loadedModules?.['src/modules/factory-cafe24-command-bridge.mjs'];
         const factoryControlBridgeNamespace = loadedModules?.['src/modules/factory-control-command-bridge.mjs'];
         if (typeof workerNamespace?.installBatchControlWorker !== 'function') {
@@ -403,6 +404,12 @@
               : cafe24CommandBridge.run(kind, ...args)
           ),
         });
+        const workerTimers = typeof timerNamespace?.createUnthrottledTimers === 'function'
+          ? timerNamespace.createUnthrottledTimers(window)
+          : {
+            setIntervalImpl: window.setInterval.bind(window),
+            clearIntervalImpl: window.clearInterval.bind(window),
+          };
         const workerReceipt = workerNamespace.installBatchControlWorker(window, {
           apiBase: workerApiUrl.origin,
           workerId: `factory-worker-${buildId}-${RUNTIME_BOOT_CACHE_TOKEN}`,
@@ -411,8 +418,9 @@
           projectionBridge: factoryControlCommandBridge,
           authorityHeartbeat: () => window.__KUASANGSE_WORKSPACE_LOCK__?.heartbeat?.(),
           fetchImpl: window.fetch.bind(window),
-          setIntervalImpl: window.setInterval.bind(window),
-          clearIntervalImpl: window.clearInterval.bind(window),
+          // 숨은 탭에서도 시계가 멈추지 않아야 관제탑이 워커를 살아 있다고 본다.
+          setIntervalImpl: workerTimers.setIntervalImpl,
+          clearIntervalImpl: workerTimers.clearIntervalImpl,
         });
         workerReceipt.worker.startHeartbeat();
         workerReceipt.worker.startSessionHeartbeat();

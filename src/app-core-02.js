@@ -6104,18 +6104,28 @@ function persistRecoveredAuxiliaryLastWorkKeys(assets = {}) {
 
 function applyServerLastWorkSnapshot(snapshot, options = {}) {
   if (!snapshot || typeof snapshot !== 'object') return false;
+  // 부르는 쪽이 범위를 못박은 복원에서는 이 탭이 지금 무엇을 열고 있든 그 범위로 본다.
+  // 갓 켠 탭의 활성 범위는 draft: 이라, 프로젝트 저장본과는 영영 맞지 않는다.
+  const expectedWorkspaceScopeId = String(options.expectedWorkspaceScopeId || '').trim();
+  // 못박은 범위의 저장본을 일부러 불러오는 복원은, 이 탭이 지금 붙들고 있는 작업을
+  // 그 작업으로 갈아끼우는 것이 목적이다. 탭 작업 인스턴스가 다르다는 이유로 막으면
+  // 완성된 다른 제품은 영영 다시 열리지 않는다.
+  const replaceWorkspace = options.replaceWorkspace === true || !!expectedWorkspaceScopeId;
   const matchesWorkspace = options.takeoverAuthority
     ? lastWorkSnapshotMatchesTakeoverWorkspace(snapshot, options.takeoverAuthority)
-    : lastWorkSnapshotMatchesCurrentWorkspace(snapshot);
+    : expectedWorkspaceScopeId
+      ? lastWorkSnapshotMatchesWorkspaceScope(snapshot, expectedWorkspaceScopeId)
+      : lastWorkSnapshotMatchesCurrentWorkspace(snapshot);
   if (!matchesWorkspace) return false;
   if (options.forceRevisionRestore !== true
     && !workspaceRevisionAllowsSnapshot(snapshot, { allowEqual: true })) return false;
   const rawAssets = snapshot.assets && typeof snapshot.assets === 'object' ? snapshot.assets : snapshot;
   const rawLightweight = snapshot.lightweight && typeof snapshot.lightweight === 'object' ? snapshot.lightweight : null;
-  const assetBoundary = validateIncomingWorkspaceBoundary(rawAssets, options);
+  const boundaryOptions = replaceWorkspace ? { ...options, replaceWorkspace: true } : options;
+  const assetBoundary = validateIncomingWorkspaceBoundary(rawAssets, boundaryOptions);
   if (!assetBoundary.ok) return false;
   const lightweightBoundary = rawLightweight
-    ? validateIncomingWorkspaceBoundary(rawLightweight, options)
+    ? validateIncomingWorkspaceBoundary(rawLightweight, boundaryOptions)
     : null;
   if (lightweightBoundary && !lightweightBoundary.ok) return false;
   if (assetBoundary.identity && lightweightBoundary?.identity
@@ -6161,6 +6171,10 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
       allowScopedInlineImages: preserveScopedInlineImages,
       targetName,
       forceProductRestore: true,
+      // 위에서 이 저장본이 못박은 범위의 것임을 이미 확인했다. 갓 켠 탭의 활성 범위가
+      // draft: 라는 이유로 여기서 다시 거르면 다른 작업의 저장본은 영영 실리지 않는다.
+      forceWorkspaceRestore: !!expectedWorkspaceScopeId,
+      replaceWorkspace,
       forceRevisionRestore: options.forceRevisionRestore === true,
       allowEqualRevision: true,
       takeoverAuthority: options.takeoverAuthority,
@@ -6200,6 +6214,8 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
       allowScopedInlineImages: snapshotHasInlineImagePayload(lightweight),
       targetName,
       forceProductRestore: true,
+      forceWorkspaceRestore: !!expectedWorkspaceScopeId,
+      replaceWorkspace,
       forceRevisionRestore: options.forceRevisionRestore === true,
       allowEqualRevision: true,
       takeoverAuthority: options.takeoverAuthority,
@@ -6245,7 +6261,12 @@ async function hydrateServerLastWorkSnapshot(options = {}, validation = {}) {
       ? workspaceTakeoverHydrationAuthority.assert(options.takeoverAuthority)
       : null;
     const hydrateScopeId = String(takeoverIdentity?.scopeId || requestedScopeId).trim();
-    const documentScopeId = !takeoverIdentity ? getCurrentDocumentWorkspaceScope() : '';
+    // 다른 작업의 저장본을 일부러 불러오는 복원에서는, 화면에 남아 있던 문서가 아니라
+    // 불러올 작업의 범위를 써야 한다. 이걸 빼면 R3 저장본을 확인해 놓고 화면에 있던
+    // 단색 문서를 도로 실어 오는 일이 생긴다.
+    const documentScopeId = !takeoverIdentity
+      ? (String(options.documentScopeId || '').trim() || getCurrentDocumentWorkspaceScope())
+      : '';
     const restoreScopeId = documentScopeId || hydrateScopeId;
     const crossScopeRestore = restoreScopeId !== hydrateScopeId;
     if (!restoreScopeId) return false;
@@ -6384,6 +6405,11 @@ async function hydrateServerLastWorkSnapshot(options = {}, validation = {}) {
     const changed = applyServerLastWorkSnapshot(snapshot, {
       forceStep: options.forceStep,
       forceRevisionRestore: options.forceRevisionRestore === true,
+      // 위에서 이 범위의 저장본임을 이미 확인했다. 갓 켠 탭이 아직 아무것도 열지 않았다는
+      // 이유로 적용을 거르면, 다른 작업의 저장본은 영영 실리지 않는다.
+      ...(String(options.documentScopeId || '').trim()
+        ? { expectedWorkspaceScopeId: restoreScopeId }
+        : {}),
       persistReplica: options.takeoverSync !== true,
       takeoverAuthority: options.takeoverAuthority,
     });

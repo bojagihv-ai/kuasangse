@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 import base64
 import binascii
 import hashlib
@@ -1491,6 +1493,26 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "job": job}), 202
 
+    @app.post("/api/factory/jobs/<job_id>/cafe24/register")
+    def factory_product_cafe24_register(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        allowed = {"categoryId", "salePrice", "supplyPrice", "displayStatus", "sellingStatus"}
+        if payload is None or set(payload) - allowed:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        for key in allowed:
+            value = payload.get(key)
+            if value is not None and not isinstance(value, str):
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            order = factory_sync.queue_cafe24_registration(job_id, payload)
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else 409
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
+
     @app.post("/api/factory/jobs/<job_id>/workfile-rebind")
     def factory_product_workfile_rebind(job_id: str) -> Response | tuple[Response, int]:
         csrf_error = require_csrf()
@@ -1686,6 +1708,234 @@ def register_routes(
             "decisionReceipt": receipt,
             "order": order,
         }), 202
+
+    def _waiting_stage_key(progress: Mapping[str, JsonValue] | None, requested: str) -> str:
+        if requested:
+            return requested
+        if not isinstance(progress, Mapping):
+            return ""
+        awaiting = progress.get("awaitingStageKeys")
+        for value in awaiting if isinstance(awaiting, list) else []:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return str(progress.get("stageKey") or "").strip()
+
+    def _auto_selected_candidate(
+        job_id: str,
+        job_payload: Mapping[str, JsonValue],
+        checkpoint: Mapping[str, JsonValue],
+        candidates: list[JsonObject],
+        stage_key: str,
+        options: Mapping[str, JsonValue],
+    ) -> tuple[str, str, JsonObject]:
+        policy_snapshot = job_payload.get("policySnapshot")
+        if not isinstance(policy_snapshot, dict):
+            return "", "policy_snapshot_missing", {}
+        try:
+            selection = decide_candidates(
+                FACTORY_DECISION_TYPES.get(stage_key, stage_key),
+                candidates,
+                identity={
+                    "jobId": job_id,
+                    "productId": str(checkpoint.get("productId") or ""),
+                    "productKey": str(checkpoint.get("productKey") or ""),
+                    "runId": str(checkpoint.get("runId") or ""),
+                    "inputFingerprint": str(checkpoint.get("inputFingerprint") or ""),
+                    "revision": checkpoint.get("revision"),
+                    "eventId": str(checkpoint.get("savedAt") or ""),
+                },
+                policy_snapshot=policy_snapshot,
+                judge=judge,
+                model=str(options.get("model") or "latestModel"),
+                reasoning_effort=str(options.get("reasoningEffort") or "medium"),
+                service_tier=str(options.get("serviceTier") or "standard"),
+                preset=str(options.get("preset") or "fast_single"),
+            )
+        except CandidateSelectionError as error:
+            return "", error.code, {}
+        except GptOAuthError as error:
+            return "", error.code, {}
+        if selection.status != "selected" or not selection.candidate_id:
+            return "", selection.reason or selection.status, selection.receipt or {}
+        return str(selection.candidate_id), "", selection.receipt or {}
+
+    @app.post("/api/factory/jobs/selections")
+    def factory_product_batch_select() -> Response | tuple[Response, int]:
+        """대기 중인 여러 작업의 A컷 선택을 한 번에 예약한다.
+
+        워커가 지금 열고 있는 작업은 즉시 적용되고, 나머지는 예약되어 워커가 그
+        작업을 다시 열 때 자동으로 적용된다.
+        """
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        mode = str(payload.get("mode") or "manual").strip()
+        if mode not in {"manual", "auto"}:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        raw_options = payload.get("judgementOptions")
+        options = raw_options if isinstance(raw_options, dict) else {}
+        auto_resume = payload.get("autoResume") is not False
+        requests: list[JsonObject] = []
+        if mode == "manual":
+            raw_selections = payload.get("selections")
+            if not isinstance(raw_selections, list) or not raw_selections:
+                return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+            for entry in raw_selections:
+                if not isinstance(entry, dict):
+                    return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+                requests.append(
+                    {
+                        "jobId": str(entry.get("jobId") or "").strip(),
+                        "stageKey": str(entry.get("stageKey") or "").strip(),
+                        "candidateId": str(entry.get("candidateId") or "").strip(),
+                    },
+                )
+        else:
+            raw_job_ids = payload.get("jobIds")
+            wanted = (
+                {str(value).strip() for value in raw_job_ids if isinstance(value, str)}
+                if isinstance(raw_job_ids, list)
+                else set()
+            )
+            for job in factory_sync.product_jobs():
+                job_id = str(job.get("jobId") or "")
+                if job.get("status") not in {"waiting_manual", "blocked"}:
+                    continue
+                if wanted and job_id not in wanted:
+                    continue
+                requests.append({"jobId": job_id, "stageKey": "", "candidateId": ""})
+        if len(requests) > 200:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        results: list[JsonValue] = []
+        for entry in requests:
+            job_id = str(entry["jobId"])
+            if not job_id:
+                results.append({"jobId": job_id, "status": "error", "reason": "job_id_required"})
+                continue
+            try:
+                context = factory_sync.product_job_context(job_id)
+            except FactorySyncError as error:
+                results.append({"jobId": job_id, "status": "error", "reason": error.code})
+                continue
+            job = context.get("job")
+            job_payload = context.get("payload")
+            checkpoint = context.get("checkpoint")
+            if not isinstance(job, dict) or not isinstance(job_payload, dict):
+                results.append({"jobId": job_id, "status": "error", "reason": "factory_product_job_missing"})
+                continue
+            progress = job.get("progress")
+            stage_key = _waiting_stage_key(
+                progress if isinstance(progress, dict) else None,
+                str(entry["stageKey"]),
+            )
+            if not stage_key:
+                results.append({"jobId": job_id, "status": "skipped", "reason": "stage_not_waiting"})
+                continue
+            candidate_id = str(entry["candidateId"])
+            receipt: JsonObject = {}
+            if mode == "auto":
+                candidates = _factory_stage_candidates(
+                    progress if isinstance(progress, dict) else {},
+                    stage_key,
+                )
+                if not candidates:
+                    results.append(
+                        {"jobId": job_id, "status": "skipped", "stageKey": stage_key, "reason": "candidate_empty"},
+                    )
+                    continue
+                candidate_id, reason, receipt = _auto_selected_candidate(
+                    job_id,
+                    job_payload,
+                    checkpoint if isinstance(checkpoint, dict) else {},
+                    candidates,
+                    stage_key,
+                    options,
+                )
+                if not candidate_id:
+                    results.append(
+                        {
+                            "jobId": job_id,
+                            "status": "skipped",
+                            "stageKey": stage_key,
+                            "reason": reason or "manual_required",
+                            "decisionReceipt": receipt,
+                        },
+                    )
+                    continue
+            try:
+                reserved = factory_sync.reserve_product_selection(
+                    job_id,
+                    {
+                        "stageKey": stage_key,
+                        "candidateId": candidate_id,
+                        "decisionMode": mode,
+                        "autoResume": auto_resume,
+                        **({"decisionReceipt": receipt} if receipt else {}),
+                    },
+                )
+            except FactorySyncError as error:
+                results.append(
+                    {"jobId": job_id, "status": "error", "stageKey": stage_key, "reason": error.code},
+                )
+                continue
+            results.append(
+                {
+                    "jobId": job_id,
+                    "status": reserved["status"],
+                    "stageKey": stage_key,
+                    "candidateId": candidate_id,
+                    **({"decisionReceipt": receipt} if receipt else {}),
+                },
+            )
+        counts = Counter(str(item["status"]) for item in results if isinstance(item, dict))
+        return jsonify(
+            {
+                "schema": "factory-batch-selection:v1",
+                "mode": mode,
+                "results": results,
+                "applied": counts["applied"],
+                "reserved": counts["reserved"],
+                "skipped": counts["skipped"],
+                "failed": counts["error"],
+            },
+        )
+
+    @app.post("/api/factory/jobs/resume")
+    def factory_product_batch_resume() -> Response | tuple[Response, int]:
+        """컷 선택이 끝난 작업 여러 건을 한 번에 다음 단계로 넘긴다."""
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        raw_job_ids = payload.get("jobIds")
+        if raw_job_ids is None:
+            job_ids = [
+                str(job.get("jobId") or "")
+                for job in factory_sync.product_jobs()
+                if job.get("status") in {"waiting_manual", "blocked"}
+            ]
+        elif isinstance(raw_job_ids, list) and all(isinstance(value, str) for value in raw_job_ids):
+            job_ids = [value.strip() for value in raw_job_ids if value.strip()]
+        else:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        if len(job_ids) > 200:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        return jsonify(factory_sync.resume_products(job_ids))
+
+    @app.post("/api/factory/jobs/<job_id>/selection/clear")
+    def factory_product_selection_clear(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        try:
+            return jsonify(factory_sync.clear_product_selection(job_id))
+        except FactorySyncError as error:
+            return _error(error.code, 404, retryable=False, correlation_id=_correlation_id())
 
     @app.get("/api/factory/state")
     def factory_state() -> Response:

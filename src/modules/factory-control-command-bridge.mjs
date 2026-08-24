@@ -205,6 +205,14 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     });
   }
 
+  async function registerCafe24(payloadValue) {
+    const payload = record(payloadValue) ? payloadValue : {};
+    if (!text(payload.jobId)) throw new FactoryControlCommandError('factory_control_field_missing:jobId');
+    const result = await requestClassicRuntime(Object.freeze({ capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION, command: 'registerFactoryCafe24', payload }));
+    if (!record(result) || result.schema !== 'factory-cafe24-registration-receipt:v1') throw new FactoryControlCommandError('factory_cafe24_receipt_invalid');
+    return Object.freeze(result);
+  }
+
   async function run(kind, name, payload = {}, order = {}) {
     if (kind === 'factory-workfile') {
       if (name === 'hydrateFactoryWorkfile') return hydrateFactoryWorkfile(payload, order);
@@ -216,6 +224,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     if (name === 'getFactoryProjection') return getProjection();
     if (name === 'selectFactoryACut') return selectACut(payload);
     if (name === 'runFactoryProduct') return runProduct(payload);
+    if (name === 'registerFactoryCafe24') return registerCafe24(payload);
     throw new FactoryControlCommandError('factory_control_command_unsupported');
   }
 

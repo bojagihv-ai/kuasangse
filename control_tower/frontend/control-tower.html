@@ -39,6 +39,15 @@
       --color-error-border: rgb(251 113 133 / 0.34);
       --color-danger-wash: rgb(251 113 133 / 0.12);
       --color-dialog-backdrop: rgb(0 0 0 / 0.74);
+      --color-ok-wash: rgb(52 211 153 / 0.16);
+      --color-warn-wash: rgb(251 191 36 / 0.16);
+      --color-warn-border: rgb(251 191 36 / 0.42);
+      --color-accent-border: rgb(99 102 241 / 0.5);
+      --board-fact-file-max-width: 22ch;
+      --board-cafe24-field-min: 11rem;
+      --bulk-thumb-size: 132px;
+      --bulk-name-field-basis: 20rem;
+      --bulk-lightbox-max-width: 1100px;
       --space-1: 8px;
       --space-half: 4px;
       --space-2: 16px;
@@ -72,6 +81,9 @@
       --virtual-queue-min-block-size: 240px;
       --virtual-row-min-block-size: 112px;
       --lazy-thumb-size: 32px;
+      --board-thumb-size: 44px;
+      --board-stage-min-block-size: 56px;
+      --board-stage-max-block-size: 84px;
       --image-intake-thumb-size: 72px;
       --font-family-sans: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
       --font-family-mono: "SFMono-Regular", Consolas, monospace;
@@ -122,8 +134,10 @@
     }
 
     .page {
-      height: 100dvh;
-      min-height: 100dvh;
+      /* 주 스크롤은 여기 하나뿐이다. 100dvh 가 창 상태에 따라 어긋나면 내용이 잘린 채
+         아래가 통째로 비어 보이므로, 부모(html·body 가 100%)를 그대로 채운다. */
+      height: 100%;
+      min-height: 100%;
       padding: var(--space-3) 0 var(--space-page-bottom);
       overflow-y: auto;
       scrollbar-gutter: stable;
@@ -270,6 +284,7 @@
 
     .section-heading {
       display: flex;
+      flex-wrap: wrap;
       align-items: flex-end;
       justify-content: space-between;
       gap: var(--space-2);
@@ -277,6 +292,8 @@
     }
 
     .section-copy {
+      flex: 1 1 30ch;
+      min-inline-size: 0;
       max-inline-size: var(--content-copy-narrow);
       margin-bottom: 0;
       text-align: end;
@@ -1357,6 +1374,808 @@
 
     .a-cut-candidate[data-inspected="true"] {
       background: var(--color-accent-wash);
+    }
+
+    .bulk-intake {
+      display: grid;
+      gap: var(--space-2);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .bulk-pickers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+      gap: var(--space-2);
+    }
+
+    .bulk-picker,
+    .bulk-default-field {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .bulk-picker input,
+    .bulk-default-field input {
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font: inherit;
+    }
+
+    /* 제품을 설명하는 값과 Cafe24 등록 대상 값을 눈으로 갈라 준다. */
+    .bulk-default-field[data-group="cafe24"] > span {
+      color: var(--color-accent-highlight);
+    }
+
+    .bulk-default-field[data-group="cafe24"] input {
+      border-color: var(--color-accent-border);
+    }
+
+    /* 제품마다 카드로 보여 준다. 사진을 눈으로 확인하고 이름과 역할을 그 자리에서 고친다. */
+    .bulk-product-card {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-3);
+      border: var(--border-width-hairline) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    .bulk-product-card[data-state="warn"] {
+      border-color: var(--color-warn-border);
+      background: var(--color-warn-wash);
+    }
+
+    .bulk-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      align-items: end;
+    }
+
+    .bulk-name-field {
+      display: grid;
+      gap: var(--space-1);
+      flex: 1 1 var(--bulk-name-field-basis);
+    }
+
+    .bulk-name-field > span {
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-meta);
+    }
+
+    .bulk-name-field input {
+      padding: var(--space-2);
+      border: var(--border-width-hairline) solid var(--color-accent-border);
+      border-radius: var(--radius-control);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .bulk-card-summary,
+    .bulk-card-badge {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-meta);
+    }
+
+    .bulk-thumb-shelf {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .bulk-thumb-cell {
+      display: grid;
+      gap: var(--space-1);
+      width: var(--bulk-thumb-size);
+    }
+
+    .bulk-thumb {
+      display: block;
+      width: var(--bulk-thumb-size);
+      height: var(--bulk-thumb-size);
+      padding: 0;
+      border: var(--border-width-hairline) solid var(--color-border-default);
+      border-radius: var(--radius-control);
+      background: var(--color-input-background);
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+
+    .bulk-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .bulk-thumb-name {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-meta);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bulk-role-select,
+    .bulk-color-input {
+      width: 100%;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-hairline) solid var(--color-border-default);
+      border-radius: var(--radius-control);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font-size: var(--font-size-meta);
+    }
+
+    .bulk-card-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .bulk-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-index-dialog);
+      display: grid;
+      gap: var(--space-2);
+      place-content: center;
+      justify-items: center;
+      padding: var(--space-4);
+      background: var(--color-dialog-backdrop);
+      cursor: zoom-out;
+    }
+
+    .bulk-lightbox img {
+      max-width: min(92vw, var(--bulk-lightbox-max-width));
+      max-height: 82vh;
+      object-fit: contain;
+      border-radius: var(--radius-card);
+    }
+
+    .bulk-lightbox-caption {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .bulk-defaults {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      gap: var(--space-1);
+    }
+
+    .bulk-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    .bulk-note {
+      margin: 0;
+      color: var(--color-status-warn);
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-plan {
+      display: grid;
+      gap: var(--space-half);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .bulk-row {
+      display: grid;
+      grid-template-columns: minmax(10rem, 2fr) minmax(4rem, 0.6fr) minmax(6rem, 1fr) minmax(6rem, 1fr) minmax(9rem, 1.4fr);
+      gap: var(--space-half);
+      align-items: stretch;
+    }
+
+    .bulk-cell {
+      display: grid;
+      align-content: center;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-row-header .bulk-cell {
+      padding-block: var(--space-half);
+      border-color: transparent;
+      background: transparent;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .bulk-row[data-state="warn"] .bulk-cell {
+      border-color: var(--color-warn-border);
+    }
+
+    .bulk-row[data-state="ready"] .bulk-cell:last-child {
+      color: var(--color-status-ok);
+    }
+
+    @media (max-width: 720px) {
+      .bulk-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .bulk-row .bulk-cell:first-child {
+        grid-column: 1 / -1;
+      }
+
+      .bulk-row-header {
+        display: none;
+      }
+    }
+
+    .production-board {
+      display: grid;
+      gap: var(--space-2);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-connection {
+      margin: 0;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-error-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-danger-wash);
+      color: var(--color-status-error);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      margin-block-start: var(--space-half);
+    }
+
+    .board-mini-action {
+      padding: var(--badge-padding-block) var(--badge-padding-inline);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      background: var(--color-card-background);
+      color: var(--color-text-secondary);
+      font: inherit;
+      font-size: var(--font-size-kicker);
+      cursor: pointer;
+    }
+
+    .board-mini-action:not(.ghost) {
+      border-color: var(--color-warn-border);
+      color: var(--color-status-warn);
+    }
+
+    .board-mini-action:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .board-mini-action:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .board-cell-thumb {
+      inline-size: 100%;
+      max-inline-size: var(--board-thumb-size);
+      aspect-ratio: 1 / 1;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      object-fit: cover;
+    }
+
+    .board-result-strip .board-candidate-options {
+      grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    }
+
+    .board-result-strip .board-candidate img {
+      aspect-ratio: 1 / 1;
+    }
+
+    .board-result-stage {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: baseline;
+      margin-block-start: var(--space-1);
+    }
+
+    .board-result-strip {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-ok-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    details.board-product-code {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      overflow-wrap: anywhere;
+    }
+
+    details.board-product-code summary {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-sans);
+      cursor: pointer;
+    }
+
+    .board-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .board-summary-cell {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 6.5rem;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .board-summary-label {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .board-summary-value {
+      font-size: var(--font-size-section-title);
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    .board-headroom {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-headroom[data-tone="ok"] {
+      color: var(--color-status-ok);
+    }
+
+    .board-headroom[data-tone="warning"] {
+      color: var(--color-status-warn);
+    }
+
+    .board-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    .board-action {
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      background: var(--color-card-background);
+      color: var(--color-text-primary);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .board-action.primary {
+      border-color: var(--color-accent-primary);
+      background: var(--color-accent-wash);
+      color: var(--color-accent-highlight);
+    }
+
+    .board-action.ghost {
+      color: var(--color-text-muted);
+    }
+
+    .board-action:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .board-action:focus-visible,
+    .board-cell-pickable:focus-visible,
+    .board-candidate:focus-visible {
+      outline: var(--focus-outline-width) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    .board-toggle {
+      display: inline-flex;
+      gap: var(--space-half);
+      align-items: center;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+    }
+
+    .board-toolbar-hint {
+      color: var(--color-text-muted);
+    }
+
+    .board-grid {
+      display: grid;
+      gap: var(--space-half);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-row {
+      display: grid;
+      grid-template-columns:
+        minmax(13rem, 1.7fr)
+        minmax(6rem, 0.7fr)
+        repeat(6, minmax(3.25rem, 0.55fr))
+        minmax(8rem, 1fr);
+      gap: var(--space-half);
+      align-items: start;
+      padding-block-end: var(--space-1);
+      border-block-end: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .board-row-header {
+      padding-block-end: 0;
+      border-block-end: 0;
+    }
+
+    .board-cell {
+      display: grid;
+      align-content: start;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+      block-size: auto;
+      overflow: visible;
+      overflow-wrap: anywhere;
+    }
+
+    .board-row-header .board-cell {
+      padding-block: var(--space-half);
+      border-color: transparent;
+      background: transparent;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+      letter-spacing: var(--tracking-label);
+      text-align: center;
+    }
+
+    .board-row-header .board-cell-product,
+    .board-row-header .board-cell-status {
+      text-align: start;
+    }
+
+    .board-cell-product {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .board-order {
+      color: var(--color-text-muted);
+      font-variant-numeric: tabular-nums;
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-product-copy {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 0;
+    }
+
+    .board-product-meta,
+    .board-product-message,
+    .board-product-action,
+    .board-product-code {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    /* 성격이 다른 사실을 같은 글씨로 이어 붙이면 한 덩어리로 뭉쳐 읽힌다.
+       파일·진행방식·장수를 종류별 칩으로 갈라 눈이 먼저 걸리게 한다. */
+    .board-product-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    .board-fact {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-hairline) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      font-size: var(--font-size-meta);
+      line-height: var(--line-height-tight);
+      white-space: nowrap;
+    }
+
+    .board-fact-file {
+      color: var(--color-text-secondary);
+      font-family: var(--font-family-mono);
+      max-width: var(--board-fact-file-max-width);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .board-fact-mode {
+      color: var(--color-accent-highlight);
+      border-color: var(--color-accent-border);
+      background: var(--color-accent-wash);
+    }
+
+    .board-fact-count {
+      color: var(--color-text-muted);
+    }
+
+    /* 상태 문구는 무슨 일이 났는지부터 보여야 한다. 톤으로 갈라 준다. */
+    .board-product-message[data-tone="ok"] {
+      color: var(--color-status-ok);
+    }
+
+    .board-product-message[data-tone="warn"] {
+      color: var(--color-status-warn);
+    }
+
+    .board-product-message[data-tone="danger"] {
+      color: var(--color-status-error);
+    }
+
+    .board-product-action {
+      color: var(--color-text-secondary);
+    }
+
+    .board-product-code {
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      opacity: 0.7;
+      overflow-wrap: anywhere;
+    }
+
+    .board-status-badge {
+      justify-self: start;
+      padding: var(--badge-padding-block) var(--badge-padding-inline);
+      border-radius: var(--radius-pill);
+      background: var(--color-accent-wash);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-status-badge[data-tone="ok"] {
+      background: var(--color-ok-wash);
+      color: var(--color-status-ok);
+    }
+
+    .board-status-badge[data-tone="attention"] {
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+    }
+
+    .board-status-badge[data-tone="error"] {
+      background: var(--color-danger-wash);
+      color: var(--color-status-error);
+    }
+
+    .board-status-badge[data-tone="active"] {
+      color: var(--color-accent-highlight);
+    }
+
+    .board-cell-stage {
+      place-content: center;
+      justify-items: center;
+      min-block-size: var(--board-stage-min-block-size);
+      max-block-size: var(--board-stage-max-block-size);
+      padding-block: var(--space-half);
+      text-align: center;
+    }
+
+    .board-cell-glyph {
+      font-size: var(--font-size-status-mark);
+    }
+
+    .board-cell-count {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+    }
+
+    .board-cell-stage[data-state="selected"] {
+      border-color: var(--color-ok-border);
+      color: var(--color-status-ok);
+    }
+
+    .board-cell-stage[data-state="awaiting"] {
+      border-color: var(--color-warn-border);
+      color: var(--color-status-warn);
+    }
+
+    .board-cell-stage[data-state="reserved"],
+    .board-cell-stage[data-state="running"] {
+      border-color: var(--color-accent-border);
+      color: var(--color-accent-highlight);
+    }
+
+    .board-cell-stage[data-state="empty"] {
+      border-style: dashed;
+      color: var(--color-text-muted);
+      opacity: 0.55;
+    }
+
+    .board-cell-pickable {
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .board-cell-pickable[data-open="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .board-cell-progress {
+      align-content: center;
+    }
+
+    .board-step-label {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .board-candidate-strip {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-cafe24-values {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-cafe24-fields {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(var(--board-cafe24-field-min), 1fr));
+      gap: var(--space-1);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-cafe24-field {
+      display: grid;
+      gap: var(--space-1);
+    }
+
+    .board-cafe24-field-label {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-candidate-heading {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .board-candidate-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+      gap: var(--space-1);
+    }
+
+    .board-candidate {
+      display: grid;
+      gap: var(--space-half);
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+      color: var(--color-text-primary);
+      font: inherit;
+      text-align: start;
+      cursor: pointer;
+    }
+
+    .board-candidate[data-reserved="true"] {
+      border-color: var(--color-accent-highlight);
+      background: var(--color-accent-wash);
+    }
+
+    .board-candidate img {
+      inline-size: 100%;
+      aspect-ratio: 4 / 3;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      object-fit: cover;
+    }
+
+    .board-candidate-placeholder,
+    .board-candidate-meta {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .board-candidate-label {
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 1100px) {
+      .board-row {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: var(--space-half);
+        padding: var(--space-1);
+        border: var(--border-width-default) solid var(--color-border-default);
+        border-radius: var(--radius-card);
+        background: var(--color-card-background);
+      }
+
+      .board-row .board-cell {
+        border-color: transparent;
+        background: transparent;
+      }
+
+      .board-row .board-cell-stage {
+        border-color: var(--color-border-default);
+      }
+
+      .board-row .board-cell-product {
+        grid-column: 1 / -1;
+        padding-inline: 0;
+      }
+
+      .board-row .board-cell-status,
+      .board-row .board-cell-progress {
+        grid-column: span 3;
+        padding-inline: 0;
+      }
+
+      .board-row-header {
+        display: none;
+      }
+
+      .board-cell-stage:not(.board-row-header .board-cell-stage)::after {
+        content: attr(data-stage-label);
+        color: var(--color-text-muted);
+        font-size: var(--font-size-kicker);
+      }
     }
 
     .a-cut-thumb {
@@ -2904,6 +3723,9 @@
       </section>
 
       <section id="menu-panel-queue" class="menu-panel" data-menu-panel="queue" role="tabpanel" aria-labelledby="menu-tab-queue" hidden>
+      <section id="production-board" class="section production-board" aria-label="병렬 생산 보드">
+        <p class="status-message">병렬 생산 보드를 불러오는 중입니다.</p>
+      </section>
       <section class="section operator-console-shell" aria-labelledby="operator-console-heading">
         <div class="section-heading operator-console-heading">
           <div>
@@ -2934,6 +3756,9 @@
       </section>
 
       <section id="menu-panel-input-source" class="menu-panel" data-menu-panel="input-source" role="tabpanel" aria-labelledby="menu-tab-input-source" hidden>
+      <section id="bulk-intake" class="section bulk-intake" aria-label="제품 일괄 투입">
+        <p class="status-message">제품 일괄 투입을 준비하는 중입니다.</p>
+      </section>
       <section class="section" aria-labelledby="work-bundle-input-heading">
         <div class="section-heading">
           <div>
@@ -3271,7 +4096,7 @@
         element.textContent = message;
         element.dataset.tone = tone;
       };
-      const apiRequest = async (path, options = {}) => {
+      const sendRequest = async (path, options = {}) => {
         const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
         if (session.id && options.method && options.method !== "GET") headers["X-Control-Tower-Session"] = session.id;
         if (session.csrf && options.method && options.method !== "GET") headers["X-Control-Tower-CSRF"] = session.csrf;
@@ -3284,6 +4109,18 @@
           throw error;
         }
         return body;
+      };
+      const apiRequest = async (path, options = {}) => {
+        try {
+          return await sendRequest(path, options);
+        } catch (error) {
+          // 관제탑이 잠깐 꺼져 있는 동안 화면을 열어 두면 session 이 비어 있다. 그 뒤 첫 요청이
+          // csrf_required 로 튕기면서 투입이 통째로 실패한다. 한 번은 세션을 다시 받아 재시도한다.
+          if (error.code !== "csrf_required" && error.code !== "session_required") throw error;
+          await loadSession();
+          if (!session.id || !session.csrf) throw error;
+          return sendRequest(path, options);
+        }
       };
       const loadSession = async () => {
         try {
@@ -3402,5 +4239,7 @@
     }
   </script>
   <script type="module" src="./src/workfile-intake.mjs?actualB=1"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=5"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=3"></script>
 </body>
 </html>

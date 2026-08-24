@@ -37,8 +37,27 @@ function sourceFunction(source, name) {
   throw new Error(`unterminated ${name}`);
 }
 
+// 늦게 채워지는 항목 목록과 대기 폭은 모듈 수준 상수라, 함수만 잘라 오면 따라오지 않는다.
+// 값을 여기 베껴 두면 실제와 어긋나므로 원본에서 그대로 읽는다.
+function readbackSettleGlobals() {
+  const labels = CORE.match(/CAFE24_READBACK_SETTLING_LABELS = new Set\(\[([^\]]*)\]\)/);
+  assert.ok(labels, 'CAFE24_READBACK_SETTLING_LABELS 를 찾지 못했습니다');
+  const attempts = CORE.match(/CAFE24_READBACK_SETTLE_ATTEMPTS = (\d+)/);
+  const delay = CORE.match(/CAFE24_READBACK_SETTLE_DELAY_MS = (\d+)/);
+  assert.ok(attempts && delay, '재시도 상한/간격 상수를 찾지 못했습니다');
+  return {
+    CAFE24_READBACK_SETTLING_LABELS: new Set([...labels[1].matchAll(/'([^']+)'/g)].map(m => m[1])),
+    CAFE24_READBACK_SETTLE_ATTEMPTS: Number(attempts[1]),
+    CAFE24_READBACK_SETTLE_DELAY_MS: Number(delay[1]),
+  };
+}
+
 function compile(name, globals = {}) {
-  const context = vm.createContext({ Object, Date, Math, Number, String, ...globals });
+  const context = vm.createContext({
+    Object, Date, Math, Number, String, Set,
+    ...readbackSettleGlobals(),
+    ...globals,
+  });
   vm.runInContext(`${sourceFunction(CORE, name)}\nthis.target = ${name};`, context);
   return context.target;
 }

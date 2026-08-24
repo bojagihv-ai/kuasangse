@@ -1,0 +1,428 @@
+export const BOARD_STAGES = Object.freeze([
+  Object.freeze({ key: 'representative', label: '대표' }),
+  Object.freeze({ key: 'size', label: '사이즈' }),
+  Object.freeze({ key: 'option_color', label: '옵션·색상' }),
+  Object.freeze({ key: 'general', label: '일반' }),
+  Object.freeze({ key: 'sections', label: '섹션' }),
+  Object.freeze({ key: 'final_detail', label: '최종' }),
+]);
+
+const STATUS_LABELS = Object.freeze({
+  queued: '대기',
+  running: '진행 중',
+  waiting_manual: '컷 선택 대기',
+  blocked: '차단',
+  completed: '완료',
+});
+
+const STATUS_TONES = Object.freeze({
+  queued: 'neutral',
+  running: 'active',
+  waiting_manual: 'attention',
+  blocked: 'error',
+  completed: 'ok',
+});
+
+function record(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function list(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function text(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function integer(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+}
+
+function stageIndex(stageKey) {
+  return BOARD_STAGES.findIndex(stage => stage.key === stageKey);
+}
+
+function normalizeCandidate(value) {
+  const source = record(value);
+  const id = text(source.id || source.candidateId || source.assetId);
+  return id
+    ? {
+      id,
+      thumbnailUrl: text(source.thumbnailUrl || source.thumbnailRef),
+      model: text(source.model),
+      source: text(source.source),
+      confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : null,
+      rationale: text(source.rationale),
+    }
+    : null;
+}
+
+function progressStages(progress) {
+  const byKey = new Map();
+  for (const stage of list(record(progress).stages)) {
+    const source = record(stage);
+    const key = text(source.key);
+    if (!key) continue;
+    byKey.set(key, {
+      key,
+      status: text(source.status),
+      selectedId: text(source.selectedId),
+      candidates: list(source.candidates).map(normalizeCandidate).filter(Boolean),
+    });
+  }
+  return byKey;
+}
+
+function cellState(stage, { reservedCandidateId, jobStatus, waitingStageKey, reachedIndex, index }) {
+  if (reservedCandidateId) return 'reserved';
+  if (stage && stage.selectedId) return 'selected';
+  if (stage && stage.candidates.length) {
+    return jobStatus === 'running' && waitingStageKey === stage.key ? 'running' : 'awaiting';
+  }
+  if (jobStatus === 'running' && index === reachedIndex) return 'running';
+  return 'empty';
+}
+
+const OPERATOR_MESSAGES = Object.freeze({
+  factory_product_checkpoint_save_failed: '작업 저장에 실패했습니다. 조립공장에서 이 작업을 다시 열고 재개하세요.',
+  factory_product_checkpoint_missing: '저장된 작업 상태가 없습니다. 처음부터 다시 실행해야 합니다.',
+  factory_product_checkpoint_invalid: '저장된 작업 상태를 읽을 수 없습니다. 조립공장에서 작업파일을 다시 여세요.',
+  factory_product_job_not_resumable: '지금은 재개할 수 없는 상태입니다. 작업 상태를 확인하세요.',
+  factory_product_asset_missing: '입력 이미지 원본을 찾지 못했습니다. 이미지를 다시 투입하세요.',
+  factory_product_images_too_large: '입력 이미지 용량이 한도를 넘었습니다. 장수나 해상도를 줄이세요.',
+  factory_product_required_values_missing: '필수 입력값이 비어 있습니다. 입력·소스에서 채워 주세요.',
+  factory_worker_build_mismatch: '조립공장 버전이 관제와 다릅니다. 생산관제를 재시작해 버전을 맞추세요.',
+  factory_worker_build_not_admitted: '허용되지 않은 조립공장 버전입니다. 조립공장을 최신으로 실행하세요.',
+  factory_session_missing: '조립공장 연결이 끊겼습니다. 조립공장 창을 다시 여세요.',
+  stale_factory_session: '조립공장 연결이 새로 맺어졌습니다. 이 작업을 다시 재개하세요.',
+  stale_workfile_revision: '작업파일이 더 최신 상태입니다. 조립공장에서 작업파일을 다시 여세요.',
+  stale_run_fingerprint: '입력이 바뀌어 이전 결과와 맞지 않습니다. 작업을 다시 실행하세요.',
+  candidate_membership_invalid: '고른 컷이 현재 후보에 없습니다. 후보를 다시 확인하세요.',
+  factory_decision_required: '자동 판단이 보류됐습니다. 직접 컷을 골라 주세요.',
+  factory_product_state_write_failed: '작업 상태를 저장하지 못했습니다. 디스크 여유를 확인하세요.',
+});
+
+const CODE_SHAPE = /^[a-z][a-z0-9_]*(?::[^\s]+)?$/;
+
+const RESULT_ERRORS = Object.freeze({
+  factory_history_manifest_unavailable: '이 작업의 결과가 아직 보관함에 저장되지 않았습니다.',
+  factory_history_identity_mismatch: '보관함에 있는 결과가 이 작업과 맞지 않습니다.',
+  factory_product_job_not_found: '이 작업을 더 이상 찾을 수 없습니다.',
+  factory_history_checkpoint_missing: '이 작업은 저장된 지점이 없어 결과를 찾을 수 없습니다. 다시 실행해야 합니다.',
+});
+
+/** 고른 컷을 못 불러왔을 때의 이유를 운영자 말로 바꾼다. */
+export function describeResultError(code) {
+  const key = text(code).split(':')[0];
+  return RESULT_ERRORS[key] || '고른 컷을 불러오지 못했습니다.';
+}
+
+/** 백엔드 오류 코드를 운영자가 읽을 문장으로 바꾸고, 원래 코드는 따로 남긴다. */
+function withStageLabels(value) {
+  let copy = value;
+  for (const stage of BOARD_STAGES) {
+    copy = copy.replace(new RegExp(`\\b${stage.key}\\b`, 'g'), stage.label);
+  }
+  return copy;
+}
+
+export function operatorMessage(value) {
+  const message = text(value);
+  if (!message) return { copy: '', code: '' };
+  const [head, ...rest] = message.split(':');
+  const code = text(head);
+  const known = OPERATOR_MESSAGES[code];
+  if (known) return { copy: known, code: message };
+  if (/selection required/i.test(message)) return { copy: '이 단계의 A컷 선택이 필요합니다.', code: '' };
+  if (/factory worker failed/i.test(message)) return { copy: '조립공장 실행이 실패했습니다.', code: message };
+  if (CODE_SHAPE.test(message) || (CODE_SHAPE.test(code) && rest.length && !/[가-힣]/.test(message))) {
+    return { copy: '조립공장에서 처리하지 못했습니다.', code: message };
+  }
+  return { copy: withStageLabels(message), code: '' };
+}
+
+/**
+ * 작업 여러 건을 한 화면에 표처럼 나란히 놓기 위한 행/열 모델을 만든다.
+ * 각 행은 작업 하나, 각 열은 공정 한 단계이며, 멈춘 칸에서 바로 컷을 고를 수 있다.
+ */
+export function projectProductionBoard(jobsValue, optionsValue = {}) {
+  const options = record(optionsValue);
+  const stageFilter = text(options.stageKey);
+  const archived = record(options.results);
+  const rows = list(jobsValue).map((jobValue, index) => {
+    const job = record(jobValue);
+    const jobId = text(job.jobId);
+    const status = text(job.status) || 'queued';
+    const progress = record(job.progress);
+    const stages = progressStages(progress);
+    // 진행 스냅샷이 없으면 보관함에 남은 고른 컷으로 대신 채운다.
+    const fromArchive = stages.size ? new Map() : stagesFromResults(archived[jobId]);
+    const pending = record(job.pendingSelection);
+    const reservedStageKey = text(pending.stageKey);
+    const reservedCandidateId = text(pending.candidateId);
+    const awaiting = list(progress.awaitingStageKeys).map(text).filter(Boolean);
+    const waitingStageKey = awaiting[0] || text(job.stageKey) || text(progress.stageKey);
+    const reachedIndex = Math.max(
+      stageIndex(waitingStageKey),
+      ...[...stages.values()].map(stage => (stage.selectedId || stage.candidates.length ? stageIndex(stage.key) : -1)),
+    );
+    const cells = BOARD_STAGES.map((definition, cellIndex) => {
+      const stage = stages.get(definition.key)
+        || (fromArchive.has(definition.key)
+          ? {
+            key: definition.key,
+            status: 'selected',
+            selectedId: fromArchive.get(definition.key).selectedId,
+            candidates: [{
+              id: fromArchive.get(definition.key).selectedId,
+              thumbnailUrl: fromArchive.get(definition.key).thumbnailUrl,
+              model: '', source: 'archive', confidence: null, rationale: '',
+            }],
+          }
+          : null);
+      const reserved = reservedStageKey === definition.key ? reservedCandidateId : '';
+      const state = cellState(stage, {
+        reservedCandidateId: reserved,
+        jobStatus: status,
+        waitingStageKey,
+        reachedIndex,
+        index: cellIndex,
+      });
+      return {
+        jobId,
+        stageKey: definition.key,
+        stageLabel: definition.label,
+        state,
+        candidateCount: stage ? stage.candidates.length : 0,
+        candidates: stage ? stage.candidates : [],
+        selectedId: stage ? stage.selectedId : '',
+        reservedCandidateId: reserved,
+        selectedThumbnailUrl: stage && stage.selectedId
+          ? (stage.candidates.find(candidate => candidate.id === stage.selectedId)?.thumbnailUrl || '')
+          : '',
+        pickable: Boolean(stage && stage.candidates.length && !stage.selectedId)
+          && (status === 'waiting_manual' || status === 'blocked'),
+      };
+    });
+    const selectedStageCount = stages.size
+      ? integer(progress.selectedStageCount)
+      : fromArchive.size || integer(progress.selectedStageCount);
+    return {
+      jobId,
+      index,
+      order: index + 1,
+      productName: text(job.productName) || jobId,
+      workfileName: text(job.workfileName),
+      jcode: job.jcode ?? null,
+      mode: text(job.mode),
+      status,
+      statusLabel: STATUS_LABELS[status] || status,
+      statusTone: STATUS_TONES[status] || 'neutral',
+      dispatched: job.dispatched === true,
+      message: operatorMessage(job.message).copy,
+      messageCode: operatorMessage(job.message).code,
+      attempts: integer(job.attempts),
+      imageCount: integer(job.imageCount),
+      percent: Math.max(0, Math.min(100, integer(progress.percent))),
+      selectedStageCount,
+      totalStageCount: integer(progress.totalStageCount) || BOARD_STAGES.length,
+      stepLabel: `${Math.min(selectedStageCount, BOARD_STAGES.length)} / ${BOARD_STAGES.length}단계`,
+      waitingStageKey,
+      reservedStageKey,
+      reservedCandidateId,
+      hasReservation: Boolean(reservedStageKey && reservedCandidateId),
+      cafe24Registered: text(job.stageKey) === 'cafe24' && status === 'completed',
+      // 분류 입력이 생기기 전에 투입된 작업은 등록 대상 값이 비어 있다. 그대로 등록을
+      // 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이 어디를
+      // 고쳐야 하는지 알 수 없다.
+      cafe24Values: record(job.cafe24Values),
+      cafe24ValuesReady: !!text(record(job.cafe24Values).categoryId),
+      autoResumePending: job.autoResumePending === true,
+      machineMs: integer(record(job.timing).totalMachineMs),
+      waitMs: integer(record(job.timing).totalWaitMs),
+      cells: stageFilter ? cells.filter(cell => cell.stageKey === stageFilter) : cells,
+    };
+  }).filter(row => row.jobId);
+
+  const summary = {
+    total: rows.length,
+    queued: rows.filter(row => row.status === 'queued').length,
+    running: rows.filter(row => row.status === 'running').length,
+    waiting: rows.filter(row => row.status === 'waiting_manual').length,
+    blocked: rows.filter(row => row.status === 'blocked').length,
+    completed: rows.filter(row => row.status === 'completed').length,
+    reserved: rows.filter(row => row.hasReservation).length,
+    resumable: rows.filter(row => row.status === 'waiting_manual' || row.status === 'blocked').length,
+    autoResuming: rows.filter(row => row.autoResumePending).length,
+    totalMachineMs: rows.reduce((total, row) => total + row.machineMs, 0),
+    totalWaitMs: rows.reduce((total, row) => total + row.waitMs, 0),
+    pickableCells: rows.reduce((total, row) => total + row.cells.filter(cell => cell.pickable && !cell.reservedCandidateId).length, 0),
+  };
+  return { schema: 'factory-production-board:v1', stages: BOARD_STAGES, rows, summary };
+}
+
+const BLOCKED_CAUSES = Object.freeze({
+  factory_product_checkpoint_save_failed: '조립공장이 작업 상태를 저장하지 못했습니다.',
+  factory_worker_failed: '조립공장 실행이 실패했습니다.',
+  factory_heartbeat_timeout: '조립공장 연결이 끊긴 채로 멈췄습니다.',
+});
+
+/** 차단된 작업이 왜 멈췄고 무엇을 하면 되는지 한 줄로 알려준다. */
+export function describeBlocked(row) {
+  const source = record(row);
+  if (text(source.status) !== 'blocked') return null;
+  const code = text(source.messageCode).split(':')[0];
+  return {
+    cause: BLOCKED_CAUSES[code] || text(source.message) || '조립공장이 이 작업을 끝내지 못했습니다.',
+    action: '다시 시도하면 저장된 지점부터 이어서 진행합니다.',
+  };
+}
+
+
+const RESULT_STAGE_LIMIT = 4;
+
+/**
+ * 보관함에서 읽은 고른 컷을 공정 단계별로 묶는다.
+ * 한 작업이 200장 넘게 고른 컷을 갖는 경우가 있어, 그대로 쏟으면 화면이 못 쓰게 된다.
+ * 단계마다 앞의 몇 장만 보여주고 나머지는 개수로 알린다.
+ */
+export function groupResultCuts(assetsValue, { limit = RESULT_STAGE_LIMIT } = {}) {
+  const selected = list(assetsValue)
+    .map(record)
+    .filter(asset => asset.phase === 'output' && asset.selectionState === 'selected');
+  const groups = [];
+  for (const stage of BOARD_STAGES) {
+    const matched = selected.filter(asset => text(asset.stage) === stage.key);
+    if (!matched.length) continue;
+    groups.push({
+      stageKey: stage.key,
+      stageLabel: stage.label,
+      total: matched.length,
+      hidden: Math.max(0, matched.length - limit),
+      cuts: matched.slice(0, limit).map(asset => ({
+        id: text(asset.id || asset.assetKey),
+        displayName: text(asset.displayName || asset.assetKey),
+        thumbnailReference: text(asset.thumbnailReference),
+        contentReference: text(asset.contentReference),
+      })),
+    });
+  }
+  const known = new Set(BOARD_STAGES.map(stage => stage.key));
+  const others = selected.filter(asset => !known.has(text(asset.stage)));
+  if (others.length) {
+    groups.push({
+      stageKey: 'other',
+      stageLabel: '기타',
+      total: others.length,
+      hidden: Math.max(0, others.length - limit),
+      cuts: others.slice(0, limit).map(asset => ({
+        id: text(asset.id || asset.assetKey),
+        displayName: text(asset.displayName || asset.assetKey),
+        thumbnailReference: text(asset.thumbnailReference),
+        contentReference: text(asset.contentReference),
+      })),
+    });
+  }
+  return { total: selected.length, groups };
+}
+
+
+/**
+ * 보관함에서 읽은 고른 컷으로 공정 칸을 채운다.
+ * 진행 스냅샷이 없는 예전 작업(특히 이미 완료된 작업)은 이것 말고는 단계를 알 길이 없다.
+ */
+export function stagesFromResults(assetsValue) {
+  const byStage = new Map();
+  for (const asset of list(assetsValue).map(record)) {
+    if (asset.phase !== 'output' || asset.selectionState !== 'selected') continue;
+    const key = text(asset.stage);
+    if (!key || byStage.has(key)) continue;
+    byStage.set(key, {
+      selectedId: text(asset.id || asset.assetKey),
+      thumbnailUrl: text(asset.thumbnailReference),
+    });
+  }
+  return byStage;
+}
+
+
+/** 밀리초를 사람이 읽는 짧은 길이로 바꾼다. */
+export function durationLabel(milliseconds) {
+  const total = Math.max(0, Math.round(Number(milliseconds) || 0) / 1000);
+  if (total < 1) return '0초';
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = Math.floor(total % 60);
+  if (hours) return `${hours}시간 ${minutes}분`;
+  if (minutes) return `${minutes}분 ${seconds}초`;
+  return `${seconds}초`;
+}
+
+/**
+ * 전체 시간 중 기계가 실제로 돌아간 비중을 알려준다.
+ * 이 비중이 낮으면 조립공장을 여러 개 띄워도 단축될 여지가 그만큼밖에 없다는 뜻이다.
+ */
+export function describeParallelHeadroom(summaryValue) {
+  const summary = record(summaryValue);
+  const machine = integer(summary.totalMachineMs);
+  const wait = integer(summary.totalWaitMs);
+  const total = machine + wait;
+  if (!total) {
+    return { measured: false, machineSharePercent: 0, tone: '', copy: '아직 측정된 공정 시간이 없습니다.' };
+  }
+  const share = Math.round((machine / total) * 100);
+  const verdict = share >= 65
+    ? '조립공장을 늘리면 그만큼 빨라질 여지가 큽니다.'
+    : share >= 35
+      ? '조립공장을 늘리면 절반 정도 효과를 볼 수 있습니다.'
+      : '대부분 사람 판단을 기다린 시간이라, 조립공장을 늘려도 크게 빨라지지 않습니다.';
+  return {
+    measured: true,
+    machineSharePercent: share,
+    tone: share >= 65 ? 'ok' : share >= 35 ? '' : 'warning',
+    copy: `기계 ${durationLabel(machine)} · 사람 대기 ${durationLabel(wait)} (기계 비중 ${share}%) · ${verdict}`,
+  };
+}
+
+
+/** 예약되지 않은 대기 칸만 모아 일괄 선택 요청 본문으로 만든다. */
+export function buildBatchSelectionRequest(board, { candidateId = '', mode = 'manual' } = {}) {
+  const rows = list(record(board).rows);
+  const selections = [];
+  for (const row of rows) {
+    for (const cell of list(record(row).cells)) {
+      if (!cell.pickable || cell.reservedCandidateId) continue;
+      const chosen = candidateId || cell.candidates[0]?.id || '';
+      if (!chosen) continue;
+      selections.push({ jobId: row.jobId, stageKey: cell.stageKey, candidateId: chosen });
+      break;
+    }
+  }
+  return mode === 'auto'
+    ? { mode: 'auto', jobIds: selections.map(entry => entry.jobId) }
+    : { mode: 'manual', selections };
+}
+
+/** 일괄 선택 응답을 사람이 읽을 한 줄 요약으로 만든다. */
+export function summarizeBatchSelection(responseValue) {
+  const response = record(responseValue);
+  const applied = integer(response.applied);
+  const reserved = integer(response.reserved);
+  const skipped = integer(response.skipped);
+  const failed = integer(response.failed);
+  const parts = [];
+  if (applied) parts.push(`${applied}건 즉시 적용`);
+  if (reserved) parts.push(`${reserved}건 예약`);
+  if (skipped) parts.push(`${skipped}건 보류`);
+  if (failed) parts.push(`${failed}건 실패`);
+  return {
+    applied,
+    reserved,
+    skipped,
+    failed,
+    tone: failed ? 'error' : skipped ? 'warning' : 'ok',
+    copy: parts.length ? parts.join(' · ') : '선택할 대기 작업이 없습니다.',
+  };
+}

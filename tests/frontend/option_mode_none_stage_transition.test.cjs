@@ -61,6 +61,8 @@ function loadRestoreCheckpoint(projection, factory) {
     state: { projectBusy: false, productInfoManualValues: {} },
     factoryRuntimeDetachedValue: value => structuredClone(value),
     factoryRuntimeControlValidateProductCheckpoint: checkpoint => structuredClone(checkpoint),
+    // 복원은 서버 문서를 읽기 전에 대상 작업으로 먼저 옮긴다.
+    factoryRuntimeControlAdoptProductProject: id => `batch:${id}`,
     loadProjectRecord: async () => true,
     factoryRuntimeControlProjection: async () => (typeof projection === 'function' ? projection() : projection),
     factoryRuntimeControlProjectionMatchesCheckpoint: () => true,
@@ -133,6 +135,8 @@ function loadRealRestoreCheckpoint(factory, options = {}) {
     factoryApplySelectedAssetsToSections: () => true,
     saveLastWorkNow: async () => true,
     factoryCafe24CurrentProductKey: () => '',
+    // 복원은 서버 문서를 읽기 전에 대상 작업으로 먼저 옮긴다.
+    factoryRuntimeControlAdoptProductProject: id => (id ? `batch:${id}` : projectId),
     factoryRuntimeBatchCommandError: message => new Error(message),
     ...(options.durableRestore ? {
       serverLastWorkHydrated: false,
@@ -469,7 +473,8 @@ test('missing local B project record hydrates the retained server workfile befor
 
   assert.deepEqual(events.slice(0, 2), [
     'load-local-project',
-    'hydrate-server:{"force":true,"forceRevisionRestore":true,"render":false}',
+    // 화면에 남아 있던 다른 제품이 아니라 이 작업의 범위를 명시해야 한다.
+    `hydrate-server:{"force":true,"forceRevisionRestore":true,"render":false,"documentScopeId":"project:${checkpoint.projectId}"}`,
   ]);
   assert.equal(receipt.schema, 'factory-product-run-receipt:v1');
   for (const [field, value] of Object.entries({
@@ -622,7 +627,8 @@ test('missing local checkpoint rejects mismatched server state before takeover a
   assert.equal(JSON.stringify(mismatchedRuntime.readFactory()), JSON.stringify(aBefore));
   assert.deepEqual(mismatchEvents, [
     'load-local-project',
-    'hydrate-server:{"force":true,"forceRevisionRestore":true,"render":false}',
+    // 화면에 남아 있던 다른 제품이 아니라 이 작업의 범위를 명시해야 한다.
+    `hydrate-server:{"force":true,"forceRevisionRestore":true,"render":false,"documentScopeId":"project:${checkpoint.projectId}"}`,
     'hydrate-server:identity-rejected',
   ]);
 

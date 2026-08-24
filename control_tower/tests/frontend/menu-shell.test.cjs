@@ -132,3 +132,19 @@ test('projection updates preserve active menu state and root-only scrolling cont
   assert.match(html, /body\s*{[^}]*overflow:\s*hidden/);
   assert.doesNotMatch(html, /\.menu-panel[^{]*\{[^}]*overflow-y\s*:/);
 });
+
+
+test('조립공장이 끊기면 탭 배지를 끊김으로 도배하지 않는다', async () => {
+  const module = await import(pathToFileURL(MODULE_PATH));
+
+  const idle = module.menuBadgeDisplay({ status: 'disconnected', count: 0 });
+  const counted = module.menuBadgeDisplay({ status: 'disconnected', count: 3 });
+  const ready = module.menuBadgeDisplay({ status: 'ready', count: 0 });
+
+  // 같은 사실을 여덟 번 반복하는 대신 탭은 비우고, 연결 안내는 보드 배너가 맡는다.
+  assert.deepEqual(idle, { text: '—', status: 'idle' });
+  assert.deepEqual(counted, { text: '3', status: 'disconnected' });
+  assert.deepEqual(ready, { text: '준비', status: 'ready' });
+  // 원래 라벨 계약은 그대로 남는다.
+  assert.equal(module.menuBadgeText({ status: 'disconnected' }), '끊김');
+});

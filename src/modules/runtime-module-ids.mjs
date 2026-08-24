@@ -45,6 +45,7 @@ export const KNOWN_FOUNDATION_MODULE_IDS = Object.freeze([
   'src/modules/batch-control-contract.mjs',
   'src/modules/batch-control-polling.mjs',
   'src/modules/batch-control-worker-install.mjs',
+  'src/modules/unthrottled-interval.mjs',
   'src/modules/batch-control-order-intake.mjs',
   'src/modules/batch-control-worker.mjs',
   'src/modules/factory-cafe24-command-bridge.mjs',

@@ -187,9 +187,13 @@ def _last_work_has_required_field_drop(existing, incoming):
     )
 
 
-def _last_work_value_drop_path(existing, incoming, path=""):
+def _last_work_value_drop_path(existing, incoming, path="", *, allow_inline_image_offload=False):
     if isinstance(existing, str):
         if not existing.strip():
+            return ""
+        # 인라인 base64 는 아카이브에 저장된 뒤 참조만 남기고 떨어져 나간다. 파일명이나
+        # 옵션 이름 같은 실제 글자는 그대로 보호한다.
+        if allow_inline_image_offload and existing.strip().startswith("data:"):
             return ""
         return (path or "$") if not isinstance(incoming, str) or not incoming.strip() else ""
     if isinstance(existing, list):
@@ -198,7 +202,12 @@ def _last_work_value_drop_path(existing, incoming, path=""):
         if not isinstance(incoming, list) or len(existing) > len(incoming):
             return path or "$"
         for index, value in enumerate(existing):
-            dropped = _last_work_value_drop_path(value, incoming[index], f"{path}[{index}]")
+            dropped = _last_work_value_drop_path(
+                value,
+                incoming[index],
+                f"{path}[{index}]",
+                allow_inline_image_offload=allow_inline_image_offload,
+            )
             if dropped:
                 return dropped
         return ""
@@ -209,7 +218,12 @@ def _last_work_value_drop_path(existing, incoming, path=""):
             return path or "$"
         for key, value in existing.items():
             child_path = f"{path}.{key}" if path else str(key)
-            dropped = _last_work_value_drop_path(value, incoming.get(key), child_path)
+            dropped = _last_work_value_drop_path(
+                value,
+                incoming.get(key),
+                child_path,
+                allow_inline_image_offload=allow_inline_image_offload,
+            )
             if dropped:
                 return dropped
         return ""
@@ -225,6 +239,44 @@ def _last_work_nonnegative_int(value):
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+_LAST_WORK_DURABLE_ASSET_KEYS = (
+    "archiveId",
+    "imageUrl",
+    "resultAssetId",
+    "assetId",
+    "localArchiveId",
+    "thumbnailReference",
+)
+
+
+def _last_work_row_keeps_durable_asset(row):
+    if not isinstance(row, dict):
+        return False
+    return any(str(row.get(key) or "").strip() for key in _LAST_WORK_DURABLE_ASSET_KEYS)
+
+
+def _last_work_row_drop_path(existing_row, incoming_row):
+    """행 하나가 실제로 무언가를 잃었는지 본다.
+
+    인라인 base64 이미지는 로컬 아카이브에 저장된 뒤 참조만 남기고 떨어져 나간다.
+    그 자리에 아카이브 참조가 남아 있으면 그림은 그대로 있는 것이므로 소실로 세지
+    않는다. 소실로 세면 옵션 이미지를 실제로 만든 제품은 다음 저장에서 영원히 막힌다.
+    """
+    if not isinstance(existing_row, dict) or not isinstance(incoming_row, dict):
+        return _last_work_value_drop_path(existing_row, incoming_row)
+    offloaded = _last_work_row_keeps_durable_asset(incoming_row)
+    for key, value in existing_row.items():
+        dropped = _last_work_value_drop_path(
+            value,
+            incoming_row.get(key),
+            str(key),
+            allow_inline_image_offload=offloaded,
+        )
+        if dropped:
+            return dropped
+    return ""
 
 
 def _last_work_row_key(row, index):
@@ -250,7 +302,7 @@ def _last_work_rows_sparse_drop_reason(existing_rows, incoming_rows, *, match_by
         return "length"
     if match_by_position:
         for index, row in enumerate(existing_rows):
-            dropped = _last_work_value_drop_path(row, incoming_rows[index])
+            dropped = _last_work_row_drop_path(row, incoming_rows[index])
             if dropped:
                 return f"[{index}].{dropped}"
         return ""
@@ -262,7 +314,7 @@ def _last_work_rows_sparse_drop_reason(existing_rows, incoming_rows, *, match_by
         key = _last_work_row_key(row, index)
         if key not in incoming_by_key:
             return f"[{key}].missing"
-        dropped = _last_work_value_drop_path(row, incoming_by_key[key])
+        dropped = _last_work_row_drop_path(row, incoming_by_key[key])
         if dropped:
             return f"[{key}].{dropped}"
     return ""
@@ -285,12 +337,13 @@ def _last_work_derived_state_drop_reason(existing, incoming):
         if _list_len(existing_options.get(key)) > _list_len(incoming_options.get(key)):
             return f"optionSorter.{key}.length"
     for key in ("slots", "optionResults"):
-        if _last_work_rows_have_sparse_drop(
+        sparse_reason = _last_work_rows_sparse_drop_reason(
             existing_options.get(key),
             incoming_options.get(key),
             match_by_position=key == "slots",
-        ):
-            return f"optionSorter.{key}.content"
+        )
+        if sparse_reason:
+            return f"optionSorter.{key}.content{sparse_reason}"
     existing_named = any(
         isinstance(slot, dict) and not re.fullmatch(r"\d+(?:번)?", str(slot.get("name") or "").strip())
         for slot in existing_options.get("slots") or []

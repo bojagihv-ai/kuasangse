@@ -55,6 +55,19 @@ export function menuBadgeText(value = {}) {
   return MENU_BADGE_LABELS[status] || status || '—';
 }
 
+/**
+ * 탭에 실제로 찍을 배지 글자.
+ * 조립공장이 끊겨 있으면 모든 탭이 '끊김'으로 도배되는데, 그건 같은 사실을 여덟 번
+ * 반복하는 것뿐이라 정보가 없다. 그럴 때는 탭을 비우고 연결 안내는 배너 한 줄로 모은다.
+ */
+export function menuBadgeDisplay(value = {}) {
+  const badge = record(value);
+  if (String(badge.status || '') === 'disconnected' && !(Number(badge.count) > 0)) {
+    return { text: '—', status: 'idle' };
+  }
+  return { text: menuBadgeText(badge), status: String(badge.status || '') };
+}
+
 export function createMenuState(initialKey = 'overview') {
   return Object.freeze({ activeKey: MENU_KEYS.includes(initialKey) ? initialKey : 'overview' });
 }
@@ -147,8 +160,9 @@ export function bindMenuShell({ documentRef = globalThis.document, onChange = ()
         const badge = root?.querySelector?.(`[data-menu-badge="${item.key}"]`);
         const value = record(badges)[item.key];
         if (!badge || !value) continue;
-        badge.textContent = menuBadgeText(value);
-        badge.dataset.status = String(value.status || '');
+        const display = menuBadgeDisplay(value);
+        badge.textContent = display.text;
+        badge.dataset.status = display.status;
       }
     },
   });

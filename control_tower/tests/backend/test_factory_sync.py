@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from hashlib import sha256
 import json
+import shutil
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -644,15 +645,21 @@ def test_live_session_hello_heartbeat_disconnect_and_stale_fences() -> None:
     assert expired["reason"] == "factory_heartbeat_timeout"
 
 
-def test_default_worker_timeout_tolerates_one_minute_background_timer() -> None:
+def test_default_worker_timeout_tolerates_background_timer_throttling() -> None:
+    """창이 뒤로 밀린 브라우저 워커의 신호 지연을 견딘다.
+
+    워커는 브라우저 탭이라 창이 뒤로 밀리면 타이머가 크게 조여진다. 90 초 기준에서는
+    멀쩡히 일하던 워커가 반복해서 끊기고 그때까지 만든 결과가 통째로 되돌아갔다.
+    진짜로 죽은 워커는 주문 만료가 같은 기준으로 회수하므로 감지가 늦어지지는 않는다.
+    """
     now = [10.0]
     bridge = FactorySyncBridge(clock=lambda: now[0])
     bridge.hello(_hello())
 
-    now[0] = 85.0
+    now[0] = 290.0
     assert bridge.current_state()["connected"] is True
 
-    now[0] = 101.0
+    now[0] = 320.0
     assert bridge.current_state()["reason"] == "factory_heartbeat_timeout"
 
 
@@ -1754,8 +1761,7 @@ def test_product_completion_rolls_back_nested_projection_when_persistence_fails(
         {**order, "workerId": worker["workerId"], "accepted": True, "eventSequence": 1},
     )
     before = bridge.current_state()
-    state_path.unlink()
-    state_path.parent.rmdir()
+    shutil.rmtree(state_path.parent)
     state_path.parent.write_text("fixture", encoding="utf-8")
     result_projection = _product_projection(queued["jobId"], sequence=8, revision=10)
     result_projection["stages"][0]["selectedIds"] = []
@@ -1891,6 +1897,7 @@ def test_factory_startup_blocks_and_persists_running_product_orphan_until_explic
     queued, worker, old_order = _claim_checkpointed_product(bridge, suffix="startup-orphan")
     job_id = str(queued["jobId"])
     before_job = _durable_product_job(state_path, job_id)
+    before_runtime_payload = bridge.product_job_context(job_id)["payload"]
     original_persist = FactorySyncBridge._persist_product_jobs_locked
     startup_persist_calls = [0]
 
@@ -1947,7 +1954,7 @@ def test_factory_startup_blocks_and_persists_running_product_orphan_until_explic
     assert resumed_order["command"]["payload"]["restoreOnly"] is True
     assert resumed_order["command"]["payload"]["checkpoint"] == before_job["checkpoint"]
     assert restored.product_jobs()[0]["attempts"] == int(before_job["attempts"]) + 1
-    assert restored.product_job_context(job_id)["payload"] == before_job["payload"]
+    assert restored.product_job_context(job_id)["payload"] == before_runtime_payload
 
 
 def test_factory_heartbeat_timeout_rolls_back_when_product_persistence_fails(

@@ -5621,7 +5621,8 @@ test('restoreOnly checkpoint keeps exact identity, allows one-way Cafe24 target 
   assert.deepEqual(events, [
     `load:${workspaceId}`,
     `authority:${workspaceScopeId}`,
-    'hydrate:{"force":true,"forceRevisionRestore":true,"render":false}',
+    // 화면에 남아 있던 다른 제품이 아니라 이 작업의 범위를 명시해야 한다.
+    `hydrate:{"force":true,"forceRevisionRestore":true,"render":false,"documentScopeId":"${workspaceScopeId}"}`,
     'update:factory/sections:guide:apply-sections:detail-document',
     'apply-selected-assets',
     'save:{"sync":false}',
@@ -5907,7 +5908,14 @@ test('restoreOnly exact checkpoint must hydrate durable competitors before retur
       },
       hydrateServerLastWorkSnapshot: async hydrateOptions => {
         events.push('hydrate');
-        assert.deepEqual(clone(hydrateOptions), {
+        const hydrateSnapshot = clone(hydrateOptions);
+        // 이 작업의 범위를 명시해야 화면에 남아 있던 다른 제품을 도로 실어 오지 않는다.
+        assert.ok(
+          String(hydrateSnapshot.documentScopeId || '').includes(jobId),
+          `복원에 이 작업의 범위를 넘기지 않았습니다: ${hydrateSnapshot.documentScopeId}`,
+        );
+        delete hydrateSnapshot.documentScopeId;
+        assert.deepEqual(hydrateSnapshot, {
           force: true,
           forceRevisionRestore: true,
           render: false,
@@ -5997,6 +6005,9 @@ test('restoreOnly exact checkpoint must hydrate durable competitors before retur
     `load:${workspaceId}`,
     'projection:0',
     `authority:${workspaceScopeId}`,
+    'hydrate',
+    // 첫 요청이 "바꿀 것 없음"으로 돌아오는 것은 앱이 켜지며 다른 제품을 불러오는 중일
+    // 때도 생긴다. 한 번 더 요청해 본 뒤에야 실패로 단정한다.
     'hydrate',
   ]);
 

@@ -13340,6 +13340,12 @@ async function factoryGetSessionDirectory(options = {}) {
   let root = await factoryGetArchiveDirectoryHandle({ factory, operationToken });
   if (!store.isOperationCurrent(operationToken)) throw factoryRuntimeStaleActionError('factory/archive:setSessionDirectory');
   if (!root) {
+    // 생산관제 워커에는 폴더 선택창에 답할 사람이 없다. 물어보면 브라우저가 거부하고
+    // 그 실패가 제품 작업 전체를 죽인다. 그림은 이미 로컬 보관에 들어가 있으므로,
+    // 디스크 보관은 조용히 건너뛴다.
+    const batchWorker = typeof classicRuntimeIsBatchWorker === 'function'
+      && classicRuntimeIsBatchWorker();
+    if (batchWorker) return null;
     root = await factoryChooseArchiveFolder({
       factory,
       operationToken,
@@ -13431,6 +13437,8 @@ async function factoryArchiveAsset(assetInput, options = {}) {
     factory: archiveContext,
     operationToken,
   });
+  // 폴더가 없어 디스크 보관을 건너뛴 경우다. 로컬 보관에는 이미 들어가 있다.
+  if (!sessionDir) return false;
   if (!store.isOperationCurrent(operationToken)) return false;
   const stageDir = await sessionDir.getDirectoryHandle(ioAsset.stageId || 'detail', { create: true });
   if (!store.isOperationCurrent(operationToken)) return false;
@@ -13499,6 +13507,12 @@ async function factoryArchiveSession(options = {}) {
   try {
     const sessionDir = await factoryGetSessionDirectory({ factory, operationToken });
     requireCurrent();
+    if (!sessionDir) {
+      // 물어볼 사람이 없어 디스크 보관을 건너뛴다. 이것으로 작업을 실패시키지 않는다.
+      factorySetStageStatus('export', 'done', '디스크 보관 건너뜀 · 로컬 보관 유지', factory);
+      factoryLog('저장 폴더가 지정되지 않아 디스크 보관을 건너뛰었습니다. 결과물은 로컬 보관에 있습니다.', 'warn', factory);
+      return true;
+    }
     const inputsDir = await sessionDir.getDirectoryHandle('inputs', { create: true });
     requireCurrent();
     if (factory.product.imageBase64) {

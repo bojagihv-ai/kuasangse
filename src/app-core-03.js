@@ -10693,6 +10693,9 @@ function factoryRuntimeCreateCommandPolicies() {
       'archive.folderName', 'archive.sessionFolderName', 'archive.status',
     ]),
   ]);
+  add(['factory/archive:clearSkippedArchiveFailure'], 'factory-assets', [
+    part('factory-assets', ['stages.export']),
+  ]);
   add(['factory/runtime:refreshLocalArchiveAssets'], 'factory-assets', [
     factoryWorkflowAssets,
     part('factory', ['logs', 'logStageId']),
@@ -16533,11 +16536,21 @@ function factoryRuntimeControlProjectionMatchesCheckpoint(projection = {}, check
     ));
 }
 
-function factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot = {}, checkpoint = {}, jobId = '') {
+function factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot = {}, checkpoint = {}, jobId = '', options = {}) {
   const assets = snapshot?.assets && typeof snapshot.assets === 'object' ? snapshot.assets : snapshot;
   const factory = assets?.factory && typeof assets.factory === 'object' ? assets.factory : {};
   const productKey = String(factoryCurrentProductKey(factory) || '').trim();
   const productNo = String(factoryCafe24TargetInfo(factory)?.productNo || '').trim();
+  const rawRevision = snapshot?.workspaceRevision?.counter
+    ?? assets?.workspaceRevision?.counter
+    ?? factory.workspaceRevision?.counter;
+  const revision = Number(rawRevision);
+  // 저장된 문서가 판 번호를 안 달고 있는 경우가 있다. 없는 값을 낡은 것으로 치면
+  // 신원이 완벽히 같은 스냅샷도 영영 실리지 않아, 탭을 새로 연 작업이 통째로 막힌다.
+  // null 을 Number 에 넣으면 0 이 되어 "가장 낡은 판"으로 둔갑하므로 따로 걸러낸다.
+  const revisionUnreadable = rawRevision === null
+    || rawRevision === undefined
+    || !Number.isFinite(revision);
   return factoryRuntimeControlProjectionMatchesCheckpoint({
     session: {
       workspaceId: String(factory.workspace?.id || factory.currentProjectId || assets?.currentProjectId || '').trim(),
@@ -16545,10 +16558,16 @@ function factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot = {}, che
       productKey,
       runId: String(factoryCurrentWorkflowRunId(factory) || '').trim(),
       inputFingerprint: String(factoryCurrentInputImageFingerprint(factory) || '').trim(),
-      revision: Number(snapshot?.workspaceRevision?.counter ?? assets?.workspaceRevision?.counter ?? factory.workspaceRevision?.counter),
+      revision,
     },
-    registration: { jobId: String(factory.goalRun?.jobId || factory.batchJobId || '').trim() },
-  }, checkpoint, jobId);
+    // Cafe24 에 올린 뒤에는 이 제품의 신원이 factory:키 에서 cafe24:번호 로 바뀐다.
+    // 등록 대상 번호를 함께 주지 않으면 그 승격을 알아볼 수 없어, 한 번 등록한 제품은
+    // 자기 저장본으로 다시 열 수 없게 된다.
+    registration: {
+      jobId: String(factory.goalRun?.jobId || factory.batchJobId || '').trim(),
+      productId: productNo ? `cafe24:${productNo}` : '',
+    },
+  }, checkpoint, jobId, { ignoreRevision: revisionUnreadable || options.ignoreRevision === true });
 }
 
 async function factoryRuntimeControlSaveProductCheckpoint(payload = {}, status = '', stageKey = '') {
@@ -16588,11 +16607,39 @@ async function factoryRuntimeControlSaveProductCheckpoint(payload = {}, status =
     const detail = String(state.error || '').trim();
     throw factoryRuntimeBatchCommandError(`factory_product_checkpoint_save_failed${detail ? `: ${detail}` : ''}`);
   }
+  // 판 번호를 읽기 전에 서버 문서를 먼저 밀어 넣는다. 이걸 빼면 체크포인트가 아직
+  // 저장되지 않은 판을 적는다. 실측: 문서는 판 35 로 저장됐는데 1.3초 뒤 기록된
+  // 체크포인트는 60 이었고, 그 작업은 다시 열 때마다 낡은 문서 취급을 받아 막혔다.
+  if (typeof saveLastWorkNow === 'function') await saveLastWorkNow({ sync: false });
   const projection = await factoryRuntimeControlProjection();
   return Object.freeze({
     projection,
     checkpoint: factoryRuntimeControlCheckpointFromProjection(payload, projection, status, stageKey),
   });
+}
+
+const FACTORY_ARCHIVE_FOLDER_FAILURE = '저장 폴더 권한이 없습니다.';
+
+async function factoryRuntimeControlClearSkippedArchiveFailure() {
+  const batchWorker = typeof classicRuntimeIsBatchWorker === 'function'
+    && classicRuntimeIsBatchWorker();
+  if (!batchWorker) return false;
+  const stage = factoryRuntimeReadFactory()?.stages?.export;
+  if (String(stage?.status || '') !== 'error') return false;
+  if (!String(stage?.message || '').includes(FACTORY_ARCHIVE_FOLDER_FAILURE)) return false;
+  await factoryRuntimeUpdateOwnedFactory(
+    'factory/archive:clearSkippedArchiveFailure',
+    'factory-assets',
+    draft => {
+      const target = draft.stages?.export;
+      if (!target) return false;
+      target.status = 'done';
+      target.message = '디스크 보관 건너뜀 · 로컬 보관 유지';
+      return true;
+    },
+  );
+  await saveLastWorkNow({ sync: false });
+  return true;
 }
 
 async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
@@ -16601,24 +16648,40 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
   if (state.projectBusy) {
     throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_busy');
   }
+  // 서버에서 실어 오는 경로는 "지금 열려 있는" 작업공간의 문서를 읽는다. 먼저 이 작업으로
+  // 옮기지 않으면 다른 제품의 문서를 읽고 신원이 다르다며 복원이 영영 실패한다.
+  factoryRuntimeControlAdoptProductProject(jobId);
   const canHydrateServerCheckpoint = typeof hydrateServerLastWorkSnapshot === 'function';
+  // 복원한 뒤의 확인은 방금 실어 온 그 문서를 다시 보는 것이다. 판 번호는 창이 문서를
+  // 열 때마다 새로 매기므로(실측 96 → 33) 여기서 비교하면 작업이 영영 막힌다.
+  const RESTORED_IDENTITY_ONLY = Object.freeze({ ignoreRevision: true });
   const hydrateServerCheckpoint = async () => {
     let rejected = false;
-    const hydrated = await hydrateServerLastWorkSnapshot({
+    const requestHydration = () => hydrateServerLastWorkSnapshot({
       force: true,
       forceRevisionRestore: true,
       render: false,
+      // 화면에 남아 있던 다른 제품이 아니라, 불러올 이 작업의 범위를 명시한다.
+      documentScopeId: getCurrentDocumentWorkspaceScope(checkpoint.projectId),
     }, {
       validateSnapshot: snapshot => {
+        // 같은 작업의 낡은 스냅샷을 고르면 만들어 둔 결과를 잃는다. 판이 달려 있으면
+        // 그대로 비교하고, 아예 없는 문서만 신원으로 판단한다.
         const valid = factoryRuntimeControlServerSnapshotMatchesCheckpoint(snapshot, checkpoint, jobId);
         rejected = !valid;
         return valid;
       },
     });
+    let hydrated = await requestHydration();
+    // 앱이 켜지며 다른 제품을 불러오는 중이면 첫 요청은 그 작업이 끝나기만 기다렸다가
+    // 그냥 거짓을 돌려준다. 실측: 그 사이 화면은 단색으로 바뀌고 R3 복원은 실패했다.
+    // 한 번 더 요청해야 이 작업이 실제로 실린다.
+    if (hydrated !== true && !rejected) hydrated = await requestHydration();
     return { hydrated, rejected };
   };
   const restored = await loadProjectRecord(checkpoint.projectId, { startupRestore: true, checkpointRestore: true });
   let hydratedServerCheckpoint = false;
+  let restoredOntoCheckpoint = false;
   let projection;
   if (!restored) {
     if (!canHydrateServerCheckpoint) {
@@ -16626,20 +16689,39 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
     }
     const hydration = await hydrateServerCheckpoint();
     hydratedServerCheckpoint = hydration.hydrated;
-    if (hydratedServerCheckpoint !== true) {
-      throw factoryRuntimeBatchCommandError(
-        hydration.rejected ? 'factory_product_checkpoint_restore_mismatch' : 'factory_product_checkpoint_hydration_failed',
-      );
+    if (hydration.rejected) {
+      throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
     projection = await factoryRuntimeControlProjection();
-    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId)) {
+    // 어느 스냅샷을 실을지는 위에서 판까지 따져 이미 골랐다. 실어 놓은 뒤의 판 번호는
+    // 이 창이 문서를 새로 열며 매긴 값이라 체크포인트의 판과 비교할 수 없다.
+    const alreadyOnCheckpoint = factoryRuntimeControlProjectionMatchesCheckpoint(
+      projection,
+      checkpoint,
+      jobId,
+      RESTORED_IDENTITY_ONLY,
+    );
+    restoredOntoCheckpoint = alreadyOnCheckpoint;
+    // "실어 올 것이 없다"는 응답은 이미 그 문서를 열고 있을 때도 온다. 그때까지 실패로
+    // 세면, 제대로 열려 있는 작업이 복원 실패로 막힌다.
+    if (hydratedServerCheckpoint !== true && !alreadyOnCheckpoint) {
+      throw factoryRuntimeBatchCommandError('factory_product_checkpoint_hydration_failed');
+    }
+    if (!alreadyOnCheckpoint) {
       throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
   }
   projection ||= await factoryRuntimeControlProjection();
   if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, {
     allowStaleProductBeforeHydration: canHydrateServerCheckpoint,
-    ignoreRevision: restored === true,
+    // loadProjectRecord 는 참/거짓이 아니라 불러온 기록을 돌려준다. === true 로 비교하면
+    // 문서를 제대로 불러오고도 판 비교가 켜져, 새 탭에서 그 작업이 영영 막힌다.
+    // 방금 이 체크포인트 위로 문서를 세워 놓고, 바로 다음 줄에서 판으로 다시 거절하면
+    // 복원은 성공해 놓고도 실패로 끝난다. 실측: RP 를 제대로 실어 놓고 판 59 와 비교해
+    // 막혔다.
+    ignoreRevision: Boolean(restored)
+      || hydratedServerCheckpoint === true
+      || restoredOntoCheckpoint,
   })) {
     throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
   }
@@ -16659,7 +16741,7 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
       );
     }
     projection = await factoryRuntimeControlProjection();
-    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId)) {
+    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, RESTORED_IDENTITY_ONLY)) {
       throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
   }
@@ -16676,8 +16758,15 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
   );
   await saveLastWorkNow({ sync: false });
   projection = await factoryRuntimeControlProjection();
-  if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId)) {
+  if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, RESTORED_IDENTITY_ONLY)) {
     throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
+  }
+  // 워커에는 폴더 선택창에 답할 사람이 없어 디스크 보관은 건너뛴다. 그 전에 남은 옛
+  // 실패 표시를 그대로 두면, 다 만들어 둔 제품이 매번 검수 대기로 되돌아온다.
+  if (typeof factoryRuntimeControlClearSkippedArchiveFailure === 'function'
+    && await factoryRuntimeControlClearSkippedArchiveFailure()) {
+    // 정리하기 전에 뜬 판을 그대로 쓰면, 관제탑에는 방금 지운 실패가 그대로 보고된다.
+    projection = await factoryRuntimeControlProjection();
   }
   if (!factoryRuntimeControlProvidedColorOptionsMatch(factoryRuntimeReadFactory(), payload)) {
     await factoryRuntimeUpdateOwnedFactory(
@@ -16687,7 +16776,7 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
     );
     await saveLastWorkNow({ sync: false });
     projection = await factoryRuntimeControlProjection();
-    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId)) {
+    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, RESTORED_IDENTITY_ONLY)) {
       throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
   }
@@ -17176,6 +17265,15 @@ async function factoryRuntimeControlRunProduct(payload = {}) {
   if (payload.restoreOnly === true) {
     return factoryRuntimeControlRestoreProductCheckpoint(payload);
   }
+  // 저장해 둔 지점이 있는데 지금 다른 제품을 들고 있으면 이 작업부터 연다. 열지 않고
+  // 진행하면 화면에 남아 있던 다른 제품의 내용이 이 작업의 문서로 저장된다.
+  if (payload.checkpoint && typeof payload.checkpoint === 'object') {
+    const opened = await factoryRuntimeControlProjection();
+    const targetJobId = String(payload.jobId || '').trim();
+    if (String(opened?.registration?.jobId || '').trim() !== targetJobId) {
+      await factoryRuntimeControlRestoreProductCheckpoint(payload);
+    }
+  }
   await factoryRuntimeControlPrepareProduct(payload);
   const before = await factoryRuntimeControlProjection();
   const missingRequired = (before.inputs || []).flatMap(input => (
@@ -17254,7 +17352,6 @@ async function factoryRuntimeControlRunProduct(payload = {}) {
 }
 
 const FACTORY_CAFE24_FIELD_MAP = Object.freeze({
-  categoryId: { fieldId: 'category', label: '분류' },
   salePrice: { fieldId: 'sale_price', label: '판매가' },
   supplyPrice: { fieldId: 'purchase_price', label: '공급가 / 원가' },
   displayStatus: { fieldId: 'display_status', label: '진열상태' },
@@ -17271,9 +17368,41 @@ function factoryRuntimeControlCafe24Values(payload = {}) {
   return values;
 }
 
+async function factoryRuntimeControlApplyCafe24Category(payload = {}) {
+  // 분류는 글자 한 줄이 아니라 등록 행이다. 글자로 넣으면 등록 직전 점검이 분류를
+  // 읽지 못해 category_id 로 막힌다.
+  const source = payload?.cafe24 && typeof payload.cafe24 === 'object' ? payload.cafe24 : {};
+  const categoryId = String(source.categoryId ?? '').trim();
+  if (!categoryId) return '';
+  await factoryRuntimeBridgeAction(
+    'factory/fields:commitField',
+    undefined,
+    draft => {
+      const product = draft.product && typeof draft.product === 'object' ? draft.product : (draft.product = {});
+      product.finalDb = product.finalDb && typeof product.finalDb === 'object' ? product.finalDb : {};
+      product.finalDb.category = [{
+        category_no: categoryId,
+        display_group: '1',
+        recommend: 'F',
+        new: 'F',
+      }];
+      return 'category';
+    },
+    { render: false, forceSave: true },
+  );
+  return categoryId;
+}
+
 async function factoryRuntimeControlRegisterCafe24(payload = {}) {
   const jobId = String(payload.jobId || '').trim();
   if (!jobId) throw factoryRuntimeBatchCommandError('factory_product_payload_invalid');
+  // 지금 다른 제품을 물고 있으면 저장해 둔 지점으로 이 작업부터 연다. 열지 않고 등록하면
+  // 화면에 남아 있던 다른 제품의 값이 스토어로 나간다.
+  const current = await factoryRuntimeControlProjection();
+  const onTarget = String(current?.registration?.jobId || '').trim() === jobId;
+  if (!onTarget && payload.checkpoint && typeof payload.checkpoint === 'object') {
+    await factoryRuntimeControlRestoreProductCheckpoint({ ...payload, jobId });
+  }
   factoryRuntimeControlAdoptProductProject(jobId);
   if (typeof factoryCommitAutomationWizardFieldValue !== 'function'
     || typeof factoryRuntimeBridgeAction !== 'function') {
@@ -17281,6 +17410,7 @@ async function factoryRuntimeControlRegisterCafe24(payload = {}) {
   }
   // 관제탑이 지정한 등록 대상 값을 먼저 확정한다. 이것을 넣지 않으면 등록 화면이 없는
   // 배치에서 분류·판매가가 비어 등록이 막힌다.
+  await factoryRuntimeControlApplyCafe24Category(payload);
   for (const field of factoryRuntimeControlCafe24Values(payload)) {
     await factoryRuntimeBridgeAction(
       'factory/fields:commitField',
@@ -17304,12 +17434,21 @@ async function factoryRuntimeControlRegisterCafe24(payload = {}) {
     || '',
   ).trim();
   if (registered !== true) {
+    // 실패 사유는 등록이 남긴 영수증이 정답이다. 사전점검 목록을 먼저 읽으면 이미 지나간
+    // 항목을 사유로 적어, 사람이 엉뚱한 곳을 고치게 된다.
+    const receipt = factory?.product?.cafe24RegistrationReceipt || {};
     const reason = String(
-      factory?.product?.finalRegistration?.message
+      receipt.error
+      || factory?.product?.finalRegistration?.message
       || factoryRuntimeControlCafe24BlockReason(projection)
       || 'factory_cafe24_registration_declined',
     ).trim();
-    throw factoryRuntimeBatchCommandError(`factory_cafe24_registration_declined: ${reason}`);
+    // 상품번호가 남았다면 스토어에는 이미 만들어졌다는 뜻이다. 이걸 숨기면 다시 눌러
+    // 같은 상품을 하나 더 만든다.
+    const createdNo = String(productNo || receipt.productNo || '').trim();
+    throw factoryRuntimeBatchCommandError(
+      `factory_cafe24_registration_declined: ${reason}${createdNo ? ` · 스토어에 상품 ${createdNo} 이(가) 이미 생성됨` : ''}`,
+    );
   }
   const saved = await factoryRuntimeControlSaveProductCheckpoint(payload, 'completed', 'cafe24');
   return Object.freeze({

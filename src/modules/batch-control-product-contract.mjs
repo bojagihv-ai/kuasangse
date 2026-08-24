@@ -224,9 +224,11 @@ export function validateProductRunPayload(payload) {
   ) {
     throw new BatchWorkerContractError('factory_product_base_image_required');
   }
-  if (payload.restoreOnly === true) validateProductCheckpoint(payload.checkpoint, payload.jobId);
-  else if (payload.checkpoint !== undefined) {
-    throw new BatchWorkerContractError('factory_product_checkpoint_invalid');
+  // 저장해 둔 지점은 복원 전용 주문에만 오는 것이 아니다. 워커가 다른 제품을 들고 있을 때
+  // 이것으로 이 작업을 먼저 열어야, 그 제품의 내용이 이 작업의 문서로 저장되지 않는다.
+  // 복원 전용 주문에서는 여전히 반드시 있어야 한다.
+  if (payload.restoreOnly === true || payload.checkpoint !== undefined) {
+    validateProductCheckpoint(payload.checkpoint, payload.jobId);
   }
   return Object.freeze({ ...payload });
 }

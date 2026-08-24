@@ -514,7 +514,10 @@ def test_same_count_sparse_derived_rows_cannot_erase_saved_content(authority_cli
     assert regressed.status_code == 200
     assert regressed.get_json()["accepted"] is False
     assert regressed.get_json()["protectedNoOp"] is True
-    assert regressed.get_json()["reason"].endswith("optionSorter.slots.content")
+    # 어느 칸이 비었는지까지 적어야 막힌 작업을 사람이 풀 수 있다.
+    reason = regressed.get_json()["reason"]
+    assert "optionSorter.slots.content" in reason
+    assert reason.endswith("imgIds")
 
 
 def test_richer_option_slots_may_replace_generated_row_ids(authority_client) -> None:
