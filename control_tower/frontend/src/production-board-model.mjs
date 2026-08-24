@@ -85,6 +85,26 @@ function cellState(stage, { reservedCandidateId, jobStatus, waitingStageKey, rea
   return 'empty';
 }
 
+// 투입값 이름을 사람 말로 보여준다. 코드 이름을 그대로 내면 무엇을 채워야 할지 모른다.
+export const PRODUCT_VALUE_LABELS = Object.freeze({
+  category: '상품 종류',
+  material: '소재',
+  originCountry: '원산지',
+  size: '사이즈/규격',
+  salePrice: '판매가',
+  stock: '기본 재고',
+  usage: '사용용도',
+  optionMode: '옵션 여부',
+  cafe24CategoryId: 'Cafe24 분류번호',
+  supplyPrice: '공급가',
+  displayStatus: '진열',
+  sellingStatus: '판매',
+});
+
+function valueLabel(key) {
+  return PRODUCT_VALUE_LABELS[text(key)] || text(key);
+}
+
 const OPERATOR_MESSAGES = Object.freeze({
   factory_product_checkpoint_save_failed: '작업 저장에 실패했습니다. 조립공장에서 이 작업을 다시 열고 재개하세요.',
   factory_product_checkpoint_missing: '저장된 작업 상태가 없습니다. 처음부터 다시 실행해야 합니다.',
@@ -257,8 +277,17 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     // 한 줄을 만들어 사람이 세지 않고도 바로 움직일 수 있게 한다.
     const pickableCell = cells.find(cell => cell.pickable);
     const firstUnfinished = cells.find(cell => !cell.selectedId);
+    const missingValues = list(job.missingRequiredValues).map(text).filter(Boolean);
     const nextAction = (() => {
       if (cafe24Registered) return { kind: 'registered', copy: 'Cafe24 등록까지 끝났습니다', tone: 'ok' };
+      // 값이 비어 있으면 무엇을 만들어도 어긋난다. 다른 안내보다 먼저 지목한다.
+      if (missingValues.length && status !== 'running') {
+        return {
+          kind: 'values',
+          copy: `다음: 투입값 채우기 · ${missingValues.map(valueLabel).join(', ')}`,
+          tone: 'attention',
+        };
+      }
       if (status === 'completed' || cafe24Declined) {
         if (!cafe24ValuesReady) return { kind: 'cafe24-values', copy: '다음: Cafe24 등록값 입력', tone: 'attention' };
         return { kind: 'cafe24', copy: '다음: Cafe24 등록', tone: 'attention' };
@@ -328,6 +357,9 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       cafe24Values,
       cafe24ValuesReady,
       cafe24Declined,
+      // 비어 있는 투입값을 화면이 알아야, 입력·소스로 되돌아가지 않고 그 자리에서 채울 수 있다.
+      requiredValues: record(job.requiredValues),
+      missingRequiredValues: list(job.missingRequiredValues).map(text).filter(Boolean),
       nextAction,
       autoResumePending: job.autoResumePending === true,
       machineMs: integer(record(job.timing).totalMachineMs),

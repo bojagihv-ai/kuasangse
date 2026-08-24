@@ -8,7 +8,8 @@ import {
   durationLabel,
   projectProductionBoard,
   summarizeBatchSelection,
-} from './production-board-model.mjs?parallelBoard=7';
+  PRODUCT_VALUE_LABELS,
+} from './production-board-model.mjs?parallelBoard=8';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -72,6 +73,7 @@ export function mountProductionBoard(runtime, {
   let connected = null;
   let openResults = '';
   let openCafe24Values = '';
+  let openProductValues = '';
   const resultCache = new Map();
   let stopped = false;
   let loaded = false;
@@ -193,6 +195,58 @@ export function mountProductionBoard(runtime, {
   { name: 'displayStatus', label: '진열 (T/F)', placeholder: 'F = 진열 안 함' },
   { name: 'sellingStatus', label: '판매 (T/F)', placeholder: 'F = 판매 안 함' },
 ]);
+
+  function renderProductValueForm(row) {
+    // 비어 있는 값을 위에, 이미 채운 값을 아래에 둔다. 한 칸만 고치려고 열었을 때
+    // 나머지를 다시 쓰게 만들지 않는다.
+    const form = document.createElement('form');
+    form.className = 'board-cafe24-values';
+    form.dataset.jobId = row.jobId;
+    form.addEventListener('submit', event => event.preventDefault());
+    const title = element('div', 'board-candidate-heading');
+    title.append(
+      element('strong', '', `${row.productName} · 투입값`),
+      element('span', 'factory-pill', `비어 있음 ${row.missingRequiredValues.length}개`),
+    );
+    form.append(title);
+    const grid = element('div', 'board-cafe24-fields');
+    const missing = new Set(row.missingRequiredValues);
+    const order = [...row.missingRequiredValues, ...Object.keys(PRODUCT_VALUE_LABELS)
+      .filter(key => !missing.has(key) && row.requiredValues?.[key])];
+    for (const key of order) {
+      const label = element('label', 'board-cafe24-field');
+      const name = element('span', 'board-cafe24-field-label', PRODUCT_VALUE_LABELS[key] || key);
+      if (missing.has(key)) name.dataset.tone = 'attention';
+      label.append(name);
+      if (key === 'optionMode') {
+        const select = document.createElement('select');
+        select.name = key;
+        for (const [value, copy] of [['', '고르세요'], ['provided', '옵션 있음'], ['none', '옵션 없음']]) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = copy;
+          select.append(option);
+        }
+        select.value = String(row.requiredValues?.[key] || '');
+        label.append(select);
+      } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = key;
+        input.value = String(row.requiredValues?.[key] || '');
+        label.append(input);
+      }
+      grid.append(label);
+    }
+    form.append(grid);
+    const submit = button('board-mini-action', '이 값으로 저장', {
+      action: 'product-values-submit',
+      jobId: row.jobId,
+    });
+    submit.disabled = busy;
+    form.append(submit);
+    return form;
+  }
 
   function renderCafe24ValueForm(row) {
     // 이 값들은 조립공장에 등록 화면이 없어 관제탑에서만 지정할 수 있다. 비어 있는 채로
@@ -367,6 +421,15 @@ export function mountProductionBoard(runtime, {
       retry.disabled = busy;
       rowActions.append(retry);
     }
+    if (row.missingRequiredValues?.length && !row.cafe24Registered) {
+      // 입력·소스 화면으로 되돌아가지 않고 이 자리에서 채운다.
+      const fill = button('board-mini-action board-action-primary', '투입값 채우기', {
+        action: 'product-values',
+        jobId: row.jobId,
+      });
+      fill.disabled = busy;
+      rowActions.append(fill);
+    }
     if (row.nextAction?.kind === 'pick') {
       // "컷 선택 대기" 라고만 쓰여 있고 고르는 길이 안 보이면 사람이 움직일 수 없다.
       const pick = button(
@@ -482,6 +545,7 @@ export function mountProductionBoard(runtime, {
       nodes.push(renderRow(row));
       if (openResults === row.jobId) nodes.push(renderResultStrip(row));
       if (openCafe24Values === row.jobId) nodes.push(renderCafe24ValueForm(row));
+      if (openProductValues === row.jobId) nodes.push(renderProductValueForm(row));
       if (openCell.jobId !== row.jobId) continue;
       const cell = row.cells.find(item => item.stageKey === openCell.stageKey);
       if (cell && cell.candidates.length) nodes.push(renderCandidateStrip(row, cell));
@@ -573,6 +637,23 @@ export function mountProductionBoard(runtime, {
     }
   }
 
+  async function saveProductValues(jobId, values) {
+    busy = true;
+    render();
+    try {
+      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/values`, {
+        method: 'POST',
+        body: JSON.stringify(values),
+      });
+      setStatus('투입값을 저장했습니다. 이 작업을 재개하면 채운 값으로 진행합니다.', 'ok');
+    } catch (error) {
+      setStatus(`투입값 저장 실패 · ${String(error?.code || error?.message || error)}`, 'error');
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
   async function registerCafe24(jobId, values = {}) {
     busy = true;
     render();
@@ -630,6 +711,27 @@ export function mountProductionBoard(runtime, {
     }
     if (action === 'cafe24') {
       void registerCafe24(target.dataset.jobId);
+      return;
+    }
+    if (action === 'product-values') {
+      openProductValues = openProductValues === target.dataset.jobId ? '' : target.dataset.jobId;
+      render();
+      return;
+    }
+    if (action === 'product-values-submit') {
+      const form = target.closest('form');
+      const values = {};
+      for (const input of form?.querySelectorAll('input, select') || []) {
+        const value = String(input.value || '').trim();
+        if (value) values[input.name] = value;
+      }
+      if (!Object.keys(values).length) {
+        setStatus('채울 값을 하나 이상 넣어 주세요.', 'warning');
+        render();
+        return;
+      }
+      openProductValues = '';
+      void saveProductValues(target.dataset.jobId, values);
       return;
     }
     if (action === 'cafe24-values') {

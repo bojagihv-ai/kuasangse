@@ -1370,6 +1370,48 @@ class FactorySyncBridge:
         self._queue(order)
         return _copy(order)
 
+    def update_product_values(
+        self,
+        job_id: str,
+        values: Mapping[str, JsonValue] | None = None,
+    ) -> JsonObject:
+        """투입값을 이 자리에서 채운다.
+
+        값이 비어 투입된 작업은 입력·소스 화면으로 되돌아가야만 고칠 수 있었다. 아직
+        조립공장에 넘기지 않은 값이라 실행 중이 아닐 때만 손댄다.
+        """
+        source = values if isinstance(values, Mapping) else {}
+        unknown = set(source) - PRODUCT_VALUE_KEYS
+        if unknown:
+            raise FactorySyncError("factory_product_values_invalid")
+        normalized: JsonObject = {}
+        for key, raw in source.items():
+            if raw is None:
+                continue
+            if not isinstance(raw, (str, int)) or isinstance(raw, bool):
+                raise FactorySyncError("factory_product_values_invalid")
+            text_value = str(raw).strip()
+            if text_value:
+                normalized[key] = text_value
+        if not normalized:
+            raise FactorySyncError("factory_product_values_invalid")
+        with self._condition:
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            if job.status == "running" or job.current_order_id:
+                raise FactorySyncError("factory_product_job_busy")
+            with self._product_state_transaction_locked():
+                existing = job.payload.get("requiredValues")
+                merged = dict(existing) if isinstance(existing, Mapping) else {}
+                merged.update(normalized)
+                job.payload["requiredValues"] = merged
+                public_job = self._public_product_job(job)
+                self._append_event("factory.product.updated", {"job": public_job})
+                self._persist_product_jobs_locked()
+            self._condition.notify_all()
+            return public_job
+
     def queue_cafe24_registration(
         self,
         job_id: str,
@@ -2180,6 +2222,9 @@ class FactorySyncBridge:
             # 등록에 필요한 값이 투입값에 있는지 화면이 알아야, 없을 때 사람에게 받을 수 있다.
             # 분류 입력이 생기기 전에 투입된 작업은 이 값이 비어 있다.
             "cafe24Values": _cafe24_values_from_job(job.payload),
+            # 어떤 투입값이 비어 있는지 화면이 알아야, 그 자리에서 채울 수 있다.
+            "requiredValues": _product_values_from_job(job.payload),
+            "missingRequiredValues": sorted(_missing_product_values(job.payload)),
             "workfileName": str(
                 job.payload.get("workfileName")
                 or f"{job.payload.get('productName') or '상세페이지 작업'}.kuasangse"
@@ -3161,6 +3206,23 @@ def _rebind_request_is_idempotent(
         and receipt.get("newRevision") == payload.get("expectedHydratedWorkfileRevision")
         and receipt.get("newRunId") == payload.get("expectedRunId")
     )
+
+
+def _product_values_from_job(payload: Mapping[str, JsonValue]) -> JsonObject:
+    """투입할 때 채워 둔 값을 꺼낸다."""
+    source = payload.get("requiredValues")
+    values = source if isinstance(source, Mapping) else {}
+    return {
+        key: str(values[key]).strip()
+        for key in PRODUCT_VALUE_KEYS
+        if str(values.get(key) or "").strip()
+    }
+
+
+def _missing_product_values(payload: Mapping[str, JsonValue]) -> set[str]:
+    """조립공장이 요구하는데 아직 비어 있는 값을 고른다."""
+    present = set(_product_values_from_job(payload))
+    return set(PRODUCT_REQUIRED_VALUE_KEYS) - present
 
 
 def _cafe24_values_from_job(payload: Mapping[str, JsonValue]) -> JsonObject:

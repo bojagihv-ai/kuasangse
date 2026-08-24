@@ -1493,6 +1493,27 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "job": job}), 202
 
+    @app.post("/api/factory/jobs/<job_id>/values")
+    def factory_product_values(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            job = factory_sync.update_product_values(job_id, payload)
+        except FactorySyncError as error:
+            status = (
+                404
+                if error.code == "factory_product_job_not_found"
+                else 409
+                if error.code == "factory_product_job_busy"
+                else 422
+            )
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "job": job})
+
     @app.post("/api/factory/jobs/<job_id>/cafe24/register")
     def factory_product_cafe24_register(job_id: str) -> Response | tuple[Response, int]:
         csrf_error = require_csrf()
