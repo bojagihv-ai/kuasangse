@@ -360,6 +360,16 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       // 비어 있는 투입값을 화면이 알아야, 입력·소스로 되돌아가지 않고 그 자리에서 채울 수 있다.
       requiredValues: record(job.requiredValues),
       missingRequiredValues: list(job.missingRequiredValues).map(text).filter(Boolean),
+      // 무엇을 올렸는지 보여야 무엇을 바꿀지 판단할 수 있다.
+      inputImageSummary: list(job.inputImageSummary).map(value => {
+        const image = record(value);
+        return {
+          role: text(image.role),
+          name: text(image.name),
+          fileName: text(image.fileName),
+          colorName: text(image.colorName),
+        };
+      }).filter(image => image.role),
       nextAction,
       autoResumePending: job.autoResumePending === true,
       machineMs: integer(record(job.timing).totalMachineMs),

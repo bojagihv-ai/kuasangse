@@ -1412,6 +1412,42 @@ class FactorySyncBridge:
             self._condition.notify_all()
             return public_job
 
+    def update_product_images(
+        self,
+        job_id: str,
+        images: JsonValue,
+    ) -> JsonObject:
+        """올린 이미지를 이 자리에서 바꾼다.
+
+        기본 이미지와 색상 옵션 이미지(색상명 포함)를 통째로 갈아끼운다. 조립공장이
+        이미 그 이미지로 돌고 있는 동안에는 손대지 않는다.
+        """
+        normalized = _normalize_product_images(images)
+        if not any(image.get("role") == "base" for image in normalized):
+            raise FactorySyncError("factory_product_base_image_required")
+        with self._condition:
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            if job.status == "running" or job.current_order_id:
+                raise FactorySyncError("factory_product_job_busy")
+            with self._product_state_transaction_locked():
+                job.payload["inputImages"] = [dict(image) for image in normalized]
+                # 색상 이미지가 있으면 옵션 있음, 없으면 옵션 없음이 실제 상태다.
+                required = job.payload.get("requiredValues")
+                merged = dict(required) if isinstance(required, Mapping) else {}
+                merged["optionMode"] = (
+                    "provided"
+                    if any(image.get("role") == "color-option" for image in normalized)
+                    else "none"
+                )
+                job.payload["requiredValues"] = merged
+                public_job = self._public_product_job(job)
+                self._append_event("factory.product.updated", {"job": public_job})
+                self._persist_product_jobs_locked()
+            self._condition.notify_all()
+            return public_job
+
     def queue_cafe24_registration(
         self,
         job_id: str,
@@ -2224,6 +2260,22 @@ class FactorySyncBridge:
             "cafe24Values": _cafe24_values_from_job(job.payload),
             # 어떤 투입값이 비어 있는지 화면이 알아야, 그 자리에서 채울 수 있다.
             "requiredValues": _product_values_from_job(job.payload),
+            # 어떤 이미지를 올렸는지 화면이 알아야, 무엇을 바꾸는지 보고 고칠 수 있다.
+            # dataUrl 은 무거워 목록에서 제외하고 미리보기는 자산 경로로 따로 받는다.
+            "inputImageSummary": [
+                {
+                    "role": str(image.get("role") or ""),
+                    "name": str(image.get("name") or ""),
+                    "fileName": str(image.get("fileName") or ""),
+                    "colorName": str(image.get("colorName") or ""),
+                }
+                for image in (
+                    job.payload.get("inputImages")
+                    if isinstance(job.payload.get("inputImages"), list)
+                    else []
+                )
+                if isinstance(image, dict)
+            ],
             "missingRequiredValues": sorted(_missing_product_values(job.payload)),
             "workfileName": str(
                 job.payload.get("workfileName")
@@ -3208,6 +3260,43 @@ def _rebind_request_is_idempotent(
     )
 
 
+def _normalize_product_images(images_value: JsonValue) -> list[JsonObject]:
+    """올린 이미지를 계약대로 검사한다.
+
+    투입할 때와 나중에 고칠 때가 같은 규칙을 써야, 한쪽으로 넣은 이미지가 다른 쪽에서
+    거절되는 일이 없다.
+    """
+    if not isinstance(images_value, list):
+        raise FactorySyncError("factory_product_images_invalid")
+    images: list[JsonObject] = []
+    total_bytes = 0
+    for value in images_value:
+        if not isinstance(value, dict) or set(value) - PRODUCT_IMAGE_KEYS:
+            raise FactorySyncError("factory_product_images_invalid")
+        role = str(value.get("role") or "")
+        data_url = str(value.get("dataUrl") or "")
+        prefix, separator, encoded = data_url.partition(",")
+        if (
+            role not in {"base", "color-option"}
+            or not str(value.get("name") or "").strip()
+            or not separator
+            or not prefix.startswith("data:image/")
+            or not prefix.endswith(";base64")
+        ):
+            raise FactorySyncError("factory_product_images_invalid")
+        # 색상 옵션 이미지는 색상명이 짝지어져야 조립공장이 옵션표를 만들 수 있다.
+        if role == "color-option" and not str(value.get("colorName") or "").strip():
+            raise FactorySyncError("factory_product_color_name_required")
+        try:
+            total_bytes += len(b64decode(encoded, validate=True))
+        except (Base64Error, ValueError):
+            raise FactorySyncError("factory_product_images_invalid") from None
+        images.append(_copy(value))
+    if total_bytes > MAX_WORKFILE_BYTES:
+        raise FactorySyncError("factory_product_images_too_large")
+    return images
+
+
 def _product_values_from_job(payload: Mapping[str, JsonValue]) -> JsonObject:
     """투입할 때 채워 둔 값을 꺼낸다."""
     source = payload.get("requiredValues")
@@ -3385,34 +3474,9 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
         or normalized_required_values.get("optionMode", "provided") not in {"provided", "none"}
     ):
         raise FactorySyncError("factory_product_required_values_invalid")
-    images_value = payload.get("inputImages", [])
-    if not isinstance(images_value, list):
-        raise FactorySyncError("factory_product_images_invalid")
-    images: list[JsonObject] = []
-    total_bytes = 0
-    for value in images_value:
-        if not isinstance(value, dict) or set(value) - PRODUCT_IMAGE_KEYS:
-            raise FactorySyncError("factory_product_images_invalid")
-        role = str(value.get("role") or "")
-        data_url = str(value.get("dataUrl") or "")
-        prefix, separator, encoded = data_url.partition(",")
-        if (
-            role not in {"base", "color-option"}
-            or not str(value.get("name") or "").strip()
-            or not separator
-            or not prefix.startswith("data:image/")
-            or not prefix.endswith(";base64")
-        ):
-            raise FactorySyncError("factory_product_images_invalid")
-        try:
-            total_bytes += len(b64decode(encoded, validate=True))
-        except (Base64Error, ValueError):
-            raise FactorySyncError("factory_product_images_invalid") from None
-        images.append(_copy(value))
+    images = _normalize_product_images(payload.get("inputImages", []))
     if source_kind == "manual" and not any(image.get("role") == "base" for image in images):
         raise FactorySyncError("factory_product_base_image_required")
-    if total_bytes > MAX_WORKFILE_BYTES:
-        raise FactorySyncError("factory_product_images_too_large")
     normalized_source: JsonObject = {key: value for key, value in source.items()}
     normalized_images: list[JsonValue] = [dict(image) for image in images]
     normalized: JsonObject = {

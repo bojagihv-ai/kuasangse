@@ -45,6 +45,8 @@
       --color-accent-border: rgb(99 102 241 / 0.5);
       --board-fact-file-max-width: 22ch;
       --board-cafe24-field-min: 11rem;
+      --board-intake-thumb-size: 92px;
+      --board-intake-card-min: 9rem;
       --bulk-thumb-size: 132px;
       --bulk-name-field-basis: 20rem;
       --bulk-lightbox-max-width: 1100px;
@@ -2123,6 +2125,111 @@
     .board-cafe24-field-label[data-tone="attention"] {
       color: var(--color-status-warn);
       font-weight: var(--font-weight-strong);
+    }
+
+    .board-intake-panel {
+      display: grid;
+      gap: var(--space-2);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-intake-group {
+      display: grid;
+      gap: var(--space-1);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-intake-group-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: baseline;
+      color: var(--color-text-primary);
+      font-size: var(--font-size-panel-copy);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .board-intake-group-hint {
+      color: var(--color-text-muted);
+      font-weight: var(--font-weight-regular);
+    }
+
+    .board-intake-shelf {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .board-intake-chip {
+      display: grid;
+      gap: var(--space-half);
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-subtle);
+      border-radius: var(--radius-compact);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-intake-card {
+      display: grid;
+      gap: var(--space-half);
+      justify-items: center;
+      min-inline-size: var(--board-intake-card-min);
+      padding: var(--space-half);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+    }
+
+    .board-intake-thumb {
+      inline-size: var(--board-intake-thumb-size);
+      block-size: var(--board-intake-thumb-size);
+      object-fit: cover;
+      border-radius: var(--radius-compact);
+    }
+
+    .board-intake-chip-name {
+      color: var(--color-text-primary);
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+    }
+
+    .board-intake-chip-color {
+      color: var(--color-status-ok);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-intake-chip-color[data-tone="attention"] {
+      color: var(--color-status-warn);
+    }
+
+    .board-intake-color {
+      inline-size: 100%;
+    }
+
+    .board-intake-empty {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-intake-pick {
+      justify-self: start;
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-panel-copy);
+      cursor: pointer;
+    }
+
+    .board-intake-file {
+      display: none;
     }
 
     .board-candidate-heading {
@@ -4280,7 +4387,7 @@
     }
   </script>
   <script type="module" src="./src/workfile-intake.mjs?actualB=1"></script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=8"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=9"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=3"></script>
 </body>
 </html>

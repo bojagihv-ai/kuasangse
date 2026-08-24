@@ -50,7 +50,37 @@ test('옵션 여부는 골라 넣게 한다', () => {
 
 test('저장 실패는 조용히 넘어가지 않는다', () => {
   const board = source('src', 'production-board.mjs');
-  const at = board.indexOf('async function saveProductValues');
-  assert.notEqual(at, -1);
-  assert.ok(board.slice(at, at + 700).includes("'error'"), '실패를 알리지 않습니다');
+  const at = board.indexOf('async function saveProductIntake');
+  assert.notEqual(at, -1, '투입값 저장 함수를 찾지 못했습니다');
+  assert.ok(board.slice(at, at + 1400).includes("'error'"), '실패를 알리지 않습니다');
+});
+
+test('기본 이미지와 색상 옵션 이미지를 같은 자리에서 올린다', () => {
+  // input 은 올리는 것, output 은 생성물이다. 올리는 것은 한 자리에 모여야 한다.
+  const board = source('src', 'production-board.mjs');
+  assert.ok(board.includes("title: '기본 이미지'"), '기본 이미지 자리가 없습니다');
+  assert.ok(board.includes("title: '색상 옵션 이미지'"), '색상 옵션 이미지 자리가 없습니다');
+  assert.ok(board.includes('/images'), '이미지 저장 엔드포인트를 부르지 않습니다');
+});
+
+test('색상 옵션 이미지는 색상명 없이 저장되지 않는다', () => {
+  // 색상명이 없으면 조립공장이 옵션표를 만들 수 없다.
+  const board = source('src', 'production-board.mjs');
+  assert.ok(board.includes('const unnamed = draft.color.filter'), '색상명 확인이 없습니다');
+  assert.ok(board.includes('색상명을 넣어 주세요'), '무엇이 빠졌는지 알리지 않습니다');
+});
+
+test('고른 이미지는 다시 그려도 남는다', () => {
+  // 새로 그릴 때마다 사라지면 색상명을 적는 동안 이미지가 날아간다.
+  const board = source('src', 'production-board.mjs');
+  assert.ok(board.includes('const imageDrafts = new Map()'), '고른 이미지를 담아 두지 않습니다');
+  assert.ok(board.includes("action: 'product-images-clear'"), '고른 이미지를 비울 길이 없습니다');
+});
+
+test('이미지를 값보다 먼저 올린다', () => {
+  // 이미지가 옵션 여부를 정하므로, 사람이 고른 옵션 여부가 최종으로 남아야 한다.
+  const board = source('src', 'production-board.mjs');
+  const at = board.indexOf('async function saveProductIntake');
+  const region = board.slice(at, at + 1400);
+  assert.ok(region.indexOf('/images') < region.indexOf('/values'), '값을 이미지보다 먼저 보냅니다');
 });

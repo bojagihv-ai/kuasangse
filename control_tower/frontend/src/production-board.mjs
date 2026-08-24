@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=8';
+} from './production-board-model.mjs?parallelBoard=9';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -74,6 +74,8 @@ export function mountProductionBoard(runtime, {
   let openResults = '';
   let openCafe24Values = '';
   let openProductValues = '';
+  // 고른 이미지는 저장 전까지 여기에 담아 둔다. 새로 그려도 사라지지 않아야 한다.
+  const imageDrafts = new Map();
   const resultCache = new Map();
   let stopped = false;
   let loaded = false;
@@ -196,24 +198,55 @@ export function mountProductionBoard(runtime, {
   { name: 'sellingStatus', label: '판매 (T/F)', placeholder: 'F = 판매 안 함' },
 ]);
 
+  const REQUIRED_VALUE_ORDER = Object.freeze([
+    'category', 'material', 'originCountry', 'size', 'salePrice', 'stock', 'usage', 'optionMode',
+  ]);
+
+  async function fileToImage(file, role, ordinal) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('이미지를 읽지 못했습니다'));
+      reader.readAsDataURL(file);
+    });
+    const bytes = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return {
+      role,
+      ordinal,
+      name: file.name.replace(/\.[^.]+$/, ''),
+      fileName: file.name,
+      colorName: role === 'color-option' ? '' : null,
+      sha256: [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join(''),
+      dataUrl,
+    };
+  }
+
+  const IMAGE_GROUPS = Object.freeze([
+    Object.freeze({ role: 'base', key: 'base', title: '기본 이미지', hint: '최소 1장' }),
+    Object.freeze({ role: 'color-option', key: 'color', title: '색상 옵션 이미지', hint: '이미지마다 색상명을 붙입니다' }),
+  ]);
+
   function renderProductValueForm(row) {
-    // 비어 있는 값을 위에, 이미 채운 값을 아래에 둔다. 한 칸만 고치려고 열었을 때
-    // 나머지를 다시 쓰게 만들지 않는다.
-    const form = document.createElement('form');
-    form.className = 'board-cafe24-values';
-    form.dataset.jobId = row.jobId;
-    form.addEventListener('submit', event => event.preventDefault());
-    const title = element('div', 'board-candidate-heading');
-    title.append(
-      element('strong', '', `${row.productName} · 투입값`),
-      element('span', 'factory-pill', `비어 있음 ${row.missingRequiredValues.length}개`),
-    );
-    form.append(title);
+    // 투입값 한 곳에서 필수값 · 기본 이미지 · 색상 옵션 이미지를 모두 다룬다. 입력·소스
+    // 화면으로 되돌아가지 않아도 되게 하는 것이 이 패널의 목적이다.
+    const draft = imageDrafts.get(row.jobId) || { base: [], color: [] };
+    const panel = element('form', 'board-intake-panel');
+    panel.dataset.jobId = row.jobId;
+    panel.addEventListener('submit', event => event.preventDefault());
+
+    const head = element('div', 'board-candidate-heading');
+    head.append(element('strong', '', row.productName + ' · 투입값'));
+    const missingCount = row.missingRequiredValues.length;
+    const badge = element('span', 'factory-pill', missingCount ? '비어 있음 ' + missingCount + '개' : '모두 채워짐');
+    badge.dataset.tone = missingCount ? 'attention' : 'ok';
+    head.append(badge);
+    panel.append(head);
+
+    const values = element('section', 'board-intake-group');
+    values.append(element('p', 'board-intake-group-title', '필수값'));
     const grid = element('div', 'board-cafe24-fields');
     const missing = new Set(row.missingRequiredValues);
-    const order = [...row.missingRequiredValues, ...Object.keys(PRODUCT_VALUE_LABELS)
-      .filter(key => !missing.has(key) && row.requiredValues?.[key])];
-    for (const key of order) {
+    for (const key of REQUIRED_VALUE_ORDER) {
       const label = element('label', 'board-cafe24-field');
       const name = element('span', 'board-cafe24-field-label', PRODUCT_VALUE_LABELS[key] || key);
       if (missing.has(key)) name.dataset.tone = 'attention';
@@ -221,11 +254,11 @@ export function mountProductionBoard(runtime, {
       if (key === 'optionMode') {
         const select = document.createElement('select');
         select.name = key;
-        for (const [value, copy] of [['', '고르세요'], ['provided', '옵션 있음'], ['none', '옵션 없음']]) {
-          const option = document.createElement('option');
-          option.value = value;
-          option.textContent = copy;
-          select.append(option);
+        for (const option of [['', '고르세요'], ['provided', '옵션 있음'], ['none', '옵션 없음']]) {
+          const node = document.createElement('option');
+          node.value = option[0];
+          node.textContent = option[1];
+          select.append(node);
         }
         select.value = String(row.requiredValues?.[key] || '');
         label.append(select);
@@ -238,14 +271,103 @@ export function mountProductionBoard(runtime, {
       }
       grid.append(label);
     }
-    form.append(grid);
-    const submit = button('board-mini-action', '이 값으로 저장', {
+    values.append(grid);
+    panel.append(values);
+
+    const uploaded = row.inputImageSummary || [];
+    for (const spec of IMAGE_GROUPS) {
+      const group = element('section', 'board-intake-group');
+      const title = element('p', 'board-intake-group-title', spec.title);
+      title.append(element('span', 'board-intake-group-hint', spec.hint));
+      group.append(title);
+
+      const already = uploaded.filter(image => image.role === spec.role);
+      if (already.length) {
+        const shelf = element('div', 'board-intake-shelf');
+        for (const image of already) {
+          const chip = element('div', 'board-intake-chip');
+          chip.append(element('span', 'board-intake-chip-name', image.fileName || image.name));
+          if (spec.role === 'color-option') {
+            const color = element('span', 'board-intake-chip-color', image.colorName || '색상명 없음');
+            if (!image.colorName) color.dataset.tone = 'attention';
+            chip.append(color);
+          }
+          shelf.append(chip);
+        }
+        group.append(shelf);
+      } else {
+        group.append(element('p', 'board-intake-empty', '올린 이미지 없음'));
+      }
+
+      const picked = draft[spec.key];
+      if (picked.length) {
+        const shelf = element('div', 'board-intake-shelf');
+        picked.forEach((image, index) => {
+          const card = element('div', 'board-intake-card');
+          const thumb = document.createElement('img');
+          thumb.className = 'board-intake-thumb';
+          thumb.src = image.dataUrl;
+          thumb.alt = image.fileName;
+          card.append(thumb);
+          card.append(element('span', 'board-intake-chip-name', image.fileName));
+          if (spec.role === 'color-option') {
+            const colorInput = document.createElement('input');
+            colorInput.type = 'text';
+            colorInput.className = 'board-intake-color';
+            colorInput.placeholder = '색상명 *';
+            colorInput.value = image.colorName || '';
+            colorInput.addEventListener('input', event => {
+              picked[index].colorName = event.target.value;
+            });
+            card.append(colorInput);
+          }
+          shelf.append(card);
+        });
+        group.append(shelf);
+      }
+
+      const pick = document.createElement('input');
+      pick.type = 'file';
+      pick.accept = 'image/jpeg,image/png,image/webp';
+      pick.multiple = true;
+      pick.className = 'board-intake-file';
+      pick.addEventListener('change', async event => {
+        const files = [...(event.target.files || [])];
+        if (!files.length) return;
+        try {
+          const added = await Promise.all(files.map((file, index) => fileToImage(file, spec.role, index + 1)));
+          const next = imageDrafts.get(row.jobId) || { base: [], color: [] };
+          next[spec.key] = [...next[spec.key], ...added];
+          imageDrafts.set(row.jobId, next);
+          render();
+        } catch (error) {
+          setStatus('이미지를 읽지 못했습니다 · ' + String(error?.message || error), 'error');
+          render();
+        }
+      });
+      const pickLabel = element('label', 'board-intake-pick', spec.title + ' 고르기');
+      pickLabel.append(pick);
+      group.append(pickLabel);
+      panel.append(group);
+    }
+
+    const actions = element('div', 'button-row');
+    const submit = button('board-mini-action board-action-primary', '이 투입값으로 저장', {
       action: 'product-values-submit',
       jobId: row.jobId,
     });
     submit.disabled = busy;
-    form.append(submit);
-    return form;
+    actions.append(submit);
+    if (draft.base.length || draft.color.length) {
+      const clear = button('board-mini-action ghost', '고른 이미지 비우기', {
+        action: 'product-images-clear',
+        jobId: row.jobId,
+      });
+      clear.disabled = busy;
+      actions.append(clear);
+    }
+    panel.append(actions);
+    return panel;
   }
 
   function renderCafe24ValueForm(row) {
@@ -637,15 +759,30 @@ export function mountProductionBoard(runtime, {
     }
   }
 
-  async function saveProductValues(jobId, values) {
+  async function saveProductIntake(jobId, values, images) {
     busy = true;
     render();
     try {
-      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/values`, {
-        method: 'POST',
-        body: JSON.stringify(values),
-      });
-      setStatus('투입값을 저장했습니다. 이 작업을 재개하면 채운 값으로 진행합니다.', 'ok');
+      // 이미지를 먼저 올린다. 이미지가 옵션 여부를 정하므로, 값이 그 뒤에 와야
+      // 사람이 고른 옵션 여부가 최종으로 남는다.
+      if (images.length) {
+        await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/images`, {
+          method: 'POST',
+          body: JSON.stringify({ inputImages: images }),
+        });
+      }
+      if (Object.keys(values).length) {
+        await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/values`, {
+          method: 'POST',
+          body: JSON.stringify(values),
+        });
+      }
+      imageDrafts.delete(jobId);
+      const parts = [
+        Object.keys(values).length ? '투입값' : '',
+        images.length ? `이미지 ${images.length}장` : '',
+      ].filter(Boolean).join(' · ');
+      setStatus(`${parts} 저장했습니다. 이 작업을 재개하면 채운 값으로 진행합니다.`, 'ok');
     } catch (error) {
       setStatus(`투입값 저장 실패 · ${String(error?.code || error?.message || error)}`, 'error');
     } finally {
@@ -718,20 +855,34 @@ export function mountProductionBoard(runtime, {
       render();
       return;
     }
+    if (action === 'product-images-clear') {
+      imageDrafts.delete(target.dataset.jobId);
+      render();
+      return;
+    }
     if (action === 'product-values-submit') {
       const form = target.closest('form');
       const values = {};
-      for (const input of form?.querySelectorAll('input, select') || []) {
+      for (const input of form?.querySelectorAll('input[name], select[name]') || []) {
         const value = String(input.value || '').trim();
         if (value) values[input.name] = value;
       }
-      if (!Object.keys(values).length) {
-        setStatus('채울 값을 하나 이상 넣어 주세요.', 'warning');
+      const draft = imageDrafts.get(target.dataset.jobId) || { base: [], color: [] };
+      const images = [...draft.base, ...draft.color];
+      // 색상 옵션 이미지는 색상명이 짝지어져야 조립공장이 옵션표를 만들 수 있다.
+      const unnamed = draft.color.filter(image => !String(image.colorName || '').trim());
+      if (unnamed.length) {
+        setStatus(`색상명을 넣어 주세요 · ${unnamed.map(image => image.fileName).join(', ')}`, 'warning');
+        render();
+        return;
+      }
+      if (!Object.keys(values).length && !images.length) {
+        setStatus('채울 값이나 올릴 이미지를 하나 이상 넣어 주세요.', 'warning');
         render();
         return;
       }
       openProductValues = '';
-      void saveProductValues(target.dataset.jobId, values);
+      void saveProductIntake(target.dataset.jobId, values, images);
       return;
     }
     if (action === 'cafe24-values') {

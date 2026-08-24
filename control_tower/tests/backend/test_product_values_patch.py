@@ -76,3 +76,77 @@ def test_empty_request_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(FactorySyncError):
         bridge.update_product_values(job_id, {})
+
+
+def _png_data_url() -> str:
+    return (
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mP8z8AAAwAB/AFbxpTLAAAAAElFTkSuQmCC"
+    )
+
+
+def _image(role: str, name: str, color: str | None = None) -> dict:
+    return {
+        "role": role,
+        "ordinal": 1,
+        "name": name,
+        "fileName": f"{name}.png",
+        "colorName": color,
+        "sha256": "a" * 64,
+        "dataUrl": _png_data_url(),
+    }
+
+
+def test_images_can_be_replaced_in_place(tmp_path: Path) -> None:
+    # input 은 사람이 올리는 것이다. 올린 것을 고치려고 입력·소스 화면으로 되돌아가야
+    # 하면, 보드에서 하는 일이 반쪽이 된다.
+    bridge, job_id = _bridge(tmp_path, "images")
+
+    job = bridge.update_product_images(
+        job_id,
+        [_image("base", "기본컷"), _image("color-option", "빨강", "빨강")],
+    )
+
+    roles = [image["role"] for image in job["inputImageSummary"]]
+    assert roles == ["base", "color-option"]
+    assert job["inputImageSummary"][1]["colorName"] == "빨강"
+
+
+def test_color_image_without_a_color_name_is_refused(tmp_path: Path) -> None:
+    # 색상명이 없으면 조립공장이 옵션표를 만들 수 없다.
+    bridge, job_id = _bridge(tmp_path, "nocolor")
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_images(job_id, [_image("base", "기본컷"), _image("color-option", "빨강")])
+    assert error.value.code == "factory_product_color_name_required"
+
+
+def test_images_without_a_base_are_refused(tmp_path: Path) -> None:
+    bridge, job_id = _bridge(tmp_path, "nobase")
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_images(job_id, [_image("color-option", "빨강", "빨강")])
+    assert error.value.code == "factory_product_base_image_required"
+
+
+def test_color_images_decide_the_option_mode(tmp_path: Path) -> None:
+    # 색상 이미지가 있는데 옵션 없음으로 남으면 조립공장이 옵션 단계를 건너뛴다.
+    bridge, job_id = _bridge(tmp_path, "optionmode")
+
+    with_color = bridge.update_product_images(
+        job_id,
+        [_image("base", "기본컷"), _image("color-option", "빨강", "빨강")],
+    )
+    assert with_color["requiredValues"]["optionMode"] == "provided"
+
+    without_color = bridge.update_product_images(job_id, [_image("base", "기본컷")])
+    assert without_color["requiredValues"]["optionMode"] == "none"
+
+
+def test_a_running_job_keeps_its_images(tmp_path: Path) -> None:
+    bridge, job_id = _bridge(tmp_path, "imgbusy")
+    bridge._product_jobs[job_id].status = "running"
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_images(job_id, [_image("base", "기본컷")])
+    assert error.value.code == "factory_product_job_busy"
