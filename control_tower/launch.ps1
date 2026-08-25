@@ -37,6 +37,8 @@ $BackendHealthUrl = "http://127.0.0.1:$BackendPort/api/health"
 $BackendJobsUrl = "http://127.0.0.1:$BackendPort/api/jobs"
 $BackendReviewsUrl = "http://127.0.0.1:$BackendPort/api/reviews"
 $BackendFactoryStateUrl = "http://127.0.0.1:$BackendPort/api/factory/state"
+# localhost 는 윈도우에서 ::1 로 먼저 풀린다. 화면 서버는 127.0.0.1 만 듣고 있어
+# localhost 로 열면 준비 확인부터 실패한다. 주소는 127.0.0.1 로 둔다.
 $FrontendUrl = "http://127.0.0.1:$FrontendPort/control-tower.html"
 $FrontendReadyMarker = if ($BackendPort -eq 5062) {
     'const healthUrl = "http://127.0.0.1:5062/api/health";'

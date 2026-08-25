@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=19';
+} from './production-board-model.mjs?parallelBoard=24';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -84,6 +84,8 @@ export function mountProductionBoard(runtime, {
   const thumbNodes = new Map();
   // 보관함을 아직 받는 중인 작업. 칸에 "불러오는 중" 이라고 적어 준다.
   let pendingResultJobs = new Set();
+  // 마지막으로 그린 표의 요약. 같으면 다시 그리지 않는다.
+  let lastBoardSignature = '';
   let stopped = false;
   let loaded = false;
   let eventSource = null;
@@ -134,6 +136,28 @@ export function mountProductionBoard(runtime, {
     connection.hidden = connected !== false;
     connection.dataset.tone = 'error';
     connection.textContent = '조립공장이 연결되지 않았습니다 · 상세페이지 AI 자동화를 실행하면 멈춘 작업이 다시 흐릅니다.';
+    if (!connection.hidden) renderWorkerFrontendHint();
+  }
+
+  /**
+   * 조립공장 화면 서버(8081)가 내려가 있으면 워커는 영영 붙지 못한다. 그때 "연결되지
+   * 않았습니다" 만 보이면, 사람은 자동화를 다시 실행해 보다가 원인을 못 찾는다.
+   * 실측 2026-08-25: 8081 이 죽어 워커 탭이 ERR_CONNECTION_REFUSED 였는데 화면에는
+   * 그 사실이 어디에도 없었다. 서버가 살아 있는지 눌러 보고 사실대로 덧붙인다.
+   */
+  function renderWorkerFrontendHint() {
+    const base = 'http://127.0.0.1:8081/app.html';
+    fetch(base, { method: 'GET', cache: 'no-store', mode: 'no-cors' })
+      .then(() => {
+        if (connection.hidden) return;
+        connection.textContent = '조립공장이 연결되지 않았습니다 · 조립공장 화면은 떠 있습니다. '
+          + '작업자 창을 열어 두었는지 확인해 주세요: ' + base;
+      })
+      .catch(() => {
+        if (connection.hidden) return;
+        connection.textContent = '조립공장 화면 서버(8081)가 내려가 있습니다 · '
+          + '바탕화면 "생산관제" 를 다시 실행하면 함께 올라옵니다.';
+      });
   }
 
   function renderSummary(summary) {
@@ -634,6 +658,16 @@ export function mountProductionBoard(runtime, {
       pick.disabled = busy;
       rowActions.append(pick);
     }
+    if (row.nextAction?.kind === 'resume' && row.status !== 'blocked') {
+      // "다음: 작업 재개" 라고 적어 놓고 그 행에 누를 곳이 없으면, 사람은 위쪽 일괄 버튼을
+      // 찾아 헤매거나 아무것도 못 한다. 그 행에서 바로 이어갈 수 있어야 한다.
+      const resume = button('board-mini-action board-action-primary', '작업 재개', {
+        action: 'retry',
+        jobId: row.jobId,
+      });
+      resume.disabled = busy;
+      rowActions.append(resume);
+    }
     if ((row.status === 'completed' || row.cafe24Declined) && !row.cafe24Registered) {
       // 조립공장에는 등록 화면이 없다. 분류·공급가·진열은 이 작업의 투입값을 그대로 싣는다.
       // 투입값이 없는 작업은 바로 지시하지 않고 여기서 값을 받는다. 등록값이 없어 차단된
@@ -781,8 +815,38 @@ export function mountProductionBoard(runtime, {
     return line;
   }
 
+  /**
+   * 표를 다시 그릴 이유가 있는지 한 줄로 요약한다.
+   * 바뀐 것이 없는데도 매번 전부 새로 그리면 행이 눈앞에서 갈아 끼워지고, 그 순간
+   * 누른 클릭이 사라진 노드로 떨어져 "버튼이 안 눌린다" 가 된다. 실측 2026-08-25:
+   * "다시 시도" 를 눌러도 아무 반응이 없다는 신고가 있었고, 이벤트 계측 결과 클릭은
+   * 버튼에 닿고 있었다. 문제는 그 사이 표가 통째로 다시 그려진 것이었다.
+   */
+  function boardSignature(board) {
+    return JSON.stringify([
+      busy, connected, openResults, openCafe24Values, openProductValues,
+      openCell.jobId, openCell.stageKey, statusLine.copy, statusLine.tone,
+      board.summary,
+      board.rows.map(row => [
+        row.jobId, row.status, row.productName, row.message, row.percent,
+        row.stepLabel, row.nextAction?.copy || '',
+        row.cells.map(cell => [
+          cell.stageKey, cell.state, cell.candidateCount,
+          cell.selectedIndex, cell.selectedThumbnailUrl, cell.pickable, cell.changeable,
+        ]),
+      ]),
+    ]);
+  }
+
   function render() {
     const board = projectProductionBoard(jobs, { results: archivedResults() });
+    const signature = boardSignature(board);
+    if (signature === lastBoardSignature && grid.childElementCount) {
+      renderConnection();
+      renderStatus();
+      return board;
+    }
+    lastBoardSignature = signature;
     renderConnection();
     renderSummary(board.summary);
     renderToolbar(board);
@@ -986,6 +1050,10 @@ export function mountProductionBoard(runtime, {
     const image = document.createElement('img');
     image.className = 'board-zoom-image';
     image.alt = label;
+    // 크게 보는 그림은 원본이라 큰 것이 많다. 메인 스레드에서 풀면 화면 전체가 멎는다.
+    // 실측: 섹션 원본(879x1789)을 띄우자 화면 캡처가 30초 넘게 응답하지 않았다.
+    image.decoding = 'async';
+    image.loading = 'eager';
     frame.append(image);
     const caption = element('p', 'board-zoom-label', label);
     frame.append(caption);
@@ -1072,7 +1140,13 @@ export function mountProductionBoard(runtime, {
       closeZoom();
       return;
     }
-    if (!target || busy) return;
+    if (!target) return;
+    if (busy) {
+      // 처리 중이라고 눌린 것을 조용히 버리면, 사람은 버튼이 고장 난 줄 안다. 실측:
+      // "다시 시도" 를 눌러도 아무 반응이 없다는 신고가 있었고 원인이 이것이었다.
+      setStatus('앞선 요청을 처리하는 중입니다. 끝나면 다시 눌러 주세요.', 'warning');
+      return;
+    }
     const action = target.dataset.action;
     if (action === 'toggle-auto-resume') return;
     if (action === 'resume') {
