@@ -35451,6 +35451,30 @@ function classicRuntimeIsBatchWorker() {
   }
 }
 
+let classicRuntimeBlockingDialogShimInstalled = false;
+
+function installClassicRuntimeBatchDialogShim() {
+  // 배치 워커에는 창을 눌러 줄 사람이 없다. 그런데 confirm/prompt/alert 는 네이티브 창이라
+  // 렌더러를 통째로 멈춘다 — 워커 하트비트가 그 자리에서 끊기고, 지시한 작업이 영영 끝나지
+  // 않으며 브라우저 탭 자체가 응답을 잃는다. 실측: 방울수저집 Cafe24 등록이 변경안 확인문구
+  // 입력창에서 얼어붙어 CDP 평가까지 막혔다.
+  // 사람의 승인은 관제탑에서 작업을 지시하는 순간 이미 끝났으므로, 워커에서는 화면에서
+  // 사람이 눌렀을 기본값(확인 / 기본 입력값)을 그대로 쓰고 진행 기록만 남긴다.
+  if (classicRuntimeBlockingDialogShimInstalled) return false;
+  if (typeof window === 'undefined') return false;
+  if (typeof classicRuntimeIsBatchWorker !== 'function' || !classicRuntimeIsBatchWorker()) return false;
+  classicRuntimeBlockingDialogShimInstalled = true;
+  const note = (kind, message) => {
+    const text = `배치 워커라 ${kind} 창을 띄우지 않고 진행합니다: ${String(message || '').slice(0, 120)}`;
+    try { if (typeof factoryLog === 'function') factoryLog(text, 'info'); } catch (_) {}
+    try { console.info(text); } catch (_) {}
+  };
+  window.confirm = message => { note('확인', message); return true; };
+  window.prompt = (message, defaultValue = '') => { note('입력', message); return String(defaultValue ?? ''); };
+  window.alert = message => { note('알림', message); };
+  return true;
+}
+
 function startClassicRuntimeBackgroundLifecycle() {
   if (classicRuntimeBackgroundDisposer) return classicRuntimeBackgroundDisposer;
   classicRuntimeGoogleAuthTimer = setTimeout(() => {
@@ -36136,5 +36160,6 @@ function bindClassicRuntimeListeners() {
   return classicRuntimeListenersDisposer;
 }
 
-
-
+// 배치 워커에서는 화면 수명주기가 돌지 않는다. 네이티브 창은 열리는 순간 렌더러를 멈추므로
+// 스크립트가 실린 그 자리에서 바로 막아야 한다.
+installClassicRuntimeBatchDialogShim();

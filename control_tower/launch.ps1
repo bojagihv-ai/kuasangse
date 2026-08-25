@@ -171,15 +171,45 @@ function Test-SinhwaHubReady {
     try {
         $openApi = Invoke-WebRequest -Uri $SinhwaHubOpenApiUrl -Method Get -UseBasicParsing -TimeoutSec 3
         $frontend = Invoke-WebRequest -Uri $SinhwaHubFrontendUrl -Method Get -UseBasicParsing -TimeoutSec 3
+        # 포트가 열린 것만으로는 부족하다. 서비스 키까지 통해야 실제로 원장을 읽을 수 있다.
         return (
             $openApi.StatusCode -eq 200 -and
             $openApi.Content.Contains('"/api/pdp-control/v1/jobs"') -and
-            $frontend.StatusCode -eq 200
+            $frontend.StatusCode -eq 200 -and
+            (Test-SinhwaHubPdpAuthReady)
         )
     }
     catch {
         return $false
     }
+}
+
+function Test-SinhwaHubPdpAuthReady {
+    # 포트만 보면 서비스 키 없이 뜬 허브를 "준비됨" 으로 보고 그냥 지나간다. 그러면 생산관제의
+    # 원장 호출이 전부 401 -> blocked_external(503) 로 떨어지고, 화면에는 "상태 확인 실패" 만
+    # 뜬 채 원인은 어디에도 남지 않는다. 실측 2026-08-25: 허브가 키 없이 떠 있어 /api/jobs 가
+    # 계속 503 이었고, 관제탑은 멀쩡히 켜져 있는데 아무것도 못 읽었다.
+    #
+    # 확인은 키를 쥔 허브 매니저에게 맡긴다. 이 파일이 키를 직접 만지면 서비스 키가 생산관제
+    # 실행 파일로 새어 나온다. 키는 백엔드 자식 프로세스의 일시적 환경변수로만 흘러야 한다.
+    if (-not (Test-Path -LiteralPath $SinhwaHubManagerPath -PathType Leaf)) {
+        return $true
+    }
+    try {
+        $statusText = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+            -File $SinhwaHubManagerPath -Action Status -BackendPort 8200 -FrontendPort 5173 `
+            -SqlContainerName disabled 2>&1 | Out-String
+    }
+    catch {
+        return $true
+    }
+    if ([string]::IsNullOrWhiteSpace($statusText)) {
+        return $true
+    }
+    if ($statusText -match "Backend PDP auth ready:\s*False") {
+        return $false
+    }
+    return $true
 }
 
 function Ensure-SinhwaHubReady {
@@ -208,6 +238,17 @@ function Ensure-SinhwaHubReady {
         throw "신화사 DB 실행 관리 파일이 없어 생산관제를 시작하지 않았습니다: $SinhwaHubManagerPath"
     }
 
+    # 키 없이 이미 떠 있는 허브는 Start 만으로는 고쳐지지 않는다. 먼저 내려야 서비스 키를
+    # 들고 다시 올라온다. 실측 2026-08-25: 내리지 않고 올리면 그대로 401 이 이어졌다.
+    $managerStopArguments = (
+        "-NoProfile -ExecutionPolicy Bypass -File `"$SinhwaHubManagerPath`" " +
+        "-Action Stop -Force -BackendPort 8200 -FrontendPort 5173 -SqlContainerName disabled"
+    )
+    $managerStopProcess = Start-Process -FilePath "powershell.exe" `
+        -ArgumentList $managerStopArguments `
+        -WindowStyle Hidden `
+        -PassThru
+    $managerStopProcess.WaitForExit()
     $managerArguments = (
         "-NoProfile -ExecutionPolicy Bypass -File `"$SinhwaHubManagerPath`" " +
         "-Action Start -BackendPort 8200 -FrontendPort 5173 -SqlContainerName disabled"
@@ -252,7 +293,10 @@ function Get-ManagedProcessRoot {
         $commandLine.IndexOf("control_tower.backend.app", [StringComparison]::OrdinalIgnoreCase) -ge 0
     }
     else {
-        $commandLine.IndexOf("http.server", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        # 화면 서버는 캐시를 끄려고 static_server.py 로 바꿨다. 옛 이름만 보면 런처가 자기가
+        # 띄운 프론트를 남의 것으로 오해해 다음 실행부터 "다른 프로그램이 쓰는 중" 으로 막힌다.
+        ($commandLine.IndexOf("http.server", [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            $commandLine.IndexOf("static_server.py", [StringComparison]::OrdinalIgnoreCase) -ge 0) -and
             $commandLine.IndexOf([string]$FrontendPort, [StringComparison]::OrdinalIgnoreCase) -ge 0
     }
     if (-not $matchesRole) {
@@ -267,7 +311,8 @@ function Get-ManagedProcessRoot {
             $commandLine.IndexOf("control_tower.backend.app", [StringComparison]::OrdinalIgnoreCase) -ge 0
         }
         else {
-            $commandLine.IndexOf("http.server", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            ($commandLine.IndexOf("http.server", [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $commandLine.IndexOf("static_server.py", [StringComparison]::OrdinalIgnoreCase) -ge 0) -and
                 $commandLine.IndexOf([string]$FrontendPort, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
                 $commandLine.IndexOf($FrontendRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0
         }
@@ -458,7 +503,11 @@ function Start-Frontend {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
     $stdoutPath = Join-Path $RuntimeRoot "frontend-$stamp.stdout.log"
     $stderrPath = Join-Path $RuntimeRoot "frontend-$stamp.stderr.log"
-    $arguments = "-m http.server $FrontendPort --bind 127.0.0.1 --directory `"$FrontendRoot`""
+    # http.server 는 Cache-Control 을 보내지 않아 크롬이 제멋대로 캐시한다. 그러면 같은
+    # 주소인데도 창마다 다른 판을 들고 있게 된다. 실측 2026-08-25: 한 창에서는 컷 확대가
+    # 되고 다른 창에서는 안 됐고, 원인은 낡은 모듈이었다. 캐시를 끄고 내려준다.
+    $staticServer = Join-Path $ControlTowerRoot "tools\static_server.py"
+    $arguments = "`"$staticServer`" --host 127.0.0.1 --port $FrontendPort --directory `"$FrontendRoot`""
     $serviceKeyWasPresent = Test-Path -LiteralPath "Env:PDP_CONTROL_SERVICE_KEY"
     $originalServiceKey = [Environment]::GetEnvironmentVariable("PDP_CONTROL_SERVICE_KEY", [EnvironmentVariableTarget]::Process)
     try {

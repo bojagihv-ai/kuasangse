@@ -1541,7 +1541,16 @@ def register_routes(
         if csrf_error is not None:
             return csrf_error
         payload = _json_object()
-        allowed = {"categoryId", "salePrice", "supplyPrice", "displayStatus", "sellingStatus"}
+        # 등록 방식(새 상품/기존 수정)은 사람이 정하는 값이다. 이 목록에 없으면 보드에서
+        # 골라도 조립공장까지 전달되지 않아, 스토어에 이미 있는 제품이 늘 덮어쓰기가 된다.
+        allowed = {
+            "categoryId",
+            "salePrice",
+            "supplyPrice",
+            "displayStatus",
+            "sellingStatus",
+            "registrationMode",
+        }
         if payload is None or set(payload) - allowed:
             return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
         for key in allowed:

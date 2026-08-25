@@ -316,3 +316,25 @@ test('막 복원해 놓은 문서를 바로 다음 줄에서 판으로 거절하
     '바깥 검사가 방금 복원한 사실을 반영하지 않습니다',
   );
 });
+
+test('로컬 기록을 불러온 뒤의 하이드레이션도 무변경을 실패로 세지 않는다', () => {
+  // 실측: 방울수저집은 loadProjectRecord 가 성공했는데도 뒤이은 강제 하이드레이션이
+  // "바꿀 것 없음"(false) 을 돌려주자 hydration_failed 로 죽었다. 멀쩡히 열린 작업이
+  // 복원 실패가 된다.
+  const region = restoreSource();
+  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {');
+  assert.notEqual(at, -1, '두 번째 하이드레이션 블록을 찾지 못했습니다');
+  const block = region.slice(at, at + 1200);
+  assert.ok(block.includes('const onCheckpoint ='), '이미 그 작업에 서 있는지 보지 않습니다');
+  assert.ok(
+    block.includes("hydration.hydrated !== true && !onCheckpoint"),
+    '무변경 응답을 조건 없이 실패로 셉니다',
+  );
+});
+
+test('두 번째 하이드레이션도 거절은 여전히 불일치로 알린다', () => {
+  const region = restoreSource();
+  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {');
+  const block = region.slice(at, at + 1200);
+  assert.ok(block.includes('if (hydration.rejected)'), '거절과 무변경을 구분하지 않습니다');
+});

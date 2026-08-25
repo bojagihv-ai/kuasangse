@@ -75,8 +75,11 @@ PRODUCT_OPTIONAL_VALUE_KEYS = frozenset(
 )
 PRODUCT_VALUE_KEYS = PRODUCT_REQUIRED_VALUE_KEYS | PRODUCT_OPTIONAL_VALUE_KEYS
 CAFE24_REGISTRATION_VALUE_KEYS = frozenset(
-    {"categoryId", "salePrice", "supplyPrice", "displayStatus", "sellingStatus"}
+    {"categoryId", "salePrice", "supplyPrice", "displayStatus", "sellingStatus", "registrationMode"}
 )
+# 새 상품으로 올릴지, 스토어에 있는 상품을 고칠지. 지정하지 않으면 조립공장이 스스로
+# 판단한다(이미 올린 제품이면 수정). 사람이 정한 값이 있으면 그것을 따른다.
+CAFE24_REGISTRATION_MODES = frozenset({"create", "update"})
 PRODUCT_IMAGE_KEYS = frozenset(
     {"role", "ordinal", "name", "fileName", "colorName", "sha256", "dataUrl"}
 )
@@ -3344,6 +3347,8 @@ def _normalize_cafe24_registration_values(
         if not isinstance(raw, (str, int)) or isinstance(raw, bool):
             raise FactorySyncError("factory_cafe24_values_invalid")
         text = str(raw).strip()
+        if key == "registrationMode" and text and text not in CAFE24_REGISTRATION_MODES:
+            raise FactorySyncError("factory_cafe24_values_invalid")
         if text:
             normalized[key] = text
     return normalized

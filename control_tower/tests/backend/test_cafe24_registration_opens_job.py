@@ -131,3 +131,33 @@ def test_blocked_job_without_a_finished_build_still_cannot_register(tmp_path: Pa
     with pytest.raises(FactorySyncError) as error:
         bridge.queue_cafe24_registration(job_id, {})
     assert error.value.code == "factory_cafe24_job_not_ready"
+
+
+def test_registration_mode_can_be_chosen(tmp_path: Path) -> None:
+    # 스토어에 같은 제품이 있으면 조립공장은 기본적으로 그 상품을 고치려 한다. 새 상품으로
+    # 올리라고 지시할 길이 없으면, 살아 있는 상품을 덮어쓰는 것 말고는 방법이 없다.
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id, _ = _completed(bridge, "regmode")
+
+    order = bridge.queue_cafe24_registration(job_id, {"registrationMode": "create"})
+
+    assert _payload(order)["cafe24"]["registrationMode"] == "create"
+
+
+def test_unknown_registration_mode_is_refused(tmp_path: Path) -> None:
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id, _ = _completed(bridge, "regmodebad")
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.queue_cafe24_registration(job_id, {"registrationMode": "replace"})
+    assert error.value.code == "factory_cafe24_values_invalid"
+
+
+def test_registration_mode_may_be_left_to_the_factory(tmp_path: Path) -> None:
+    # 지정하지 않으면 조립공장이 스스로 판단한다. 예전 동작을 그대로 둔다.
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id, _ = _completed(bridge, "regmodenone")
+
+    order = bridge.queue_cafe24_registration(job_id, {})
+
+    assert "registrationMode" not in _payload(order)["cafe24"]

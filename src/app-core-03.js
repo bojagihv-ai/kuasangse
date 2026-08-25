@@ -2263,6 +2263,26 @@ function factoryPreserveProgressForSameWork(incomingFactory = {}, currentFactory
   ].forEach(([field, keyOf]) => {
     product[field] = mergeRows(product[field], currentProduct[field], keyOf);
   });
+  // 실어 온 작업의 기본 이미지는 이미지 저장소로 빠져 본문이 비어 있을 수 있다. 그 빈 값을
+  // "값 없음" 으로 보고 화면에 떠 있던 사진을 채우면, 이 작업의 잠긴 지문과 다른 사진이
+  // 들어앉는다. 그러면 기본 이미지가 바뀐 것으로 판단해 새 run 을 발급하고, 그 지문으로
+  // 만들어 둔 생성물 전량을 이전 자산으로 밀어낸다. 실측: 방울수저집 복원에서 잠긴 지문이
+  // 190196(JPEG) 에서 6508820(다른 PNG) 으로 바뀌고 자산 30장이 previousAssets 로 밀렸다.
+  const incomingProduct = incoming.product || {};
+  const lockedInputFingerprint = String(
+    incomingProduct.lockedInputImageFingerprint || incomingProduct.inputImageFingerprint || ''
+  ).trim();
+  const incomingHasInlineInputImage = !!String(incomingProduct.imageBase64 || '').trim();
+  if (lockedInputFingerprint && !incomingHasInlineInputImage
+    && typeof factoryImagePayloadFingerprint === 'function') {
+    const inheritedFingerprint = factoryImagePayloadFingerprint(product.imageBase64 || '');
+    if (inheritedFingerprint && inheritedFingerprint !== lockedInputFingerprint) {
+      product.imageBase64 = '';
+      product.imageMime = incomingProduct.imageMime || '';
+      product.imagePreview = incomingProduct.imagePreview || '';
+      product.inputImages = cloneData(incomingProduct.inputImages || []);
+    }
+  }
   return normalizeFactoryState(preserved);
 }
 
@@ -10450,7 +10470,11 @@ function factoryRuntimeCreateCommandPolicies() {
   ]);
   const finalRegistrationWorkflow = Object.freeze([
     ...openMarketWorkflow,
-    part('product-db', ['automation.fieldDrafts', 'automation.fieldReview']),
+    // 기본정보 확정은 필드 확정과 같은 자리를 쓴다. 임시값·검토 기록만 열어 두면 확정
+    // 알림과 마지막 작업 시각에서 경로가 거절돼 최종 등록이 통째로 멈춘다. 실측:
+    // FACTORY_COMMAND_PATH_REJECTED: ...apply-basic-info:automation.lastWizardActionAt
+    productDbUi,
+    factoryFieldUpdatedAt,
   ]);
   const persistenceMetadata = part('factory', ['cafe24FieldView', 'lastSavedAt']);
   const workspaceIdentity = part('factory', [
@@ -16733,15 +16757,33 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
   if (!['editing', 'offline-edit'].includes(productAuthority?.mode) || productAuthority.scopeId !== productAuthorityScope) {
     throw factoryRuntimeBatchCommandError('factory_product_workspace_authority_unavailable');
   }
-  if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {
+  // 로컬 기록으로 이미 이 체크포인트 위에 서 있으면 서버에서 더 실어 올 것이 없다.
+  // 실측: 그 상태에서 하이드레이션을 돌리자 판 214 로 맞아 있던 문서가 판 28 짜리로
+  // 바뀌어, 멀쩡히 복원된 작업이 불일치로 죽었다.
+  const settledOnCheckpoint = factoryRuntimeControlProjectionMatchesCheckpoint(
+    projection,
+    checkpoint,
+    jobId,
+    RESTORED_IDENTITY_ONLY,
+  );
+  if (canHydrateServerCheckpoint && !hydratedServerCheckpoint && !settledOnCheckpoint) {
     const hydration = await hydrateServerCheckpoint();
-    if (hydration.hydrated !== true) {
-      throw factoryRuntimeBatchCommandError(
-        hydration.rejected ? 'factory_product_checkpoint_restore_mismatch' : 'factory_product_checkpoint_hydration_failed',
-      );
+    if (hydration.rejected) {
+      throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
     projection = await factoryRuntimeControlProjection();
-    if (!factoryRuntimeControlProjectionMatchesCheckpoint(projection, checkpoint, jobId, RESTORED_IDENTITY_ONLY)) {
+    const onCheckpoint = factoryRuntimeControlProjectionMatchesCheckpoint(
+      projection,
+      checkpoint,
+      jobId,
+      RESTORED_IDENTITY_ONLY,
+    );
+    // 로컬 기록을 이미 제대로 불러왔으면 서버가 실어 올 것이 없다고 답한다. 그 "바꿀 것
+    // 없음" 을 실패로 세면, 멀쩡히 열려 있는 작업이 복원 실패로 죽는다.
+    if (hydration.hydrated !== true && !onCheckpoint) {
+      throw factoryRuntimeBatchCommandError('factory_product_checkpoint_hydration_failed');
+    }
+    if (!onCheckpoint) {
       throw factoryRuntimeBatchCommandError('factory_product_checkpoint_restore_mismatch');
     }
   }
@@ -17393,6 +17435,27 @@ async function factoryRuntimeControlApplyCafe24Category(payload = {}) {
   return categoryId;
 }
 
+async function factoryRuntimeControlApplyCafe24RegistrationMode(payload = {}) {
+  // 스토어에 이미 같은 제품이 있으면 조립공장은 기본적으로 그 상품을 고치려 한다.
+  // 새 상품으로 올리라고 지시받았으면 그 뜻을 따라야, 살아 있는 상품을 덮어쓰지 않는다.
+  const source = payload?.cafe24 && typeof payload.cafe24 === 'object' ? payload.cafe24 : {};
+  const mode = String(source.registrationMode ?? '').trim();
+  if (!['create', 'update'].includes(mode)) return '';
+  // openMarketSync 는 cafe24 조정자의 범위다. 필드 확정 명령으로 쓰면 경로가 거절된다.
+  await factoryRuntimeBridgeAction(
+    'factory/final-registration:apply-basic-info',
+    undefined,
+    draft => {
+      const sync = factoryEnsureOpenMarketSync(draft);
+      sync.cafe24RegistrationMode = mode;
+      sync.cafe24RegistrationModeUserTouched = true;
+      return 'cafe24RegistrationMode';
+    },
+    { render: false, forceSave: true },
+  );
+  return mode;
+}
+
 async function factoryRuntimeControlRegisterCafe24(payload = {}) {
   const jobId = String(payload.jobId || '').trim();
   if (!jobId) throw factoryRuntimeBatchCommandError('factory_product_payload_invalid');
@@ -17411,9 +17474,13 @@ async function factoryRuntimeControlRegisterCafe24(payload = {}) {
   // 관제탑이 지정한 등록 대상 값을 먼저 확정한다. 이것을 넣지 않으면 등록 화면이 없는
   // 배치에서 분류·판매가가 비어 등록이 막힌다.
   await factoryRuntimeControlApplyCafe24Category(payload);
+  await factoryRuntimeControlApplyCafe24RegistrationMode(payload);
   for (const field of factoryRuntimeControlCafe24Values(payload)) {
+    // 진열·판매 상태는 openMarketSync 에 적힌다. 필드 확정 명령은 그 범위를 쓸 수 없어
+    // FACTORY_COMMAND_PATH_REJECTED 로 등록이 통째로 멈춘다. 실측: 방울수저집 등록이
+    // openMarketSync.cafe24Display 에서 거절됐다. 최종등록 명령은 두 범위를 다 가진다.
     await factoryRuntimeBridgeAction(
-      'factory/fields:commitField',
+      'factory/final-registration:apply-basic-info',
       undefined,
       draft => {
         factoryCommitAutomationWizardFieldValue(field.fieldId, field.value, field.label, false, draft);
@@ -17425,7 +17492,15 @@ async function factoryRuntimeControlRegisterCafe24(payload = {}) {
   if (typeof factoryRunFinalRegistration !== 'function') {
     throw factoryRuntimeBatchCommandError('factory_cafe24_capability_unavailable');
   }
-  const registered = await factoryRunFinalRegistration({ headless: true, render: false });
+  // 워커에는 확인창을 눌러 줄 사람이 없다. 사람의 승인은 관제탑에서 등록을 지시하는
+  // 그 순간에 이미 끝났다. 이걸 빼면 확인창이 뜬 채로 멈춰 등록이 영영 끝나지 않는다.
+  // 실측: 방울수저집 등록이 확인창 앞에서 멈추고 거절로 되돌아왔다.
+  const registered = await factoryRunFinalRegistration({
+    headless: true,
+    render: false,
+    skipConfirm: true,
+    batch: true,
+  });
   const projection = await factoryRuntimeControlProjection();
   const factory = factoryRuntimeReadFactory();
   const productNo = String(
@@ -17437,15 +17512,21 @@ async function factoryRuntimeControlRegisterCafe24(payload = {}) {
     // 실패 사유는 등록이 남긴 영수증이 정답이다. 사전점검 목록을 먼저 읽으면 이미 지나간
     // 항목을 사유로 적어, 사람이 엉뚱한 곳을 고치게 된다.
     const receipt = factory?.product?.cafe24RegistrationReceipt || {};
+    // 등록이 중단되는 대부분의 길목은 finalRegistrationStatus 에 이유를 적고 돌아선다.
+    // 그것을 읽지 않으면 "왜 거절인지" 를 아무도 알 수 없다.
+    const runStatus = String(factory?.openMarketSync?.finalRegistrationStatus || '').trim();
     const reason = String(
       receipt.error
       || factory?.product?.finalRegistration?.message
+      || runStatus
       || factoryRuntimeControlCafe24BlockReason(projection)
       || 'factory_cafe24_registration_declined',
     ).trim();
     // 상품번호가 남았다면 스토어에는 이미 만들어졌다는 뜻이다. 이걸 숨기면 다시 눌러
     // 같은 상품을 하나 더 만든다.
-    const createdNo = String(productNo || receipt.productNo || '').trim();
+    // 이번 실행이 실제로 만든 번호일 때만 알린다. 스토어에 원래 있던 상품 번호까지
+    // "이미 생성됨" 으로 적으면, 만들지도 않은 것을 만들었다고 보고하게 된다.
+    const createdNo = String(factory?.product?.finalRegistration?.productNo || receipt.productNo || '').trim();
     throw factoryRuntimeBatchCommandError(
       `factory_cafe24_registration_declined: ${reason}${createdNo ? ` · 스토어에 상품 ${createdNo} 이(가) 이미 생성됨` : ''}`,
     );

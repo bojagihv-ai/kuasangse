@@ -83,9 +83,15 @@
       --virtual-queue-min-block-size: 240px;
       --virtual-row-min-block-size: 112px;
       --lazy-thumb-size: 32px;
-      --board-thumb-size: 44px;
-      --board-stage-min-block-size: 56px;
-      --board-stage-max-block-size: 104px;
+      --board-thumb-size: 112px;
+      --board-thumb-loading-opacity: 0.35;
+      --board-stage-min-block-size: 132px;
+      --board-stage-max-block-size: 208px;
+      --z-index-overlay: 90;
+      --board-zoom-backdrop: rgba(6, 8, 14, 0.86);
+      --board-zoom-max-inline: min(88vw, 1100px);
+      --board-zoom-max-block: 78vh;
+      --board-zoom-min-block: 52vh;
       --image-intake-thumb-size: 72px;
       --font-family-sans: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
       --font-family-mono: "SFMono-Regular", Consolas, monospace;
@@ -1685,6 +1691,84 @@
       border-radius: var(--radius-compact);
       background: var(--color-page-background);
       object-fit: cover;
+      cursor: zoom-in;
+    }
+
+    /* 받아오는 중에는 조용히 흐리게만 둔다. 깜빡이면 표 전체가 어지럽다. */
+    .board-cell-thumb[data-loading="true"] {
+      opacity: var(--board-thumb-loading-opacity);
+    }
+
+    /* 그림이 늦는 이유를 글자로 말한다. 빈 상자만 두면 고장으로 읽힌다. */
+    .board-cell-loading {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-panel-copy);
+      line-height: var(--line-height-tight);
+    }
+
+    .board-cell-thumb:hover {
+      outline: var(--border-width-default) solid var(--color-accent-highlight);
+      outline-offset: var(--focus-outline-offset);
+    }
+
+    /* 몇 개 중 몇 번째를 골랐는지. "고름" 만으로는 무엇을 골랐는지 알 수 없다. */
+    .board-cell-choice {
+      color: var(--color-text-primary);
+      font-size: var(--font-size-panel-copy);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .board-zoom-layer {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-index-overlay);
+      display: grid;
+      place-items: center;
+      padding: var(--space-2);
+      background: var(--board-zoom-backdrop);
+    }
+
+    .board-zoom-frame {
+      display: grid;
+      gap: var(--space-1);
+      justify-items: center;
+      max-inline-size: var(--board-zoom-max-inline);
+    }
+
+    .board-zoom-image {
+      inline-size: auto;
+      block-size: auto;
+      min-block-size: var(--board-zoom-min-block);
+      max-inline-size: var(--board-zoom-max-inline);
+      max-block-size: var(--board-zoom-max-block);
+      border-radius: var(--radius-compact);
+      object-fit: contain;
+    }
+
+    .board-zoom-label {
+      color: var(--color-text-primary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .board-zoom-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      justify-content: center;
+    }
+
+    .board-zoom-pick {
+      border-color: var(--color-status-ok);
+      color: var(--color-status-ok);
+    }
+
+    .board-zoom-close {
+      padding: var(--space-half) var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-highlight);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      cursor: pointer;
     }
 
     .board-result-strip .board-candidate-options {
@@ -1829,10 +1913,10 @@
     .board-row {
       display: grid;
       grid-template-columns:
-        minmax(13rem, 1.7fr)
-        minmax(6rem, 0.7fr)
-        repeat(6, minmax(3.25rem, 0.55fr))
-        minmax(8rem, 1fr);
+        minmax(14rem, 1.6fr)
+        minmax(6rem, 0.6fr)
+        repeat(6, minmax(7rem, 1fr))
+        minmax(8rem, 0.9fr);
       gap: var(--space-half);
       align-items: start;
       padding-block-end: var(--space-1);
@@ -1960,6 +2044,18 @@
       font-size: var(--font-size-kicker);
       opacity: 0.7;
       overflow-wrap: anywhere;
+    }
+
+    /* 이 창이 최신 화면인지 사람이 눈으로 판별하는 자리. */
+    .build-chip[data-tone="ok"] {
+      border-color: var(--color-status-ok);
+      color: var(--color-status-ok);
+    }
+
+    .build-chip[data-tone="stale"] {
+      border-color: var(--color-status-warn);
+      color: var(--color-status-warn);
+      font-weight: var(--font-weight-strong);
     }
 
     .board-status-badge {
@@ -3702,6 +3798,9 @@
           <p class="lede">신화사 상세페이지 원장을 기준으로 제품 투입, 정책, 검수, 작업자 진행과 Cafe24 비공개 등록 점검을 연결합니다.</p>
         </div>
         <span class="factory-pill health-chip" id="health-chip" role="status" aria-live="polite">상태 확인 중</span>
+        <!-- 창마다 다른 판이 열려 있으면 사람이 판별할 방법이 있어야 한다. 창이 들고 있는
+             화면 번호를 그 자리에 찍는다. 낡으면 색과 문구로 바로 알린다. -->
+        <span class="factory-pill build-chip" id="build-chip" role="status" aria-live="polite" title="이 창이 들고 있는 생산관제 화면 번호">화면 확인 중</span>
       </header>
 
       <nav id="primary-menu" class="menu-shell" aria-label="생산관제 메뉴">
@@ -3869,79 +3968,7 @@
       </section>
 
       <section id="menu-panel-queue" class="menu-panel" data-menu-panel="queue" role="tabpanel" aria-labelledby="menu-tab-queue" hidden>
-      <section id="production-board" class="section production-board" aria-label="병렬 생산 보드">
-        <p class="status-message">병렬 생산 보드를 불러오는 중입니다.</p>
-      </section>
-      <section class="section operator-console-shell" aria-labelledby="operator-console-heading">
-        <div class="section-heading operator-console-heading">
-          <div>
-            <p class="eyebrow">LIVE PRODUCTION DESK</p>
-            <h2 id="operator-console-heading">지금 진행 중인 생산 작업</h2>
-          </div>
-          <p class="section-copy">대기 제품, 현재 공정, 필요한 선택과 Cafe24 승인까지 실제 작업 상태만 표시합니다.</p>
-        </div>
-        <div class="operator-console-grid">
-          <aside class="operator-queue-panel" aria-labelledby="queue-heading">
-            <div class="operator-panel-heading">
-              <div><p class="eyebrow">제품 작업 순서</p><h3 id="queue-heading">제품 대기열</h3></div>
-              <span class="factory-pill" id="operator-queue-total">0건</span>
-            </div>
-            <div id="product-list" class="operator-queue-list" aria-live="polite">
-              <p class="status-message">조립공장 작업 큐를 불러오는 중입니다.</p>
-            </div>
-          </aside>
-          <section id="overview-stage-summary" class="operator-current-work" aria-live="polite" aria-label="현재 제품 생산 진행과 다음 행동">
-            <article class="operator-empty-state"><p class="status-message">현재 조립공장 작업 상태를 확인하는 중입니다.</p></article>
-            <section id="operator-queue-selection" class="operator-queue-selection" aria-live="polite" aria-label="현재 제품 A컷 선택">
-              <p class="status-message">현재 선택할 제품과 후보를 확인하는 중입니다.</p>
-            </section>
-          </section>
-        </div>
-      </section>
-
-      </section>
-
-      <section id="menu-panel-input-source" class="menu-panel" data-menu-panel="input-source" role="tabpanel" aria-labelledby="menu-tab-input-source" hidden>
-      <section id="bulk-intake" class="section bulk-intake" aria-label="제품 일괄 투입">
-        <p class="status-message">제품 일괄 투입을 준비하는 중입니다.</p>
-      </section>
-      <section class="section" aria-labelledby="work-bundle-input-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">조립공장 입력 자료</p>
-            <h2 id="work-bundle-input-heading">최신 입력 자료</h2>
-          </div>
-          <p class="section-copy">신화사 상세페이지 원장에서 받은 실제 입력 자료만 용도별로 표시합니다. 로컬 폴더나 브라우저 저장소는 검색하지 않습니다.</p>
-        </div>
-        <section id="work-bundle-input-assets" class="factory-sync-pane" aria-live="polite">
-          <p class="status-message">신화사 상세페이지 입력 자료를 불러오는 중입니다.</p>
-        </section>
-      </section>
-
-      <section class="section" id="workfile-intake-section" aria-labelledby="workfile-intake-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">DETAIL PAGE WORKFILE</p>
-            <h2 id="workfile-intake-heading">상세페이지 작업파일 열기</h2>
-          </div>
-          <p class="section-copy"><code>.kuasangse</code> 파일은 원본을 바꾸지 않고 <span class="keep-together">읽기만 하며</span>, 필수값·입력 이미지와 생성 결과·A컷을 자동으로 나눠 보여줍니다.</p>
-        </div>
-        <div class="factory-card control-card workfile-intake-card">
-          <label class="factory-drop" for="workfile-input">
-            <strong>상세페이지 작업파일 선택</strong>
-            <span><span class="keep-together">예: 모시바둑파우치.kuasangse</span> · 대용량 파일도 <span class="keep-together">화면을 멈추지 않고</span> 별도 작업으로 분류</span>
-            <input id="workfile-input" type="file" accept=".kuasangse,application/json">
-            <span class="workfile-file-control" aria-hidden="true">
-              <span class="workfile-file-button">파일 선택</span>
-              <span id="workfile-file-name" class="workfile-file-name">선택한 파일 없음</span>
-            </span>
-          </label>
-          <p id="workfile-import-status" class="status-message" role="status" aria-live="polite">작업파일을 선택하면 입력 자료와 생성 결과를 분류합니다.</p>
-          <div id="workfile-classification" class="workfile-classification" aria-live="polite" hidden></div>
-        </div>
-      </section>
-
-      <section class="section" id="intake-section" aria-labelledby="intake-heading">
+<section class="section" id="intake-section" aria-labelledby="intake-heading">
         <div class="section-heading">
           <div>
             <p class="eyebrow">BATCH INTAKE</p>
@@ -4012,6 +4039,91 @@
           </form>
         </div>
       </section>
+      <section id="production-board" class="section production-board" aria-label="병렬 생산 보드">
+        <p class="status-message">병렬 생산 보드를 불러오는 중입니다.</p>
+      </section>
+      <section class="section operator-console-shell" aria-labelledby="operator-console-heading">
+        <div class="section-heading operator-console-heading">
+          <div>
+            <p class="eyebrow">LIVE PRODUCTION DESK</p>
+            <h2 id="operator-console-heading">지금 진행 중인 생산 작업</h2>
+          </div>
+          <p class="section-copy">대기 제품, 현재 공정, 필요한 선택과 Cafe24 승인까지 실제 작업 상태만 표시합니다.</p>
+        </div>
+        <div class="operator-console-grid">
+          <aside class="operator-queue-panel" aria-labelledby="queue-heading">
+            <div class="operator-panel-heading">
+              <div><p class="eyebrow">제품 작업 순서</p><h3 id="queue-heading">제품 대기열</h3></div>
+              <span class="factory-pill" id="operator-queue-total">0건</span>
+            </div>
+            <div id="product-list" class="operator-queue-list" aria-live="polite">
+              <p class="status-message">조립공장 작업 큐를 불러오는 중입니다.</p>
+            </div>
+          </aside>
+          <section id="overview-stage-summary" class="operator-current-work" aria-live="polite" aria-label="현재 제품 생산 진행과 다음 행동">
+            <article class="operator-empty-state"><p class="status-message">현재 조립공장 작업 상태를 확인하는 중입니다.</p></article>
+            <section id="operator-queue-selection" class="operator-queue-selection" aria-live="polite" aria-label="현재 제품 A컷 선택">
+              <p class="status-message">현재 선택할 제품과 후보를 확인하는 중입니다.</p>
+            </section>
+          </section>
+        </div>
+      </section>
+
+      </section>
+
+      <section id="menu-panel-input-source" class="menu-panel" data-menu-panel="input-source" role="tabpanel" aria-labelledby="menu-tab-input-source" hidden>
+      <!-- 대량 제품 투입 폼은 작업 큐 맨 위에 있다. 같은 id 를 두 곳에 둘 수 없으니,
+           여기서는 그 자리로 보내 준다. 안 그러면 예전에 쓰던 사람이 사라졌다고 여긴다. -->
+      <section class="section" aria-labelledby="intake-moved-heading">
+        <div class="section-heading">
+          <div>
+            <p class="section-eyebrow">BATCH INTAKE</p>
+            <h2 id="intake-moved-heading">대량 제품 투입</h2>
+          </div>
+          <button class="board-action" type="button" id="go-batch-intake">작업 큐에서 투입하기</button>
+        </div>
+        <p class="section-copy">새 제품 투입은 작업 큐 맨 위로 옮겼습니다. 투입한 뒤 그 아래 표에서 진행 상황을 바로 볼 수 있습니다.</p>
+      </section>
+      <section id="bulk-intake" class="section bulk-intake" aria-label="제품 일괄 투입">
+        <p class="status-message">제품 일괄 투입을 준비하는 중입니다.</p>
+      </section>
+      <section class="section" aria-labelledby="work-bundle-input-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">조립공장 입력 자료</p>
+            <h2 id="work-bundle-input-heading">최신 입력 자료</h2>
+          </div>
+          <p class="section-copy">신화사 상세페이지 원장에서 받은 실제 입력 자료만 용도별로 표시합니다. 로컬 폴더나 브라우저 저장소는 검색하지 않습니다.</p>
+        </div>
+        <section id="work-bundle-input-assets" class="factory-sync-pane" aria-live="polite">
+          <p class="status-message">신화사 상세페이지 입력 자료를 불러오는 중입니다.</p>
+        </section>
+      </section>
+
+      <section class="section" id="workfile-intake-section" aria-labelledby="workfile-intake-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">DETAIL PAGE WORKFILE</p>
+            <h2 id="workfile-intake-heading">상세페이지 작업파일 열기</h2>
+          </div>
+          <p class="section-copy"><code>.kuasangse</code> 파일은 원본을 바꾸지 않고 <span class="keep-together">읽기만 하며</span>, 필수값·입력 이미지와 생성 결과·A컷을 자동으로 나눠 보여줍니다.</p>
+        </div>
+        <div class="factory-card control-card workfile-intake-card">
+          <label class="factory-drop" for="workfile-input">
+            <strong>상세페이지 작업파일 선택</strong>
+            <span><span class="keep-together">예: 모시바둑파우치.kuasangse</span> · 대용량 파일도 <span class="keep-together">화면을 멈추지 않고</span> 별도 작업으로 분류</span>
+            <input id="workfile-input" type="file" accept=".kuasangse,application/json">
+            <span class="workfile-file-control" aria-hidden="true">
+              <span class="workfile-file-button">파일 선택</span>
+              <span id="workfile-file-name" class="workfile-file-name">선택한 파일 없음</span>
+            </span>
+          </label>
+          <p id="workfile-import-status" class="status-message" role="status" aria-live="polite">작업파일을 선택하면 입력 자료와 생성 결과를 분류합니다.</p>
+          <div id="workfile-classification" class="workfile-classification" aria-live="polite" hidden></div>
+        </div>
+      </section>
+
+      
 
       </section>
 
@@ -4387,7 +4499,83 @@
     }
   </script>
   <script type="module" src="./src/workfile-intake.mjs?actualB=1"></script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=9"></script>
+  <script>
+    // 조립공장이 접속할 때 빌드 번호를 맞춰 보듯, 이 화면도 열리는 순간 최신인지 본다.
+    // 캐시를 꺼도 이미 낡은 채로 열려 있던 창은 스스로 고쳐지지 않는다. 그 창에서는
+    // 새로 붙인 기능이 조용히 없는 것처럼 보인다. 실측 2026-08-25: 한 크롬 창에서만
+    // 컷 확대가 동작하지 않았고, 원인은 그 창이 들고 있던 낡은 모듈이었다.
+    // 이 스크립트는 모듈 태그보다 먼저 파싱된다. 그때 DOM 을 뒤지면 모듈 태그가 아직 없어
+    // 화면 번호를 못 읽고 'v?' 로 남는다. 문서가 다 읽힌 뒤에 본다.
+    document.addEventListener('DOMContentLoaded', function wireBatchIntakeJump() {
+      var button = document.getElementById('go-batch-intake');
+      if (!button) return;
+      button.addEventListener('click', function (event) {
+        // 이 버튼은 입력·소스 패널 안에 있다. 클릭이 위로 흘러가면 그 패널이 도로 켜져
+        // 탭이 안 바뀐다. 메뉴가 내주는 정식 전환 통로를 쓰고, 없으면 탭 버튼을 누른다.
+        event.preventDefault();
+        event.stopPropagation();
+        var menu = window.controlTowerMenu;
+        if (menu && typeof menu.activate === 'function') {
+          menu.activate('queue');
+        }
+        else {
+          var tab = document.getElementById('menu-tab-queue');
+          if (tab) tab.click();
+        }
+        // 패널이 실제로 켜진 다음에 옮겨야 한다. 숨어 있는 동안에는 자리를 못 잡는다.
+        window.requestAnimationFrame(function () {
+          var target = document.getElementById('intake-section');
+          if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        });
+      });
+    });
+
+    function runControlTowerBuildCheck() {
+      var RELOAD_MARK = 'controlTowerStaleReloadAt';
+      function currentBuild() {
+        var node = document.querySelector('script[src*="production-board.mjs"]');
+        if (!node) return '';
+        var match = String(node.getAttribute('src') || '').match(/parallelBoard=(\d+)/);
+        return match ? match[1] : '';
+      }
+      var running = currentBuild();
+      var chip = document.getElementById('build-chip');
+      if (chip) {
+        chip.textContent = '화면 v' + (running || '?');
+        chip.dataset.tone = 'ok';
+      }
+      if (!running) return;
+      fetch(location.pathname + '?buildCheck=' + Date.now(), { cache: 'no-store' })
+        .then(function (response) { return response.ok ? response.text() : ''; })
+        .then(function (text) {
+          if (!text) return;
+          var match = text.match(/production-board\.mjs\?parallelBoard=(\d+)/);
+          var latest = match ? match[1] : '';
+          if (!latest || latest === running) return;
+          // 되풀이 새로고침은 막는다. 한 번 고쳐서 안 되면 사람에게 알린다.
+          var last = Number(sessionStorage.getItem(RELOAD_MARK) || 0);
+          if (chip) {
+            chip.textContent = '화면 v' + running + ' · 낡음(최신 v' + latest + ')';
+            chip.dataset.tone = 'stale';
+          }
+          if (Date.now() - last < 30000) {
+            console.warn('생산관제 화면이 낡았습니다. 새로고침이 반영되지 않았습니다: ' + running + ' -> ' + latest);
+            return;
+          }
+          sessionStorage.setItem(RELOAD_MARK, String(Date.now()));
+          console.info('생산관제 화면이 낡아 새로 받습니다: ' + running + ' -> ' + latest);
+          location.replace(location.pathname + '?freshBuild=' + latest);
+        })
+        .catch(function () {});
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', runControlTowerBuildCheck);
+    }
+    else {
+      runControlTowerBuildCheck();
+    }
+  </script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=25"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=3"></script>
 </body>
 </html>

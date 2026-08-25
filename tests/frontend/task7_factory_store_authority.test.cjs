@@ -5996,18 +5996,19 @@ test('restoreOnly exact checkpoint must hydrate durable competitors before retur
     'projection:16',
   ]);
 
-  const hydrationFailure = createRuntime({ hydrationResult: false });
-  await assert.rejects(
-    hydrationFailure.run(payload),
-    errorValue => errorValue?.code === 'factory_product_checkpoint_hydration_failed',
-  );
-  assert.deepEqual(hydrationFailure.events, [
+  // 서버가 "바꿀 것 없음"(false) 을 돌려주는 것은 실패가 아니다. 로컬 기록을 이미 제대로
+  // 불러왔을 때도 그렇게 답한다. 실측: 방울수저집이 이 경우에 hydration_failed 로 죽었다.
+  // 신원이 체크포인트와 맞는 한 복원은 성공으로 끝나야 한다.
+  const noChangeHydration = createRuntime({ hydrationResult: false });
+  const noChangeReceipt = await noChangeHydration.run(payload);
+  assert.equal(noChangeReceipt.schema, 'factory-product-run-receipt:v1');
+  assert.deepEqual(noChangeHydration.events.slice(0, 5), [
     `load:${workspaceId}`,
     'projection:0',
     `authority:${workspaceScopeId}`,
-    'hydrate',
     // 첫 요청이 "바꿀 것 없음"으로 돌아오는 것은 앱이 켜지며 다른 제품을 불러오는 중일
-    // 때도 생긴다. 한 번 더 요청해 본 뒤에야 실패로 단정한다.
+    // 때도 생긴다. 한 번 더 요청해 본 뒤에야 판단한다.
+    'hydrate',
     'hydrate',
   ]);
 

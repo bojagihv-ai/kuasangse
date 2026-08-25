@@ -280,7 +280,15 @@ if ($frontOk) {
   Write-Host '  [3/4] Frontend (8081) already running'
 } else {
   Write-Host '  [3/4] Frontend (8081) starting...'
-  Start-Process -FilePath $PythonHttp -ArgumentList @('-m', 'http.server', '8081', '--directory', $Root) -WindowStyle Minimized
+  # http.server 는 Cache-Control 을 안 보내 크롬이 제멋대로 캐시한다. 그러면 창마다 다른
+  # 판을 들고 있게 되고, 새로 붙인 기능이 어떤 창에서만 없는 것처럼 보인다.
+  $StaticServer = Join-Path $Root 'control_tower	ools\static_server.py'
+  if (Test-Path -LiteralPath $StaticServer) {
+    Start-Process -FilePath $PythonHttp -ArgumentList @($StaticServer, '--host', '127.0.0.1', '--port', '8081', '--directory', $Root) -WindowStyle Minimized
+  }
+  else {
+    Start-Process -FilePath $PythonHttp -ArgumentList @('-m', 'http.server', '8081', '--directory', $Root) -WindowStyle Minimized
+  }
 }
 
 Write-Host ''

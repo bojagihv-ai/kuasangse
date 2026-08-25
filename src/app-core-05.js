@@ -6504,7 +6504,13 @@ function factoryCafe24CompareRegistrationReadback(preflight = {}, detail = null,
 }
 
 // Cafe24 가 등록 직후에는 아직 채우지 않는 값들. 이 항목만 어긋나 있으면 잠시 뒤 다시 읽는다.
-const CAFE24_READBACK_SETTLING_LABELS = new Set(['옵션별 재고', '대표이미지', '상세이미지']);
+const CAFE24_READBACK_SETTLING_LABELS = new Set([
+  '옵션별 재고', '대표이미지', '상세이미지',
+  // 저장 에코도 같은 이유로 늦게 채워진다. 이 항목만 목록에서 빠져 있으면 다른 항목이
+  // 아직 반영 중이어도 재시도가 한 번도 돌지 않고 즉시 실패로 끝난다. 실측: 방울수저집
+  // #3021 은 스토어에 분류·옵션·이미지가 모두 정상인데 이 한 줄 때문에 실패로 기록됐다.
+  '기본/필수값 payload',
+]);
 // 저장 에코를 기다릴 때와 같은 폭(약 30초)으로 본다. 8초로는 이미지 반영을 못 기다린다.
 const CAFE24_READBACK_SETTLE_ATTEMPTS = 20;
 const CAFE24_READBACK_SETTLE_DELAY_MS = 1500;
@@ -6512,6 +6518,27 @@ const CAFE24_READBACK_SETTLE_DELAY_MS = 1500;
 // factory 는 반드시 소유한 draft 여야 한다. 커밋된 스냅샷은 깊게 동결돼 있고
 // app-core-05 는 non-strict 라, 셀렉터 기본값을 쓰면 아래 영수증 대입이
 // 예외 없이 조용히 버려진다.
+function factoryCafe24RefreshSaveVerificationFromDetail(record, detail, productNo) {
+  // 보낸 payload 를 남겨 둔 기록만 다시 대조할 수 있다. 없으면 원래 기록을 그대로 쓴다.
+  if (!record || typeof record !== 'object') return record;
+  if (String(record.productNo || '') !== String(productNo || '')) return record;
+  const sent = record.sentPayload && typeof record.sentPayload === 'object' ? record.sentPayload : null;
+  if (!sent || !Object.keys(sent).length) return record;
+  if (typeof factoryVerifyCafe24ProductEcho !== 'function'
+    || typeof factoryCafe24SaveVerificationRecord !== 'function') return record;
+  const raw = typeof parseCafe24Raw === 'function'
+    ? (parseCafe24Raw(detail) || detail?.raw || detail)
+    : (detail?.raw || detail);
+  if (!raw) return record;
+  return factoryCafe24SaveVerificationRecord({
+    type: record.type || 'update',
+    productNo,
+    product: sent,
+    verification: factoryVerifyCafe24ProductEcho(sent, raw),
+    rollback: record.rollback || null,
+  });
+}
+
 async function factoryCafe24FinalizeRegistrationReceipt(factory, options = {}) {
   const preflight = options.preflight || factory.product?.cafe24RegistrationReceipt;
   if (!preflight) return null;
@@ -6524,7 +6551,15 @@ async function factoryCafe24FinalizeRegistrationReceipt(factory, options = {}) {
   for (let attempt = 0; attempt < CAFE24_READBACK_SETTLE_ATTEMPTS; attempt += 1) {
     detail = await fetchCafe24ProductFullByNo(productNo, mallId);
     if (typeof factoryAttachCafe24InventoryEchoes === 'function') detail = await factoryAttachCafe24InventoryEchoes(detail, mallId);
-    comparison = factoryCafe24CompareRegistrationReadback(preflight, detail, factory.product?.cafe24LastSaveVerification || null);
+    // 저장 직후 찍은 에코는 Cafe24 가 나중에 채우는 분류·옵션을 불일치로 남긴다. 방금 읽은
+    // 상세로 다시 대조해야, 이미 반영된 값을 옛 스냅샷 때문에 실패로 적지 않는다.
+    const refreshedSaveVerification = factoryCafe24RefreshSaveVerificationFromDetail(
+      factory.product?.cafe24LastSaveVerification || null,
+      detail,
+      productNo,
+    );
+    if (refreshedSaveVerification) factory.product.cafe24LastSaveVerification = refreshedSaveVerification;
+    comparison = factoryCafe24CompareRegistrationReadback(preflight, detail, refreshedSaveVerification);
     // Cafe24 는 등록 직후 이미지와 재고를 아직 채우지 않은 채로 응답한다. 실측: 02:51 등록
     // 시점에는 detail/list/small/tiny 가 모두 비어 대표이미지가 불일치였고, 같은 상품을
     // 나중에 다시 읽으니 네 칸 모두 채워져 전부 일치했다. 재고에만 재시도를 걸어 두면
@@ -6976,7 +7011,16 @@ async function factoryRunFinalRegistration(options = {}) {
   const cafe24Model = factoryFinalRegistrationCafe24Model(factory);
   const basicInfo = factoryFinalRegistrationBasicInfoModel(factory);
   const inventoryQuantityInput = String(options.forceInventoryQuantity ?? '').trim();
-  const forceInventoryQuantity = /^\d+$/.test(inventoryQuantityInput) ? inventoryQuantityInput : '';
+  // 새 상품의 초기 옵션 재고는 DB 수량이 정본이다. 이 값을 실어 주지 않으면 옵션 재고를
+  // 다른 Cafe24 상품의 후보 캐시에서 seed 하는데, 갓 만든 상품의 캐시본은 재고가 0이라
+  // 그 0 이 그대로 실린다. 실측: #3011 은 스토어에 9색 전부 99 인데 캐시본은 0 이었고,
+  // 그 탓에 새로 올린 #3021 이 9색 전부 0(품절)으로 등록됐다.
+  // 부르는 쪽이 수량을 못박았으면 그 값이 우선이다. 기존 상품 수정 경로는 이 값을 받지
+  // 않으므로, 스토어에 이미 있는 재고를 이 기본값이 덮어쓰지 않는다.
+  const dbInventoryQuantity = String(factory.product?.finalDb?.quantity ?? '').trim();
+  const forceInventoryQuantity = /^\d+$/.test(inventoryQuantityInput)
+    ? inventoryQuantityInput
+    : (/^\d+$/.test(dbInventoryQuantity) ? dbInventoryQuantity : '');
   if (!detailModel.canProceed) {
     factoryUpdateFinalRegistrationStatus(detailModel.reason || '상세페이지 조각이 아직 없습니다.', 0, 'error', { factory, render: false });
     return false;

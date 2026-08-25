@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=9';
+} from './production-board-model.mjs?parallelBoard=19';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -77,6 +77,13 @@ export function mountProductionBoard(runtime, {
   // 고른 이미지는 저장 전까지 여기에 담아 둔다. 새로 그려도 사라지지 않아야 한다.
   const imageDrafts = new Map();
   const resultCache = new Map();
+  // 확대창에 넘길 후보 묶음. dataset 에 담기엔 커서 노드 키로 따로 보관한다.
+  const zoomPayloads = new Map();
+  // 새로 그릴 때마다 img 를 새로 만들면 브라우저가 그림을 다시 받아 화면이 깜빡인다.
+  // 같은 자리·같은 주소면 만들어 둔 노드를 그대로 다시 쓴다.
+  const thumbNodes = new Map();
+  // 보관함을 아직 받는 중인 작업. 칸에 "불러오는 중" 이라고 적어 준다.
+  let pendingResultJobs = new Set();
   let stopped = false;
   let loaded = false;
   let eventSource = null;
@@ -191,7 +198,9 @@ export function mountProductionBoard(runtime, {
   }
 
   const CAFE24_VALUE_FIELDS = Object.freeze([
-  { name: 'categoryId', label: '상품분류 번호', placeholder: '예: 119', required: true },
+  { name: 'registrationMode', label: '등록 방식', placeholder: '',
+    options: [['', '조립공장 판단에 맡김'], ['create', '새 상품으로 등록'], ['update', '기존 상품 수정']] },
+  { name: 'categoryId', label: '상품분류 번호', placeholder: '비우면 스토어 값을 씁니다' },
   { name: 'salePrice', label: '판매가', placeholder: '예: 2700' },
   { name: 'supplyPrice', label: '공급가', placeholder: '예: 500' },
   { name: 'displayStatus', label: '진열 (T/F)', placeholder: 'F = 진열 안 함' },
@@ -387,13 +396,25 @@ export function mountProductionBoard(runtime, {
     for (const field of CAFE24_VALUE_FIELDS) {
       const label = element('label', 'board-cafe24-field');
       label.append(element('span', 'board-cafe24-field-label', field.label));
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.name = field.name;
-      input.placeholder = field.placeholder;
-      input.value = String(row.cafe24Values?.[field.name] || '');
-      if (field.required) input.required = true;
-      label.append(input);
+      if (field.options) {
+        const select = document.createElement('select');
+        select.name = field.name;
+        for (const option of field.options) {
+          const node = document.createElement('option');
+          node.value = option[0];
+          node.textContent = option[1];
+          select.append(node);
+        }
+        select.value = String(row.cafe24Values?.[field.name] || '');
+        label.append(select);
+      } else {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.name = field.name;
+        input.placeholder = field.placeholder;
+        input.value = String(row.cafe24Values?.[field.name] || '');
+        label.append(input);
+      }
       grid.append(label);
     }
     form.append(grid);
@@ -494,6 +515,57 @@ export function mountProductionBoard(runtime, {
     return strip;
   }
 
+  /**
+   * 확대창에 넘길 후보 묶음을 만든다.
+   * 조립공장이 준 후보에 그림이 없으면(섹션이 그렇다) 보관함의 그 단계 자산으로 채운다.
+   * 다만 보관함 자산의 키는 조립공장이 아는 후보 번호가 아니므로, 그때는 보기만 하고
+   * 고르지는 못하게 한다. 엉뚱한 번호를 보내 잘못 고르게 만드느니 못 고르는 편이 낫다.
+   */
+  function buildZoomPayload(row, cell) {
+    const label = `${row.productName} · ${cell.stageLabel}`;
+    const source = cell.selectedContentUrl || cell.selectedThumbnailUrl;
+    const live = (cell.candidates || [])
+      .filter(candidate => candidate && candidate.thumbnailUrl)
+      .map(candidate => ({
+        id: candidate.id,
+        thumbnailUrl: candidate.thumbnailUrl,
+        contentUrl: candidate.contentUrl || candidate.thumbnailUrl,
+      }));
+    if (live.length) {
+      return {
+        source,
+        label,
+        jobId: row.jobId,
+        stageKey: cell.stageKey,
+        candidates: live,
+        startIndex: Math.max(0, (cell.selectedIndex || 1) - 1),
+        canPick: cell.pickable || cell.changeable,
+      };
+    }
+    const entry = resultCache.get(String(row.jobId));
+    const archived = entry && !entry.error && Array.isArray(entry.assets)
+      ? entry.assets.map(record)
+      : [];
+    const shots = archived
+      .filter(asset => String(asset.phase || '') === 'output'
+        && String(asset.stage || '') === cell.stageKey)
+      .map(asset => ({
+        id: '',
+        thumbnailUrl: String(asset.thumbnailReference || ''),
+        contentUrl: String(asset.contentReference || asset.thumbnailReference || ''),
+      }))
+      .filter(shot => shot.contentUrl || shot.thumbnailUrl);
+    return {
+      source,
+      label,
+      jobId: row.jobId,
+      stageKey: cell.stageKey,
+      candidates: shots,
+      startIndex: 0,
+      canPick: false,
+    };
+  }
+
   function renderRow(row) {
     const line = element('div', 'board-row');
     line.dataset.jobId = row.jobId;
@@ -566,13 +638,20 @@ export function mountProductionBoard(runtime, {
       // 조립공장에는 등록 화면이 없다. 분류·공급가·진열은 이 작업의 투입값을 그대로 싣는다.
       // 투입값이 없는 작업은 바로 지시하지 않고 여기서 값을 받는다. 등록값이 없어 차단된
       // 작업도 원문 코드 대신 이 입력으로 풀 수 있어야 한다.
-      const register = button(
-        'board-mini-action board-action-primary',
-        row.cafe24ValuesReady ? 'Cafe24 등록' : 'Cafe24 값 입력',
-        { action: row.cafe24ValuesReady ? 'cafe24' : 'cafe24-values', jobId: row.jobId },
-      );
+      const register = button('board-mini-action board-action-primary', 'Cafe24 등록', {
+        action: 'cafe24',
+        jobId: row.jobId,
+      });
       register.disabled = busy;
       rowActions.append(register);
+      // 분류·공급가는 원래 필수가 아니다. 스토어에 이미 있는 제품은 조립공장이 원격에서
+      // 읽어 온다. 값을 굳이 지정하고 싶을 때만 여는 보조 수단으로 둔다.
+      const values = button('board-mini-action ghost', 'Cafe24 값 지정', {
+        action: 'cafe24-values',
+        jobId: row.jobId,
+      });
+      values.disabled = busy;
+      rowActions.append(values);
     }
     const results = button(
       'board-mini-action ghost',
@@ -595,7 +674,9 @@ export function mountProductionBoard(runtime, {
     line.append(status);
 
     for (const cell of row.cells) {
-      const node = row.cells.length && cell.pickable
+      // 고를 것이 있는 칸도, 이미 고른 칸도 눌러야 한다. 사람이 마음을 바꾸는 것이 정상이다.
+      const openable = cell.pickable || cell.changeable;
+      const node = openable
         ? button('board-cell board-cell-stage board-cell-pickable', '', {
           action: 'open',
           jobId: row.jobId,
@@ -606,18 +687,67 @@ export function mountProductionBoard(runtime, {
       node.dataset.stageLabel = cell.stageLabel;
       node.title = `${cell.stageLabel} · ${CELL_TITLES[cell.state] || ''}`;
       if (cell.selectedThumbnailUrl) {
-        const thumb = document.createElement('img');
-        thumb.className = 'board-cell-thumb';
-        thumb.src = assetUrl ? assetUrl(cell.selectedThumbnailUrl) : cell.selectedThumbnailUrl;
-        thumb.alt = `${cell.stageLabel} 고른 컷`;
-        thumb.loading = 'lazy';
+        const thumbKey = `${row.jobId}:${cell.stageKey}`;
+        const wanted = assetUrl ? assetUrl(cell.selectedThumbnailUrl) : cell.selectedThumbnailUrl;
+        const cached = thumbNodes.get(thumbKey);
+        const reuse = cached && cached.dataset.thumbSrc === wanted;
+        const thumb = reuse ? cached : document.createElement('img');
+        if (!reuse) {
+          thumb.className = 'board-cell-thumb';
+          thumb.dataset.thumbSrc = wanted;
+          thumb.src = wanted;
+          thumb.alt = `${cell.stageLabel} 고른 컷`;
+          // 표가 자주 다시 그려지는 화면에서 지연 로딩은 계속 처음으로 되돌아간다. 바로 받는다.
+          thumb.loading = 'eager';
+          thumb.decoding = 'async';
+          thumbNodes.set(thumbKey, thumb);
+        }
+        if (!reuse) {
+          // 받아오는 동안 빈 상자가 그대로 보이면 깨진 것처럼 읽힌다. 글자로 알린다.
+          thumb.dataset.loading = 'true';
+          // 여기서 render() 를 부르면 표를 다시 그리며 img 가 떨어졌다 붙고, 지연 로딩이
+          // 처음으로 되돌아가 영영 끝나지 않는다. 실측: 27장이 하나도 안 실렸다.
+          // 다 받은 칸의 표시는 그 자리에서 지운다.
+          thumb.addEventListener('load', () => {
+            delete thumb.dataset.loading;
+            const holder = thumb.parentElement;
+            const label = holder ? holder.querySelector('.board-cell-loading') : null;
+            if (label) label.remove();
+          }, { once: true });
+          // 정말 못 받아오면 빈 상자 대신 원래의 상태 표시로 돌아간다.
+          thumb.addEventListener('error', () => {
+            thumbNodes.delete(thumbKey);
+            const holder = thumb.parentElement;
+            thumb.remove();
+            if (holder && !holder.querySelector('.board-cell-glyph')) {
+              holder.prepend(element('span', 'board-cell-glyph', CELL_GLYPHS[cell.state] || '·'));
+            }
+          }, { once: true });
+        }
+        // 작은 그림으로는 무엇을 골랐는지 판단할 수 없다. 눌러서 크게 보고, 후보가
+        // 여럿이면 그 자리에서 넘겨 가며 비교한 뒤 고른다.
+        thumb.dataset.zoomSrc = cell.selectedContentUrl || cell.selectedThumbnailUrl;
+        thumb.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
+        const zoomKey = `${row.jobId}:${cell.stageKey}`;
+        node.dataset.zoomCell = zoomKey;
+        zoomPayloads.set(zoomKey, buildZoomPayload(row, cell));
         node.append(thumb);
       } else {
         node.append(element('span', 'board-cell-glyph', CELL_GLYPHS[cell.state] || '·'));
       }
       // 표 머리글은 스크롤로 사라진다. 어느 칸이 어느 컷인지 칸 자신이 말해야 한다.
       node.append(element('span', 'board-cell-stage-name', cell.stageLabel));
+      // 그림이 늦게 오는 이유를 사람이 알 수 있어야 한다. 빈 상자만 두면 고장으로 읽힌다.
+      const thumbPending = node.querySelector('.board-cell-thumb[data-loading="true"]');
+      if (thumbPending || (!cell.selectedThumbnailUrl && pendingResultJobs.has(String(row.jobId)))) {
+        node.append(element('span', 'board-cell-loading', '불러오는 중'));
+      }
+      // 몇 개 중 몇 번째를 골랐는지 칸에 적는다. "고름" 만으로는 무엇을 골랐는지 알 수 없다.
+      if (cell.selectedIndex && cell.candidateCount > 1) {
+        node.append(element('span', 'board-cell-choice', `${cell.selectedIndex}/${cell.candidateCount}`));
+      }
       if (cell.pickable) node.append(element('span', 'board-cell-pick-hint', '고르기'));
+      else if (cell.changeable) node.append(element('span', 'board-cell-pick-hint', '바꾸기'));
       if (cell.candidateCount && cell.state !== 'selected') {
         node.append(element('span', 'board-cell-count', `${cell.candidateCount}`));
       }
@@ -809,10 +939,17 @@ export function mountProductionBoard(runtime, {
   }
 
   async function fillMissingProgress() {
+    // 진행 스냅샷이 있어도 보관함은 읽어야 한다. 섹션처럼 스냅샷에 그림이 없는 단계는
+    // 보관함에만 이미지가 있어서, 스냅샷이 있다는 이유로 건너뛰면 그 칸은 영영 체크표시뿐이다.
     const pending = jobs
-      .filter(job => !record(job).progress && !resultCache.has(String(job.jobId)))
+      .filter(job => !resultCache.has(String(job.jobId)))
       .slice(0, 8);
-    for (const job of pending) await loadResults(String(job.jobId), { quiet: true });
+    if (!pending.length) return;
+    // 한 건씩 순서대로 받으면 건당 수백 KB 라 그림이 2~3장씩 뒤늦게 뜬다. 나란히 받는다.
+    pendingResultJobs = new Set(pending.map(job => String(job.jobId)));
+    render();
+    await Promise.all(pending.map(job => loadResults(String(job.jobId), { quiet: true })));
+    pendingResultJobs = new Set();
   }
 
   async function loadResults(jobId, { quiet = false } = {}) {
@@ -833,8 +970,108 @@ export function mountProductionBoard(runtime, {
     autoResume = target.checked === true;
   }
 
+  // 컷은 작게 보면 무엇을 골랐는지 판단할 수 없다. 누르면 그 자리에서 크게 보고,
+  // 후보가 여럿이면 넘겨 가며 비교한 뒤 그 자리에서 고른다. 크게 보기와 고르기가
+  // 따로 놀면 52컷짜리 섹션은 사람이 실제로 고를 수 없다.
+  function openZoom({ source, label, jobId = '', stageKey = '', candidates = [], startIndex = 0, canPick = false }) {
+    closeZoom();
+    const shots = candidates.length
+      ? candidates
+      : [{ id: '', thumbnailUrl: source, contentUrl: source }];
+    let index = Math.max(0, Math.min(startIndex, shots.length - 1));
+
+    const layer = element('div', 'board-zoom-layer');
+    layer.dataset.boardZoom = 'true';
+    const frame = element('div', 'board-zoom-frame');
+    const image = document.createElement('img');
+    image.className = 'board-zoom-image';
+    image.alt = label;
+    frame.append(image);
+    const caption = element('p', 'board-zoom-label', label);
+    frame.append(caption);
+
+    const controls = element('div', 'board-zoom-controls');
+    const prev = button('board-zoom-close', '← 이전', { action: 'zoom-prev' });
+    const next = button('board-zoom-close', '다음 →', { action: 'zoom-next' });
+    const pick = button('board-zoom-close board-zoom-pick', '이 컷으로 선택', { action: 'zoom-pick' });
+    const close = button('board-zoom-close', '닫기', { action: 'zoom-close' });
+    if (shots.length > 1) controls.append(prev, next);
+    if (canPick && jobId && stageKey) controls.append(pick);
+    controls.append(close);
+    frame.append(controls);
+    layer.append(frame);
+
+    const paint = () => {
+      const shot = shots[index] || {};
+      const href = shot.contentUrl || shot.thumbnailUrl || source;
+      image.src = assetUrl ? assetUrl(href) : href;
+      caption.textContent = shots.length > 1
+        ? `${label} · ${index + 1}/${shots.length}`
+        : label;
+      pick.dataset.candidateId = shot.id || '';
+      pick.disabled = busy || !shot.id;
+    };
+    const step = delta => {
+      index = (index + delta + shots.length) % shots.length;
+      paint();
+    };
+    layer.dataset.jobId = jobId;
+    layer.dataset.stageKey = stageKey;
+    // 확대창은 body 에 붙는다. 보드의 클릭 처리기는 보드 안쪽에만 걸려 있어서, 여기 버튼은
+    // 이 리스너가 직접 처리해야 한다. 이걸 빼면 닫기와 선택이 눌러도 아무 반응이 없다.
+    layer.addEventListener('click', event => {
+      const hit = event.target instanceof Element ? event.target.closest('[data-action]') : null;
+      const hitAction = hit ? hit.dataset.action : '';
+      if (hitAction === 'zoom-prev') { step(-1); return; }
+      if (hitAction === 'zoom-next') { step(1); return; }
+      if (hitAction === 'zoom-close') { closeZoom(); return; }
+      if (hitAction === 'zoom-pick') {
+        const candidateId = hit.dataset.candidateId || '';
+        if (!candidateId || !jobId || !stageKey) return;
+        void submitBatch({
+          mode: 'manual',
+          selections: [{ jobId, stageKey, candidateId }],
+        });
+        closeZoom();
+        return;
+      }
+      // 바깥을 눌러도 닫힌다. 크게 본 뒤 원래 화면으로 돌아가는 길을 막지 않는다.
+      if (event.target === layer) closeZoom();
+    });
+    layer.addEventListener('keydown', event => {
+      if (event.key === 'ArrowLeft') { step(-1); event.preventDefault(); }
+      if (event.key === 'ArrowRight') { step(1); event.preventDefault(); }
+      if (event.key === 'Escape') closeZoom();
+    });
+    paint();
+    document.body.append(layer);
+    close.focus();
+  }
+
+  function closeZoom() {
+    document.querySelectorAll('[data-board-zoom="true"]').forEach(node => node.remove());
+  }
+
   function onClick(event) {
+    const zoomTarget = event.target instanceof Element
+      ? event.target.closest('[data-zoom-src]')
+      : null;
+    if (zoomTarget) {
+      event.preventDefault();
+      event.stopPropagation();
+      const cellNode = zoomTarget.closest('[data-zoom-cell]');
+      const payload = cellNode ? zoomPayloads.get(cellNode.dataset.zoomCell) : null;
+      openZoom(payload || {
+        source: zoomTarget.dataset.zoomSrc,
+        label: zoomTarget.dataset.zoomLabel || '',
+      });
+      return;
+    }
     const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
+    if (target && target.dataset.action === 'zoom-close') {
+      closeZoom();
+      return;
+    }
     if (!target || busy) return;
     const action = target.dataset.action;
     if (action === 'toggle-auto-resume') return;
@@ -897,8 +1134,8 @@ export function mountProductionBoard(runtime, {
         const value = String(form?.elements?.[field.name]?.value || '').trim();
         if (value) values[field.name] = value;
       }
-      if (!values.categoryId) {
-        setStatus('Cafe24 상품분류 번호는 반드시 넣어야 합니다.', 'warning');
+      if (!Object.keys(values).length) {
+        setStatus('지정할 값을 하나 이상 넣어 주세요.', 'warning');
         render();
         return;
       }
@@ -917,6 +1154,22 @@ export function mountProductionBoard(runtime, {
       const same = openCell.jobId === target.dataset.jobId && openCell.stageKey === target.dataset.stageKey;
       openCell = same ? { jobId: '', stageKey: '' } : { jobId: target.dataset.jobId, stageKey: target.dataset.stageKey };
       render();
+      return;
+    }
+    if (action === 'zoom-pick') {
+      const layer = target.closest('[data-board-zoom="true"]');
+      const candidateId = target.dataset.candidateId || '';
+      if (layer && candidateId) {
+        void submitBatch({
+          mode: 'manual',
+          selections: [{
+            jobId: layer.dataset.jobId,
+            stageKey: layer.dataset.stageKey,
+            candidateId,
+          }],
+        });
+        closeZoom();
+      }
       return;
     }
     if (action === 'pick') {

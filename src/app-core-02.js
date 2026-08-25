@@ -3068,6 +3068,20 @@ function applyProductImageBackupPayload(payload, options = {}) {
   const primary = payload.factory || payload.app || payload.analysis || (payload.primary?.source === 'market' ? null : payload.primary) || payload.market || null;
   const item = productImageBackupItem(primary?.source || 'backup', primary);
   if (!item?.base64) return false;
+  // 이미지 백업은 이 작업의 기본 이미지를 되살리기 위한 것이다. 작업이 이미 잠가 둔 지문과
+  // 다른 사진이면 되살릴 대상이 아니라 남의 사진이고, 그대로 밀어 넣으면 기본 이미지가
+  // 바뀐 것으로 판단해 새 run 이 발급되면서 그 지문으로 만들어 둔 생성물이 전부 이전
+  // 자산으로 밀려난다. force 는 제품 신원 검사를 건너뛰라는 뜻이지, 다른 사진으로
+  // 바꿔치우라는 뜻이 아니다. 실측: 방울수저집 복원에서 잠긴 지문이 190196(JPEG) 에서
+  // 6508820(다른 PNG) 으로 바뀌고 자산 30장이 previousAssets 로 밀려났다.
+  const lockedInputImageFingerprint = String(
+    factory?.product?.lockedInputImageFingerprint || factory?.product?.inputImageFingerprint || ''
+  ).trim();
+  if (lockedInputImageFingerprint && typeof factoryImagePayloadFingerprint === 'function') {
+    const backupBase64 = typeof imageBase64Only === 'function' ? imageBase64Only(item.base64) : item.base64;
+    const backupFingerprint = factoryImagePayloadFingerprint(backupBase64);
+    if (backupFingerprint && backupFingerprint !== lockedInputImageFingerprint) return false;
+  }
   const force = options.force === true;
   const restoreInline = options.restoreInline === true;
   let changed = false;
@@ -6180,7 +6194,12 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
       takeoverAuthority: options.takeoverAuthority,
     }) || changed;
     if (options.persistReplica !== false && sessionAssetsHydrated && snapshotHasInlineImagePayload(assets)) {
-      workspacePutSessionAssets(currentSessionAssetsPayload({ includeImages: false })).catch(() => {});
+      // 복제본 저장은 곁다리다. 이 탭이 다른 작업에 묶여 있으면 payload 를 만드는 순간
+      // 예외를 던지는데, 그 예외가 복원 전체를 무너뜨린다. 실측: 방울수저집 복원이
+      // WORK_IDENTITY_IMAGE_BINDING_CONFLICT 로 죽고 문서가 엉뚱한 run 으로 바뀌었다.
+      try {
+        workspacePutSessionAssets(currentSessionAssetsPayload({ includeImages: false })).catch(() => {});
+      } catch (_) {}
     }
   }
   if (snapshot.productImageBackup) {
@@ -8135,9 +8154,30 @@ function applySessionAssetsPayload(assets, options = {}) {
   changed = repairedRestoredDraftAssetScope || changed;
   changed = restoreSpecificationSizeImageFromFactory({ ...state, factory: workingFactory }) || changed;
   changed = repairRestoredSessionIdentityDrift('asset-payload', workingFactory) || changed;
-  if (!preserveRestoredFactoryAssetScope && typeof syncProductImageAcrossWorkspaces === 'function') {
+  // 실어 온 작업의 기본 이미지는 이미지 저장소로 빠져 있어 본문에 바이트가 없을 수 있다.
+  // 그 상태로 화면 쪽 이미지를 기준으로 맞추면 지문이 다르다고 판단해 새 run 을 발급하고,
+  // 그 지문으로 만들어 둔 생성물 전량을 이전 자산으로 밀어낸다. 실측: 방울수저집 복원에서
+  // 잠긴 지문이 190196(JPEG) 에서 6508820(다른 PNG) 으로 바뀌고 자산 30장이 밀려났다.
+  const restoredProductScope = workingFactory?.product || {};
+  const restoredHasInlineInputImage = !!(
+    restoredProductScope.imageBase64
+    || (restoredProductScope.imagePreview && restoredProductScope.imagePreview !== IMAGE_STORED_MARKER)
+    || (Array.isArray(restoredProductScope.inputImages) && restoredProductScope.inputImages.some(image =>
+      image?.base64 || (image?.preview && image.preview !== IMAGE_STORED_MARKER)))
+  );
+  const restoredInputImageAwaitingBytes = options.forceProductRestore === true
+    && !!String(restoredProductScope.lockedInputImageFingerprint || '').trim()
+    && !restoredHasInlineInputImage;
+  if (!preserveRestoredFactoryAssetScope && !restoredInputImageAwaitingBytes
+    && typeof syncProductImageAcrossWorkspaces === 'function') {
     changed = syncProductImageAcrossWorkspaces({
       preserveFactoryAssets: options.forceProductRestore === true && preserveInlineImages,
+      // 다른 제품의 저장본을 일부러 실어 오는 복원에서는, 탭에 남아 있던 화면 이미지가
+      // 아니라 실어 온 그 작업의 기본 이미지가 기준이다. 화면 이미지를 기준으로 삼으면
+      // 지문이 다르다고 판단해 새 run 을 발급하고, 만들어 둔 생성물을 전부 이전 자산으로
+      // 밀어낸다. 실측: 방울수저집 복원에서 자산 30장이 previousAssets 로 밀리고
+      // 잠긴 지문이 190196(JPEG) 에서 6508820(다른 PNG) 으로 바뀌었다.
+      prefer: options.forceProductRestore === true ? 'factory' : options.prefer,
       factory: workingFactory,
     }) || changed;
   }

@@ -216,8 +216,9 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     const status = text(job.status) || 'queued';
     const progress = record(job.progress);
     const stages = progressStages(progress);
-    // 진행 스냅샷이 없으면 보관함에 남은 고른 컷으로 대신 채운다.
-    const fromArchive = stages.size ? new Map() : stagesFromResults(archived[jobId]);
+    // 보관함은 언제나 읽는다. 진행 스냅샷이 있어도 섹션처럼 썸네일이 빠진 단계가 있어,
+    // 스냅샷이 있다는 이유로 보관함을 건너뛰면 그 칸은 이미지가 있는데도 체크표시만 뜬다.
+    const fromArchive = stagesFromResults(archived[jobId]);
     const pending = record(job.pendingSelection);
     const reservedStageKey = text(pending.stageKey);
     const reservedCandidateId = text(pending.candidateId);
@@ -228,15 +229,19 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       ...[...stages.values()].map(stage => (stage.selectedId || stage.candidates.length ? stageIndex(stage.key) : -1)),
     );
     const cells = BOARD_STAGES.map((definition, cellIndex) => {
+      const archivedStage = fromArchive.get(definition.key) || null;
+      // 진행 스냅샷이 있으면 그것이 정본이다. 보관함 기록으로 없는 단계를 만들어 내면,
+      // 아직 안 만든 칸이 "고름" 으로 보인다. 보관함은 스냅샷이 아예 없을 때만 단계를 세운다.
+      const archivedStageAsSource = stages.size ? null : archivedStage;
       const stage = stages.get(definition.key)
-        || (fromArchive.has(definition.key)
+        || (archivedStageAsSource
           ? {
             key: definition.key,
             status: 'selected',
-            selectedId: fromArchive.get(definition.key).selectedId,
+            selectedId: archivedStageAsSource.selectedId,
             candidates: [{
-              id: fromArchive.get(definition.key).selectedId,
-              thumbnailUrl: fromArchive.get(definition.key).thumbnailUrl,
+              id: archivedStageAsSource.selectedId,
+              thumbnailUrl: archivedStageAsSource.thumbnailUrl,
               model: '', source: 'archive', confidence: null, rationale: '',
             }],
           }
@@ -258,11 +263,23 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
         candidates: stage ? stage.candidates : [],
         selectedId: stage ? stage.selectedId : '',
         reservedCandidateId: reserved,
+        // 고른 컷의 그림은 진행 스냅샷에 없을 수 있다. 그때만 보관함에 남은 것을 쓴다.
+        // 아직 고르지 않은 칸까지 채우면, 빈 칸이 그림을 달고 나와 표가 들쭉날쭉해진다.
         selectedThumbnailUrl: stage && stage.selectedId
-          ? (stage.candidates.find(candidate => candidate.id === stage.selectedId)?.thumbnailUrl || '')
+          ? ((stage.candidates.find(candidate => candidate.id === stage.selectedId)?.thumbnailUrl || '')
+            || text(archivedStage?.thumbnailUrl))
           : '',
+        // 크게 보기용 원본. 고른 칸에서만 쓴다.
+        selectedContentUrl: stage && stage.selectedId ? text(archivedStage?.contentUrl) : '',
+        // 몇 개 중 몇 번째를 골랐는지. 이게 없으면 화면은 "고름" 만 말하고 무엇을 골랐는지는 안 말한다.
+        selectedIndex: stage && stage.selectedId
+          ? stage.candidates.findIndex(candidate => candidate.id === stage.selectedId) + 1
+          : 0,
         pickable: Boolean(stage && stage.candidates.length && !stage.selectedId)
           && (status === 'waiting_manual' || status === 'blocked'),
+        // 이미 고른 칸도 다시 고를 수 있어야 한다. 사람이 마음을 바꾸는 것이 정상이다.
+        changeable: Boolean(stage && stage.candidates.length > 1 && stage.selectedId)
+          && (status === 'waiting_manual' || status === 'blocked' || status === 'completed'),
       };
     });
     const selectedStageCount = stages.size
@@ -271,7 +288,6 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     const messageInfo = operatorMessage(job.message);
     const cafe24Registered = text(job.stageKey) === 'cafe24' && status === 'completed';
     const cafe24Values = record(job.cafe24Values);
-    const cafe24ValuesReady = !!text(cafe24Values.categoryId);
     const cafe24Declined = messageInfo.code.startsWith('factory_cafe24_registration_declined');
     // "5/6단계" 는 다음에 무엇을 해야 하는지 말해 주지 않는다. 행마다 다음 할 일
     // 한 줄을 만들어 사람이 세지 않고도 바로 움직일 수 있게 한다.
@@ -289,7 +305,6 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
         };
       }
       if (status === 'completed' || cafe24Declined) {
-        if (!cafe24ValuesReady) return { kind: 'cafe24-values', copy: '다음: Cafe24 등록값 입력', tone: 'attention' };
         return { kind: 'cafe24', copy: '다음: Cafe24 등록', tone: 'attention' };
       }
       if (pickableCell) {
@@ -355,7 +370,6 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       // 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이 어디를
       // 고쳐야 하는지 알 수 없다.
       cafe24Values,
-      cafe24ValuesReady,
       cafe24Declined,
       // 비어 있는 투입값을 화면이 알아야, 입력·소스로 되돌아가지 않고 그 자리에서 채울 수 있다.
       requiredValues: record(job.requiredValues),
@@ -474,6 +488,9 @@ export function stagesFromResults(assetsValue) {
     byStage.set(key, {
       selectedId: text(asset.id || asset.assetKey),
       thumbnailUrl: text(asset.thumbnailReference),
+      // 크게 볼 때는 축소본이 아니라 원본을 띄워야 한다. 축소본을 늘리면 뭉개져서
+      // 크게 본 의미가 없다.
+      contentUrl: text(asset.contentReference),
     });
   }
   return byStage;

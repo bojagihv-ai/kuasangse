@@ -10,7 +10,7 @@ function source(...parts) {
 test('완료된 작업에는 Cafe24 등록 버튼이 뜬다', () => {
   // 조립공장에는 등록 화면이 없다. 이 버튼이 없으면 사람이 등록을 시작할 방법 자체가 없다.
   const board = source('production-board.mjs');
-  assert.ok(board.includes("row.cafe24ValuesReady ? 'cafe24' : 'cafe24-values'"), 'Cafe24 등록 버튼이 없습니다');
+  assert.ok(board.includes("'Cafe24 등록', {"), 'Cafe24 등록 버튼이 없습니다');
   assert.ok(board.includes("(row.status === 'completed' || row.cafe24Declined) && !row.cafe24Registered"));
 });
 
@@ -22,20 +22,20 @@ test('등록값이 없어 차단된 작업도 여기서 풀 수 있다', () => {
   assert.ok(model.includes('cafe24Declined'), '등록 거절 여부를 모델이 알려주지 않습니다');
 });
 
-test('등록값이 없는 작업은 먼저 값을 받는다', () => {
-  // 값 없이 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이
-  // 어디를 고쳐야 하는지 알 수 없다.
+test('등록값은 원할 때만 지정하는 보조 수단이다', () => {
+  // 분류·공급가는 원래 필수가 아니다. 스토어에 이미 있는 제품은 조립공장이 원격에서
+  // 읽어 온다. 미리 받아야만 등록되게 막으면 멀쩡한 제품이 등록되지 않는다.
   const board = source('production-board.mjs');
-  assert.ok(board.includes("'Cafe24 값 입력'"), '값을 받는 길이 없습니다');
+  assert.ok(board.includes("'Cafe24 값 지정'"), '값을 지정하는 길이 없습니다');
   assert.ok(board.includes('CAFE24_VALUE_FIELDS'), '입력 항목이 없습니다');
   assert.ok(board.includes('renderCafe24ValueForm'), '입력 폼을 그리지 않습니다');
 });
 
-test('상품분류 번호는 반드시 받는다', () => {
-  // 나머지는 비워도 되지만 분류가 없으면 등록 자체가 막힌다.
+test('분류번호를 등록 전제조건으로 삼지 않는다', () => {
   const board = source('production-board.mjs');
-  assert.ok(board.includes('if (!values.categoryId)'), '분류 없이도 보냅니다');
-  assert.ok(board.includes('Cafe24 상품분류 번호는 반드시'), '왜 막혔는지 알리지 않습니다');
+  assert.ok(!board.includes('if (!values.categoryId)'), '분류 없이는 못 보내게 막습니다');
+  const model = source('production-board-model.mjs');
+  assert.ok(!model.includes('cafe24ValuesReady'), '분류 유무로 등록을 가릅니다');
 });
 
 test('받은 값은 등록 지시에 실어 보낸다', () => {
@@ -46,7 +46,6 @@ test('받은 값은 등록 지시에 실어 보낸다', () => {
 
 test('투입값이 있는지 모델이 알려준다', () => {
   const model = source('production-board-model.mjs');
-  assert.ok(model.includes('cafe24ValuesReady'), '등록값 유무를 알려주지 않습니다');
   assert.ok(model.includes('const cafe24Values = record(job.cafe24Values)'), '기존 값을 읽지 않습니다');
   assert.ok(model.includes('      cafe24Values,'), '기존 값을 행에 전달하지 않습니다');
 });

@@ -845,6 +845,9 @@ function factoryCafe24SaveVerificationRecord({ type = 'update', productNo = '', 
     missing,
     mismatches,
     fieldNames: Object.keys(product || {}),
+    // Cafe24 는 분류·옵션처럼 나중에 채우는 값이 있어, 저장 직후 에코는 아직 비어 있다.
+    // 보낸 payload 를 남겨 두어야 등록 후 재조회 때 같은 기준으로 다시 대조할 수 있다.
+    sentPayload: cloneData(product || {}),
     ok: !error && !missing.length && !mismatches.length && matched === checked,
     message: message || '',
     error: error || '',

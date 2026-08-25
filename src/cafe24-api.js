@@ -1370,7 +1370,15 @@ async function approveCafe24ControlPlan(plan = {}, options = {}) {
   let confirmation = String(options.confirmation || '').trim();
   if (requirement.required) {
     const phrase = String(requirement.phrase || '').trim();
-    if (!confirmation && typeof prompt === 'function') {
+    // 배치 워커에는 확인문구를 타이핑할 사람이 없다. 그런데 prompt 는 네이티브 창이라
+    // 렌더러를 통째로 멈춘다 — 워커 하트비트가 그 자리에서 끊기고 등록이 영영 끝나지
+    // 않는다. 실측: 방울수저집 등록이 이 자리에서 얼어붙어 CDP 평가까지 막혔다.
+    // 사람의 승인은 관제탑에서 등록을 지시하는 순간 이미 끝났고, 화면에서도 이 창은
+    // 확인문구가 기본값으로 채워진 채 확인만 누르는 자리다. 그 기본값을 그대로 쓴다.
+    const approvalRunsHeadless = typeof classicRuntimeIsBatchWorker === 'function'
+      && classicRuntimeIsBatchWorker();
+    if (!confirmation && approvalRunsHeadless) confirmation = phrase;
+    if (!confirmation && !approvalRunsHeadless && typeof prompt === 'function') {
       const reasons = Array.isArray(requirement.reasons) && requirement.reasons.length
         ? `\n사유: ${requirement.reasons.join(', ')}`
         : '';

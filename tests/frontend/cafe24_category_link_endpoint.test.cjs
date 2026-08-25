@@ -121,3 +121,21 @@ test('이미 그 작업이 열려 있으면 다시 복원하지 않는다', () =
   const region = core.slice(at, core.indexOf('factoryRunFinalRegistration(', at));
   assert.ok(region.includes('if (!onTarget &&'), '열려 있어도 무조건 복원합니다');
 });
+
+test('지정받은 등록 방식을 조립공장이 실제로 적용한다', () => {
+  // 지시만 받고 적용하지 않으면 새 상품으로 올리라고 해놓고 기존 상품을 덮어쓴다.
+  const core = source('src/app-core-03.js');
+  const at = core.indexOf('async function factoryRuntimeControlApplyCafe24RegistrationMode(');
+  assert.notEqual(at, -1, '등록 방식 적용 경로가 없습니다');
+  const region = core.slice(at, at + 900);
+  assert.ok(region.includes('sync.cafe24RegistrationMode = mode'), '등록 방식을 바꾸지 않습니다');
+  assert.ok(region.includes('cafe24RegistrationModeUserTouched = true'), '사람이 정한 값임을 남기지 않습니다');
+  assert.ok(region.includes("['create', 'update'].includes(mode)"), '아무 값이나 받습니다');
+});
+
+test('등록 방식은 등록 실행 전에 적용한다', () => {
+  const core = source('src/app-core-03.js');
+  const at = core.indexOf('async function factoryRuntimeControlRegisterCafe24(');
+  const region = core.slice(at, core.indexOf('factoryRunFinalRegistration(', at));
+  assert.ok(region.includes('factoryRuntimeControlApplyCafe24RegistrationMode('), '등록 전에 방식을 정하지 않습니다');
+});
