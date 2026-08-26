@@ -153,6 +153,10 @@ PRODUCT_PROGRESS_CANDIDATE_KEYS = (
     "model",
     "confidence",
     "rationale",
+    # 섹션 단계는 한 칸에 여러 섹션의 변형이 함께 온다. 어느 섹션의 것인지 버리면
+    # 화면이 52개를 한 줄에 쏟아 사람이 고를 수 없다.
+    "sectionId",
+    "variantId",
 )
 
 
@@ -213,6 +217,9 @@ def _product_progress_snapshot(projection: Mapping[str, JsonValue] | None) -> Js
                 "key": key,
                 "status": status,
                 "selectedId": selected_id,
+                # 섹션은 섹션마다 하나씩 고른다. selectedId 하나만 내보내면 화면은
+                # 15개 중 1개만 고른 것처럼 보이고 나머지는 "아직 안 고름" 이 된다.
+                "selectedIds": selected_ids,
                 "candidateCount": len(candidates),
                 "candidates": candidates,
             }

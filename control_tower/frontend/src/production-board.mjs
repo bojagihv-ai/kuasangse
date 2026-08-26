@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=24';
+} from './production-board-model.mjs?parallelBoard=25';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -90,6 +90,8 @@ export function mountProductionBoard(runtime, {
   let pendingResultJobs = new Set();
   // 마지막으로 그린 표의 요약. 같으면 다시 그리지 않는다.
   let lastBoardSignature = '';
+  // 마지막으로 그린 표. 버튼 처리에서 그 행의 원본 값을 다시 찾아야 할 때 쓴다.
+  let lastBoard = null;
   let stopped = false;
   let loaded = false;
   let eventSource = null;
@@ -498,6 +500,83 @@ export function mountProductionBoard(runtime, {
     return form;
   }
 
+  // 상세페이지 섹션의 정식 차례와 이름. 원본은 src/app-core-01.js 의 SECTIONS 이고,
+  // 관제탑은 그 모듈을 읽을 수 없어 같은 차례를 여기에 옮겨 둔다. id 가 어긋나면
+  // 아래 목록에 없는 섹션은 뒤로 밀려 나오되 사라지지는 않는다.
+  const SECTION_CATALOGUE = Object.freeze([
+    { id: 'header', label: '헤더 (Header)' },
+    { id: 'hook', label: '훅 (Hook)' },
+    { id: 'key_features', label: '핵심 특징 (Key Features)' },
+    { id: 'specifications', label: '상세 스펙 (Specifications)' },
+    { id: 'use_scenarios', label: '사용 시나리오 (Use Scenarios)' },
+    { id: 'competitive_edge', label: '비교 우위 (Competitive Edge)' },
+    { id: 'material_tech', label: '소재/기술 (Material & Tech)' },
+    { id: 'certifications', label: '인증/수상 (Certifications)' },
+    { id: 'reviews', label: '리뷰/후기 (Reviews)' },
+    { id: 'size_color', label: '색상옵션' },
+    { id: 'promotion', label: '프로모션 (Promotion)' },
+    { id: 'shipping', label: '배송/포장 (Shipping)' },
+    { id: 'faq', label: 'FAQ (자주 묻는 질문)' },
+    { id: 'brand_story', label: '브랜드 스토리' },
+    { id: 'cta_footer', label: 'CTA 푸터 (Footer)' },
+  ]);
+  const SECTION_ORDER = new Map(SECTION_CATALOGUE.map((item, index) => [item.id, index]));
+  const SECTION_LABELS = new Map(SECTION_CATALOGUE.map(item => [item.id, item.label]));
+
+  function sectionLabel(sectionId) {
+    return SECTION_LABELS.get(sectionId) || sectionId || '기타 섹션';
+  }
+
+  /** 섹션 단계의 후보를 섹션별로 묶어 정식 차례대로 돌려준다. */
+  function groupSectionCandidates(cell) {
+    const groups = new Map();
+    for (const candidate of cell.candidates) {
+      const sectionId = candidate.sectionId || '기타';
+      if (!groups.has(sectionId)) groups.set(sectionId, []);
+      groups.get(sectionId).push(candidate);
+    }
+    const selected = new Set([...(cell.selectedIds || []), cell.selectedId].filter(Boolean));
+    return [...groups.entries()]
+      .map(([sectionId, candidates]) => ({
+        sectionId,
+        label: sectionLabel(sectionId),
+        candidates,
+        selectedId: candidates.find(candidate => selected.has(candidate.id))?.id || '',
+      }))
+      .sort((left, right) => {
+        const a = SECTION_ORDER.has(left.sectionId) ? SECTION_ORDER.get(left.sectionId) : 999;
+        const b = SECTION_ORDER.has(right.sectionId) ? SECTION_ORDER.get(right.sectionId) : 999;
+        return a - b || left.sectionId.localeCompare(right.sectionId);
+      });
+  }
+
+  function renderCandidateOption(row, cell, candidate, { index, total, picked }) {
+    const option = button('board-candidate', '', {
+      action: 'pick',
+      jobId: row.jobId,
+      stageKey: cell.stageKey,
+      candidateId: candidate.id,
+    });
+    option.disabled = busy;
+    if (candidate.id === cell.reservedCandidateId) option.dataset.reserved = 'true';
+    if (picked) option.dataset.picked = 'true';
+    if (candidate.thumbnailUrl) {
+      const image = document.createElement('img');
+      image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
+      image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
+      image.loading = 'lazy';
+      option.append(image);
+    } else {
+      option.append(element('span', 'board-candidate-placeholder', '미리보기 없음'));
+    }
+    // 사람이 읽는 이름은 "변형 2/4" 다. 원시 식별자는 눈으로 구분되지 않는다.
+    option.append(element('span', 'board-candidate-label', total > 1 ? `변형 ${index + 1}/${total}` : '변형 1'));
+    if (picked) option.append(element('span', 'board-candidate-meta', '지금 쓰는 컷'));
+    else if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
+    option.title = candidate.id;
+    return option;
+  }
+
   function renderCandidateStrip(row, cell) {
     const strip = element('div', 'board-candidate-strip');
     strip.dataset.jobId = row.jobId;
@@ -507,30 +586,72 @@ export function mountProductionBoard(runtime, {
       element('strong', '', `${row.productName} · ${cell.stageLabel}`),
       element('span', 'factory-pill', `${cell.candidateCount}개 후보`),
     );
+    // 섹션 단계는 여러 섹션의 변형이 한 칸에 함께 온다. 한 줄로 쏟으면 52개가 원시
+    // 식별자만 달고 늘어서서 사람이 무엇을 고르는지 알 수 없다. 섹션마다 나눠 놓는다.
+    if (cell.stageKey === 'sections' && cell.candidates.some(candidate => candidate.sectionId)) {
+      const groups = groupSectionCandidates(cell);
+      title.append(element('span', 'factory-pill', `${groups.length}개 섹션`));
+      const stitch = button('board-action ghost', '이어붙여 보기', {
+        action: 'stitch-sections',
+        jobId: row.jobId,
+      });
+      stitch.disabled = busy;
+      title.append(stitch);
+      strip.append(title);
+      // 섹션마다 '지금 이렇게 생겼다' 를 옆에 붙인다. 변형 낱개에는 그림이 없어서,
+      // 이것 없이는 화면이 통째로 "미리보기 없음" 벽이 된다.
+      const entry = resultCache.get(row.jobId);
+      const shots = entry && !entry.error && Array.isArray(entry.assets)
+        ? sectionShotsById(entry.assets)
+        : new Map();
+      for (const group of groups) {
+        const block = element('div', 'board-section-group');
+        const heading = element('div', 'board-section-group-heading');
+        const shot = shots.get(group.sectionId);
+        if (shot) {
+          const preview = document.createElement('img');
+          preview.className = 'board-section-preview';
+          preview.alt = `${group.label} 현재 이미지`;
+          preview.decoding = 'async';
+          preview.loading = 'lazy';
+          preview.src = assetUrl
+            ? assetUrl(shot.asset.thumbnailReference || shot.asset.contentReference)
+            : (shot.asset.thumbnailReference || shot.asset.contentReference);
+          preview.dataset.zoomSrc = shot.asset.contentReference || shot.asset.thumbnailReference;
+          preview.dataset.zoomLabel = `${row.productName} · ${group.label}`;
+          heading.append(preview);
+        }
+        heading.append(element('strong', '', group.label));
+        heading.append(element('span', 'board-candidate-meta',
+          group.candidates.length > 1 ? `${group.candidates.length}개 변형` : '변형 1개'));
+        if (!group.selectedId) heading.append(element('span', 'factory-pill', '아직 안 고름'));
+        block.append(heading);
+        const groupOptions = element('div', 'board-candidate-options');
+        for (const [index, candidate] of group.candidates.entries()) {
+          groupOptions.append(renderCandidateOption(row, cell, candidate, {
+            index,
+            total: group.candidates.length,
+            picked: candidate.id === group.selectedId,
+          }));
+        }
+        block.append(groupOptions);
+        strip.append(block);
+      }
+      if (cell.reservedCandidateId) {
+        const cancel = button('board-action ghost', '이 작업 예약 취소', { action: 'clear-one', jobId: row.jobId });
+        cancel.disabled = busy;
+        strip.append(cancel);
+      }
+      return strip;
+    }
     strip.append(title);
     const options = element('div', 'board-candidate-options');
-    for (const candidate of cell.candidates) {
-      const option = button('board-candidate', '', {
-        action: 'pick',
-        jobId: row.jobId,
-        stageKey: cell.stageKey,
-        candidateId: candidate.id,
-      });
-      option.disabled = busy;
-      if (candidate.id === cell.reservedCandidateId) option.dataset.reserved = 'true';
-      if (candidate.thumbnailUrl) {
-        const image = document.createElement('img');
-        image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
-        image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
-        image.loading = 'lazy';
-        option.append(image);
-      } else {
-        option.append(element('span', 'board-candidate-placeholder', '미리보기 없음'));
-      }
-      const label = element('span', 'board-candidate-label', candidate.id);
-      option.append(label);
-      if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
-      options.append(option);
+    for (const [index, candidate] of cell.candidates.entries()) {
+      options.append(renderCandidateOption(row, cell, candidate, {
+        index,
+        total: cell.candidates.length,
+        picked: candidate.id === cell.selectedId,
+      }));
     }
     strip.append(options);
     if (cell.reservedCandidateId) {
@@ -901,6 +1022,7 @@ export function mountProductionBoard(runtime, {
   function render() {
     const board = projectProductionBoard(jobs, { results: archivedResults() });
     const signature = boardSignature(board);
+    lastBoard = board;
     if (signature === lastBoardSignature && grid.childElementCount) {
       renderConnection();
       // 표를 다시 그리지 않아도 흘러가는 시간은 계속 보여 줘야 한다.
@@ -909,6 +1031,7 @@ export function mountProductionBoard(runtime, {
       return board;
     }
     lastBoardSignature = signature;
+    lastBoard = board;
     renderConnection();
     renderSummary(board.summary);
     renderToolbar(board);
@@ -1179,6 +1302,90 @@ export function mountProductionBoard(runtime, {
     close.focus();
   }
 
+  /**
+   * 섹션마다 지금 쓰이는 이미지를 보관함에서 찾는다.
+   * 보관함에는 두 종류가 섞여 있다. "섹션 header" 처럼 섹션 이름을 그대로 단 현재본과,
+   * "015144_헤더_(Header)_섹션_결과_..." 처럼 시각이 앞에 붙은 지난 회차본이다.
+   * 현재본이 있으면 그것을 쓰고, 없을 때만 지난 회차 중 가장 늦은 것을 쓴다.
+   */
+  function sectionShotsById(assets) {
+    const squash = value => String(value || '').replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+    const current = new Map();
+    const fallback = new Map();
+    for (const asset of assets) {
+      if (asset.factoryStageKey !== 'sections') continue;
+      const name = String(asset.displayName || '').trim();
+      const direct = name.match(/^섹션\s+([a-z_]+)$/);
+      if (direct && SECTION_LABELS.has(direct[1])) {
+        current.set(direct[1], asset);
+        continue;
+      }
+      const squashed = squash(name);
+      const hit = SECTION_CATALOGUE.find(item => squashed.includes(squash(item.label)));
+      if (!hit) continue;
+      const stamp = name.match(/^(\d+)/)?.[1] || '';
+      const seen = fallback.get(hit.id);
+      if (!seen || stamp >= seen.stamp) fallback.set(hit.id, { asset, stamp });
+    }
+    const shots = new Map();
+    for (const item of SECTION_CATALOGUE) {
+      const asset = current.get(item.id) || fallback.get(item.id)?.asset;
+      if (asset) shots.set(item.id, { asset, label: item.label });
+    }
+    return shots;
+  }
+
+  /** 이어붙이기용. 정식 차례대로 늘어놓는다. */
+  function latestSectionShots(assets) {
+    return [...sectionShotsById(assets).values()];
+  }
+
+  /** 섹션을 낱장으로 보면 이어졌을 때 어떻게 읽히는지 알 수 없다. 차례대로 이어 붙인다. */
+  function openStitchedDetail(row) {
+    const entry = resultCache.get(row.jobId);
+    const assets = entry && !entry.error && Array.isArray(entry.assets) ? entry.assets : [];
+    const shots = latestSectionShots(assets);
+    closeZoom();
+    const layer = element('div', 'board-zoom-layer');
+    layer.dataset.boardZoom = 'true';
+    const sheet = element('div', 'board-stitch-sheet');
+    const head = element('div', 'board-stitch-head');
+    head.append(element('strong', '', `${row.productName} · 이어진 상세페이지`));
+    head.append(element('span', 'board-candidate-meta',
+      shots.length ? `${shots.length}개 섹션` : '보관함에 섹션 이미지가 없습니다'));
+    const close = button('board-action ghost', '닫기', { action: 'zoom-close' });
+    head.append(close);
+    sheet.append(head);
+    const strip = element('div', 'board-stitch-strip');
+    for (const shot of shots) {
+      const block = element('figure', 'board-stitch-block');
+      const image = document.createElement('img');
+      image.className = 'board-stitch-image';
+      image.alt = shot.label;
+      image.decoding = 'async';
+      image.loading = 'lazy';
+      image.src = assetUrl ? assetUrl(shot.asset.contentReference) : shot.asset.contentReference;
+      block.append(image);
+      block.append(element('figcaption', 'board-stitch-caption', shot.label));
+      strip.append(block);
+    }
+    if (!shots.length) {
+      strip.append(element('p', 'status-message',
+        '이 작업의 보관함에서 섹션 이미지를 찾지 못했습니다. 고른 컷 보기를 한 번 연 뒤 다시 눌러 주세요.'));
+    }
+    sheet.append(strip);
+    layer.append(sheet);
+    layer.addEventListener('click', event => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target === layer || target?.closest('[data-action="zoom-close"]')) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeZoom();
+      }
+    });
+    document.body.append(layer);
+  }
+
   function closeZoom() {
     document.querySelectorAll('[data-board-zoom="true"]').forEach(node => node.remove());
   }
@@ -1280,6 +1487,19 @@ export function mountProductionBoard(runtime, {
       void registerCafe24(target.dataset.jobId, values);
       return;
     }
+    if (action === 'stitch-sections') {
+      const jobId = target.dataset.jobId;
+      const row = lastBoard?.rows.find(item => item.jobId === jobId);
+      if (!row) return;
+      // 보관함을 아직 안 받았으면 먼저 받아 온다. 빈 창을 띄우면 고장으로 읽힌다.
+      if (!resultCache.has(jobId)) {
+        setStatus('보관함에서 섹션 이미지를 가져오는 중입니다.', '');
+        void loadResults(jobId, { quiet: true }).then(() => openStitchedDetail(row));
+        return;
+      }
+      openStitchedDetail(row);
+      return;
+    }
     if (action === 'results') {
       const jobId = target.dataset.jobId;
       openResults = openResults === jobId ? '' : jobId;
@@ -1290,6 +1510,11 @@ export function mountProductionBoard(runtime, {
     if (action === 'open') {
       const same = openCell.jobId === target.dataset.jobId && openCell.stageKey === target.dataset.stageKey;
       openCell = same ? { jobId: '', stageKey: '' } : { jobId: target.dataset.jobId, stageKey: target.dataset.stageKey };
+      // 섹션 칸은 묶음마다 지금 쓰는 그림을 옆에 붙인다. 그 그림은 보관함에 있으므로
+      // 칸을 여는 순간 함께 받아 온다. 안 그러면 처음 열 때만 그림이 없다.
+      if (openCell.jobId && openCell.stageKey === 'sections' && !resultCache.has(openCell.jobId)) {
+        void loadResults(openCell.jobId, { quiet: true });
+      }
       render();
       return;
     }

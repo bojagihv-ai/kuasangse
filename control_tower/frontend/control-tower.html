@@ -771,14 +771,14 @@
     }
 
     .product-result.is-picked {
-      border-color: var(--color-accent);
-      background: var(--color-accent-soft);
+      border-color: var(--color-accent-primary);
+      background: var(--color-accent-wash);
     }
 
     .product-result.is-picked strong::after {
       content: '선택됨';
       margin-inline-start: var(--space-half);
-      color: var(--color-accent);
+      color: var(--color-accent-primary);
       font-size: var(--font-size-compact);
     }
 
@@ -1098,7 +1098,7 @@
 
     .io-stage-card h4 {
       margin: 0;
-      font-size: var(--font-size-body);
+      font-size: var(--font-size-panel-copy);
       overflow-wrap: anywhere;
       word-break: keep-all;
     }
@@ -1444,7 +1444,7 @@
       display: grid;
       gap: var(--space-2);
       padding: var(--space-3);
-      border: var(--border-width-hairline) solid var(--color-border-default);
+      border: var(--border-width-default) solid var(--color-border-default);
       border-radius: var(--radius-card);
       background: var(--color-card-background);
     }
@@ -1469,13 +1469,13 @@
 
     .bulk-name-field > span {
       color: var(--color-accent-highlight);
-      font-size: var(--font-size-meta);
+      font-size: var(--font-size-compact);
     }
 
     .bulk-name-field input {
       padding: var(--space-2);
-      border: var(--border-width-hairline) solid var(--color-accent-border);
-      border-radius: var(--radius-control);
+      border: var(--border-width-default) solid var(--color-accent-border);
+      border-radius: var(--radius-compact);
       background: var(--color-input-background);
       color: var(--color-text-primary);
       font-size: var(--font-size-panel-copy);
@@ -1484,7 +1484,7 @@
     .bulk-card-summary,
     .bulk-card-badge {
       color: var(--color-text-muted);
-      font-size: var(--font-size-meta);
+      font-size: var(--font-size-compact);
     }
 
     .bulk-thumb-shelf {
@@ -1504,8 +1504,8 @@
       width: var(--bulk-thumb-size);
       height: var(--bulk-thumb-size);
       padding: 0;
-      border: var(--border-width-hairline) solid var(--color-border-default);
-      border-radius: var(--radius-control);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
       background: var(--color-input-background);
       cursor: zoom-in;
       overflow: hidden;
@@ -1520,7 +1520,7 @@
 
     .bulk-thumb-name {
       color: var(--color-text-muted);
-      font-size: var(--font-size-meta);
+      font-size: var(--font-size-compact);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1530,11 +1530,11 @@
     .bulk-color-input {
       width: 100%;
       padding: var(--space-1) var(--space-2);
-      border: var(--border-width-hairline) solid var(--color-border-default);
-      border-radius: var(--radius-control);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
       background: var(--color-input-background);
       color: var(--color-text-primary);
-      font-size: var(--font-size-meta);
+      font-size: var(--font-size-compact);
     }
 
     .bulk-card-facts {
@@ -1546,7 +1546,7 @@
     .bulk-lightbox {
       position: fixed;
       inset: 0;
-      z-index: var(--z-index-dialog);
+      z-index: var(--z-index-overlay);
       display: grid;
       gap: var(--space-2);
       place-content: center;
@@ -2008,9 +2008,9 @@
       align-items: center;
       gap: var(--space-1);
       padding: var(--space-1) var(--space-2);
-      border: var(--border-width-hairline) solid var(--color-border-default);
+      border: var(--border-width-default) solid var(--color-border-default);
       border-radius: var(--radius-pill);
-      font-size: var(--font-size-meta);
+      font-size: var(--font-size-compact);
       line-height: var(--line-height-tight);
       white-space: nowrap;
     }
@@ -2265,7 +2265,7 @@
 
     .board-intake-group-hint {
       color: var(--color-text-muted);
-      font-weight: var(--font-weight-regular);
+      font-weight: var(--font-weight-normal);
     }
 
     .board-intake-shelf {
@@ -2280,7 +2280,7 @@
       display: grid;
       gap: var(--space-half);
       padding: var(--space-half) var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-subtle);
+      border: var(--border-width-default) solid var(--color-border-default);
       border-radius: var(--radius-compact);
       font-size: var(--font-size-panel-copy);
     }
@@ -2346,6 +2346,79 @@
       gap: var(--space-1);
       align-items: center;
       justify-content: space-between;
+    }
+
+    .board-section-group {
+      display: grid;
+      gap: var(--space-half);
+      padding-block: var(--space-1);
+      border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .board-section-group-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .board-section-preview {
+      inline-size: var(--board-thumb-size);
+      block-size: var(--board-thumb-size);
+      object-fit: cover;
+      border-radius: var(--radius-compact);
+      border: var(--border-width-default) solid var(--color-border-default);
+      cursor: zoom-in;
+    }
+
+    .board-candidate[data-picked="true"] {
+      border-color: var(--color-accent-primary);
+      background: var(--color-accent-wash);
+    }
+
+    .board-stitch-sheet {
+      display: grid;
+      gap: var(--space-1);
+      inline-size: min(52rem, 92vw);
+      max-block-size: 92vh;
+      overflow-y: auto;
+      padding: var(--space-2);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    .board-stitch-head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+      position: sticky;
+      inset-block-start: calc(var(--space-2) * -1);
+      padding-block: var(--space-half);
+      background: var(--color-card-background);
+    }
+
+    .board-stitch-strip {
+      display: grid;
+      gap: 0;
+    }
+
+    .board-stitch-block {
+      display: grid;
+      gap: 0;
+      margin: 0;
+    }
+
+    .board-stitch-image {
+      inline-size: 100%;
+      block-size: auto;
+      display: block;
+    }
+
+    .board-stitch-caption {
+      padding-block: var(--space-half);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
     }
 
     .board-candidate-options {
@@ -4587,7 +4660,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=35"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=37"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>

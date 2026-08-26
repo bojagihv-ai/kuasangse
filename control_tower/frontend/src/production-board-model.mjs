@@ -55,6 +55,10 @@ function normalizeCandidate(value) {
       source: text(source.source),
       confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : null,
       rationale: text(source.rationale),
+      // 섹션 단계는 한 칸에 여러 섹션의 변형이 함께 온다. 어느 섹션의 것인지 잃어버리면
+      // 52개가 한 줄에 쏟아져 사람이 고를 수 없다. id 는 "섹션:변형" 꼴이다.
+      sectionId: text(source.sectionId) || text(id).split(':')[0],
+      variantId: text(source.variantId),
     }
     : null;
 }
@@ -69,6 +73,8 @@ function progressStages(progress) {
       key,
       status: text(source.status),
       selectedId: text(source.selectedId),
+      // 섹션 단계의 선택은 섹션마다 하나씩이라 selectedId 하나로는 다 담기지 않는다.
+      selectedIds: list(source.selectedIds).map(text).filter(Boolean),
       candidates: list(source.candidates).map(normalizeCandidate).filter(Boolean),
     });
   }
@@ -262,6 +268,7 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
         candidateCount: stage ? stage.candidates.length : 0,
         candidates: stage ? stage.candidates : [],
         selectedId: stage ? stage.selectedId : '',
+        selectedIds: stage && Array.isArray(stage.selectedIds) ? stage.selectedIds : [],
         reservedCandidateId: reserved,
         // 고른 컷의 그림은 진행 스냅샷에 없을 수 있다. 그때만 보관함에 남은 것을 쓴다.
         // 아직 고르지 않은 칸까지 채우면, 빈 칸이 그림을 달고 나와 표가 들쭉날쭉해진다.

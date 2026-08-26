@@ -1,0 +1,34 @@
+{
+  "bulk-intake-model.mjs": {
+    "token": "bulkIntake=2",
+    "digest": "bbc5f707511802e9"
+  },
+  "production-board-model.mjs": {
+    "token": "parallelBoard=25",
+    "digest": "9a1e746e11cec5e2"
+  },
+  "factory-sync-model.mjs": {
+    "token": "selectedId=3",
+    "digest": "e4a54a2a381b18ce"
+  },
+  "menu-shell.mjs": {
+    "token": "menuReorg=3",
+    "digest": "98e78924051c27f9"
+  },
+  "operator-queue-model.mjs": {
+    "token": "batchList=1",
+    "digest": "de72ad2c6552b56d"
+  },
+  "production-result-groups.mjs": {
+    "token": "detailSections=1",
+    "digest": "ad9cd83f376aa8cc"
+  },
+  "workfile-job-tabs-model.mjs": {
+    "token": "workfileTabs=2",
+    "digest": "5ab46a48c1268803"
+  },
+  "workfile-identity-model.mjs": {
+    "token": "actualB=1",
+    "digest": "c50ecdce1254fe62"
+  }
+}
