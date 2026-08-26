@@ -10,7 +10,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=28';
+} from './production-board-model.mjs?parallelBoard=29';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -47,9 +47,12 @@ const CELL_GLYPHS = Object.freeze({
   awaiting: '●',
   running: '▶',
   empty: '·',
+  // 옵션 없는 제품의 옵션·색상 칸. 점만 찍으면 고장인지 아직인지 알 수 없다.
+  skipped: '—',
 });
 
 const CELL_TITLES = Object.freeze({
+  skipped: '옵션 없는 제품이라 이 단계는 건너뜁니다',
   selected: '선택 완료',
   reserved: '선택 예약됨 · 조립공장이 이 작업을 다시 열면 적용됩니다',
   awaiting: '컷 선택 대기 · 눌러서 후보를 확인하세요',
@@ -330,6 +333,9 @@ export function mountProductionBoard(runtime, {
     const badge = element('span', 'factory-pill', missingCount ? '비어 있음 ' + missingCount + '개' : '모두 채워짐');
     badge.dataset.tone = missingCount ? 'attention' : 'ok';
     head.append(badge);
+    // 저장하지 않고 그냥 덮는 길도 있어야 한다. 저장 버튼 하나만 두면 구경만 하고
+    // 싶어도 저장을 눌러야 하는 것처럼 읽힌다.
+    head.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'values' }));
     panel.append(head);
 
     const values = element('section', 'board-intake-group');
@@ -471,6 +477,7 @@ export function mountProductionBoard(runtime, {
     title.append(
       element('strong', '', `${row.productName} · Cafe24 등록값`),
       element('span', 'factory-pill', '투입값 없음'),
+      button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cafe24' }),
     );
     form.append(title);
     const grid = element('div', 'board-cafe24-fields');
@@ -575,7 +582,7 @@ export function mountProductionBoard(runtime, {
       });
   }
 
-  function renderCandidateOption(row, cell, candidate, { index, total, picked }) {
+  function renderCandidateOption(row, cell, candidate, { index, total, picked, fallbackThumbUrl = '' }) {
     const option = button('board-candidate', '', {
       action: 'pick',
       jobId: row.jobId,
@@ -589,6 +596,13 @@ export function mountProductionBoard(runtime, {
       const image = document.createElement('img');
       image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
       image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
+      image.loading = 'lazy';
+      option.append(image);
+    } else if (fallbackThumbUrl) {
+      // 변형이 하나뿐인 섹션은 옆의 현재 이미지가 곧 이 변형이다. 그 그림을 쓴다.
+      const image = document.createElement('img');
+      image.src = assetUrl ? assetUrl(fallbackThumbUrl) : fallbackThumbUrl;
+      image.alt = `${cell.stageLabel} 후보`;
       image.loading = 'lazy';
       option.append(image);
     } else {
@@ -645,18 +659,21 @@ export function mountProductionBoard(runtime, {
       });
       stitch.disabled = busy;
       title.append(stitch);
+      title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cell' }));
       strip.append(title);
-      // 섹션마다 '지금 이렇게 생겼다' 를 옆에 붙인다. 변형 낱개에는 그림이 없어서,
-      // 이것 없이는 화면이 통째로 "미리보기 없음" 벽이 된다.
+      // 섹션마다 '지금 이렇게 생겼다' 를 왼쪽 기둥으로 붙인다. 변형 낱개에는 그림이
+      // 없어서, 이것 없이는 화면이 통째로 "미리보기 없음" 벽이 된다. 제목과 변형은
+      // 그림 오른쪽을 채워, 그림 옆이 텅 비지 않게 한다.
       const entry = resultCache.get(row.jobId);
       const shots = entry && !entry.error && Array.isArray(entry.assets)
         ? sectionShotsById(entry.assets)
         : new Map();
       for (const group of groups) {
         const block = element('div', 'board-section-group');
-        const heading = element('div', 'board-section-group-heading');
         const shot = shots.get(group.sectionId);
-        if (shot) {
+        // 변형이 하나뿐이면 그 카드가 곧 현재 이미지다. 왼쪽에 같은 그림을 한 번 더
+        // 두면 중복일 뿐이다. 왼쪽 기준 그림은 비교할 변형이 여럿일 때만 둔다.
+        if (shot && group.candidates.length > 1) {
           const preview = document.createElement('img');
           preview.className = 'board-section-preview';
           preview.alt = `${group.label} 현재 이미지`;
@@ -667,22 +684,34 @@ export function mountProductionBoard(runtime, {
             : (shot.asset.thumbnailReference || shot.asset.contentReference);
           preview.dataset.zoomSrc = shot.asset.contentReference || shot.asset.thumbnailReference;
           preview.dataset.zoomLabel = `${row.productName} · ${group.label}`;
-          heading.append(preview);
+          block.append(preview);
         }
+        const copy = element('div', 'board-section-copy');
+        const heading = element('div', 'board-section-group-heading');
         heading.append(element('strong', '', group.label));
         heading.append(element('span', 'board-candidate-meta',
           group.candidates.length > 1 ? `${group.candidates.length}개 변형` : '변형 1개'));
-        if (!group.selectedId) heading.append(element('span', 'factory-pill', '아직 안 고름'));
-        block.append(heading);
+        // '아직 안 고름' 은 지금 고를 차례일 때만 뜻이 있다. 끝난 단계에 붙이면
+        // 이미 쓰이고 있는 섹션을 미완성처럼 읽게 만든다.
+        if (!group.selectedId && cell.pickable) {
+          heading.append(element('span', 'factory-pill', '선택 대기'));
+        }
+        copy.append(heading);
         const groupOptions = element('div', 'board-candidate-options');
+        // 변형이 하나뿐이고 고를 차례도 아니면, 그 하나가 지금 쓰이는 컷이다.
+        const soleInUse = !group.selectedId && !cell.pickable && group.candidates.length === 1;
         for (const [index, candidate] of group.candidates.entries()) {
           groupOptions.append(renderCandidateOption(row, cell, candidate, {
             index,
             total: group.candidates.length,
-            picked: candidate.id === group.selectedId,
+            picked: candidate.id === group.selectedId || soleInUse,
+            fallbackThumbUrl: soleInUse && shot
+              ? (shot.asset.thumbnailReference || shot.asset.contentReference)
+              : '',
           }));
         }
-        block.append(groupOptions);
+        copy.append(groupOptions);
+        block.append(copy);
         strip.append(block);
       }
       if (cell.reservedCandidateId) {
@@ -692,6 +721,7 @@ export function mountProductionBoard(runtime, {
       }
       return strip;
     }
+    title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cell' }));
     strip.append(title);
     const options = element('div', 'board-candidate-options');
     for (const [index, candidate] of cell.candidates.entries()) {
@@ -716,6 +746,7 @@ export function mountProductionBoard(runtime, {
     const entry = resultCache.get(row.jobId);
     const title = element('div', 'board-candidate-heading');
     title.append(element('strong', '', `${row.productName} · 고른 컷`));
+    title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'results' }));
     strip.append(title);
     if (!entry) {
       strip.append(element('p', 'status-message', '고른 컷을 불러오는 중입니다.'));
@@ -990,9 +1021,12 @@ export function mountProductionBoard(runtime, {
       }
       // 표 머리글은 스크롤로 사라진다. 어느 칸이 어느 컷인지 칸 자신이 말해야 한다.
       node.append(element('span', 'board-cell-stage-name', cell.stageLabel));
+      if (cell.state === 'skipped') node.append(element('span', 'board-cell-loading', '옵션 없음'));
       // 그림이 늦게 오는 이유를 사람이 알 수 있어야 한다. 빈 상자만 두면 고장으로 읽힌다.
       const thumbPending = node.querySelector('.board-cell-thumb[data-loading="true"]');
-      if (thumbPending || (!cell.selectedThumbnailUrl && pendingResultJobs.has(String(row.jobId)))) {
+      // 건너뛴 칸에는 올 그림이 없다. '불러오는 중' 을 붙이면 영영 기다리는 것처럼 읽힌다.
+      if (cell.state !== 'skipped'
+        && (thumbPending || (!cell.selectedThumbnailUrl && pendingResultJobs.has(String(row.jobId))))) {
         node.append(element('span', 'board-cell-loading', '불러오는 중'));
       }
       // 몇 개 중 몇 번째를 골랐는지 칸에 적는다. "고름" 만으로는 무엇을 골랐는지 알 수 없다.
@@ -1590,6 +1624,15 @@ export function mountProductionBoard(runtime, {
       openStitchedDetail(row);
       return;
     }
+    if (action === 'panel-close') {
+      const kind = target.dataset.panel;
+      if (kind === 'cell') openCell = { jobId: '', stageKey: '' };
+      else if (kind === 'results') openResults = '';
+      else if (kind === 'cafe24') openCafe24Values = '';
+      else if (kind === 'values') openProductValues = '';
+      render();
+      return;
+    }
     if (action === 'results') {
       const jobId = target.dataset.jobId;
       openResults = openResults === jobId ? '' : jobId;
@@ -1679,6 +1722,18 @@ export function mountProductionBoard(runtime, {
 
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
+  // 펼친 패널은 ESC 로도 닫는다. 닫는 길이 마우스뿐이면 답답하다.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    // 확대창이 열려 있으면 그쪽 ESC 가 먼저다.
+    if (document.querySelector('[data-board-zoom="true"]')) return;
+    if (!openCell.jobId && !openResults && !openCafe24Values && !openProductValues) return;
+    openCell = { jobId: '', stageKey: '' };
+    openResults = '';
+    openCafe24Values = '';
+    openProductValues = '';
+    render();
+  });
   window.addEventListener('control-tower:job-created', refresh);
   void refresh().then(connectEvents);
 

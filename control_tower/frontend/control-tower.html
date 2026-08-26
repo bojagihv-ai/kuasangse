@@ -68,7 +68,9 @@
       --radius-compact: 8px;
       --radius-pill: 999px;
       --radius-circle: 50%;
-      --content-max-width: 1160px;
+      /* 1160px 는 화면 좌우를 통째로 비웠다. 넓은 화면에서는 넓게 쓰되,
+         본문이 무한정 퍼지지는 않게 상한만 둔다. */
+      --content-max-width: 1800px;
       --content-copy-wide: 62ch;
       --content-copy-narrow: 52ch;
       --status-dot-size: 8px;
@@ -2223,6 +2225,14 @@
     .board-cafe24-field {
       display: grid;
       gap: var(--space-1);
+      /* input 기본폭이 칸보다 넓으면 패널을 뚫고 나간다. 칸 안에서 줄게 한다. */
+      min-inline-size: 0;
+    }
+
+    .board-cafe24-field input,
+    .board-cafe24-field select {
+      inline-size: 100%;
+      min-inline-size: 0;
     }
 
     .board-cafe24-field-label {
@@ -2350,9 +2360,23 @@
 
     .board-section-group {
       display: grid;
-      gap: var(--space-half);
+      /* 그림 옆이 텅 비지 않게, 그림은 왼쪽 기둥·내용은 오른쪽 전체를 쓴다. */
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: var(--space-1);
+      align-items: start;
       padding-block: var(--space-1);
       border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    /* 그림이 없는 묶음은 내용이 전체 폭을 쓴다. */
+    .board-section-group > .board-section-copy:only-child {
+      grid-column: 1 / -1;
+    }
+
+    .board-section-copy {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 0;
     }
 
     .board-section-group-heading {
@@ -4660,7 +4684,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=42"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=46"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>

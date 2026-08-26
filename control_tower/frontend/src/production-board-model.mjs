@@ -253,13 +253,20 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
           }
           : null);
       const reserved = reservedStageKey === definition.key ? reservedCandidateId : '';
-      const state = cellState(stage, {
+      let state = cellState(stage, {
         reservedCandidateId: reserved,
         jobStatus: status,
         waitingStageKey,
         reachedIndex,
         index: cellIndex,
       });
+      // 옵션 없는 제품은 옵션·색상 단계가 원래 비어 있다. 빈 점만 찍어 두면
+      // 사람은 고장인지 아직 안 온 것인지 알 수 없다. 건너뜀으로 따로 표시한다.
+      if (state === 'empty'
+        && definition.key === 'option_color'
+        && text(record(job.requiredValues).optionMode) === 'none') {
+        state = 'skipped';
+      }
       return {
         jobId,
         stageKey: definition.key,
