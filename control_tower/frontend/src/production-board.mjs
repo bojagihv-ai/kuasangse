@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=25';
+} from './production-board-model.mjs?parallelBoard=26';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -577,6 +577,20 @@ export function mountProductionBoard(runtime, {
     return option;
   }
 
+  /**
+   * 보관함 파일 이름을 사람이 읽는 이름으로 줄인다.
+   * "091019_차분한_대표_이미지_generated_hero_1_m" 은 앞이 시각이고 뒤가 기계용 꼬리다.
+   * 그대로 두면 칸 안에서 네 줄로 접혀 무엇인지 알아볼 수 없다. 가운데만 남긴다.
+   */
+  function readableAssetName(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const withoutStamp = raw.replace(/^\d{6,}_/, '');
+    const withoutTail = withoutStamp.replace(/_(generated|factory|section|archive)_[\w-]*$/i, '');
+    const cleaned = withoutTail.replace(/_+/g, ' ').trim();
+    return cleaned || raw;
+  }
+
   function renderCandidateStrip(row, cell) {
     const strip = element('div', 'board-candidate-strip');
     strip.dataset.jobId = row.jobId;
@@ -699,7 +713,10 @@ export function mountProductionBoard(runtime, {
         image.src = assetUrl ? assetUrl(cut.thumbnailReference) : cut.thumbnailReference;
         image.alt = `${group.stageLabel} 고른 컷 ${cut.displayName}`;
         image.loading = 'lazy';
-        card.append(image, element('span', 'board-candidate-label', cut.displayName));
+        const label = element('span', 'board-candidate-label', readableAssetName(cut.displayName));
+        // 원래 파일 이름은 보관함에서 찾을 때 필요하다. 지우지 않고 손 올렸을 때 보인다.
+        label.title = cut.displayName;
+        card.append(image, label);
         options.append(card);
       }
       strip.append(options);
