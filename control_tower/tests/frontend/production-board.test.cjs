@@ -168,11 +168,31 @@ test('일괄 선택 결과를 한 줄로 요약한다', async () => {
 
   assert.deepEqual(
     summarizeBatchSelection({ applied: 1, reserved: 4, skipped: 0, failed: 0 }),
-    { applied: 1, reserved: 4, skipped: 0, failed: 0, tone: 'ok', copy: '1건 즉시 적용 · 4건 예약' },
+    { applied: 1, reserved: 4, skipped: 0, failed: 0, reasons: [], tone: 'ok', copy: '1건 즉시 적용 · 4건 예약' },
   );
   assert.equal(summarizeBatchSelection({ failed: 2 }).tone, 'error');
   assert.equal(summarizeBatchSelection({ skipped: 3 }).tone, 'warning');
   assert.equal(summarizeBatchSelection({}).copy, '선택할 대기 작업이 없습니다.');
+
+  // 보류만 알려 주고 사유를 감추면 사람이 다음에 무엇을 해야 할지 모른다.
+  // 실측 2026-08-26: 화면은 "3건 보류" 만 적었고, 서버가 준
+  // policy_snapshot_missing 은 어디에도 없었다.
+  const held = summarizeBatchSelection({
+    skipped: 3,
+    results: [
+      { jobId: 'w-1', reason: 'policy_snapshot_missing' },
+      { jobId: 'w-2', reason: 'policy_snapshot_missing' },
+      { jobId: 'w-3', reason: 'no_candidates' },
+    ],
+  });
+  assert.deepEqual(held.reasons, ['policy_snapshot_missing', 'no_candidates']);
+  assert.equal(held.copy, '3건 보류 · 사유 정책 스냅샷 없음, 후보 없음');
+
+  // 모르는 코드는 삼키지 말고 그대로 보여 준다.
+  assert.equal(
+    summarizeBatchSelection({ skipped: 1, results: [{ reason: 'brand_new_code' }] }).copy,
+    '1건 보류 · 사유 brand_new_code',
+  );
 });
 
 test('내부 오류 코드는 운영자 문장으로 바꾸고 원래 코드는 따로 남긴다', async () => {

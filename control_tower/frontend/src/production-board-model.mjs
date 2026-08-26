@@ -562,6 +562,17 @@ export function buildBatchSelectionRequest(board, { candidateId = '', mode = 'ma
 }
 
 /** 일괄 선택 응답을 사람이 읽을 한 줄 요약으로 만든다. */
+/** 서버가 돌려주는 보류 사유를 사람 말로 옮긴다. 모르는 코드는 그대로 보여 준다. */
+const BATCH_SELECTION_REASONS = Object.freeze({
+  policy_snapshot_missing: '정책 스냅샷 없음',
+  policy_snapshot_invalid: '정책 스냅샷이 올바르지 않음',
+  no_pickable_stage: '고를 대기 단계 없음',
+  no_candidates: '후보 없음',
+  job_busy: '조립공장이 이 작업을 물고 있음',
+  factory_product_job_busy: '조립공장이 이 작업을 물고 있음',
+  already_reserved: '이미 예약됨',
+});
+
 export function summarizeBatchSelection(responseValue) {
   const response = record(responseValue);
   const applied = integer(response.applied);
@@ -573,12 +584,24 @@ export function summarizeBatchSelection(responseValue) {
   if (reserved) parts.push(`${reserved}건 예약`);
   if (skipped) parts.push(`${skipped}건 보류`);
   if (failed) parts.push(`${failed}건 실패`);
+  // "3건 보류" 만 적어 두면 왜 안 됐는지 알 길이 없다. 서버는 작업마다 사유를
+  // 돌려주는데 화면이 그것을 버리고 있었다. 실측 2026-08-26: 사유가
+  // policy_snapshot_missing 이었는데 화면에는 아무 데도 없었다.
+  const reasons = [...new Set(
+    list(response.results)
+      .map(item => text(record(item).reason))
+      .filter(Boolean),
+  )];
+  const reasonCopy = reasons.length
+    ? ` · 사유 ${reasons.map(reason => BATCH_SELECTION_REASONS[reason] || reason).join(', ')}`
+    : '';
   return {
     applied,
     reserved,
     skipped,
     failed,
+    reasons,
     tone: failed ? 'error' : skipped ? 'warning' : 'ok',
-    copy: parts.length ? parts.join(' · ') : '선택할 대기 작업이 없습니다.',
+    copy: parts.length ? `${parts.join(' · ')}${reasonCopy}` : '선택할 대기 작업이 없습니다.',
   };
 }

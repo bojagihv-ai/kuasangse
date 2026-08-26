@@ -9,7 +9,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=26';
+} from './production-board-model.mjs?parallelBoard=27';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -591,6 +591,15 @@ export function mountProductionBoard(runtime, {
     return cleaned || raw;
   }
 
+  /** 재개가 막힌 이유를 사람 말로 옮긴다. 모르는 코드는 그대로 보여 준다. */
+  const RESUME_REASONS = Object.freeze({
+    factory_worker_build_not_admitted: '조립공장 화면이 낡음 (작업자 창을 새로 열어 주세요)',
+    factory_session_missing: '조립공장이 붙어 있지 않음',
+    factory_product_job_busy: '조립공장이 이 작업을 물고 있음',
+    factory_product_job_not_found: '작업을 찾을 수 없음',
+    factory_product_decision_required: '먼저 컷을 골라야 함',
+  });
+
   function renderCandidateStrip(row, cell) {
     const strip = element('div', 'board-candidate-strip');
     strip.dataset.jobId = row.jobId;
@@ -1141,10 +1150,21 @@ export function mountProductionBoard(runtime, {
       });
       const resumed = Number(response?.resumed || 0);
       const failed = Number(response?.failed || 0);
+      // 몇 건이 막혔는지만 알려 주면 사람이 다음에 무엇을 해야 할지 모른다. 서버는
+      // 작업마다 사유를 돌려준다. 실측 2026-08-26: 사유가
+      // factory_worker_build_not_admitted 였는데 화면에는 어디에도 없었다.
+      const reasons = [...new Set(
+        (Array.isArray(response?.results) ? response.results : [])
+          .map(item => String(item?.reason || '').trim())
+          .filter(Boolean),
+      )];
+      const reasonCopy = reasons.length
+        ? ` · 사유 ${reasons.map(code => RESUME_REASONS[code] || code).join(', ')}`
+        : '';
       setStatus(
         resumed || failed
-          ? [resumed && `${resumed}건 다음 단계로 진행`, failed && `${failed}건은 아직 진행할 수 없음`]
-            .filter(Boolean).join(' · ')
+          ? `${[resumed && `${resumed}건 다음 단계로 진행`, failed && `${failed}건은 아직 진행할 수 없음`]
+            .filter(Boolean).join(' · ')}${reasonCopy}`
           : '진행할 작업이 없습니다.',
         failed ? 'warning' : 'ok',
       );
