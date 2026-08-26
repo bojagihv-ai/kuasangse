@@ -17453,6 +17453,22 @@ async function factoryRuntimeControlApplyCafe24RegistrationMode(payload = {}) {
     },
     { render: false, forceSave: true },
   );
+  // 고치겠다고 한 상품이 있으면 그 상품으로 못박는다. 비워 두면 조립공장이 후보 중에서
+  // 고르는데, 그것이 사람이 생각한 상품과 같다는 보장이 없다. finalDb.product_no 는
+  // factoryCafe24TargetCandidate 가 후보보다 먼저 보는 자리다.
+  const targetProductNo = String(source.targetProductNo ?? '').trim();
+  if (mode === 'update' && /^\d+$/.test(targetProductNo)) {
+    await factoryRuntimeBridgeAction(
+      'factory/final-registration:apply-basic-info',
+      undefined,
+      draft => {
+        if (!draft.product.finalDb || typeof draft.product.finalDb !== 'object') draft.product.finalDb = {};
+        draft.product.finalDb.product_no = targetProductNo;
+        return 'product_no';
+      },
+      { render: false, forceSave: true },
+    );
+  }
   return mode;
 }
 

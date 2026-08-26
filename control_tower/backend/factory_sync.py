@@ -75,7 +75,17 @@ PRODUCT_OPTIONAL_VALUE_KEYS = frozenset(
 )
 PRODUCT_VALUE_KEYS = PRODUCT_REQUIRED_VALUE_KEYS | PRODUCT_OPTIONAL_VALUE_KEYS
 CAFE24_REGISTRATION_VALUE_KEYS = frozenset(
-    {"categoryId", "salePrice", "supplyPrice", "displayStatus", "sellingStatus", "registrationMode"}
+    {
+        "categoryId",
+        "salePrice",
+        "supplyPrice",
+        "displayStatus",
+        "sellingStatus",
+        "registrationMode",
+        # 기존 상품을 고칠 때 '어느 상품' 인지는 사람이 정할 수 있어야 한다. 지정하지 않으면
+        # 조립공장이 후보 중에서 고르는데, 그것이 늘 사람이 의도한 상품이라는 보장이 없다.
+        "targetProductNo",
+    }
 )
 # 새 상품으로 올릴지, 스토어에 있는 상품을 고칠지. 지정하지 않으면 조립공장이 스스로
 # 판단한다(이미 올린 제품이면 수정). 사람이 정한 값이 있으면 그것을 따른다.
@@ -1528,6 +1538,17 @@ class FactorySyncBridge:
             }
             job.current_order_id = str(order["orderId"])
             job.message = "Cafe24 등록을 조립공장에 지시했습니다."
+            # 사람이 이번에 정한 등록 방식·대상은 작업에 남긴다. 다음에 이 화면을 열었을 때
+            # 무엇으로 등록되는지가 지난번 선택과 같아야 한다.
+            chosen = _normalize_cafe24_registration_values(cafe24)
+            if chosen:
+                previous = job.payload.get("cafe24Registration")
+                merged = dict(previous) if isinstance(previous, Mapping) else {}
+                merged.update(chosen)
+                # 새 상품으로 올리기로 했으면 예전에 찍어 둔 수정 대상은 함께 지운다.
+                if chosen.get("registrationMode") == "create":
+                    merged.pop("targetProductNo", None)
+                job.payload["cafe24Registration"] = merged
             self._persist_product_jobs_locked()
             self._queue(order)
             self._append_event(
@@ -3318,7 +3339,7 @@ def _missing_product_values(payload: Mapping[str, JsonValue]) -> set[str]:
 
 
 def _cafe24_values_from_job(payload: Mapping[str, JsonValue]) -> JsonObject:
-    """투입할 때 지정해 둔 등록 대상 값을 꺼낸다."""
+    """투입할 때 지정해 둔 등록 대상 값과, 사람이 나중에 정한 값을 합쳐서 꺼낸다."""
     source = payload.get("requiredValues")
     values = source if isinstance(source, Mapping) else {}
     mapped = {
@@ -3328,7 +3349,18 @@ def _cafe24_values_from_job(payload: Mapping[str, JsonValue]) -> JsonObject:
         "displayStatus": values.get("displayStatus"),
         "sellingStatus": values.get("sellingStatus"),
     }
-    return {key: str(value).strip() for key, value in mapped.items() if str(value or "").strip()}
+    resolved = {key: str(value).strip() for key, value in mapped.items() if str(value or "").strip()}
+    # 등록 방식과 수정 대상은 사람이 화면에서 정하는 값이라 투입값에는 없다. 한 번 정한 것을
+    # 흘려보내면 워커가 다시 뜬 뒤 조립공장 판단으로 되돌아가, 새로 올리려던 것이 조용히
+    # 기존 상품 덮어쓰기가 된다. 실측 2026-08-26: 워커 재시작 후 "기존 상품 #3011 수정"
+    # 으로 되돌아 있었다.
+    chosen = payload.get("cafe24Registration")
+    if isinstance(chosen, Mapping):
+        for key in CAFE24_REGISTRATION_VALUE_KEYS:
+            text = str(chosen.get(key) or "").strip()
+            if text:
+                resolved[key] = text
+    return resolved
 
 
 def _normalize_cafe24_registration_values(
@@ -3349,8 +3381,18 @@ def _normalize_cafe24_registration_values(
         text = str(raw).strip()
         if key == "registrationMode" and text and text not in CAFE24_REGISTRATION_MODES:
             raise FactorySyncError("factory_cafe24_values_invalid")
+        if key == "targetProductNo" and text and not text.isdigit():
+            raise FactorySyncError("factory_cafe24_values_invalid")
         if text:
             normalized[key] = text
+    # 상품번호를 지정했다는 것은 그 상품을 고치겠다는 뜻이다. 새 상품 등록과 함께 오면
+    # 둘 중 무엇을 의도했는지 알 수 없으므로 조용히 한쪽을 고르지 않고 거절한다.
+    if normalized.get("targetProductNo") and normalized.get("registrationMode") == "create":
+        raise FactorySyncError("factory_cafe24_values_invalid")
+    # 방식을 안 고르고 번호만 적었으면 고치겠다는 뜻으로 읽는다. 그냥 두면 조립공장이
+    # 스스로 판단하는 길로 빠져 적어 준 번호가 아무 일도 하지 않는다.
+    if normalized.get("targetProductNo") and not normalized.get("registrationMode"):
+        normalized["registrationMode"] = "update"
     return normalized
 
 

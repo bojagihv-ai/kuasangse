@@ -1550,6 +1550,8 @@ def register_routes(
             "displayStatus",
             "sellingStatus",
             "registrationMode",
+            # 어느 상품을 고칠지도 사람이 정한다. 비워 두면 조립공장이 후보에서 고른다.
+            "targetProductNo",
         }
         if payload is None or set(payload) - allowed:
             return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())

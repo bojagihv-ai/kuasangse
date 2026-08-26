@@ -307,6 +307,15 @@ if ($backendOk) { Write-Host '  Backend ready' } else { Write-Host '  Backend sl
 if ($frontOk) { Write-Host '  Frontend ready' } else { Write-Host '  Frontend slow' }
 
 Write-Host $(if ($WorkerOnly) { '  Opening background worker...' } else { '  Opening background worker and normal editor...' })
+# Chrome Memory Saver discards minimized/background tabs. The worker window is opened
+# minimized on purpose, which is exactly the state Chrome reclaims. When that happens the
+# worker stops reporting mid-run and the control tower shows "running" forever.
+# Measured 2026-08-26: worker went silent during a Cafe24 registration; capturedAt and
+# sequence froze while Chrome CPU stayed flat. Reopening it in the foreground revived it.
+# Fix on the Chrome side: Settings > Performance > "Always keep these sites active"
+# and add 127.0.0.1. Turning Memory Saver off entirely is not required.
+Write-Host '  NOTE: add 127.0.0.1 to Chrome Settings > Performance > always-active sites,'
+Write-Host '        otherwise Chrome may suspend the minimized worker window mid-run.'
 if ($Chrome) {
   Start-Process -FilePath $Chrome -ArgumentList @('--new-window', '--start-minimized', $WorkerAppUrl)
   if (-not $WorkerOnly) {

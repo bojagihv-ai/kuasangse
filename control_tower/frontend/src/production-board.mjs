@@ -251,6 +251,9 @@ export function mountProductionBoard(runtime, {
   const CAFE24_VALUE_FIELDS = Object.freeze([
   { name: 'registrationMode', label: '등록 방식', placeholder: '',
     options: [['', '조립공장 판단에 맡김'], ['create', '새 상품으로 등록'], ['update', '기존 상품 수정']] },
+  // 고칠 상품을 사람이 못박을 수 있어야 한다. 비워 두면 조립공장이 후보에서 고르는데,
+  // 그것이 사람이 생각한 상품과 같다는 보장이 없다.
+  { name: 'targetProductNo', label: '수정할 상품번호', placeholder: '기존 상품 수정일 때만 · 예: 3011' },
   { name: 'categoryId', label: '상품분류 번호', placeholder: '비우면 스토어 값을 씁니다' },
   { name: 'salePrice', label: '판매가', placeholder: '예: 2700' },
   { name: 'supplyPrice', label: '공급가', placeholder: '예: 500' },
@@ -444,6 +447,8 @@ export function mountProductionBoard(runtime, {
     );
     form.append(title);
     const grid = element('div', 'board-cafe24-fields');
+    let modeSelect = null;
+    let targetInput = null;
     for (const field of CAFE24_VALUE_FIELDS) {
       const label = element('label', 'board-cafe24-field');
       label.append(element('span', 'board-cafe24-field-label', field.label));
@@ -458,6 +463,7 @@ export function mountProductionBoard(runtime, {
         }
         select.value = String(row.cafe24Values?.[field.name] || '');
         label.append(select);
+        if (field.name === 'registrationMode') modeSelect = select;
       } else {
         const input = document.createElement('input');
         input.type = 'text';
@@ -465,9 +471,23 @@ export function mountProductionBoard(runtime, {
         input.placeholder = field.placeholder;
         input.value = String(row.cafe24Values?.[field.name] || '');
         label.append(input);
+        if (field.name === 'targetProductNo') targetInput = input;
       }
       grid.append(label);
     }
+    // 새 상품으로 올리기로 했으면 고칠 상품번호는 뜻이 없다. 남아 있는 값을 그대로 보내면
+    // 서로 어긋난 지시가 되어 거절당한다. 화면에서 먼저 막고, 무엇이 잠겼는지 보여 준다.
+    const syncTargetAvailability = () => {
+      if (!targetInput || !modeSelect) return;
+      const creating = modeSelect.value === 'create';
+      targetInput.disabled = creating;
+      if (creating) targetInput.value = '';
+      targetInput.placeholder = creating
+        ? '새 상품으로 올릴 때는 쓰지 않습니다'
+        : '기존 상품 수정일 때만 · 예: 3011';
+    };
+    if (modeSelect) modeSelect.addEventListener('change', syncTargetAvailability);
+    syncTargetAvailability();
     form.append(grid);
     const submit = button('board-mini-action', '이 값으로 Cafe24 등록', {
       action: 'cafe24-values-submit',
