@@ -695,9 +695,12 @@ export function mountProductionBoard(runtime, {
       for (const group of groups) {
         const block = element('div', 'board-section-group');
         const shot = shots.get(group.sectionId);
-        // 변형이 하나뿐이면 그 카드가 곧 현재 이미지다. 왼쪽에 같은 그림을 한 번 더
-        // 두면 중복일 뿐이다. 왼쪽 기준 그림은 비교할 변형이 여럿일 때만 둔다.
-        if (shot && group.candidates.length > 1) {
+        // 지금 쓰는 컷은 카드로 이미 보이고 '지금 쓰는 컷' 이라고 적혀 있다.
+        // 왼쪽에 같은 그림을 한 번 더 두면 서로 다른 안이 둘인 것처럼 읽힌다.
+        // 실측 2026-08-26: 헤더의 왼쪽 기준 그림과 변형 1/3 카드가 같은 그림이었다.
+        // 고른 변형이 없어서 카드에 그림이 하나도 없을 때만 기준 그림을 둔다.
+        const anyCardHasImage = !!group.selectedId || group.candidates.length === 1;
+        if (shot && !anyCardHasImage) {
           const preview = document.createElement('img');
           preview.className = 'board-section-preview';
           preview.alt = `${group.label} 현재 이미지`;
