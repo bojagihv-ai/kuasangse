@@ -149,3 +149,73 @@ def test_many_waiting_products_can_be_reserved_in_one_pass(tmp_path: Path) -> No
     # 예약은 조립공장이 실제로 컷을 반영했다고 보고할 때까지 남는다.
     reserved_jobs = [job for job in bridge.product_jobs() if "pendingSelection" in job]
     assert len(reserved_jobs) == 6
+
+
+def test_reservation_is_dropped_as_soon_as_the_candidate_disappears(
+    tmp_path: Path,
+) -> None:
+    """후보가 다시 만들어져 예약한 컷이 사라지면 그 자리에서 예약을 접는다.
+
+    전에는 워커가 작업파일을 통째로 다시 연 뒤에야 이것을 알아챘다. 사람은 몇 분
+    동안 "적용하는 중" 을 보고 있다가 결국 못 찾았다는 말을 들었고, 컷은 그대로였다.
+    실측 2026-08-26: 방울수저집 대표 후보가 10개에서 9개로 바뀌어 있었다.
+    """
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    first_id, _, first_projection = _two_waiting_products(bridge)
+    bridge.reserve_product_selection(
+        first_id,
+        {"stageKey": "representative", "candidateId": "representative-b"},
+    )
+    assert _job(bridge, first_id)["pendingSelection"]["candidateId"] == "representative-b"
+
+    # 조립공장이 후보를 다시 만들어 예약한 id 가 사라진 채로 보고한다.
+    regenerated = {**first_projection, "sequence": 40, "cursor": "40"}
+    regenerated["stages"] = [
+        {
+            **stage,
+            "candidates": [
+                candidate
+                for candidate in stage.get("candidates", [])
+                if candidate.get("id") != "representative-b"
+            ],
+        }
+        for stage in regenerated["stages"]
+    ]
+    bridge.accept_session_projection(_session_envelope(regenerated, cursor=9))
+
+    job = _job(bridge, first_id)
+    assert "pendingSelection" not in job or job.get("pendingSelection") is None
+    assert "새 후보 목록에 없습니다" in str(job["message"])
+
+    # 예약이 접혔으므로 그 컷을 적용하는 주문도 나가지 않는다.
+    for _ in range(3):
+        claimed = bridge.claim(_live_worker())
+        order = claimed.get("order") if isinstance(claimed, dict) else None
+        if order is None:
+            break
+        assert order["command"]["name"] != "selectFactoryACut"
+
+
+def test_reservation_survives_a_report_that_does_not_carry_its_stage(
+    tmp_path: Path,
+) -> None:
+    """그 단계 보고가 아직 안 온 것과 후보가 사라진 것은 다르다.
+
+    구분하지 않으면, 다른 단계를 보고할 때마다 멀쩡한 예약이 지워진다.
+    """
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    first_id, _, first_projection = _two_waiting_products(bridge)
+    bridge.reserve_product_selection(
+        first_id,
+        {"stageKey": "representative", "candidateId": "representative-b"},
+    )
+
+    without_stage = {**first_projection, "sequence": 41, "cursor": "41"}
+    without_stage["stages"] = [
+        stage for stage in without_stage["stages"] if stage.get("key") != "representative"
+    ]
+    if not without_stage["stages"]:
+        without_stage["stages"] = [{"key": "size", "status": "empty", "candidates": []}]
+    bridge.accept_session_projection(_session_envelope(without_stage, cursor=10))
+
+    assert _job(bridge, first_id)["pendingSelection"]["candidateId"] == "representative-b"

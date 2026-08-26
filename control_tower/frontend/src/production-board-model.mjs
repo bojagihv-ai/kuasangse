@@ -59,6 +59,11 @@ function normalizeCandidate(value) {
       // 52개가 한 줄에 쏟아져 사람이 고를 수 없다. id 는 "섹션:변형" 꼴이다.
       sectionId: text(source.sectionId) || text(id).split(':')[0],
       variantId: text(source.variantId),
+      // 변형별 그림은 저장되지 않는다. 이름("기준안 1")과 첫 문구로 고르게 한다.
+      label: text(source.label),
+      summary: text(source.summary),
+      usesCurrentImage: text(source.imageRef) === 'current-section-image',
+      hasImage: text(source.hasImage) === '1',
     }
     : null;
 }

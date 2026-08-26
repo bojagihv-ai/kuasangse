@@ -2445,6 +2445,22 @@
       font-size: var(--font-size-compact);
     }
 
+    .board-candidate-note {
+      display: grid;
+      gap: var(--space-half);
+      padding: var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      min-block-size: var(--board-thumb-size);
+      align-content: center;
+    }
+
+    .board-candidate-note span {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      line-height: var(--line-height-tight);
+    }
+
     .board-candidate-options {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
@@ -4684,7 +4700,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=46"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=47"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>

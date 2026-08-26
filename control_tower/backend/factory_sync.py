@@ -157,6 +157,11 @@ PRODUCT_PROGRESS_CANDIDATE_KEYS = (
     # 화면이 52개를 한 줄에 쏟아 사람이 고를 수 없다.
     "sectionId",
     "variantId",
+    # 변형별 그림은 저장되지 않는다. 이름과 첫 문구가 그 자리를 대신한다.
+    "label",
+    "summary",
+    "imageRef",
+    "hasImage",
 )
 
 
@@ -573,6 +578,7 @@ class FactorySyncBridge:
             self._last_factory_session = session
             if previous is not None and _projection_content(previous) == _projection_content(normalized):
                 self._projection = normalized
+                self._drop_stale_reservation_locked(normalized)
                 self._flush_pending_selection_locked(normalized)
                 self._advance_after_selection_locked(self._projection or {})
                 return {
@@ -582,6 +588,8 @@ class FactorySyncBridge:
                     "sessionCursor": session.cursor,
                 }
             self._projection = normalized
+            # 후보가 다시 만들어졌으면 예약은 이미 못 쓴다. 기다리게 두지 않는다.
+            self._drop_stale_reservation_locked(normalized)
             self._flush_pending_selection_locked(normalized)
             self._advance_after_selection_locked(self._projection or {})
             event_type, payload_value = _projection_event(previous, normalized)
@@ -614,6 +622,8 @@ class FactorySyncBridge:
                     "cursor": str(self._event_sequence),
                 }
             self._projection = normalized
+            # 후보가 다시 만들어졌으면 예약은 이미 못 쓴다. 기다리게 두지 않는다.
+            self._drop_stale_reservation_locked(normalized)
             self._flush_pending_selection_locked(normalized)
             self._advance_after_selection_locked(self._projection or {})
             event_type, payload = _projection_event(previous, normalized)
@@ -1276,6 +1286,48 @@ class FactorySyncBridge:
                 )
                 self._condition.notify_all()
             return {"jobId": job_id, "status": "cleared"}
+
+    def _drop_stale_reservation_locked(
+        self,
+        projection: Mapping[str, JsonValue] | None,
+    ) -> bool:
+        """후보 목록이 바뀌어 예약한 컷이 사라졌으면 그 자리에서 예약을 접는다.
+
+        전에는 예약을 워커가 작업파일을 전부 다시 연 뒤에야 검증했다. 후보가
+        재생성돼 예약한 id 가 사라진 경우, 사람은 "적용하는 중" 을 몇 분 동안
+        보고 있다가 결국 "찾지 못했습니다" 를 받았다. 컷은 그대로였다.
+        실측 2026-08-26: 방울수저집 대표 후보가 10개에서 9개로 바뀌어 있었다.
+
+        후보 목록이 실린 보고를 받을 때마다 검사해, 헛되이 기다리지 않게 한다.
+        """
+        if not isinstance(projection, Mapping):
+            return False
+        stages = projection.get("stages")
+        if not isinstance(stages, list) or not stages:
+            return False
+        job = self._job_for_projection_locked(projection, self._product_jobs)
+        reservation = job.pending_selection if job is not None else None
+        if job is None or not isinstance(reservation, Mapping):
+            return False
+        stage_key = str(reservation.get("stageKey") or "")
+        candidate_id = str(reservation.get("candidateId") or "")
+        # 그 단계 보고가 아직 안 왔으면 판단하지 않는다. 없는 것과 안 온 것은 다르다.
+        if not any(
+            isinstance(stage, Mapping) and str(stage.get("key") or "") == stage_key
+            for stage in stages
+        ):
+            return False
+        if _projection_has_candidate(projection, stage_key, candidate_id):
+            return False
+        job.pending_selection = None
+        job.auto_resume_pending = False
+        job.message = "예약해 둔 컷이 새 후보 목록에 없습니다. 후보가 다시 만들어졌습니다. 직접 골라 주세요."
+        self._persist_product_jobs_locked()
+        self._append_event(
+            "factory.product.updated",
+            {"job": self._public_product_job(job)},
+        )
+        return True
 
     def _flush_pending_selection_locked(
         self,
@@ -2654,6 +2706,7 @@ class FactorySyncBridge:
                 },
             )
             # 작업파일을 다시 연 직후이므로, 예약해 둔 컷이 있으면 여기서 바로 내보낸다.
+            self._drop_stale_reservation_locked(normalized)
             applied_selection = self._flush_pending_selection_locked(normalized)
             payload = command.get("payload")
             if not isinstance(payload, dict) or payload.get("restoreOnly") is not True:

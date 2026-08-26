@@ -10,7 +10,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=29';
+} from './production-board-model.mjs?parallelBoard=30';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -599,18 +599,26 @@ export function mountProductionBoard(runtime, {
       image.loading = 'lazy';
       option.append(image);
     } else if (fallbackThumbUrl) {
-      // 변형이 하나뿐인 섹션은 옆의 현재 이미지가 곧 이 변형이다. 그 그림을 쓴다.
+      // 이 변형의 그림이 곧 지금 섹션 그림이다. 이미 받아 둔 것을 그대로 쓴다.
       const image = document.createElement('img');
       image.src = assetUrl ? assetUrl(fallbackThumbUrl) : fallbackThumbUrl;
       image.alt = `${cell.stageLabel} 후보`;
       image.loading = 'lazy';
       option.append(image);
     } else {
-      option.append(element('span', 'board-candidate-placeholder', '미리보기 없음'));
+      // 변형별 그림은 조립공장이 저장하지 않는다. 없는 그림을 기다리는 것처럼
+      // "미리보기 없음" 만 두면 무엇을 고르는지 알 수 없다. 이 변형이 무엇으로
+      // 다른지를 대신 보여 준다 — 만든 방식과 첫 문구다.
+      const note = element('div', 'board-candidate-note');
+      note.append(element('strong', '', candidate.label || `시안 ${index + 1}`));
+      if (candidate.summary) note.append(element('span', '', candidate.summary));
+      else note.append(element('span', '', '문구 정보 없음'));
+      option.append(note);
     }
     // 사람이 읽는 이름은 "변형 2/4" 다. 원시 식별자는 눈으로 구분되지 않는다.
     option.append(element('span', 'board-candidate-label', total > 1 ? `변형 ${index + 1}/${total}` : '변형 1'));
     if (picked) option.append(element('span', 'board-candidate-meta', '지금 쓰는 컷'));
+    else if (candidate.label) option.append(element('span', 'board-candidate-meta', candidate.label));
     else if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
     option.title = candidate.id;
     return option;
@@ -701,11 +709,13 @@ export function mountProductionBoard(runtime, {
         // 변형이 하나뿐이고 고를 차례도 아니면, 그 하나가 지금 쓰이는 컷이다.
         const soleInUse = !group.selectedId && !cell.pickable && group.candidates.length === 1;
         for (const [index, candidate] of group.candidates.entries()) {
+          const usesCurrent = soleInUse || candidate.usesCurrentImage
+            || candidate.id === group.selectedId;
           groupOptions.append(renderCandidateOption(row, cell, candidate, {
             index,
             total: group.candidates.length,
             picked: candidate.id === group.selectedId || soleInUse,
-            fallbackThumbUrl: soleInUse && shot
+            fallbackThumbUrl: usesCurrent && shot
               ? (shot.asset.thumbnailReference || shot.asset.contentReference)
               : '',
           }));

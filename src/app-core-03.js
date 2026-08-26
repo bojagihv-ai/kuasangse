@@ -15957,11 +15957,26 @@ function factoryControlSectionStage(factory = {}) {
       if (!variantId) continue;
       const id = `${sectionId}:${variantId}`;
       if (variantId === currentId) selectedIds.push(id);
+      // 변형은 그림이 아니라 '무엇이 다른가' 로 고른다. 이름과 첫 문구만 실어도
+      // 사람이 고를 수 있다. 그림 전체를 실으면 보고가 무거워져 화면이 느려진다.
+      const variantContent = variant && typeof variant.content === 'object' ? variant.content : {};
+      const variantSummary = String(
+        variantContent.headline
+        || variantContent.title
+        || variantContent.subheadline
+        || variantContent.body
+        || '',
+      ).replace(/\s+/g, ' ').trim().slice(0, 60);
       candidates.push(Object.freeze({
         id,
         assetId: id,
         sectionId,
         variantId,
+        label: String(variant.label || '').trim(),
+        summary: variantSummary,
+        // 이 변형의 그림이 곧 지금 섹션 그림이면, 관제탑이 이미 받아 둔 그림을 쓴다.
+        imageRef: String(variant.imageRef || '').trim(),
+        hasImage: variant.image || variant.hasImage ? '1' : '',
         thumbnailUrl: factoryControlThumbnailReference(variant),
         digest: String(variant.digest || variant.imageDigest || '').trim(),
         source: String(variant.source || 'section-variant').trim(),
