@@ -10,7 +10,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=30';
+} from './production-board-model.mjs?parallelBoard=31';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -582,6 +582,20 @@ export function mountProductionBoard(runtime, {
       });
   }
 
+  /**
+   * 카드에 적을 이름. 조립공장이 붙인 이름에 영문 섹션 id 가 그대로 남아 있는
+   * 경우가 있다("섹션 이미지 size_color"). 사람이 읽는 이름으로 바꿔 준다.
+   */
+  function readableCandidateLabel(candidate, index) {
+    const raw = String(candidate.label || '').trim();
+    const sectionId = String(candidate.sectionId || '').trim();
+    if (!raw) return sectionId ? sectionLabel(sectionId) : `시안 ${index + 1}`;
+    if (sectionId && SECTION_LABELS.has(sectionId) && raw.includes(sectionId)) {
+      return raw.split(sectionId).join(SECTION_LABELS.get(sectionId)).replace(/\s+/g, ' ').trim();
+    }
+    return raw;
+  }
+
   function renderCandidateOption(row, cell, candidate, { index, total, picked, fallbackThumbUrl = '' }) {
     const option = button('board-candidate', '', {
       action: 'pick',
@@ -610,8 +624,10 @@ export function mountProductionBoard(runtime, {
       // "미리보기 없음" 만 두면 무엇을 고르는지 알 수 없다. 이 변형이 무엇으로
       // 다른지를 대신 보여 준다 — 만든 방식과 첫 문구다.
       const note = element('div', 'board-candidate-note');
-      note.append(element('strong', '', candidate.label || `시안 ${index + 1}`));
+      if (candidate.kind === 'html') note.dataset.kind = 'html';
+      note.append(element('strong', '', readableCandidateLabel(candidate, index)));
       if (candidate.summary) note.append(element('span', '', candidate.summary));
+      else if (candidate.kind === 'html') note.append(element('span', '', '상세페이지 HTML'));
       else note.append(element('span', '', '문구 정보 없음'));
       option.append(note);
     }
@@ -709,8 +725,12 @@ export function mountProductionBoard(runtime, {
         // 변형이 하나뿐이고 고를 차례도 아니면, 그 하나가 지금 쓰이는 컷이다.
         const soleInUse = !group.selectedId && !cell.pickable && group.candidates.length === 1;
         for (const [index, candidate] of group.candidates.entries()) {
-          const usesCurrent = soleInUse || candidate.usesCurrentImage
-            || candidate.id === group.selectedId;
+          // 지금 이 섹션에 실제로 쓰이는 그림은 '고른 변형' 하나뿐이다.
+          // imageRef 가 current-section-image 라는 말은 "만들 당시 현재였다" 는 뜻이지
+          // "지금도 이 그림이다" 가 아니다. 그것을 현재 그림으로 읽어 모든 변형에
+          // 같은 그림을 붙이면, 서로 다른 안이 똑같아 보인다. 빈 칸보다 나쁘다.
+          // 실측 2026-08-26: 인증/수상 3개 변형이 전부 같은 그림으로 떴다.
+          const usesCurrent = candidate.id === group.selectedId || soleInUse;
           groupOptions.append(renderCandidateOption(row, cell, candidate, {
             index,
             total: group.candidates.length,

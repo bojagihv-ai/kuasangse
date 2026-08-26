@@ -64,6 +64,8 @@ function normalizeCandidate(value) {
       summary: text(source.summary),
       usesCurrentImage: text(source.imageRef) === 'current-section-image',
       hasImage: text(source.hasImage) === '1',
+      // 그림 후보와 문서 후보는 고르는 방식이 다르다. 문서는 열어 봐야 안다.
+      kind: text(source.kind) || 'image',
     }
     : null;
 }

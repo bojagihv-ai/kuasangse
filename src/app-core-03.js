@@ -15885,9 +15885,26 @@ function factoryControlCompetitorInputGroup(factory) {
 function factoryControlAssetCandidate(asset = {}) {
   const id = String(asset.id || asset.assetId || '').trim();
   if (!id) return null;
+  // 최종 상세페이지 후보는 그림이 아니라 HTML 문서다. 그림이 없다고 빈 칸을 두면
+  // 무엇을 고르는지 알 수 없다. 그 문서가 무엇인지를 대신 적어 보낸다 —
+  // 섹션이 몇 개인지, 언제 저장했는지.
+  const assetMeta = asset && typeof asset.metadata === 'object' ? asset.metadata : {};
+  const assetKind = String(asset.type || '').trim() === 'html' ? 'html' : 'image';
+  const sectionCount = Number(assetMeta.sectionCount);
+  const preservedAt = Number(assetMeta.preservedAt || asset.createdAt || 0);
+  const summaryParts = [];
+  if (Number.isFinite(sectionCount) && sectionCount > 0) summaryParts.push(`섹션 ${sectionCount}개`);
+  if (Number.isFinite(preservedAt) && preservedAt > 0) {
+    const at = new Date(preservedAt);
+    summaryParts.push(`${at.getMonth() + 1}월 ${at.getDate()}일 ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`);
+  }
+  if (assetMeta.productCheckWarning) summaryParts.push('상품 확인 필요');
   return Object.freeze({
     id,
     assetId: id,
+    kind: assetKind,
+    label: String(asset.title || '').trim(),
+    summary: summaryParts.join(' · '),
     thumbnailUrl: factoryControlThumbnailReference(asset),
     digest: String(
       asset.digest || asset.imageDigest || asset.contentDigest

@@ -162,6 +162,8 @@ PRODUCT_PROGRESS_CANDIDATE_KEYS = (
     "summary",
     "imageRef",
     "hasImage",
+    # 최종 상세페이지 후보는 그림이 아니라 HTML 문서다.
+    "kind",
 )
 
 

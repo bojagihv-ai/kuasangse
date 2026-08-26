@@ -2455,6 +2455,10 @@
       align-content: center;
     }
 
+    .board-candidate-note[data-kind="html"] {
+      border-inline-start: var(--border-width-emphasis) solid var(--color-accent-primary);
+    }
+
     .board-candidate-note span {
       color: var(--color-text-muted);
       font-size: var(--font-size-compact);
@@ -4700,7 +4704,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=47"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=48"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>
