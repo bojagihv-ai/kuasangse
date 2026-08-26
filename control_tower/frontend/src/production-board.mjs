@@ -71,6 +71,10 @@ export function mountProductionBoard(runtime, {
   let busy = false;
   let autoResume = true;
   let connected = null;
+  // 워커가 살아 있는지는 '붙어 있다' 가 아니라 '방금 말했다' 로 안다. 렌더러가 막히면
+  // 연결은 그대로인데 상태 보고만 끊긴다. 그 사이 화면은 "실행 중" 만 보여 준다.
+  // 실측 2026-08-26: 워커가 10분 넘게 죽어 있었는데 보드는 계속 진행 중이라고 했다.
+  let workerHeartbeatAt = '';
   let openResults = '';
   let openCafe24Values = '';
   let openProductValues = '';
@@ -132,11 +136,34 @@ export function mountProductionBoard(runtime, {
     return results;
   }
 
+  // 조립공장이 마지막으로 말한 지 이만큼 지나면, 붙어 있어도 응답이 없는 것으로 본다.
+  // 평소 보고 간격은 10초 안쪽이라 2분이면 느린 것과 멎은 것이 갈린다.
+  const WORKER_SILENCE_WARN_MS = 2 * 60 * 1000;
+
+  function workerSilenceMs() {
+    if (!workerHeartbeatAt) return 0;
+    const beat = Date.parse(workerHeartbeatAt);
+    if (!Number.isFinite(beat)) return 0;
+    return Math.max(0, Date.now() - beat);
+  }
+
   function renderConnection() {
-    connection.hidden = connected !== false;
-    connection.dataset.tone = 'error';
-    connection.textContent = '조립공장이 연결되지 않았습니다 · 상세페이지 AI 자동화를 실행하면 멈춘 작업이 다시 흐릅니다.';
-    if (!connection.hidden) renderWorkerFrontendHint();
+    if (connected === false) {
+      connection.hidden = false;
+      connection.dataset.tone = 'error';
+      connection.textContent = '조립공장이 연결되지 않았습니다 · 상세페이지 AI 자동화를 실행하면 멈춘 작업이 다시 흐릅니다.';
+      renderWorkerFrontendHint();
+      return;
+    }
+    const silence = workerSilenceMs();
+    if (silence >= WORKER_SILENCE_WARN_MS) {
+      connection.hidden = false;
+      connection.dataset.tone = 'warning';
+      connection.textContent = `조립공장이 ${durationLabel(silence)}째 응답이 없습니다 · `
+        + '큰 상세페이지를 올리는 중일 수 있습니다. 이대로 계속되면 작업자 창을 닫았다가 다시 열어 주세요.';
+      return;
+    }
+    connection.hidden = true;
   }
 
   /**
@@ -894,6 +921,7 @@ export function mountProductionBoard(runtime, {
       ]);
       jobs = Array.isArray(response?.jobs) ? response.jobs : [];
       connected = state ? state.connected === true : connected;
+      if (state && typeof state.capturedAt === 'string') workerHeartbeatAt = state.capturedAt;
       void fillMissingProgress();
       loaded = true;
       if (statusLine.tone === 'error' || statusLine.tone === '') statusLine = { copy: '', tone: '' };
