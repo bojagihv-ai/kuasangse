@@ -15807,6 +15807,12 @@ function factoryControlThumbnailReference(source = {}) {
     source.localArchive?.thumbnailUrl,
     source.metadata?.thumbnailUrl,
     source.sourceMap?.thumbnailUrl,
+    // 섹션 변형은 보관함 주소를 image 에 들고 있다. 여기를 안 보면 이미 저장해 둔
+    // 그림이 있는데도 "미리보기 없음" 이 뜬다. 아래 걸러내기가 data:/blob: 은
+    // 어차피 막으므로, 주소인 경우에만 통과한다.
+    source.image,
+    source.preview,
+    source.dataUrl,
   ];
   const direct = candidates.map(value => String(value || '').trim()).find(value => (
     /^(?:https?:\/\/|\/)/i.test(value)

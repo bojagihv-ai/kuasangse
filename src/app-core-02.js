@@ -4275,11 +4275,19 @@ function stripDetailBlockImages(blocks) {
 function stripVariantImages(sectionVariants = {}) {
   const result = {};
   for (const [sectionId, variants] of Object.entries(sectionVariants || {})) {
-    result[sectionId] = (Array.isArray(variants) ? variants : []).map(variant => ({
-      ...variant,
-      hasImage: !!variant.image || !!variant.hasImage,
-      image: null,
-    }));
+    result[sectionId] = (Array.isArray(variants) ? variants : []).map(variant => {
+      // 보관함 주소는 그림이 아니라 그림을 가리키는 한 줄이다. 무게가 없는데도
+      // 함께 버리고 있었다. 그래서 다시 열면 변형마다 "미리보기 없음" 이 됐다.
+      // 실제 바이트(data:)만 떼어내고 주소는 남긴다.
+      const kept = typeof runtimeExternalImageSrc === 'function'
+        ? runtimeExternalImageSrc(variant?.image || variant?.preview || variant?.dataUrl)
+        : '';
+      return {
+        ...variant,
+        hasImage: !!variant.image || !!variant.hasImage,
+        image: kept || null,
+      };
+    });
   }
   return result;
 }
