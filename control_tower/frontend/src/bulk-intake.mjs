@@ -43,13 +43,25 @@ function thumbUrl(image) {
 function openLightbox(url, caption) {
   const overlay = element('div', 'bulk-lightbox');
   const image = document.createElement('img');
+  // 크게 보는 그림은 원본이라 크다. 메인 스레드에서 풀면 화면 전체가 멎는다.
+  // 실측 2026-08-25: 보드 확대창에서 같은 증상으로 화면 캡처가 30초 넘게 멈췄다.
+  image.decoding = 'async';
+  image.loading = 'eager';
   image.src = url;
   image.alt = caption;
   const label = element('p', 'bulk-lightbox-caption', caption);
   const close = element('button', 'board-action ghost', '닫기');
   close.type = 'button';
   overlay.append(image, label, close);
-  const dismiss = () => overlay.remove();
+  const dismiss = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  // 크게 본 뒤 돌아가는 길이 마우스뿐이면 답답하다. ESC 로도 닫는다.
+  function onKey(event) {
+    if (event.key === 'Escape') dismiss();
+  }
+  document.addEventListener('keydown', onKey);
   overlay.addEventListener('click', event => {
     if (event.target === overlay || event.target === close) dismiss();
   });
@@ -167,12 +179,43 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
 
   // 입력 중에 카드를 통째로 다시 그리면 글자를 칠 때마다 포커스가 튄다. 한 박자 뒤에 모은다.
   let planTimer = null;
+  // 한글 조합 중인지. 조합 중에 다시 그리면 입력칸이 갈아 끼워져 글자가 깨진다.
+  let composing = false;
   function schedulePlan() {
     if (planTimer) clearTimeout(planTimer);
     planTimer = setTimeout(() => {
       planTimer = null;
+      // 조합이 아직 안 끝났으면 미룬다. 지금 그리면 글자가 깨진다.
+      if (composing) {
+        schedulePlan();
+        return;
+      }
       rebuild();
     }, 350);
+  }
+
+  /**
+   * 다시 그리면 입력칸이 새 노드로 바뀌어 초점과 커서 자리가 사라진다.
+   * 어디에 있었는지 적어 두었다가 그린 뒤 그대로 돌려놓는다.
+   */
+  function captureFocus() {
+    const node = document.activeElement;
+    if (!node || !node.dataset || !node.dataset.focusKey) return null;
+    return {
+      key: node.dataset.focusKey,
+      start: typeof node.selectionStart === 'number' ? node.selectionStart : null,
+      end: typeof node.selectionEnd === 'number' ? node.selectionEnd : null,
+    };
+  }
+
+  function restoreFocus(mark) {
+    if (!mark) return;
+    const node = root.querySelector(`[data-focus-key="${mark.key}"]`);
+    if (!node) return;
+    node.focus();
+    if (mark.start !== null && typeof node.setSelectionRange === 'function') {
+      try { node.setSelectionRange(mark.start, mark.end); } catch (_) {}
+    }
   }
 
   function rebuild() {
@@ -180,7 +223,9 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       [...defaultsBox.querySelectorAll('[data-default-key]')].map(input => [input.dataset.defaultKey, input.value]),
     );
     plan = buildBulkPlan(grouped, csvRows, defaults);
+    const mark = captureFocus();
     render();
+    restoreFocus(mark);
   }
 
   function renderPlan() {
@@ -218,8 +263,20 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       nameInput.type = 'text';
       nameInput.value = entry.productName;
       nameInput.placeholder = '예: 슬라브 겹보 55x55cm';
+      // 다시 그릴 때 이 칸을 찾아 초점을 되살리기 위한 표식.
+      nameInput.dataset.focusKey = `product-name:${index}`;
+      // 한글은 여러 자판을 모아 한 글자를 만든다. 조합 중에 표를 다시 그리면 입력칸이
+      // 통째로 갈아 끼워져 초점이 날아가고 글자가 깨진다. 조합이 끝난 뒤에 다시 센다.
+      nameInput.addEventListener('compositionstart', () => { composing = true; });
+      nameInput.addEventListener('compositionend', () => {
+        composing = false;
+        if (group) group.productName = nameInput.value.trim();
+        schedulePlan();
+      });
       nameInput.addEventListener('input', () => {
         if (group) group.productName = nameInput.value.trim();
+        // 글자를 칠 때마다 다시 그리면 초점이 매번 나간다. 조합 중에는 세지 않는다.
+        if (composing) return;
         schedulePlan();
       });
       nameLabel.append(nameInput);

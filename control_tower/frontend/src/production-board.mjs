@@ -822,11 +822,24 @@ export function mountProductionBoard(runtime, {
    * "다시 시도" 를 눌러도 아무 반응이 없다는 신고가 있었고, 이벤트 계측 결과 클릭은
    * 버튼에 닿고 있었다. 문제는 그 사이 표가 통째로 다시 그려진 것이었다.
    */
+  const STABLE_SUMMARY_KEYS = Object.freeze([
+    'total', 'queued', 'running', 'waiting', 'blocked', 'completed',
+    'reserved', 'resumable', 'autoResuming', 'pickableCells',
+  ]);
+
+  function stableSummarySignature(summary) {
+    return STABLE_SUMMARY_KEYS.map(key => summary?.[key] ?? 0);
+  }
+
   function boardSignature(board) {
     return JSON.stringify([
       busy, connected, openResults, openCafe24Values, openProductValues,
       openCell.jobId, openCell.stageKey, statusLine.copy, statusLine.tone,
-      board.summary,
+      // 총 기계/대기 시간은 새로고침마다 흘러간다. 이것까지 서명에 넣으면 아무 일이
+      // 없어도 매번 표를 통째로 다시 그리고, 그 순간 손 밑의 버튼이 갈아 끼워진다.
+      // 실측 2026-08-26: "Cafe24 값 지정" 을 눌렀는데 아무 것도 열리지 않았다.
+      // 흘러가는 값은 서명에서 빼고, 아래에서 표를 건드리지 않고 따로 갱신한다.
+      stableSummarySignature(board.summary),
       board.rows.map(row => [
         row.jobId, row.status, row.productName, row.message, row.percent,
         row.stepLabel, row.nextAction?.copy || '',
@@ -843,6 +856,8 @@ export function mountProductionBoard(runtime, {
     const signature = boardSignature(board);
     if (signature === lastBoardSignature && grid.childElementCount) {
       renderConnection();
+      // 표를 다시 그리지 않아도 흘러가는 시간은 계속 보여 줘야 한다.
+      renderSummary(board.summary);
       renderStatus();
       return board;
     }

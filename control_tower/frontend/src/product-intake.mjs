@@ -140,6 +140,29 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
       <div class="span-all"><span class="label">준비 상태</span><span class="status-message" data-tone="${ready ? 'ok' : 'error'}">${escapeHtml(readinessMessage)}</span></div>
     `;
     document.getElementById('jcode').value = String(source.jcode);
+    markSelectedResult(source.jcode);
+    revealSelectedSummary();
+  };
+
+  // 목록이 길면 누른 자리에서 확인 문구까지 1500px 넘게 떨어진다.
+  // 눌렀는데 아무 일도 안 일어난 것처럼 보이므로 요약을 화면 안으로 데려온다.
+  const revealSelectedSummary = () => {
+    const rect = selectedSummary.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const offscreen = rect.top < 0 || rect.bottom > window.innerHeight;
+    if (!offscreen) return;
+    // 부드러운 스크롤은 이 화면에서 다른 렌더가 끼어들면 취소된다(실측: scrollTop 0 유지).
+    // 눌렀을 때 확인이 보이는 편이 애니메이션보다 중요하므로 즉시 이동한다.
+    selectedSummary.scrollIntoView({ block: 'center' });
+  };
+
+  const markSelectedResult = jcode => {
+    const wanted = String(jcode);
+    for (const button of results.querySelectorAll('.product-result')) {
+      const picked = button.dataset.jcode === wanted;
+      button.setAttribute('aria-pressed', picked ? 'true' : 'false');
+      button.classList.toggle('is-picked', picked);
+    }
   };
 
   const selectSource = async source => {
@@ -201,6 +224,10 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'product-result';
+        // 고른 것이 무엇인지는 초점이 아니라 상태로 남아야 한다.
+        // 초점만으로 표시하면 다른 칸을 누르는 순간 무엇을 골랐는지 사라진다.
+        button.dataset.jcode = String(source.jcode);
+        button.setAttribute('aria-pressed', 'false');
         button.innerHTML = `<strong>${escapeHtml(source.productName)}</strong><span>신화사 품번 ${escapeHtml(source.jcode)} · ${escapeHtml(source.category || '분류 미입력')}</span><span>이미지 ${escapeHtml(source.imageCount)}장 · 상세 ${escapeHtml(source.detailPageCount)}건</span>`;
         button.addEventListener('click', () => void selectSource(source));
         results.append(button);

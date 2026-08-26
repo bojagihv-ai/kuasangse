@@ -770,6 +770,18 @@
       text-align: start;
     }
 
+    .product-result.is-picked {
+      border-color: var(--color-accent);
+      background: var(--color-accent-soft);
+    }
+
+    .product-result.is-picked strong::after {
+      content: '선택됨';
+      margin-inline-start: var(--space-half);
+      color: var(--color-accent);
+      font-size: var(--font-size-compact);
+    }
+
     .product-result span {
       color: var(--color-text-muted);
       font-size: var(--font-size-compact);
@@ -4475,7 +4487,7 @@
   <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs?factoryQueue=3";
+    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=3";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");
@@ -4575,7 +4587,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=30"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=3"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=33"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>
