@@ -605,3 +605,40 @@ export function summarizeBatchSelection(responseValue) {
     copy: parts.length ? `${parts.join(' · ')}${reasonCopy}` : '선택할 대기 작업이 없습니다.',
   };
 }
+
+/**
+ * 한 행을 다시 그려야 하는지 가리는 지문.
+ *
+ * 바뀌지 않은 행까지 매번 새로 만들면, 누르는 순간 손 밑의 버튼이 다른 노드로
+ * 갈아 끼워진다. mousedown 은 옛 노드에 mouseup 은 새 노드에 떨어지고, 브라우저는
+ * click 을 아예 만들지 않는다. 그것이 "눌러도 반응이 없다" 의 정체다.
+ *
+ * 그래서 이 지문에는 그 행이 실제로 그리는 것만 담는다. 표 전체의 총 기계/대기
+ * 시간처럼 새로고침마다 흘러가는 값은 담지 않는다. 담으면 아무 일이 없어도 모든
+ * 행이 매번 새로 만들어진다.
+ */
+export function boardRowSignature(rowValue, contextValue = {}) {
+  const row = record(rowValue);
+  const context = record(contextValue);
+  return JSON.stringify([
+    context.busy === true,
+    context.connected === true,
+    context.resultsOpen === true,
+    text(row.jobId), integer(row.order), text(row.status),
+    text(row.statusLabel), text(row.statusTone),
+    text(row.productName), text(row.workfileName),
+    text(row.message), text(row.messageCode),
+    integer(row.percent), text(row.stepLabel), text(row.modeLabel),
+    integer(row.imageCount),
+    row.dispatched === true, row.hasReservation === true, row.autoResumePending === true,
+    text(record(row.nextAction).kind), text(record(row.nextAction).copy),
+    list(row.cells).map(cellValue => {
+      const cell = record(cellValue);
+      return [
+        text(cell.stageKey), text(cell.state), integer(cell.candidateCount),
+        integer(cell.selectedIndex), text(cell.selectedThumbnailUrl),
+        cell.pickable === true, cell.changeable === true, text(cell.reservedCandidateId),
+      ];
+    }),
+  ]);
+}

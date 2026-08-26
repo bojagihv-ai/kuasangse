@@ -1,5 +1,6 @@
 import {
   BOARD_STAGES,
+  boardRowSignature,
   buildBatchSelectionRequest,
   describeBlocked,
   describeParallelHeadroom,
@@ -9,7 +10,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=27';
+} from './production-board-model.mjs?parallelBoard=28';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -92,11 +93,35 @@ export function mountProductionBoard(runtime, {
   let lastBoardSignature = '';
   // 마지막으로 그린 표. 버튼 처리에서 그 행의 원본 값을 다시 찾아야 할 때 쓴다.
   let lastBoard = null;
+  // 바뀌지 않은 행은 만들어 둔 것을 그대로 다시 쓴다. 매번 새로 만들면 누르는 순간
+  // 손 밑의 버튼이 다른 노드로 갈아 끼워져 mousedown 과 mouseup 이 서로 다른 노드에
+  // 떨어지고, 브라우저는 click 을 아예 만들지 않는다. 그것이 "눌러도 반응이 없다" 다.
+  const rowNodes = new Map();
+  // 그래도 그 행 자체가 바뀌는 순간에 손이 눌려 있으면 같은 일이 생긴다. 누르고 있는
+  // 동안에는 그 행만 그대로 두고, 손을 뗀 뒤에 갱신한다. 다른 행은 평소대로 갱신된다.
+  let heldJobId = '';
+  let deferredRender = false;
   let stopped = false;
   let loaded = false;
   let eventSource = null;
 
   const grid = element('div', 'board-grid');
+  grid.addEventListener('pointerdown', event => {
+    const holder = event.target instanceof Element ? event.target.closest('[data-job-id]') : null;
+    heldJobId = holder ? String(holder.dataset.jobId || '') : '';
+  });
+  const releaseHeldRow = () => {
+    if (!heldJobId) return;
+    heldJobId = '';
+    if (!deferredRender) return;
+    deferredRender = false;
+    // click 은 이미 제 버튼에서 끝났다. 이제 미뤄 둔 갱신을 반영한다.
+    setTimeout(() => render(), 0);
+  };
+  grid.addEventListener('pointerup', releaseHeldRow);
+  grid.addEventListener('pointercancel', releaseHeldRow);
+  // 버튼 밖에서 손을 떼면 grid 는 pointerup 을 못 받는다. 창 전체에서도 풀어 준다.
+  globalThis.addEventListener?.('pointerup', releaseHeldRow);
   const summaryBar = element('div', 'board-summary');
   const headroom = element('p', 'board-headroom');
   const connection = element('p', 'board-connection');
@@ -1025,6 +1050,12 @@ export function mountProductionBoard(runtime, {
     return STABLE_SUMMARY_KEYS.map(key => summary?.[key] ?? 0);
   }
 
+  const rowSignature = row => boardRowSignature(row, {
+    busy,
+    connected,
+    resultsOpen: openResults === row.jobId,
+  });
+
   function boardSignature(board) {
     return JSON.stringify([
       busy, connected, openResults, openCafe24Values, openProductValues,
@@ -1068,8 +1099,30 @@ export function mountProductionBoard(runtime, {
       grid.replaceChildren(nodes[0], empty);
       return board;
     }
+    const liveJobIds = new Set(board.rows.map(row => row.jobId));
+    for (const jobId of [...rowNodes.keys()]) {
+      if (!liveJobIds.has(jobId)) rowNodes.delete(jobId);
+    }
     for (const row of board.rows) {
-      nodes.push(renderRow(row));
+      const signature = rowSignature(row);
+      const cached = rowNodes.get(row.jobId);
+      const stale = !cached || cached.signature !== signature;
+      // 지금 누르고 있는 행이면 갈아 끼우지 않는다. 손을 뗀 뒤에 다시 그린다.
+      if (stale && cached && heldJobId && heldJobId === row.jobId) {
+        deferredRender = true;
+        nodes.push(cached.node);
+        if (openResults === row.jobId) nodes.push(renderResultStrip(row));
+        if (openCafe24Values === row.jobId) nodes.push(renderCafe24ValueForm(row));
+        if (openProductValues === row.jobId) nodes.push(renderProductValueForm(row));
+        if (openCell.jobId === row.jobId) {
+          const openStage = row.cells.find(item => item.stageKey === openCell.stageKey);
+          if (openStage && openStage.candidates.length) nodes.push(renderCandidateStrip(row, openStage));
+        }
+        continue;
+      }
+      const node = stale ? renderRow(row) : cached.node;
+      if (stale) rowNodes.set(row.jobId, { node, signature });
+      nodes.push(node);
       if (openResults === row.jobId) nodes.push(renderResultStrip(row));
       if (openCafe24Values === row.jobId) nodes.push(renderCafe24ValueForm(row));
       if (openProductValues === row.jobId) nodes.push(renderProductValueForm(row));

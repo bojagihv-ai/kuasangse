@@ -4,8 +4,8 @@
     "digest": "bbc5f707511802e9"
   },
   "production-board-model.mjs": {
-    "token": "parallelBoard=27",
-    "digest": "d9169371ba25e6d7"
+    "token": "parallelBoard=28",
+    "digest": "2c0710349d89b454"
   },
   "factory-sync-model.mjs": {
     "token": "selectedId=3",

@@ -402,3 +402,32 @@ test('모듈 import 에 버전을 붙여 낡은 캐시가 남지 않게 한다',
     );
   }
 });
+
+test('행 지문은 그 행이 그리는 것만 본다 — 흘러가는 총 시간에는 흔들리지 않는다', async () => {
+  const { boardRowSignature, projectProductionBoard } = await import(MODEL_URL);
+
+  // 같은 작업을 두 번 투영하면 지문이 같아야 한다. 같아야 행 노드를 다시 쓰고,
+  // 다시 써야 누르는 순간 버튼이 갈아 끼워지지 않는다.
+  const [before] = projectProductionBoard([job({ status: 'waiting_manual' })]).rows;
+  const [again] = projectProductionBoard([job({ status: 'waiting_manual' })]).rows;
+  assert.equal(boardRowSignature(before), boardRowSignature(again));
+
+  // 표 전체의 총 기계/대기 시간이 흘러도 이 행이 그리는 것은 그대로다.
+  const [ticked] = projectProductionBoard([
+    job({ status: 'waiting_manual', timing: { totalMachineMs: 999999, totalWaitMs: 888888 } }),
+  ]).rows;
+  assert.equal(
+    boardRowSignature(before),
+    boardRowSignature(ticked),
+    '총 시간만 흘렀는데 행을 다시 만들면, 새로고침마다 손 밑의 버튼이 사라진다',
+  );
+
+  // 반대로 이 행이 실제로 바뀌면 지문도 달라져야 한다.
+  const [moved] = projectProductionBoard([job({ status: 'blocked' })]).rows;
+  assert.notEqual(boardRowSignature(before), boardRowSignature(moved));
+
+  // 바깥 사정(누르는 중·연결 끊김·고른 컷 펼침)도 행 모양을 바꾸므로 지문에 든다.
+  assert.notEqual(boardRowSignature(before, { busy: true }), boardRowSignature(before));
+  assert.notEqual(boardRowSignature(before, { connected: true }), boardRowSignature(before));
+  assert.notEqual(boardRowSignature(before, { resultsOpen: true }), boardRowSignature(before));
+});
