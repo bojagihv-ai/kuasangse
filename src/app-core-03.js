@@ -17733,6 +17733,77 @@ function factoryRuntimeControlCafe24BlockReason(projection = {}) {
   return blockers.length ? `등록 차단: ${blockers.join(', ')}` : '';
 }
 
+/**
+ * 관제탑에서 프롬프트를 적어 새 컷을 만들라고 지시한 것을 수행한다.
+ *
+ * 있는 후보 중에서만 고르게 하면 마음에 드는 것이 없을 때 길이 막힌다.
+ * 조립공장에는 이미 사람이 적은 프롬프트로 컷을 만드는 길이 있다 —
+ * factory.stages.<단계>.prompt 에 줄 단위로 적으면 그 줄마다 한 컷을 만든다
+ * (app-core-06.js 의 presets 분기). 그 길을 관제탑에서도 쓸 수 있게 연결한다.
+ */
+async function factoryRuntimeControlComposeCut(payload = {}) {
+  const jobId = String(payload.jobId || '').trim();
+  const stageKey = String(payload.stageKey || '').trim();
+  const prompt = String(payload.prompt || '').trim();
+  if (!jobId || !stageKey || !prompt) throw factoryRuntimeBatchCommandError('factory_product_payload_invalid');
+  const STAGE_TO_RUNNER = Object.freeze({
+    representative: 'hero',
+    size: 'size',
+    general: 'cuts',
+  });
+  // 섹션은 단계 전체가 아니라 그 섹션 하나만 다시 만든다.
+  const sectionMatch = stageKey.match(/^sections:(.+)$/);
+  const runnerStageId = STAGE_TO_RUNNER[stageKey] || '';
+  if (!runnerStageId && !sectionMatch) throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+
+  const current = await factoryRuntimeControlProjection();
+  const onTarget = String(current?.registration?.jobId || '').trim() === jobId;
+  if (!onTarget && payload.checkpoint && typeof payload.checkpoint === 'object') {
+    await factoryRuntimeControlRestoreProductCheckpoint({ ...payload, jobId });
+  }
+  factoryRuntimeControlAdoptProductProject(jobId);
+
+  if (sectionMatch) {
+    const sectionId = sectionMatch[1];
+    if (typeof regenerateSection !== 'function') {
+      throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+    }
+    await factoryRuntimeBridgeAction(
+      'factory/fields:commitField',
+      undefined,
+      draft => {
+        if (!draft.sectionPromptOverrides || typeof draft.sectionPromptOverrides !== 'object') {
+          draft.sectionPromptOverrides = {};
+        }
+        draft.sectionPromptOverrides[sectionId] = prompt;
+        return 'sectionPromptOverrides';
+      },
+      { render: false, forceSave: true },
+    );
+    await regenerateSection(sectionId);
+    return Object.freeze({ schema: 'factory-compose-cut:v1', jobId, stageKey, started: true });
+  }
+
+  await factoryRuntimeBridgeAction(
+    'factory/fields:commitField',
+    undefined,
+    draft => {
+      factorySetStagePromptForCurrentWork(draft, runnerStageId, prompt);
+      return 'stagePrompt';
+    },
+    { render: false, forceSave: true },
+  );
+  if (typeof factoryRunStage !== 'function') {
+    throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+  }
+  await factoryRuntimeUpdateOwnedFactory(
+    'factory/runtime:composeCut',
+    'factory',
+    draft => factoryRunStage(runnerStageId, { factory: draft }),
+  );
+  return Object.freeze({ schema: 'factory-compose-cut:v1', jobId, stageKey, started: true });
+}
+
 async function factoryRuntimeControlCommand(value = {}) {
   if (value?.capabilityVersion !== 'factory-control-command:v1') {
     throw factoryRuntimeBatchCommandError('factory_control_command_version_unsupported');
@@ -17741,6 +17812,7 @@ async function factoryRuntimeControlCommand(value = {}) {
   if (value.command === 'selectFactoryACut') return factoryRuntimeControlSelectACut(value.payload || {});
   if (value.command === 'runFactoryProduct') return factoryRuntimeControlRunProduct(value.payload || {});
   if (value.command === 'registerFactoryCafe24') return factoryRuntimeControlRegisterCafe24(value.payload || {});
+  if (value.command === 'composeFactoryCut') return factoryRuntimeControlComposeCut(value.payload || {});
   throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
 }
 

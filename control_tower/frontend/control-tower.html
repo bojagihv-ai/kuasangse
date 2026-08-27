@@ -2474,6 +2474,79 @@
       line-height: var(--line-height-tight);
     }
 
+    .board-candidate-slot {
+      display: grid;
+      gap: var(--space-half);
+      align-content: start;
+    }
+
+    .board-prompt-toggle {
+      justify-self: start;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--color-accent-primary);
+      font: inherit;
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    .board-candidate-prompt {
+      padding: var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      font-size: var(--font-size-compact);
+      line-height: var(--line-height-tight);
+      white-space: pre-wrap;
+    }
+
+    /* 새 컷 만들기는 후보 줄 맨 오른쪽에 크게 둔다. 고를 것이 없을 때 여기서 만든다. */
+    .board-compose-slot {
+      display: grid;
+      gap: var(--space-half);
+      justify-items: center;
+      align-content: center;
+      min-block-size: var(--board-thumb-size);
+    }
+
+    .board-compose-open {
+      inline-size: 100%;
+      min-block-size: var(--board-thumb-size);
+      border: var(--border-width-emphasis) dashed var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: none;
+      color: var(--color-accent-primary);
+      font-size: var(--font-size-page-title);
+      line-height: var(--line-height-tight);
+      cursor: pointer;
+    }
+
+    .board-compose-open:hover:not(:disabled) {
+      background: var(--color-accent-wash);
+    }
+
+    .board-compose-form {
+      display: grid;
+      gap: var(--space-1);
+      grid-column: 1 / -1;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .board-compose-form textarea {
+      inline-size: 100%;
+      min-inline-size: 0;
+      resize: vertical;
+    }
+
+    .board-action[data-on="true"] {
+      border-color: var(--color-accent-primary);
+      color: var(--color-accent-primary);
+    }
+
     .board-candidate-options {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
@@ -4713,7 +4786,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=51"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=55"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>

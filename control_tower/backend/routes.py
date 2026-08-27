@@ -1535,6 +1535,73 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "job": job})
 
+    @app.get("/api/factory/archive-prompt/<archive_id>")
+    def factory_archive_prompt(archive_id: str) -> Response | tuple[Response, int]:
+        """그 컷을 만들 때 쓴 프롬프트를 보관함에서 읽어 준다.
+
+        조립공장 백엔드(5050)는 다른 오리진이라 화면이 fetch 로 부르면 막힌다.
+        관제탑은 같은 보관함 폴더를 디스크로 읽을 수 있으므로 여기서 내준다.
+        """
+        safe_id = str(archive_id or "").strip()
+        if not safe_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", safe_id):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        index_path = archive_root / "index.json"
+        if not index_path.is_file():
+            return jsonify({"archiveId": safe_id, "prompt": "", "note": "보관함 목록이 없습니다."})
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return jsonify({"archiveId": safe_id, "prompt": "", "note": "보관함 목록을 읽지 못했습니다."})
+        record = next(
+            (
+                item
+                for item in (index.get("assets") or [])
+                if isinstance(item, dict) and str(item.get("archiveId") or "") == safe_id
+            ),
+            None,
+        )
+        if not isinstance(record, dict):
+            return jsonify({"archiveId": safe_id, "prompt": "", "note": "이 컷의 보관함 기록을 찾지 못했습니다."})
+        files = record.get("files") if isinstance(record.get("files"), dict) else {}
+        prompt = ""
+        raw_path = str(files.get("promptPath") or "").strip()
+        if raw_path:
+            candidate = Path(raw_path)
+            try:
+                candidate.resolve().relative_to(archive_root)
+            except (ValueError, OSError):
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                prompt = candidate.read_text(encoding="utf-8", errors="replace").strip()
+        return jsonify({
+            "archiveId": safe_id,
+            "prompt": prompt,
+            "title": str(record.get("title") or ""),
+            "note": "" if prompt else "이 컷에는 저장된 프롬프트가 없습니다.",
+        })
+
+    @app.post("/api/factory/jobs/<job_id>/compose-cut")
+    def factory_product_compose_cut(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        allowed = {"stageKey", "prompt"}
+        if payload is None or set(payload) - allowed:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        stage_key = payload.get("stageKey")
+        prompt = payload.get("prompt")
+        if not isinstance(stage_key, str) or not stage_key.strip():
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        if not isinstance(prompt, str) or not prompt.strip():
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            order = factory_sync.queue_compose_cut(job_id, stage_key.strip(), prompt.strip())
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else 409
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
+
     @app.post("/api/factory/jobs/<job_id>/cafe24/register")
     def factory_product_cafe24_register(job_id: str) -> Response | tuple[Response, int]:
         csrf_error = require_csrf()

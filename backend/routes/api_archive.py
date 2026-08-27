@@ -2022,6 +2022,43 @@ def get_local_archive_source_image():
     return response
 
 
+@api.route("/local-archive/assets/<archive_id>/prompt", methods=["GET"])
+def get_local_archive_asset_prompt(archive_id):
+    """그 컷을 만들 때 쓴 프롬프트만 돌려준다.
+
+    자산 전체를 받으면 이미지가 data URL 로 함께 딸려 와 수 MB 가 오간다.
+    프롬프트는 사람이 '프롬프트 보기' 를 누를 때만 필요하므로 따로 낸다.
+    """
+    archive_id = str(archive_id or "").strip()
+    if not archive_id:
+        return jsonify({"ok": False, "error": "archive_id가 필요합니다."}), 400
+    index = _local_archive_load_index()
+    record = next(
+        (item for item in index.get("assets", []) if str(item.get("archiveId") or "") == archive_id),
+        None,
+    )
+    if not record:
+        return jsonify({"ok": False, "error": "로컬 보관 자산을 찾지 못했습니다."}), 404
+    files = record.get("files") if isinstance(record.get("files"), dict) else {}
+    prompt = ""
+    prompt_path = _local_archive_safe_existing_file(files.get("promptPath"))
+    if prompt_path:
+        prompt = prompt_path.read_text(encoding="utf-8", errors="replace").strip()
+    if not prompt:
+        asset_path = _local_archive_safe_existing_file(files.get("assetPath"))
+        if asset_path:
+            asset = _load_json_file(str(asset_path)) or {}
+            prompt = str(asset.get("prompt") or "").strip()
+    return jsonify({
+        "ok": True,
+        "archiveId": archive_id,
+        "prompt": prompt,
+        "title": str(record.get("title") or ""),
+        "stageId": str(record.get("stageId") or ""),
+        "sourceLabel": str(record.get("sourceLabel") or ""),
+    })
+
+
 @api.route("/local-archive/assets/<archive_id>", methods=["GET"])
 def get_local_archive_asset(archive_id):
     archive_id = str(archive_id or "").strip()

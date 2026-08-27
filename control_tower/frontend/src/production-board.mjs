@@ -100,6 +100,19 @@ export function mountProductionBoard(runtime, {
   // 손 밑의 버튼이 다른 노드로 갈아 끼워져 mousedown 과 mouseup 이 서로 다른 노드에
   // 떨어지고, 브라우저는 click 을 아예 만들지 않는다. 그것이 "눌러도 반응이 없다" 다.
   const rowNodes = new Map();
+  // 어떤 프롬프트로 만든 컷인지는 눌러야 알 수 있었다. 이제 카드마다 펼쳐 본다.
+  // 프롬프트는 폴링에 싣지 않는다 — 누를 때만 그 컷의 보관함에서 받아 온다.
+  const promptCache = new Map();
+  // 캐시는 키가 그대로여도 값이 '받는 중' → '받음' 으로 바뀐다. 키만 서명에 넣으면
+  // 그 변화가 안 잡혀 화면이 영영 '가져오는 중' 에 머문다.
+  let promptCacheVersion = 0;
+  const openPrompts = new Set();
+  const PROMPT_ALWAYS_KEY = 'controlTower.promptAlwaysOpen';
+  // 새 컷 만들기 칸이 열려 있는 곳. "작업:단계" 로 기억한다.
+  let openCompose = '';
+  let promptAlwaysOpen = (() => {
+    try { return localStorage.getItem(PROMPT_ALWAYS_KEY) === '1'; } catch { return false; }
+  })();
   // 그래도 그 행 자체가 바뀌는 순간에 손이 눌려 있으면 같은 일이 생긴다. 누르고 있는
   // 동안에는 그 행만 그대로 두고, 손을 뗀 뒤에 갱신한다. 다른 행은 평소대로 갱신된다.
   let heldJobId = '';
@@ -596,6 +609,107 @@ export function mountProductionBoard(runtime, {
     return raw;
   }
 
+  /** 그 컷의 보관함 주소에서 만든 프롬프트를 받아 온다. 한 번 받으면 기억한다. */
+  async function loadCandidatePrompt(candidate) {
+    const key = String(candidate.id || '');
+    if (!key || promptCache.has(key)) return;
+    const source = String(candidate.thumbnailUrl || '');
+    const match = source.match(/\/local-archive\/assets\/([^/?#]+)\//);
+    if (!match) {
+      promptCache.set(key, { prompt: '', note: '이 컷은 보관함 기록이 없어 프롬프트를 찾을 수 없습니다.' });
+      promptCacheVersion += 1;
+      render();
+      return;
+    }
+    promptCache.set(key, { loading: true });
+    promptCacheVersion += 1;
+    try {
+      // 조립공장 백엔드는 다른 오리진이라 fetch 가 막힌다. 관제탑이 같은 보관함을
+      // 디스크로 읽어 내주므로 그쪽에 묻는다. 실측 2026-08-26: 5050 직접 호출은
+      // Failed to fetch 였다.
+      const body = await apiRequest(`/api/factory/archive-prompt/${encodeURIComponent(match[1])}`);
+      promptCache.set(key, {
+        prompt: String(body?.prompt || '').trim(),
+        note: String(body?.note || '').trim(),
+      });
+      promptCacheVersion += 1;
+    } catch (error) {
+      promptCache.set(key, { prompt: '', note: `프롬프트를 가져오지 못했습니다 · ${String(error?.message || error)}` });
+      promptCacheVersion += 1;
+    }
+    render();
+  }
+
+  function renderCandidatePrompt(candidate) {
+    const box = element('div', 'board-candidate-prompt');
+    const entry = promptCache.get(String(candidate.id || ''));
+    if (!entry || entry.loading) {
+      box.append(element('span', 'board-candidate-meta', '프롬프트를 가져오는 중입니다.'));
+      return box;
+    }
+    if (entry.prompt) box.append(element('p', '', entry.prompt));
+    else box.append(element('span', 'board-candidate-meta', entry.note || '프롬프트가 없습니다.'));
+    return box;
+  }
+
+  /** 프롬프트를 늘 펼쳐 둘지 접어 둘지는 사람마다 다르다. 고른 것을 기억한다. */
+  function promptAlwaysToggle() {
+    const toggle = button(
+      'board-action ghost',
+      promptAlwaysOpen ? '프롬프트 항상 펼침 · 켜짐' : '프롬프트 항상 펼침 · 꺼짐',
+      { action: 'prompt-always' },
+    );
+    toggle.dataset.on = promptAlwaysOpen ? 'true' : 'false';
+    return toggle;
+  }
+
+  /**
+   * 후보 줄 맨 오른쪽의 '＋ 새 컷 만들기'.
+   * 있는 것 중에서만 고르게 하면 마음에 드는 것이 없을 때 길이 막힌다.
+   * 프롬프트를 적어 그 자리에서 새로 만들 수 있어야 한다.
+   */
+  function renderComposeSlot(row, cell) {
+    const key = `${row.jobId}:${cell.stageKey}`;
+    const slot = element('div', 'board-compose-slot');
+    if (openCompose !== key) {
+      const open = button('board-compose-open', '＋', {
+        action: 'compose-open',
+        jobId: row.jobId,
+        stageKey: cell.stageKey,
+      });
+      open.title = `${cell.stageLabel} 새 컷 만들기`;
+      open.disabled = busy;
+      slot.append(open);
+      slot.append(element('span', 'board-candidate-meta', '새 컷 만들기'));
+      return slot;
+    }
+    const form = element('form', 'board-compose-form');
+    form.dataset.jobId = row.jobId;
+    form.dataset.stageKey = cell.stageKey;
+    form.addEventListener('submit', event => event.preventDefault());
+    form.append(element('strong', '', `${cell.stageLabel} 새 컷 만들기`));
+    const label = element('label', 'board-cafe24-field');
+    label.append(element('span', 'board-cafe24-field-label', '프롬프트'));
+    const input = document.createElement('textarea');
+    input.name = 'prompt';
+    input.rows = 4;
+    input.placeholder = '예: 밝은 회백색 스튜디오 배경, 제품 중앙 정렬, 넉넉한 여백';
+    label.append(input);
+    form.append(label);
+    const actions = element('div', 'board-row-actions');
+    const submit = button('board-mini-action', '이 프롬프트로 만들기', {
+      action: 'compose-submit',
+      jobId: row.jobId,
+      stageKey: cell.stageKey,
+    });
+    submit.disabled = busy;
+    actions.append(submit);
+    actions.append(button('board-action ghost', '닫기', { action: 'compose-open', jobId: row.jobId, stageKey: cell.stageKey }));
+    form.append(actions);
+    slot.append(form);
+    return slot;
+  }
+
   function renderCandidateOption(row, cell, candidate, { index, total, picked, fallbackThumbUrl = '' }) {
     const option = button('board-candidate', '', {
       action: 'pick',
@@ -647,7 +761,20 @@ export function mountProductionBoard(runtime, {
     else if (candidate.label) option.append(element('span', 'board-candidate-meta', candidate.label));
     else if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
     option.title = candidate.id;
-    return option;
+    const wrap = element('div', 'board-candidate-slot');
+    wrap.append(option);
+    // 카드 자체는 '고르기' 버튼이라 그 안에 또 버튼을 넣을 수 없다. 밖에 붙인다.
+    const promptOpen = promptAlwaysOpen || openPrompts.has(String(candidate.id || ''));
+    const toggle = button('board-prompt-toggle', promptOpen ? '프롬프트 접기' : '프롬프트 보기', {
+      action: 'prompt-toggle',
+      candidateId: candidate.id,
+    });
+    wrap.append(toggle);
+    if (promptOpen) {
+      if (!promptCache.has(String(candidate.id || ''))) void loadCandidatePrompt(candidate);
+      wrap.append(renderCandidatePrompt(candidate));
+    }
+    return wrap;
   }
 
   /**
@@ -693,6 +820,7 @@ export function mountProductionBoard(runtime, {
       });
       stitch.disabled = busy;
       title.append(stitch);
+      title.append(promptAlwaysToggle());
       title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cell' }));
       strip.append(title);
       // 섹션마다 '지금 이렇게 생겼다' 를 왼쪽 기둥으로 붙인다. 변형 낱개에는 그림이
@@ -753,6 +881,7 @@ export function mountProductionBoard(runtime, {
               : '',
           }));
         }
+        groupOptions.append(renderComposeSlot(row, { ...cell, stageKey: `sections:${group.sectionId}`, stageLabel: group.label }));
         copy.append(groupOptions);
         block.append(copy);
         strip.append(block);
@@ -764,6 +893,7 @@ export function mountProductionBoard(runtime, {
       }
       return strip;
     }
+    title.append(promptAlwaysToggle());
     title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cell' }));
     strip.append(title);
     const options = element('div', 'board-candidate-options');
@@ -774,6 +904,7 @@ export function mountProductionBoard(runtime, {
         picked: candidate.id === cell.selectedId,
       }));
     }
+    options.append(renderComposeSlot(row, cell));
     strip.append(options);
     if (cell.reservedCandidateId) {
       const cancel = button('board-action ghost', '이 작업 예약 취소', { action: 'clear-one', jobId: row.jobId });
@@ -1137,6 +1268,10 @@ export function mountProductionBoard(runtime, {
     return JSON.stringify([
       busy, connected, openResults, openCafe24Values, openProductValues,
       openCell.jobId, openCell.stageKey, statusLine.copy, statusLine.tone,
+      // 펼친 프롬프트와 새 컷 만들기 칸도 화면 모양을 바꾼다. 서명에 없으면
+      // 눌러도 표가 다시 그려지지 않아 아무 일도 일어나지 않는다.
+      promptAlwaysOpen, openCompose, [...openPrompts].sort().join('|'),
+      promptCacheVersion,
       // 총 기계/대기 시간은 새로고침마다 흘러간다. 이것까지 서명에 넣으면 아무 일이
       // 없어도 매번 표를 통째로 다시 그리고, 그 순간 손 밑의 버튼이 갈아 끼워진다.
       // 실측 2026-08-26: "Cafe24 값 지정" 을 눌렀는데 아무 것도 열리지 않았다.
@@ -1228,6 +1363,26 @@ export function mountProductionBoard(runtime, {
     } catch (error) {
       setStatus(`생산 보드를 불러오지 못했습니다 · ${String(error?.code || error?.message || error)}`, 'error');
       render();
+    }
+  }
+
+  /** 적어 준 프롬프트로 그 단계의 컷을 새로 만들라고 지시한다. */
+  async function composeCut(jobId, stageKey, prompt) {
+    busy = true;
+    setStatus('적어 주신 프롬프트로 새 컷을 만드는 중입니다. 끝나면 후보에 나타납니다.', '');
+    render();
+    try {
+      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/compose-cut`, {
+        method: 'POST',
+        body: JSON.stringify({ stageKey, prompt }),
+      });
+      openCompose = '';
+      setStatus('새 컷 만들기를 조립공장에 지시했습니다.', 'ok');
+    } catch (error) {
+      setStatus(`새 컷 만들기 실패 · ${String(error?.code || error?.message || error)}`, 'error');
+    } finally {
+      busy = false;
+      await refresh();
     }
   }
 
@@ -1675,6 +1830,35 @@ export function mountProductionBoard(runtime, {
         return;
       }
       openStitchedDetail(row);
+      return;
+    }
+    if (action === 'prompt-toggle') {
+      const id = String(target.dataset.candidateId || '');
+      if (openPrompts.has(id)) openPrompts.delete(id);
+      else openPrompts.add(id);
+      render();
+      return;
+    }
+    if (action === 'prompt-always') {
+      promptAlwaysOpen = !promptAlwaysOpen;
+      try { localStorage.setItem(PROMPT_ALWAYS_KEY, promptAlwaysOpen ? '1' : '0'); } catch { /* 저장 못 해도 이번 세션은 유지된다 */ }
+      render();
+      return;
+    }
+    if (action === 'compose-submit') {
+      const form = target.closest('form');
+      const prompt = String(form?.elements?.prompt?.value || '').trim();
+      if (!prompt) {
+        setStatus('어떤 컷을 원하는지 프롬프트를 적어 주세요.', 'warning');
+        return;
+      }
+      void composeCut(target.dataset.jobId, target.dataset.stageKey, prompt);
+      return;
+    }
+    if (action === 'compose-open') {
+      const key = `${target.dataset.jobId}:${target.dataset.stageKey}`;
+      openCompose = openCompose === key ? '' : key;
+      render();
       return;
     }
     if (action === 'panel-close') {

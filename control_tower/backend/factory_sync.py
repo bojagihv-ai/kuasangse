@@ -1522,6 +1522,74 @@ class FactorySyncBridge:
             self._condition.notify_all()
             return public_job
 
+    def queue_compose_cut(self, job_id: str, stage_key: str, prompt: str) -> JsonObject:
+        """사람이 적은 프롬프트로 그 단계의 컷을 새로 만들라고 조립공장에 지시한다.
+
+        있는 후보 중에서만 고르게 하면 마음에 드는 것이 없을 때 길이 막힌다.
+        조립공장에는 사람이 적은 프롬프트로 컷을 만드는 길이 이미 있고,
+        이 주문은 그 길을 관제탑에서 여는 것이다.
+        """
+        with self._condition:
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            self._require_admitted_runtime_build_locked()
+            if job.current_order_id:
+                raise FactorySyncError("factory_product_job_busy")
+            session = (self._projection or {}).get("session")
+            if not isinstance(session, dict):
+                raise FactorySyncError("factory_session_missing")
+            checkpoint = _copy(job.checkpoint) if isinstance(job.checkpoint, dict) else None
+            registration = (self._projection or {}).get("registration")
+            on_target = isinstance(registration, dict) and registration.get("jobId") == job_id
+            if not on_target and not checkpoint:
+                raise FactorySyncError("factory_cafe24_target_mismatch")
+            identity: Mapping[str, JsonValue] = session if on_target else (job.checkpoint or {})
+            marker = uuid4().hex
+            worker_session_id = (
+                self._factory_session.session_id if self._factory_session is not None else ""
+            )
+            target_worker_id = (
+                self._factory_session.worker_id if self._factory_session is not None else ""
+            )
+            order: JsonObject = {
+                "orderId": f"factory-compose-{marker}",
+                "contractVersion": WORK_ORDER_VERSION,
+                "capabilityVersion": WORKER_CAPABILITY_VERSION,
+                "batchId": "factory-session",
+                "productId": str(identity.get("productId") or ""),
+                "productKey": str(identity.get("productKey") or ""),
+                "currentRunId": str(identity.get("runId") or ""),
+                "stageId": stage_key,
+                "operationToken": f"factory-compose:{marker}",
+                "idempotencyKey": f"factory-compose:{job_id}:{marker}",
+                "expectedWorkfileRevision": identity.get("revision"),
+                "workerSessionId": worker_session_id,
+                "targetWorkerId": target_worker_id,
+                "command": {
+                    "kind": COMMAND_KIND,
+                    "version": COMMAND_VERSION,
+                    "name": "composeFactoryCut",
+                    "payload": {
+                        **_copy(job.payload),
+                        "jobId": job_id,
+                        "stageKey": stage_key,
+                        "prompt": prompt,
+                        **({"checkpoint": checkpoint} if checkpoint else {}),
+                    },
+                },
+            }
+            job.current_order_id = str(order["orderId"])
+            job.message = "적어 주신 프롬프트로 새 컷을 만드는 중입니다."
+            self._persist_product_jobs_locked()
+            self._queue(order)
+            self._append_event(
+                "factory.product.updated",
+                {"job": self._public_product_job(job)},
+            )
+            self._condition.notify_all()
+            return {"accepted": True, "orderId": order["orderId"]}
+
     def queue_cafe24_registration(
         self,
         job_id: str,
@@ -2919,6 +2987,19 @@ class FactorySyncBridge:
                 "factory.workfile.hydrated",
                 {"receipt": public_receipt, "projection": public_projection},
             )
+            self._condition.notify_all()
+            return
+        if command["name"] == "composeFactoryCut":
+            job_id = str((command.get("payload") or {}).get("jobId") or "")
+            job = self._product_jobs.get(job_id)
+            if job is not None:
+                job.current_order_id = ""
+                job.message = "새 컷을 만들었습니다. 후보에서 확인해 주세요."
+                self._persist_product_jobs_locked()
+                self._append_event(
+                    "factory.product.updated",
+                    {"job": self._public_product_job(job)},
+                )
             self._condition.notify_all()
             return
         if command["name"] == "registerFactoryCafe24":
