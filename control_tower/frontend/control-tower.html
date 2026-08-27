@@ -2395,6 +2395,15 @@
       cursor: zoom-in;
     }
 
+    .board-candidate-meta[data-tone="picked"] {
+      color: var(--color-status-error);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .board-candidate img {
+      cursor: zoom-in;
+    }
+
     .board-candidate[data-picked="true"] {
       border-color: var(--color-accent-primary);
       background: var(--color-accent-wash);
@@ -4704,7 +4713,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=49"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=51"></script>
   <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
 </body>
 </html>

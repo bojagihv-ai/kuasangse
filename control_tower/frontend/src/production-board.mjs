@@ -611,6 +611,10 @@ export function mountProductionBoard(runtime, {
       image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
       image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
       image.loading = 'lazy';
+      // 작은 그림으로는 고를 수 없다. 그림을 누르면 크게 본다. 카드의 나머지를
+      // 누르면 그 컷을 고른다 — 보는 것과 고르는 것을 갈라 놓는다.
+      image.dataset.zoomSrc = candidate.thumbnailUrl;
+      image.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
       option.append(image);
     } else if (fallbackThumbUrl) {
       // 이 변형의 그림이 곧 지금 섹션 그림이다. 이미 받아 둔 것을 그대로 쓴다.
@@ -618,6 +622,8 @@ export function mountProductionBoard(runtime, {
       image.src = assetUrl ? assetUrl(fallbackThumbUrl) : fallbackThumbUrl;
       image.alt = `${cell.stageLabel} 후보`;
       image.loading = 'lazy';
+      image.dataset.zoomSrc = fallbackThumbUrl;
+      image.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
       option.append(image);
     } else {
       // 변형별 그림은 조립공장이 저장하지 않는다. 없는 그림을 기다리는 것처럼
@@ -633,7 +639,11 @@ export function mountProductionBoard(runtime, {
     }
     // 사람이 읽는 이름은 "변형 2/4" 다. 원시 식별자는 눈으로 구분되지 않는다.
     option.append(element('span', 'board-candidate-label', total > 1 ? `변형 ${index + 1}/${total}` : '변형 1'));
-    if (picked) option.append(element('span', 'board-candidate-meta', '지금 쓰는 컷'));
+    if (picked) {
+      const mark = element('span', 'board-candidate-meta', '선택컷');
+      mark.dataset.tone = 'picked';
+      option.append(mark);
+    }
     else if (candidate.label) option.append(element('span', 'board-candidate-meta', candidate.label));
     else if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
     option.title = candidate.id;
@@ -1449,11 +1459,21 @@ export function mountProductionBoard(runtime, {
       // 바깥을 눌러도 닫힌다. 크게 본 뒤 원래 화면으로 돌아가는 길을 막지 않는다.
       if (event.target === layer) closeZoom();
     });
-    layer.addEventListener('keydown', event => {
+    // 키는 초점이 있는 곳으로만 간다. 확대창 안을 누르지 않았거나 초점이 다른 데로
+    // 새면 창에 건 keydown 은 영영 안 온다. 실측 2026-08-26: 그림을 눌러 연 확대창은
+    // ESC 로 닫히지 않았다. 문서에서 받아 확대창이 떠 있을 때만 처리한다.
+    const onZoomKey = event => {
+      if (!layer.isConnected) { document.removeEventListener('keydown', onZoomKey, true); return; }
       if (event.key === 'ArrowLeft') { step(-1); event.preventDefault(); }
       if (event.key === 'ArrowRight') { step(1); event.preventDefault(); }
-      if (event.key === 'Escape') closeZoom();
-    });
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        document.removeEventListener('keydown', onZoomKey, true);
+        closeZoom();
+      }
+    };
+    document.addEventListener('keydown', onZoomKey, true);
     paint();
     document.body.append(layer);
     close.focus();
