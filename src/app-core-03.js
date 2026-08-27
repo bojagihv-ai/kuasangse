@@ -16042,7 +16042,29 @@ function factoryControlSectionStage(factory = {}) {
       const variantId = String(variant?.id || '').trim();
       if (!variantId) continue;
       const id = `${sectionId}:${variantId}`;
-      if (variantId === currentId) selectedIds.push(id);
+      const isCurrentVariant = variantId === currentId;
+      if (isCurrentVariant) selectedIds.push(id);
+      // 지금 쓰는 변형은 그림을 따로 안 들고 '현재 섹션 그림' 을 가리키기만 한다.
+      // 그 가리킨 곳을 여기서 풀어 주지 않으면, 정작 쓰이는 컷이 빈칸으로 뜬다.
+      // 가리킴을 푸는 것은 이 변형에만 한다 — 지금 현재인 것은 하나뿐이고,
+      // 나머지에도 같은 그림을 붙이면 서로 다른 안이 똑같아 보인다.
+      const currentSectionImage = isCurrentVariant
+        && String(variant?.imageRef || '') === SECTION_VARIANT_CURRENT_IMAGE_REF
+        ? String(state.sectionImages?.[sectionId] || '').trim()
+        : '';
+      const variantThumbnail = factoryControlThumbnailReference(variant)
+        || factoryControlThumbnailReference({ image: currentSectionImage });
+      // 이 화면은 '사진 컷을 고르는 곳' 이다. 그림이 없는 변형을 카드로 내놓으면
+      // 무엇을 고르는지 모른 채 찍으라는 말이 된다. 조립공장 자기 화면도
+      // 그림 없는 변형은 빼고 보여 준다(renderSectionVariantEvaluationPanel 의
+      // filter(v => v.image)). 관제탑만 빈 카드를 내놓고 있었다.
+      // 지금 쓰는 컷은 그림이 없더라도 남긴다 — 무엇이 쓰이는지는 보여야 한다.
+      if (!variantThumbnail && !isCurrentVariant) continue;
+      // 그림은 있는데 주소가 없는 경우(아직 보관함에 안 들어간 data URL)다.
+      // 한 번 넣어 두면 다음 보고부터 화면에 뜬다. 기다리지 않는다.
+      if (!variantThumbnail && currentSectionImage.startsWith('data:image/')) {
+        void archiveSectionVariantImage(sectionId, variant, currentSectionImage);
+      }
       // 변형은 그림이 아니라 '무엇이 다른가' 로 고른다. 이름과 첫 문구만 실어도
       // 사람이 고를 수 있다. 그림 전체를 실으면 보고가 무거워져 화면이 느려진다.
       const variantContent = variant && typeof variant.content === 'object' ? variant.content : {};
@@ -16063,7 +16085,7 @@ function factoryControlSectionStage(factory = {}) {
         // 이 변형의 그림이 곧 지금 섹션 그림이면, 관제탑이 이미 받아 둔 그림을 쓴다.
         imageRef: String(variant.imageRef || '').trim(),
         hasImage: variant.image || variant.hasImage ? '1' : '',
-        thumbnailUrl: factoryControlThumbnailReference(variant),
+        thumbnailUrl: variantThumbnail,
         digest: String(variant.digest || variant.imageDigest || '').trim(),
         source: String(variant.source || 'section-variant').trim(),
         model: String(variant.model || variant.modelId || '').trim(),
