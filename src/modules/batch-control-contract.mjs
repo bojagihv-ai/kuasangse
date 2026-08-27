@@ -56,6 +56,13 @@ export class BatchWorkerHttpError extends Error {
   }
 }
 
+// 빠진 칸을 찾아 그 칸 이름을 붙여 알린다. 같은 검사가 명령마다 되풀이되던 것을 한 자리로 모았다.
+function requireFields(payload, fields, missingCode) {
+  for (const field of fields) {
+    if (!text(payload[field])) throw new BatchWorkerContractError(`${missingCode}:${field}`);
+  }
+}
+
 export function validateOrder(order) {
   if (!record(order)) throw new BatchWorkerContractError('order_invalid');
   if (order.contractVersion !== BATCH_CONTROL_WORK_ORDER_VERSION) {
@@ -172,19 +179,8 @@ export function validateOrder(order) {
       }
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
-    for (const field of [
-      'productId',
-      'productKey',
-      'stageKey',
-      'candidateId',
-      'expectedRunId',
-      'expectedInputFingerprint',
-      'idempotencyKey',
-    ]) {
-      if (!text(payload[field])) {
-        throw new BatchWorkerContractError(`factory_control_field_missing:${field}`);
-      }
-    }
+    requireFields(payload, ['productId', 'productKey', 'stageKey', 'candidateId',
+      'expectedRunId', 'expectedInputFingerprint', 'idempotencyKey'], 'factory_control_field_missing');
     if (!Number.isInteger(payload.expectedRevision) || payload.expectedRevision < 0) {
       throw new BatchWorkerContractError('factory_control_revision_invalid');
     }
@@ -214,20 +210,9 @@ export function validateOrder(order) {
     ) {
       throw new BatchWorkerContractError('factory_workfile_command_version_unsupported');
     }
-    for (const field of [
-      'fileName',
-      'workfileText',
-      'expectedSha256',
-      'expectedWorkspaceId',
-      'expectedProductId',
-      'expectedProductKey',
-      'expectedRunId',
-      'idempotencyKey',
-    ]) {
-      if (!text(payload[field])) {
-        throw new BatchWorkerContractError(`factory_workfile_field_missing:${field}`);
-      }
-    }
+    requireFields(payload, ['fileName', 'workfileText', 'expectedSha256', 'expectedWorkspaceId',
+      'expectedProductId', 'expectedProductKey', 'expectedRunId', 'idempotencyKey'],
+    'factory_workfile_field_missing');
     if (
       (payload.expectedInputFingerprint !== undefined && !text(payload.expectedInputFingerprint))
       ||

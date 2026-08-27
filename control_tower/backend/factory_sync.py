@@ -164,6 +164,8 @@ PRODUCT_PROGRESS_CANDIDATE_KEYS = (
     "hasImage",
     # 최종 상세페이지 후보는 그림이 아니라 HTML 문서다.
     "kind",
+    # 그 문서의 보관함 주소. 이것이 있어야 화면이 문서를 그대로 그려 보여 줄 수 있다.
+    "documentArchiveId",
 )
 
 

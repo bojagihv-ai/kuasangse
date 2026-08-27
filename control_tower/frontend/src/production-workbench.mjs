@@ -9,6 +9,9 @@ import {
 } from './factory-sync-model.mjs?selectedId=3';
 import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
 import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=1';
+// 사람 말로 옮긴 사유 표는 보드 모델이 들고 있다. 화면마다 따로 두면 한쪽만 번역되어
+// 같은 코드가 어떤 화면에서는 한국어로, 어떤 화면에서는 원시 코드로 뜬다.
+import { OPERATOR_MESSAGES } from './production-board-model.mjs?parallelBoard=36';
 import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
 import {
   createWorkfileJobTabRegistry,
@@ -1105,6 +1108,10 @@ function visibleFactoryMessage(value, stageKey = '') {
   if (!message) return '';
   if (/selection required/i.test(message)) return `${STAGE_LABELS[text(stageKey)] || '현재 단계'} A컷 선택 필요`;
   if (/factory worker failed/i.test(message)) return '조립공장 실행 실패';
+  // 서버 코드를 그대로 흘려보내면 화면에 factory_product_checkpoint_restore_mismatch 같은
+  // 글자가 뜬다. 옮겨 둔 말이 있으면 그것을 쓰고, 코드는 괄호로 남겨 찾아볼 수 있게 한다.
+  const copy = OPERATOR_MESSAGES[message];
+  if (copy) return `${copy} (${message})`;
   return message;
 }
 
@@ -1800,6 +1807,18 @@ export function mountProductionWorkbench({
     globalThis.controlTowerMenu?.activate?.(menuKey, { focus: true });
   }
 
+  /**
+   * 어떤 자리가 접힌 탭 안에 있으면 그 탭을 펴서 눈에 보이게 한다.
+   *
+   * 버튼과 그 결과가 다른 탭에 나뉘어 있는 화면이 있다. 결과가 접힌 채로 그려지면
+   * 누른 사람에게는 아무 일도 일어나지 않은 것과 같다. 이미 펴져 있으면 건드리지 않는다.
+   */
+  function revealMenuPanelFor(node) {
+    const panel = node?.closest?.('[data-menu-panel]');
+    if (!panel || !panel.hidden) return;
+    openMenu(text(panel.dataset.menuPanel));
+  }
+
   function openFactoryStage(stageKey) {
     if (stageKey === 'competitors') {
       openMenu('competitors');
@@ -2300,6 +2319,15 @@ export function mountProductionWorkbench({
       root.append(element('p', 'factory-empty-state', '아직 생성되지 않음'));
       return;
     }
+    // 고를 수 없는 이유는 후보가 없을 때만 적혀 있었다. 후보가 있는데 못 고르는 경우에는
+    // 회색 버튼만 남아서, 왜 안 눌리는지 알 길이 없었다. 그때도 한 줄로 까닭을 적는다.
+    if (!selectionEnabled) {
+      const why = element('p', 'factory-empty-state', blockedDetail
+        || '지금은 이 단계를 고를 차례가 아닙니다 · 작업 큐에서 작업을 재개해 주세요.');
+      why.dataset.state = 'selection-closed';
+      why.setAttribute('role', 'status');
+      root.append(why);
+    }
     const maximumPage = Math.max(0, Math.ceil(stage.candidates.length / CANDIDATE_PAGE_SIZE) - 1);
     candidatePage = Math.min(candidatePage, maximumPage);
     const start = candidatePage * CANDIDATE_PAGE_SIZE;
@@ -2342,7 +2370,11 @@ export function mountProductionWorkbench({
         frame.append(placeholder);
       }
       const meta = element('div', 'a-cut-candidate-meta');
-      meta.append(element('strong', '', candidate.id));
+      // 제목이 factory_hero_mt46q96f_xmuyat 이면 무엇을 고르는지 알 수 없다.
+      // 사람이 읽을 이름을 크게 두고, 식별자는 찾아볼 수 있게 작게 남긴다.
+      const ordinal = page.indexOf(candidate) + 1 + start;
+      meta.append(element('strong', '', `${STAGE_LABELS[stage.key] || stage.key} 후보 ${ordinal}`));
+      meta.append(element('span', 'a-cut-candidate-id', candidate.id));
       if (bundleAsset) {
         meta.append(element(
           'span',
@@ -2367,8 +2399,15 @@ export function mountProductionWorkbench({
       view.dataset.action = 'view-candidate';
       view.addEventListener('click', () => {
         inspectedCandidateId = candidate.id;
+        // 인스펙터는 지금 고른 단계 안에서만 후보를 찾는다. 작업 큐에서는 단계가 다를 수 있어서,
+        // 맞춰 주지 않으면 누른 컷이 아니라 그 단계의 첫 컷 근거가 뜬다.
+        selectedStageKey = stage.key;
         rememberActiveTabView();
         render();
+        // 근거는 생산·A컷 탭의 artifact-inspector 에 그려진다.
+        // 작업 큐에서 눌렀을 때 그 탭이 접혀 있으면 화면이 하나도 안 바뀌어서
+        // 사람 눈에는 "눌러도 아무 일도 없는 버튼" 이 된다. 그리기 전에 그 탭을 편다.
+        revealMenuPanelFor(roots.inspector);
         roots.inspector.querySelector('[data-action="select-a-cut"]')?.focus();
       });
       actions.append(select, view);
@@ -2400,9 +2439,29 @@ export function mountProductionWorkbench({
   }
 
   function renderCandidates() {
+    // 작업 큐는 "지금 고를 차례" 일 때만 선택 버튼을 열어 주는데 이 화면은 늘 열어 두었다.
+    // 그래서 차단된 작업에서도 눌리고, 서버는 decision_target_required 로 거절했다.
+    // 조립공장 작업이면 큐와 같은 잣대를 쓴다. 다른 흐름(PDP bundle)은 건드리지 않는다.
+    const current = viewedProjection();
+    const jobId = text(current.registration.jobId);
+    const localJob = jobId.startsWith('factory-job-')
+      ? productJobs.find(job => text(job.jobId) === jobId)
+      : null;
+    const stageKey = selectedStageKey || text(localJob?.stageKey);
+    const selectionEnabled = viewMatchesLiveProjection()
+      && (!localJob || (
+        text(localJob.status) === 'waiting_manual'
+        && (
+          resolveLocalFactoryStageMode(current, productJobs, stageKey) === 'manual'
+          || automaticDecisionHeld(localJob, stageKey)
+        )
+      ));
     renderCandidateContactSheet(roots.candidates, {
-      selectionEnabled: viewMatchesLiveProjection(),
-      projectionValue: viewedProjection(),
+      selectionEnabled,
+      blockedDetail: localJob && text(localJob.status) === 'blocked'
+        ? `작업 차단 · ${visibleFactoryMessage(localJob.message, localJob.stageKey) || '작업을 재개해야 A컷을 고를 수 있습니다.'}`
+        : '',
+      projectionValue: current,
     });
   }
 
@@ -2881,11 +2940,36 @@ export function mountProductionWorkbench({
       return response;
     } catch (error) {
       savingByTarget.delete(savingKey(stage.key));
-      setStatus('live-status', `A컷 저장 실패 · ${error.message}`, 'error');
+      setStatus('live-status', `A컷 저장 실패 · ${aCutSaveFailureCopy(error)}`, 'error');
       if ([409, 422].includes(error.status)) await refreshState();
       render();
       return null;
     }
+  }
+
+  /**
+   * 조립공장·관제탑이 거절한 까닭을 사람 말로 옮긴다.
+   *
+   * 서버 코드를 그대로 띄우면 무엇을 해야 하는지 알 수 없다.
+   * 예를 들어 decision_target_required 는 "이 단계가 지금 고를 차례가 아니다" 라는 뜻인데,
+   * 대개 작업이 차단된 채여서 먼저 재개해야 하는 상황이다.
+   * 코드는 괄호로 함께 남긴다 — 사람이 읽을 말과 찾아볼 열쇠가 둘 다 필요하다.
+   * 모르는 코드는 그대로 보여 준다. 지어내는 것보다 낫다.
+   */
+  function aCutSaveFailureCopy(error) {
+    const code = text(error?.message);
+    const copy = {
+      decision_target_required: '지금은 이 단계를 고를 차례가 아닙니다 · 작업을 먼저 재개해 주세요',
+      factory_product_job_busy: '조립공장이 이 작업을 물고 있습니다 · 끝난 뒤 다시 시도해 주세요',
+      factory_worker_build_not_admitted: '조립공장이 다른 판을 쓰고 있습니다 · 작업자 창을 새로고침해 주세요',
+      factory_product_job_not_found: '그 작업을 찾지 못했습니다 · 작업 큐를 새로고침해 주세요',
+      stale_run_fingerprint: '후보가 지금 작업과 맞지 않습니다 · 화면을 새로고침해 주세요',
+      stale_product_checkpoint: '저장된 작업 지점이 지금 조립공장 상태와 어긋납니다 · 작업 큐에서 “다시 시도”로 이어서 진행해 주세요',
+      factory_a_cut_candidate_missing: '그 후보를 찾지 못했습니다 · 화면을 새로고침해 주세요',
+      factory_cafe24_target_mismatch: '지금 열린 작업과 다른 작업입니다 · 그 작업을 먼저 열어 주세요',
+      request_invalid: '요청이 올바르지 않습니다',
+    }[code];
+    return copy ? `${copy} (${code})` : code;
   }
 
   async function selectACut(stage, candidate) {
@@ -2951,6 +3035,27 @@ export function mountProductionWorkbench({
       root.append(element('p', 'factory-empty-state', current.connected ? '확인할 후보가 없습니다.' : '조립공장 연결 끊김'));
       return;
     }
+    // 어느 컷의 근거인지 먼저 보여 준다. 값만 늘어놓으면 무엇을 보고 있는지 알 수 없다.
+    const heading = element('div', 'factory-inspector-subject');
+    const shot = resolveCandidateThumbnail(candidate, assetUrl);
+    if (shot.kind === 'image') {
+      const preview = element('img', 'factory-inspector-shot');
+      preview.src = shot.url;
+      preview.alt = `${STAGE_LABELS[stage.key]} 후보 ${candidate.id}`;
+      preview.loading = 'eager';
+      preview.decoding = 'async';
+      heading.append(preview);
+    }
+    const naming = element('div', 'factory-inspector-naming');
+    naming.append(
+      element('span', 'factory-pill', STAGE_LABELS[stage.key] || stage.key),
+      element('strong', '', candidate.id),
+    );
+    if (stage.selectedId === candidate.id) {
+      naming.append(element('span', 'factory-pill selected-badge', '선택컷'));
+    }
+    heading.append(naming);
+    root.append(heading);
     const fields = element('dl', 'factory-inspector-fields');
     const decisionType = STAGE_DECISIONS[stage.key];
     const effective = effectiveDecision(decisionType);
@@ -3605,7 +3710,7 @@ export function mountProductionWorkbench({
       if (next) productJobs = productJobs.map(job => job.jobId === next.jobId ? next : job);
       setStatus('live-status', `${text(next?.productName || key)} · 재개 요청 접수 · 저장된 작업 상태 확인 중`, 'warning');
     } catch (error) {
-      setStatus('live-status', `다음 단계 실행 실패 · ${error.message}`, 'error');
+      setStatus('live-status', `다음 단계 실행 실패 · ${aCutSaveFailureCopy(error)}`, 'error');
     } finally {
       resumeInFlight.delete(key);
       if (roots.queue?.contains(document.activeElement)) document.activeElement.blur();

@@ -4,20 +4,22 @@ import {
   groupImageFiles,
   parseIntakeCsv,
   summarizeBulkIntake,
-} from './bulk-intake-model.mjs?bulkIntake=2';
+} from './bulk-intake-model.mjs?bulkIntake=3';
 
+// 회색 글씨는 보기일 뿐 값이 아니다. '주방' 처럼만 적어 두면 이미 채워진 것처럼 읽혀서,
+// 아래 카드가 "분류 비어 있음" 이라고 말하는 것과 서로 어긋나 보인다. 보기라고 못박는다.
 const DEFAULT_FIELDS = Object.freeze([
-  { key: 'category', label: '분류', placeholder: '주방', group: 'product' },
-  { key: 'material', label: '소재', placeholder: '면 100%', group: 'product' },
-  { key: 'originCountry', label: '원산지', placeholder: '대한민국', group: 'product' },
-  { key: 'size', label: '크기', placeholder: '45cm', group: 'product' },
-  { key: 'usage', label: '용도', placeholder: '생활', group: 'product' },
+  { key: 'category', label: '분류', placeholder: '예: 주방', group: 'product' },
+  { key: 'material', label: '소재', placeholder: '예: 면 100%', group: 'product' },
+  { key: 'originCountry', label: '원산지', placeholder: '예: 대한민국', group: 'product' },
+  { key: 'size', label: '크기', placeholder: '예: 45cm', group: 'product' },
+  { key: 'usage', label: '용도', placeholder: '예: 생활', group: 'product' },
   // 여기서 고른 값이 Cafe24 등록까지 그대로 간다. 비워 두면 등록할 때 다시 고르면 된다.
-  { key: 'cafe24CategoryId', label: '제품분류 번호', placeholder: '119', group: 'cafe24' },
-  { key: 'salePrice', label: '판매가', placeholder: '12000', group: 'cafe24' },
-  { key: 'supplyPrice', label: '공급가', placeholder: '500', group: 'cafe24' },
-  { key: 'displayStatus', label: '진열', placeholder: '진열안함', group: 'cafe24' },
-  { key: 'sellingStatus', label: '판매', placeholder: '판매안함', group: 'cafe24' },
+  { key: 'cafe24CategoryId', label: '제품분류 번호', placeholder: '예: 119', group: 'cafe24' },
+  { key: 'salePrice', label: '판매가', placeholder: '예: 12000', group: 'cafe24' },
+  { key: 'supplyPrice', label: '공급가', placeholder: '예: 500', group: 'cafe24' },
+  { key: 'displayStatus', label: '진열', placeholder: '예: 진열안함', group: 'cafe24' },
+  { key: 'sellingStatus', label: '판매', placeholder: '예: 판매안함', group: 'cafe24' },
 ]);
 
 const ISSUE_LABELS = Object.freeze({
@@ -357,11 +359,15 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     submit.textContent = plan.ready ? `${plan.ready}건 투입` : '투입';
     submit.disabled = busy || plan.ready === 0;
     reset.disabled = busy || (!grouped.products.length && !csvRows.length);
-    hint.textContent = plan.warned
-      ? `${plan.warned}건은 값이 비어 있어도 투입은 됩니다. 조립공장에서 채우게 됩니다.`
-      : plan.ready
-        ? '파일 이름이 제품명이 됩니다. 같은 이름_숫자 는 한 제품의 여러 장으로 묶입니다.'
-        : '';
+    // 막힌 건이 있으면 그것부터 말한다. 무엇을 채워야 버튼이 열리는지 모르면
+    // 사람은 회색 버튼만 보고 고장으로 읽는다.
+    hint.textContent = plan.blocked
+      ? `${plan.blocked}건은 색상명이나 기본 사진이 없어 투입할 수 없습니다. 아래 카드에 적힌 항목을 채워 주세요.`
+      : plan.warned
+        ? `${plan.warned}건은 값이 비어 있어도 투입은 됩니다. 조립공장에서 채우게 됩니다.`
+        : plan.ready
+          ? '파일 이름이 제품명이 됩니다. 같은 이름_숫자 는 한 제품의 여러 장으로 묶입니다.'
+          : '';
     renderStatus();
     renderPlan();
   }

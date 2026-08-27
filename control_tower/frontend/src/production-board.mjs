@@ -2,6 +2,7 @@ import {
   BOARD_STAGES,
   boardRowSignature,
   buildBatchSelectionRequest,
+  candidatePresentation,
   describeBlocked,
   describeParallelHeadroom,
   describeResultError,
@@ -10,7 +11,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=31';
+} from './production-board-model.mjs?parallelBoard=36';
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -67,6 +68,8 @@ export function mountProductionBoard(runtime, {
 } = {}) {
   if (!root || !runtime) return () => {};
   const { apiRequest, assetUrl } = runtime;
+  const factoryBackend = String(runtime.factoryBackend || '').replace(/\/+$/, '');
+  const factoryApp = String(runtime.factoryApp || '').replace(/\/+$/, '');
   const loadJobs = fetchJobs || (() => apiRequest('/api/factory/jobs'));
 
   let jobs = [];
@@ -535,6 +538,18 @@ export function mountProductionBoard(runtime, {
     };
     if (modeSelect) modeSelect.addEventListener('change', syncTargetAvailability);
     syncTargetAvailability();
+    // 상품번호는 숫자만 받는다. 화면에서 안 막으면 글자를 넣고 등록을 눌러야 비로소
+    // 서버가 거절하고, 그때 뜨는 건 사람이 못 읽는 코드다. 여기서 먼저 걸러 낸다.
+    if (targetInput) {
+      targetInput.inputMode = 'numeric';
+      targetInput.autocomplete = 'off';
+      targetInput.pattern = '[0-9]*';
+      targetInput.title = '상품번호는 숫자만 넣습니다';
+      targetInput.addEventListener('input', () => {
+        const digits = targetInput.value.replace(/[^0-9]/g, '');
+        if (digits !== targetInput.value) targetInput.value = digits;
+      });
+    }
     form.append(grid);
     const submit = button('board-mini-action', '이 값으로 Cafe24 등록', {
       action: 'cafe24-values-submit',
@@ -569,7 +584,12 @@ export function mountProductionBoard(runtime, {
   const SECTION_LABELS = new Map(SECTION_CATALOGUE.map(item => [item.id, item.label]));
 
   function sectionLabel(sectionId) {
-    return SECTION_LABELS.get(sectionId) || sectionId || '기타 섹션';
+    const known = SECTION_LABELS.get(sectionId);
+    if (known) return known;
+    // 모르는 값을 그대로 뱉으면 factory_detail_… 같은 원시 식별자가 제목이 된다.
+    // 사람이 읽을 수 없는 글자는 화면에 내보내지 않는다.
+    const raw = String(sectionId || '').trim();
+    return raw && !/^factory_[a-z]+_/i.test(raw) ? raw : '기타 섹션';
   }
 
   /** 섹션 단계의 후보를 섹션별로 묶어 정식 차례대로 돌려준다. */
@@ -609,13 +629,72 @@ export function mountProductionBoard(runtime, {
     return raw;
   }
 
+  // 상세페이지 변형의 본문. 그림이 없는 후보라 문서를 그대로 그려 보여 준다.
+  const documentCache = new Map();
+  let documentCacheVersion = 0;
+
+  /**
+   * 문서 안의 그림 주소를 관제탑에서도 열리는 주소로 바꾼다.
+   *
+   * 본문은 조립공장 쪽에서 만들어져 두 가지 주소를 섞어 쓴다 —
+   * 보관함 API 경로(/api/local-archive/...)는 조립공장 백엔드가, 나머지 상대경로는
+   * 조립공장 화면 서버가 내준다. 관제탑은 둘 다 다른 오리진이라 그대로 두면 깨진다.
+   * 스크립트는 막고(sandbox) 주소만 손본다.
+   */
+  function embeddableDocument(html) {
+    const body = String(html || '');
+    if (!body) return '';
+    const rewritten = body.replace(
+      /(\s(?:src|href)\s*=\s*)(["'])(?!https?:|data:|#|mailto:)([^"']*)\2/gi,
+      (whole, prefix, quote, url) => {
+        const target = String(url || '').trim();
+        if (!target) return whole;
+        const origin = target.startsWith('/api/') ? factoryBackend : factoryApp;
+        if (!origin) return whole;
+        const joined = target.startsWith('/') ? `${origin}${target}` : `${origin}/${target}`;
+        return `${prefix}${quote}${joined}${quote}`;
+      },
+    );
+    // 문서가 스스로 스크립트를 돌리거나 창을 옮기지 못하게 한다. 보기만 하는 자리다.
+    return `<!doctype html><meta charset="utf-8"><base target="_blank">${rewritten}`;
+  }
+
+  /** 그 변형의 본문을 보관함에서 받아 온다. 한 번 받으면 기억한다. */
+  async function loadCandidateDocument(candidate) {
+    const key = String(candidate.id || '');
+    const archiveId = String(candidate.documentArchiveId || '').trim();
+    if (!key || documentCache.has(key)) return;
+    if (!archiveId) {
+      documentCache.set(key, { html: '', note: '이 변형은 본문이 보관되기 전에 만들어져 미리보기가 없습니다.' });
+      documentCacheVersion += 1;
+      render();
+      return;
+    }
+    documentCache.set(key, { loading: true });
+    documentCacheVersion += 1;
+    try {
+      const body = await apiRequest(`/api/factory/archive-document/${encodeURIComponent(archiveId)}`);
+      documentCache.set(key, {
+        html: embeddableDocument(body?.html),
+        note: String(body?.note || '').trim(),
+      });
+    } catch (error) {
+      documentCache.set(key, { html: '', note: `본문을 가져오지 못했습니다 · ${String(error?.message || error)}` });
+    }
+    documentCacheVersion += 1;
+    render();
+  }
+
   /** 그 컷의 보관함 주소에서 만든 프롬프트를 받아 온다. 한 번 받으면 기억한다. */
   async function loadCandidatePrompt(candidate) {
     const key = String(candidate.id || '');
     if (!key || promptCache.has(key)) return;
+    // 보관 주소는 그림에서만 캐던 탓에, 그림이 없는 문서 변형은 프롬프트가 있어도
+    // 늘 "기록 없음" 이 나왔다. 문서는 자기 보관 id 를 따로 들고 있으니 그것도 본다.
     const source = String(candidate.thumbnailUrl || '');
-    const match = source.match(/\/local-archive\/assets\/([^/?#]+)\//);
-    if (!match) {
+    const archiveId = (source.match(/\/local-archive\/assets\/([^/?#]+)\//) || [])[1]
+      || String(candidate.documentArchiveId || '').trim();
+    if (!archiveId) {
       promptCache.set(key, { prompt: '', note: '이 컷은 보관함 기록이 없어 프롬프트를 찾을 수 없습니다.' });
       promptCacheVersion += 1;
       render();
@@ -627,7 +706,7 @@ export function mountProductionBoard(runtime, {
       // 조립공장 백엔드는 다른 오리진이라 fetch 가 막힌다. 관제탑이 같은 보관함을
       // 디스크로 읽어 내주므로 그쪽에 묻는다. 실측 2026-08-26: 5050 직접 호출은
       // Failed to fetch 였다.
-      const body = await apiRequest(`/api/factory/archive-prompt/${encodeURIComponent(match[1])}`);
+      const body = await apiRequest(`/api/factory/archive-prompt/${encodeURIComponent(archiveId)}`);
       promptCache.set(key, {
         prompt: String(body?.prompt || '').trim(),
         note: String(body?.note || '').trim(),
@@ -720,7 +799,10 @@ export function mountProductionBoard(runtime, {
     option.disabled = busy;
     if (candidate.id === cell.reservedCandidateId) option.dataset.reserved = 'true';
     if (picked) option.dataset.picked = 'true';
-    if (candidate.thumbnailUrl) {
+    // 무엇으로 보여 줄지는 모델이 한 번에 정한다. 여기서 조건을 줄줄이 걸러 내려가면
+    // 칸이 빠진 옛 기록이 어느 갈래에도 걸리지 않아 원시 id 가 그대로 뜬다.
+    const presentation = candidatePresentation(candidate, cell.stageKey);
+    if (presentation === 'image' && candidate.thumbnailUrl) {
       const image = document.createElement('img');
       image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
       image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
@@ -730,8 +812,34 @@ export function mountProductionBoard(runtime, {
       image.dataset.zoomSrc = candidate.thumbnailUrl;
       image.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
       option.append(image);
+    } else if (presentation === 'document') {
+      // 상세페이지 변형은 그림이 아니라 문서다. 보관함에 남은 본문을 그대로 그려
+      // 무엇을 고르는지 눈으로 보게 한다. 문서가 없던 시절 변형은 글로만 알려 준다.
+      void loadCandidateDocument(candidate);
+      const entry = documentCache.get(String(candidate.id || ''));
+      const frame = element('div', 'board-candidate-doc');
+      if (entry?.html) {
+        const view = document.createElement('iframe');
+        view.className = 'board-candidate-doc-view';
+        view.setAttribute('sandbox', '');
+        view.setAttribute('loading', 'lazy');
+        view.setAttribute('tabindex', '-1');
+        view.setAttribute('aria-hidden', 'true');
+        view.srcdoc = entry.html;
+        frame.append(view);
+      } else {
+        frame.dataset.state = entry?.loading ? 'loading' : 'empty';
+        frame.append(element('span', '', entry?.loading ? '본문 불러오는 중' : (entry?.note || '미리보기 없음')));
+      }
+      option.append(frame);
+      const note = element('div', 'board-candidate-note');
+      note.dataset.kind = 'html';
+      note.append(element('strong', '', candidate.summary || '상세페이지 HTML'));
+      option.append(note);
     } else if (fallbackThumbUrl) {
       // 이 변형의 그림이 곧 지금 섹션 그림이다. 이미 받아 둔 것을 그대로 쓴다.
+      // 문서(상세페이지) 변형보다 뒤에 둔다 — 상세 변형에 섹션 그림을 붙이면
+      // 그 변형과 아무 상관 없는 그림을 보고 고르게 된다.
       const image = document.createElement('img');
       image.src = assetUrl ? assetUrl(fallbackThumbUrl) : fallbackThumbUrl;
       image.alt = `${cell.stageLabel} 후보`;
@@ -740,15 +848,12 @@ export function mountProductionBoard(runtime, {
       image.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
       option.append(image);
     } else {
-      // 변형별 그림은 조립공장이 저장하지 않는다. 없는 그림을 기다리는 것처럼
-      // "미리보기 없음" 만 두면 무엇을 고르는지 알 수 없다. 이 변형이 무엇으로
-      // 다른지를 대신 보여 준다 — 만든 방식과 첫 문구다.
+      // 변형끼리 무엇이 다른지를 대신 보여 준다. 제목은 변형마다 똑같고 패널 머리글에도
+      // 이미 있어 넣지 않는다 — 여러 장이 같은 글자로 채워지면 되레 구분이 가려진다.
       const note = element('div', 'board-candidate-note');
-      if (candidate.kind === 'html') note.dataset.kind = 'html';
-      note.append(element('strong', '', readableCandidateLabel(candidate, index)));
-      if (candidate.summary) note.append(element('span', '', candidate.summary));
-      else if (candidate.kind === 'html') note.append(element('span', '', '상세페이지 HTML'));
-      else note.append(element('span', '', '문구 정보 없음'));
+      if (candidate.summary) note.append(element('strong', '', candidate.summary));
+      else note.append(element('strong', '', readableCandidateLabel(candidate, index)));
+      note.append(element('span', '', '문구 정보 없음'));
       option.append(note);
     }
     // 사람이 읽는 이름은 "변형 2/4" 다. 원시 식별자는 눈으로 구분되지 않는다.
@@ -758,8 +863,14 @@ export function mountProductionBoard(runtime, {
       mark.dataset.tone = 'picked';
       option.append(mark);
     }
-    else if (candidate.label) option.append(element('span', 'board-candidate-meta', candidate.label));
-    else if (candidate.model) option.append(element('span', 'board-candidate-meta', candidate.model));
+    // 카드 안에 이미 적은 글을 밑에 또 적으면 같은 문장이 두 번 나온다.
+    // 그림이 있는 컷만 여기서 이름을 덧붙인다.
+    else if (candidate.thumbnailUrl && candidate.label) {
+      option.append(element('span', 'board-candidate-meta', readableCandidateLabel(candidate, index)));
+    }
+    else if (candidate.thumbnailUrl && candidate.model) {
+      option.append(element('span', 'board-candidate-meta', candidate.model));
+    }
     option.title = candidate.id;
     const wrap = element('div', 'board-candidate-slot');
     wrap.append(option);
@@ -1190,6 +1301,10 @@ export function mountProductionBoard(runtime, {
         node.dataset.zoomCell = zoomKey;
         zoomPayloads.set(zoomKey, buildZoomPayload(row, cell));
         node.append(thumb);
+      } else if (cell.selectedIsDocument) {
+        // 문서를 골랐다. 그림이 없는 게 정상이니 그렇게 말한다. 점만 찍으면 덜 온 것처럼 읽힌다.
+        node.append(element('span', 'board-cell-glyph', '📄'));
+        node.append(element('span', 'board-cell-loading', '문서'));
       } else {
         node.append(element('span', 'board-cell-glyph', CELL_GLYPHS[cell.state] || '·'));
       }
@@ -1198,8 +1313,9 @@ export function mountProductionBoard(runtime, {
       if (cell.state === 'skipped') node.append(element('span', 'board-cell-loading', '옵션 없음'));
       // 그림이 늦게 오는 이유를 사람이 알 수 있어야 한다. 빈 상자만 두면 고장으로 읽힌다.
       const thumbPending = node.querySelector('.board-cell-thumb[data-loading="true"]');
-      // 건너뛴 칸에는 올 그림이 없다. '불러오는 중' 을 붙이면 영영 기다리는 것처럼 읽힌다.
-      if (cell.state !== 'skipped'
+      // 건너뛴 칸과 문서를 고른 칸에는 올 그림이 없다.
+      // '불러오는 중' 을 붙이면 영영 기다리는 것처럼 읽힌다.
+      if (cell.state !== 'skipped' && !cell.selectedIsDocument
         && (thumbPending || (!cell.selectedThumbnailUrl && pendingResultJobs.has(String(row.jobId))))) {
         node.append(element('span', 'board-cell-loading', '불러오는 중'));
       }
@@ -1262,6 +1378,13 @@ export function mountProductionBoard(runtime, {
     busy,
     connected,
     resultsOpen: openResults === row.jobId,
+    // 프롬프트와 상세 본문은 나중에 도착한다. 도착을 서명에 넣지 않으면 행 노드를
+    // 그대로 재사용해서, 받아 놓고도 화면은 "없음" 인 채로 남는다.
+    promptCacheVersion,
+    documentCacheVersion,
+    openPrompts: [...openPrompts].sort().join('|'),
+    promptAlwaysOpen,
+    openCompose,
   });
 
   function boardSignature(board) {
@@ -1272,6 +1395,8 @@ export function mountProductionBoard(runtime, {
       // 눌러도 표가 다시 그려지지 않아 아무 일도 일어나지 않는다.
       promptAlwaysOpen, openCompose, [...openPrompts].sort().join('|'),
       promptCacheVersion,
+      // 본문을 받아 오면 빈 칸이 미리보기로 바뀐다. 서명에 없으면 받아 놓고도 안 그린다.
+      documentCacheVersion,
       // 총 기계/대기 시간은 새로고침마다 흘러간다. 이것까지 서명에 넣으면 아무 일이
       // 없어도 매번 표를 통째로 다시 그리고, 그 순간 손 밑의 버튼이 갈아 끼워진다.
       // 실측 2026-08-26: "Cafe24 값 지정" 을 눌렀는데 아무 것도 열리지 않았다.

@@ -186,6 +186,16 @@ function normalizeRequiredValues(values) {
   return result;
 }
 
+/**
+ * 투입 자체를 막아야 하는 흠. 나머지는 경고로 두고 조립공장이 채우게 한다.
+ *
+ * 분류·판매가는 조립공장이 나중에 채운다. 그러나 사진의 색상명과 기본 사진은
+ * 조립공장이 만들어 낼 수 없다 — 색상명이 없으면 옵션표 슬롯명을 정하지 못하고,
+ * 기본 사진이 없으면 만들 바탕이 없다. 이 둘을 '투입 가능' 으로 세면 버튼이 열린 채
+ * 남아, 사람이 눌러야만 실패를 알게 된다.
+ */
+const BLOCKING_ISSUES = new Set(['image_missing', 'base_image_missing', 'color_name_missing']);
+
 function issuesFor(entry) {
   const issues = [];
   if (!entry.images.length) issues.push('image_missing');
@@ -229,9 +239,15 @@ export function buildBulkPlan(groupsValue, csvRowsValue = [], defaultsValue = {}
     schema: 'factory-bulk-intake-plan:v1',
     entries,
     unmatchedCsv,
-    ready: entries.filter(entry => !entry.issues.includes('image_missing')).length,
-    blocked: entries.filter(entry => entry.issues.includes('image_missing')).length,
-    warned: entries.filter(entry => entry.issues.length && !entry.issues.includes('image_missing')).length,
+    // 조립공장이 나중에 채울 수 있는 값(분류·판매가)은 경고로 두고 투입을 막지 않는다.
+    // 그러나 사진의 색상명과 기본 사진은 조립공장이 만들어 낼 수 없다 — 색상명이 없으면
+    // 옵션표 슬롯명을 정하지 못하고, 기본 사진이 없으면 만들 바탕이 없다.
+    // 이것들을 '투입 가능' 으로 세면 버튼이 열린 채로 눌러야만 실패를 알게 된다.
+    ready: entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
+    blocked: entries.filter(entry => entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
+    warned: entries.filter(entry => (
+      entry.issues.length && !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))
+    )).length,
   };
 }
 

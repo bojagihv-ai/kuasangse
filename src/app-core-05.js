@@ -5989,6 +5989,12 @@ function factoryEnsureCurrentDetailHtmlAsset(factory) {
     }
   }
   if (!html || !['current-section-export', 'current-section-export-partial', 'partial-safe-fallback'].includes(String(scoped?.source || ''))) {
+    // 새 자산을 만들지 않는 길(예: 이미 있는 보존본을 그대로 쓰는 detail-asset-richer-current)
+    // 이라도 본문은 보관함에 남겨 둔다. 이 본문은 24000자를 넘으면 작업 상태에서 지워지고,
+    // 그러면 그 변형이 무엇이었는지 뒤에 확인할 길이 사라진다.
+    if (scoped?.asset && typeof archiveDetailVariantHtml === 'function') {
+      void archiveDetailVariantHtml(scoped.asset, html);
+    }
     return { ...scoped, stored: false };
   }
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
@@ -6005,6 +6011,8 @@ function factoryEnsureCurrentDetailHtmlAsset(factory) {
     if (factory.stages?.detail) {
       factory.stages.detail.selectedAssetIds = uniqueApiKeys([...(factory.stages.detail.selectedAssetIds || []), existing.id]);
     }
+    // 이 본문은 24000자를 넘으면 작업 상태에서 지워진다. 지워지기 전에 보관함에 사본을 남긴다.
+    if (typeof archiveDetailVariantHtml === 'function') void archiveDetailVariantHtml(existing, html);
     return { ...scoped, asset: existing, stored: false, reused: true };
   }
   if (!factory.stages) factory.stages = {};
@@ -6028,6 +6036,7 @@ function factoryEnsureCurrentDetailHtmlAsset(factory) {
     },
     used: true,
   });
+  if (asset && typeof archiveDetailVariantHtml === 'function') void archiveDetailVariantHtml(asset, html);
   return { ...scoped, asset, stored: !!asset };
 }
 

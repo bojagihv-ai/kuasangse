@@ -1211,6 +1211,91 @@
       word-break: keep-all;
     }
 
+    /* 접힌 탭에 적힌 경고·오류를 대신 띄우는 자리. 눌러 놓고 아무 말도 못 듣는 일을 막는다. */
+    .hidden-status-alerts {
+      position: fixed;
+      inset-block-start: var(--space-2);
+      inset-inline-end: var(--space-2);
+      z-index: var(--z-index-overlay);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      inline-size: min(28rem, calc(100vw - var(--space-4)));
+      pointer-events: none;
+    }
+
+    .hidden-status-alert {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-warn-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+      color: var(--color-text-primary);
+      font-size: var(--font-size-compact);
+      box-shadow: 0 0.5rem 1.5rem var(--color-dialog-backdrop);
+      pointer-events: auto;
+    }
+
+    .hidden-status-alert[data-tone="error"] {
+      border-color: var(--color-error-border);
+    }
+
+    .hidden-status-alert-copy {
+      flex: 1 1 auto;
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden-status-alert-where {
+      display: block;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+    }
+
+    .hidden-status-alert button {
+      flex: 0 0 auto;
+    }
+
+    /* 식별자는 찾아볼 때만 필요하다. 이름을 가리지 않게 작고 흐리게 둔다. */
+    .a-cut-candidate-id {
+      display: block;
+      color: var(--color-text-muted);
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-kicker);
+      overflow-wrap: anywhere;
+    }
+
+    .factory-inspector-subject {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+      inline-size: 100%;
+      margin-block-end: var(--space-2);
+    }
+
+    .factory-inspector-shot {
+      inline-size: 7rem;
+      block-size: auto;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      object-fit: contain;
+    }
+
+    .factory-inspector-naming {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+      min-inline-size: 0;
+    }
+
+    .factory-inspector-naming strong {
+      overflow-wrap: anywhere;
+    }
+
     .factory-sync-fields,
     .factory-inspector-fields {
       display: grid;
@@ -2454,6 +2539,38 @@
       font-size: var(--font-size-compact);
     }
 
+    /* 상세페이지 변형은 그림이 아니라 문서다. 문서를 작게 그려 무엇을 고르는지 보인다.
+       카드 자체가 '고르기' 버튼이라, 문서가 클릭을 가로채지 않게 막아 둔다. */
+    .board-candidate-doc {
+      position: relative;
+      block-size: var(--board-thumb-size);
+      overflow: hidden;
+      border-radius: var(--radius-compact);
+      background: var(--color-page-background);
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+
+    .board-candidate-doc[data-state] span {
+      padding: var(--space-1);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      text-align: center;
+    }
+
+    .board-candidate-doc-view {
+      position: absolute;
+      inset-block-start: 0;
+      inset-inline-start: 0;
+      inline-size: 400%;
+      block-size: 400%;
+      border: 0;
+      transform: scale(0.25);
+      transform-origin: 0 0;
+      pointer-events: none;
+    }
+
     .board-candidate-note {
       display: grid;
       gap: var(--space-half);
@@ -2547,9 +2664,12 @@
       color: var(--color-accent-primary);
     }
 
+    /* auto-fill 은 후보가 적어도 빈 칸을 그대로 남겨, 넓은 화면에서 카드 옆이 통째로
+       검게 비었다. auto-fit 은 빈 칸을 접어 카드가 남은 폭을 나눠 갖는다 —
+       고르는 화면이니 카드가 큰 편이 낫다. */
     .board-candidate-options {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
       gap: var(--space-1);
     }
 
@@ -4246,7 +4366,7 @@
               <div class="field-stack"><label for="product-policy">이 제품 판단 방식</label><select id="product-policy"><option value="">자동화 방식 유지</option><option value="auto">자동 판단</option><option value="manual">직접 선택</option></select></div>
               <div class="field-stack"><label for="stage-policy">전체 공정 판단 방식</label><select id="stage-policy"><option value="">제품 판단 방식 유지</option><option value="auto">자동 판단</option><option value="manual">직접 선택</option></select></div>
             </div>
-            <div class="button-row"><button type="submit" id="intake-submit">조립공장 작업 시작</button><span id="intake-status" class="status-message" role="status" aria-live="polite">세션 준비 중</span></div>
+            <div class="button-row"><button type="submit" id="intake-submit">조립공장 작업 시작</button><span id="intake-submit-hint" class="status-message" role="status" aria-live="polite" hidden></span><span id="intake-status" class="status-message" role="status" aria-live="polite">세션 준비 중</span></div>
           </form>
         </div>
       </section>
@@ -4443,6 +4563,7 @@
       </footer>
     </div>
   </main>
+  <div id="hidden-status-alerts" class="hidden-status-alerts" role="status" aria-live="assertive"></div>
   <dialog id="work-bundle-image-dialog" class="work-bundle-image-dialog" aria-labelledby="work-bundle-image-dialog-title">
     <div class="work-bundle-image-dialog-header">
       <div>
@@ -4561,11 +4682,63 @@
         snapshot: null,
         modelOptions: null,
       };
+      // 상태 글은 그 기능이 사는 탭 안에 적힌다. 다른 탭에서 버튼을 누르면
+      // 그 글이 접힌 채로 적혀서, 누른 사람은 성공도 실패도 못 듣는다.
+      // 실측 2026-08-27: A컷 저장이 422 로 거절돼도 화면에 아무 것도 뜨지 않았다.
+      // 그래서 안 보이는 자리에 적힌 경고·오류는 항상 보이는 알림으로 한 번 더 띄운다.
+      const alertsRoot = document.getElementById("hidden-status-alerts");
+      const statusIsVisible = element => {
+        if (element.closest("[data-menu-panel][hidden], [hidden]")) return false;
+        const box = element.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      };
+      const menuLabelFor = element => {
+        const panel = element.closest("[data-menu-panel]");
+        if (!panel) return "";
+        const tab = document.querySelector(`.menu-tab[aria-controls="${panel.id}"]`);
+        return (tab?.firstChild?.textContent || "").trim();
+      };
+      const raiseHiddenStatusAlert = (element, message, tone) => {
+        if (!alertsRoot) return;
+        const where = menuLabelFor(element);
+        const key = `${element.id}|${message}`;
+        for (const existing of alertsRoot.children) {
+          if (existing.dataset.key === key) return;
+        }
+        const alert = document.createElement("div");
+        alert.className = "hidden-status-alert";
+        alert.dataset.tone = tone;
+        alert.dataset.key = key;
+        const copy = document.createElement("div");
+        copy.className = "hidden-status-alert-copy";
+        copy.textContent = message;
+        if (where) {
+          const origin = document.createElement("span");
+          origin.className = "hidden-status-alert-where";
+          origin.textContent = `${where} 화면에서 알림`;
+          copy.append(origin);
+        }
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "button-secondary";
+        close.textContent = "닫기";
+        close.addEventListener("click", () => alert.remove());
+        alert.append(copy, close);
+        alertsRoot.append(alert);
+        window.setTimeout(() => alert.remove(), tone === "error" ? 20000 : 10000);
+      };
+      document.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || !alertsRoot?.children.length) return;
+        alertsRoot.replaceChildren();
+      });
       const setStatus = (id, message, tone = "") => {
         const element = document.getElementById(id);
         if (!element) return;
         element.textContent = message;
         element.dataset.tone = tone;
+        if (message && (tone === "error" || tone === "warning") && !statusIsVisible(element)) {
+          raiseHiddenStatusAlert(element, message, tone);
+        }
       };
       const sendRequest = async (path, options = {}) => {
         const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
@@ -4605,6 +4778,9 @@
         }
       };
       const loadModelStatus = async () => {
+        // 목록을 다시 채우면서 사람이 고른 값을 덮으면, 새로고침 한 번에 설정이 조용히 되돌아간다.
+        // 그래서 다시 채우기 전에 지금 고른 값을 기억했다가, 그 값이 새 목록에도 있으면 그대로 되돌린다.
+        setStatus("model-status", "API Hub 상태 확인 중");
         try {
           const [oauth, options] = await Promise.all([
             fetch(`${API_HUB}/api/playbooks/gpt-oauth/status`).then(response => response.json()),
@@ -4612,6 +4788,7 @@
           ]);
           const models = Array.isArray(options.modelOptions) ? options.modelOptions : [];
           const select = document.getElementById("model-select");
+          const chosenModel = select.value;
           select.replaceChildren();
           models.forEach(model => {
             const value = String(model.id || model.name || "").trim();
@@ -4619,21 +4796,25 @@
             select.add(new Option(value, value));
           });
           if (!select.options.length) select.add(new Option("latestModel", "latestModel"));
-          select.value = String(options.latestModel || "latestModel");
+          const keepsModel = chosenModel && [...select.options].some(option => option.value === chosenModel);
+          select.value = keepsModel ? chosenModel : String(options.latestModel || "latestModel");
           const populate = (id, items, fallback) => {
             const target = document.getElementById(id);
+            const chosen = target.value;
             target.replaceChildren();
             (Array.isArray(items) ? items : []).forEach(item => {
               const value = String(item.id || "").trim();
               if (value) target.add(new Option(String(item.label || value), value));
             });
             if (![...target.options].some(option => option.value === fallback)) target.add(new Option(fallback, fallback));
-            target.value = fallback;
+            target.value = chosen && [...target.options].some(option => option.value === chosen) ? chosen : fallback;
           };
           populate("reasoning-select", options.reasoningOptions, "medium");
           populate("tier-select", options.serviceTierOptions, "standard");
           automation.modelOptions = options;
-          setStatus("model-status", oauth.chatGptLoginReady === true ? "GPT OAuth 연결됨" : "GPT OAuth 연결 필요", oauth.chatGptLoginReady === true ? "ok" : "error");
+          const stamp = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const ready = oauth.chatGptLoginReady === true;
+          setStatus("model-status", `${ready ? "GPT OAuth 연결됨" : "GPT OAuth 연결 필요"} · ${stamp} 확인`, ready ? "ok" : "error");
         } catch (error) {
           setStatus("model-status", `API Hub 차단: ${String(error.message || error)}`, "error");
         }
@@ -4672,7 +4853,14 @@
           return "";
         }
       };
-      globalThis.controlTowerRuntime = Object.freeze({ apiRequest, assetUrl, setStatus, automation });
+      // 상세페이지 문서 안의 그림은 조립공장 화면(8081)이 내주는 상대경로일 수 있다.
+      // 관제탑에서 그 문서를 그리려면 어느 오리진 기준인지 알아야 한다.
+      const FACTORY_APP = localOrigin("factoryApp", "http://127.0.0.1:8081");
+      globalThis.controlTowerRuntime = Object.freeze({
+        apiRequest, assetUrl, setStatus, automation,
+        factoryBackend: FACTORY_BACKEND,
+        factoryApp: FACTORY_APP,
+      });
       void loadSession();
       void loadModelStatus();
     })();
@@ -4683,10 +4871,10 @@
       onChange: key => document.getElementById("app")?.setAttribute("data-active-menu", key),
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=2"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=3";
+    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=5";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");
@@ -4786,7 +4974,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=55"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=5"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=64"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=7"></script>
 </body>
 </html>

@@ -1535,6 +1535,62 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "job": job})
 
+    def _factory_archive_record(archive_id: str) -> tuple[JsonObject | None, str]:
+        """보관함 목록에서 그 자산의 기록 한 줄을 찾아 준다. 없으면 까닭을 함께 돌려준다."""
+        index_path = archive_root / "index.json"
+        if not index_path.is_file():
+            return None, "보관함 목록이 없습니다."
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None, "보관함 목록을 읽지 못했습니다."
+        record = next(
+            (
+                item
+                for item in (index.get("assets") or [])
+                if isinstance(item, dict) and str(item.get("archiveId") or "") == archive_id
+            ),
+            None,
+        )
+        if not isinstance(record, dict):
+            return None, "이 컷의 보관함 기록을 찾지 못했습니다."
+        return record, ""
+
+    def _factory_archive_file(record: JsonObject, field: str) -> Path | None:
+        """보관함 폴더 밖을 가리키는 경로는 읽지 않는다."""
+        files = record.get("files") if isinstance(record.get("files"), dict) else {}
+        raw_path = str(files.get(field) or "").strip()
+        if not raw_path:
+            return None
+        candidate = Path(raw_path)
+        try:
+            candidate.resolve().relative_to(archive_root)
+        except (ValueError, OSError):
+            return None
+        return candidate if candidate.is_file() else None
+
+    @app.get("/api/factory/archive-document/<archive_id>")
+    def factory_archive_document(archive_id: str) -> Response | tuple[Response, int]:
+        """상세페이지 변형의 본문을 보관함에서 읽어 준다.
+
+        상세 변형은 그림이 아니라 문서라 썸네일이 없다. 문서를 그대로 내주면
+        화면이 그것을 그려 보여 줄 수 있어, 사람이 보고 고를 수 있게 된다.
+        """
+        safe_id = str(archive_id or "").strip()
+        if not safe_id or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", safe_id):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        record, note = _factory_archive_record(safe_id)
+        if record is None:
+            return jsonify({"archiveId": safe_id, "html": "", "note": note})
+        html_path = _factory_archive_file(record, "htmlPath")
+        html = html_path.read_text(encoding="utf-8", errors="replace") if html_path else ""
+        return jsonify({
+            "archiveId": safe_id,
+            "html": html,
+            "title": str(record.get("title") or ""),
+            "note": "" if html else "이 변형에는 저장된 본문이 없습니다.",
+        })
+
     @app.get("/api/factory/archive-prompt/<archive_id>")
     def factory_archive_prompt(archive_id: str) -> Response | tuple[Response, int]:
         """그 컷을 만들 때 쓴 프롬프트를 보관함에서 읽어 준다.

@@ -7530,6 +7530,10 @@ async function archiveSectionVariantImage(sectionId, variant, imageData) {
     // 보관함 쓰기는 작업파일 점유권(lease)이 있어야 통과한다. 맨 fetch 로 부르면
     // 428 PRECONDITION_REQUIRED 로 거절된다. 점유권을 붙여 주는 통로로 부른다.
     if (typeof workspaceArchiveFetch !== 'function') return false;
+    if (typeof ensureWorkspaceEditAuthority === 'function') {
+      const authority = await ensureWorkspaceEditAuthority();
+      if (!['editing', 'offline-edit'].includes(String(authority?.mode || ''))) return false;
+    }
     const res = await workspaceArchiveFetch(`${base}/api/local-archive/assets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7541,6 +7545,90 @@ async function archiveSectionVariantImage(sectionId, variant, imageData) {
     if (!archiveId) return false;
     variant.archiveId = archiveId;
     variant.imageUrl = `/api/local-archive/assets/${encodeURIComponent(archiveId)}/image`;
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * 상세페이지 변형의 본문을 보관함에 파일로 남긴다.
+ *
+ * 상세 HTML 은 24000자를 넘으면 작업 상태에서 지워진다(factoryRuntimePruneAsset).
+ * "지금 섹션으로 다시 만들 수 있다"는 이유인데, 다시 만들면 지금 섹션이 나올 뿐
+ * 그때 그 변형은 아니다. 그래서 고른 변형이 무엇이었는지 확인할 길이 사라진다 —
+ * 실측 2026-08-27: 보관함에 html 0건, jpg 665건.
+ *
+ * 보관함 백엔드는 asset.html 을 받으면 detail.html 로 써 두고 그대로 돌려준다.
+ * 보내 주기만 하면 되므로, 변형을 만들 때 본문 사본을 함께 남긴다.
+ */
+async function archiveDetailVariantHtml(asset, html) {
+  const body = String(html || '').trim();
+  if (!asset || !body || typeof workspaceArchiveFetch !== 'function') return false;
+  if (String(asset.documentArchiveId || '').trim()) return true;
+  try {
+    const base = typeof factoryRuntimeBackendBaseUrl === 'function' ? factoryRuntimeBackendBaseUrl() : '';
+    const factory = (typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null) || {};
+    const product = factory.product || {};
+    const workspaceId = typeof factoryCurrentWorkspaceId === 'function'
+      ? factoryCurrentWorkspaceId(factory)
+      : String(factory.currentProjectId || '');
+    const payload = {
+      workspaceId,
+      productName: String(product.productName || state.productName || '').trim(),
+      productKey: String(product.productKey || product.productIdentityKey || '').trim(),
+      stageId: 'detail',
+      asset: {
+        id: asset.id,
+        stageId: 'detail',
+        type: 'html',
+        title: String(asset.title || '상세페이지 변형'),
+        html: body,
+        prompt: String(asset.prompt || ''),
+        createdAt: asset.createdAt || Date.now(),
+        workspaceId,
+        currentProjectId: workspaceId,
+        metadata: {
+          ...(asset.metadata && typeof asset.metadata === 'object' ? asset.metadata : {}),
+          detailVariantAssetId: asset.id,
+          source: 'detail-variant-document',
+        },
+      },
+    };
+    // 보관함 쓰기는 편집 점유권을 요구한다. 없으면 fetch 가
+    // "archive mutation requires the current edit authority" 로 거절된다.
+    if (typeof ensureWorkspaceEditAuthority === 'function') {
+      const authority = await ensureWorkspaceEditAuthority();
+      if (!['editing', 'offline-edit'].includes(String(authority?.mode || ''))) return false;
+    }
+    const res = await workspaceArchiveFetch(`${base}/api/local-archive/assets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return false;
+    const result = await res.json();
+    const archiveId = String(result?.archive?.id || result?.archive?.archiveId || '').trim();
+    if (!archiveId) return false;
+    // documentArchiveId 만 남긴다. archiveId 까지 붙이면 투영이 "그림이 있는 자산"으로 보고
+    // .../thumbnail 주소를 만들어 내는데, 이 보관본에는 그림이 없어 빈 칸이 뜬다.
+    asset.documentArchiveId = archiveId;
+    // 보관은 저장이 끝난 뒤에 마무리된다. 그래서 위에서 붙인 표는 이미 커밋된 사본에
+    // 닿지 못하고 사라진다. 저장된 자산에 같은 표를 한 번 더 붙여야 화면이 찾을 수 있다.
+    if (typeof factoryRuntimeUpdateOwnedFactory === 'function') {
+      try {
+        await factoryRuntimeUpdateOwnedFactory(
+          'factory/runtime:preserveDetailHtml',
+          'factory-assets',
+          draft => {
+            const target = (draft.assets || []).find(item => String(item?.id || '') === String(asset.id || ''));
+            if (!target) return false;
+            target.documentArchiveId = archiveId;
+            return true;
+          },
+        );
+      } catch (_) { /* 표를 못 붙여도 본문은 이미 남았다. 다음 저장에서 다시 붙는다. */ }
+    }
     return true;
   } catch (error) {
     return false;
@@ -15968,7 +16056,12 @@ function factoryControlAssetCandidate(asset = {}) {
     kind: assetKind,
     label: String(asset.title || '').trim(),
     summary: summaryParts.join(' · '),
-    thumbnailUrl: factoryControlThumbnailReference(asset),
+    // 상세페이지 변형은 그림이 아니라 문서다. 보관함에 남긴 본문의 주소를 함께 보내
+    // 관제탑이 그 문서를 그대로 그려 보여 줄 수 있게 한다.
+    documentArchiveId: String(asset.documentArchiveId || '').trim(),
+    // 문서 자산에는 그림이 없다. 보관 id 만 보고 .../thumbnail 주소를 만들어 보내면
+    // 화면에 404 나는 빈 칸이 뜬다. 문서는 문서로 보여 준다.
+    thumbnailUrl: assetKind === 'html' ? '' : factoryControlThumbnailReference(asset),
     digest: String(
       asset.digest || asset.imageDigest || asset.contentDigest
       || asset.contentHash || asset.localArchive?.contentHash
@@ -15992,16 +16085,41 @@ function factoryControlAssetCandidate(asset = {}) {
 
 function factoryControlAssetStage(factory, key, stageId) {
   const stage = factory.stages?.[stageId] || {};
-  const candidates = (factory.assets || [])
-    .filter(asset => String(asset?.stageId || '') === stageId && !asset?.rejected)
-    .map(factoryControlAssetCandidate)
-    .filter(Boolean);
   const selectedIds = Array.isArray(stage.selectedAssetIds)
     ? stage.selectedAssetIds.map(value => String(value || '').trim()).filter(Boolean)
     : [];
+  const stageAssets = (factory.assets || [])
+    .filter(asset => String(asset?.stageId || '') === stageId && !asset?.rejected);
+  // 같은 파일을 가리키는 후보가 둘이면 같은 컷을 두 번 고르라고 내미는 셈이다.
+  // 보관함에서 되살린 컷과 원래 컷이 같은 파일인 일이 잦다 —
+  // 실측 2026-08-27: 대표 후보 10개 중 2개가 같은 보관 파일(e91390053bcb37ce)이었다.
+  // 파일 지문으로 겹치는 것을 걸러 내되, 이미 고른 컷이 있으면 그쪽을 남긴다.
+  // 어느 쪽을 남길지는 사람이 고른 것 > 지금 쓰는 것 > 나머지 순으로 정한다.
+  // 사람이 고른 id 를 버리면 그림은 같아도 뒤에서 그 id 를 찾는 쪽(등록·영수증)이 헛짚는다.
+  const selectedIdSet = new Set(selectedIds);
+  const usedIdSet = new Set(
+    stageAssets.filter(asset => asset?.used).map(asset => String(asset?.id || '').trim()).filter(Boolean),
+  );
+  const keepRank = id => (selectedIdSet.has(id) ? 2 : (usedIdSet.has(id) ? 1 : 0));
+  const candidates = [];
+  const seenAtByFingerprint = new Map();
+  for (const asset of stageAssets) {
+    const candidate = factoryControlAssetCandidate(asset);
+    if (!candidate) continue;
+    const fingerprint = candidate.digest || candidate.thumbnailUrl || '';
+    const seenAt = fingerprint ? seenAtByFingerprint.get(fingerprint) : undefined;
+    if (seenAt === undefined) {
+      if (fingerprint) seenAtByFingerprint.set(fingerprint, candidates.length);
+      candidates.push(candidate);
+      continue;
+    }
+    if (keepRank(candidate.id) > keepRank(candidates[seenAt].id)) {
+      candidates[seenAt] = candidate;
+    }
+  }
   const selectedId = selectedIds.find(id => candidates.some(candidate => candidate.id === id))
-    || String((factory.assets || []).find(asset => (
-      asset?.used && String(asset?.stageId || '') === stageId
+    || String(stageAssets.find(asset => (
+      asset?.used && candidates.some(candidate => candidate.id === String(asset?.id || '').trim())
     ))?.id || '').trim();
   return Object.freeze({
     key,

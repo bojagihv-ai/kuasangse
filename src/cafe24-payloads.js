@@ -2611,6 +2611,26 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
       const scoreB = (b.used ? 10 : 0) + (b.stageId === 'detail' ? 5 : 0) + Number(b.createdAt || 0) / 10000000000000;
       return scoreB - scoreA;
     });
+  // 사람이 고른 최종 A컷이 있으면 그것이 정본이다.
+  // 이 함수는 여태 stages.detail.selectedAssetIds 를 한 번도 보지 않고 "이미지가 가장 많은
+  // 자산" 을 골랐다. 그래서 고른 것과 다른 변형이 조용히 등록될 수 있었다 —
+  // 실측 2026-08-27: 고른 변형의 본문이 지워져 있으면 이미지 0개라 영영 지고,
+  // 대신 아무 자산이나 뽑혔다. 고른 것을 먼저 보고, 못 쓰면 그 까닭을 말한다.
+  const selectedDetailIds = Array.isArray(factory.stages?.detail?.selectedAssetIds)
+    ? factory.stages.detail.selectedAssetIds.map(value => String(value || '').trim()).filter(Boolean)
+    : [];
+  const chosenDetail = selectedDetailIds.length
+    ? detailAssets.find(asset => (
+      String(asset?.id || '') === selectedDetailIds[selectedDetailIds.length - 1]
+    )) || null
+    : null;
+  const chosenDetailHtml = chosenDetail
+    ? factoryCafe24StripDetailAdminLabels(chosenDetail.html || chosenDetail.content || chosenDetail.value || '')
+    : '';
+  const chosenDetailLost = !!(chosenDetail && !chosenDetailHtml);
+  const chosenDetailNotice = chosenDetailLost
+    ? '고른 최종 A컷의 본문이 남아 있지 않아 현재 미리보기로 등록합니다. 그 변형으로 올리려면 다시 만들어 주세요.'
+    : '';
   let sectionExportBlocked = null;
   try {
     const previewStatus = factoryCurrentPreviewSectionStatus(appState);
@@ -2651,6 +2671,36 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
             message: `상세페이지 HTML에 현재 상품과 다른 상품명 단서가 남아 있어 전송하지 않습니다: ${foreignCheck.conflicts.slice(0, 3).join(', ')}. 현재 상품 기준으로 섹션을 다시 생성해주세요.`,
           };
         }
+        // 고른 A컷이 먼저다. 이미지 수로 겨루기 전에 사람의 지시를 따른다.
+        if (chosenDetailHtml && /<[^>]+>/.test(chosenDetailHtml)) {
+          const chosenSafe = factoryCafe24DetailHtmlPreflight(chosenDetailHtml);
+          if (!chosenSafe.ok && chosenSafe.hasAdminLabels) {
+            return {
+              html: '', source: 'detail-admin-label-blocked', blocked: true, asset: chosenDetail, sectionCount,
+              message: `고른 최종 A컷에 작업용 라벨이 남아 있어 전송하지 않습니다: ${chosenSafe.adminLabelHits.slice(0, 3).join(', ')}.`,
+            };
+          }
+          if (chosenSafe.hasLightPlaceholder) {
+            return {
+              html: '', source: 'detail-light-placeholder-blocked', blocked: true, asset: chosenDetail, sectionCount,
+              message: '고른 최종 A컷에 실제 이미지가 아닌 자리표시자가 남아 있어 전송하지 않습니다.',
+            };
+          }
+          const chosenForeign = factoryCafe24DetailForeignProductCheck(chosenDetailHtml, factory, appState);
+          if (!chosenForeign.ok) {
+            return {
+              html: '', source: 'detail-foreign-product-blocked', blocked: true, asset: chosenDetail, sectionCount,
+              message: `고른 최종 A컷에 다른 상품명 단서가 남아 있어 전송하지 않습니다: ${chosenForeign.conflicts.slice(0, 3).join(', ')}.`,
+            };
+          }
+          return {
+            html: mergeCurrentSectionImages(chosenDetailHtml, html),
+            source: 'detail-asset-selected',
+            asset: chosenDetail,
+            sectionCount: Number(chosenDetail?.metadata?.sectionCount || 0) || sectionCount,
+            message: '고른 최종 A컷을 등록 본문으로 사용합니다.',
+          };
+        }
         const richerAsset = detailAssets
           .map(asset => ({
             asset,
@@ -2668,12 +2718,18 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
             html: mergeCurrentSectionImages(richerAsset.html, html),
             source: 'detail-asset-richer-current',
             asset: richerAsset.asset,
+            selectedDetailLost: chosenDetailLost,
             sectionCount: Number(richerAsset.asset?.metadata?.sectionCount || 0) || sectionCount,
-            message: '현재 미리보기에서 복원되지 않은 상세 이미지가 있어 같은 작업의 완성 보존본을 사용합니다.',
+            message: [chosenDetailNotice,
+              '현재 미리보기에서 복원되지 않은 상세 이미지가 있어 같은 작업의 완성 보존본을 사용합니다.',
+            ].filter(Boolean).join(' '),
           };
         }
         const check = detailHtmlProductCheck(html);
         const warningMessages = [
+          // 고른 변형을 못 쓰고 현재 미리보기로 넘어갈 때는 반드시 말한다.
+          // 말 없이 넘어가면 고른 것과 다른 내용이 올라간 줄도 모른다.
+          chosenDetailNotice,
           sectionScopeCheck.productKeyWarning ? sectionScopeCheck.message : '',
           !check.ok ? '상품명 문구가 HTML에 직접 보이지 않지만 입력 이미지 원본 기준이 맞아 등록 대상으로 유지합니다.' : '',
         ].filter(Boolean);
@@ -2681,6 +2737,7 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
           html: mergeCurrentSectionImages(String(html), html),
           source: 'current-section-export',
           productCheckWarning: !!warningMessages.length,
+          selectedDetailLost: chosenDetailLost,
           sectionCount,
           message: warningMessages.join(' '),
         };
@@ -2701,7 +2758,12 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
   } catch(e) {
     sectionExportBlocked = { html: '', source: 'section-export-error', blocked: true, error: e?.message || String(e) };
   }
-  for (const asset of detailAssets) {
+  // 현재 미리보기로 만들지 못했을 때 쓰는 길이다. 여기서도 사람이 고른 A컷을 먼저 본다 —
+  // used 정렬에만 기대면 같은 순위의 다른 자산이 앞설 수 있어 고른 것과 다른 게 나간다.
+  const fallbackOrder = chosenDetail
+    ? [chosenDetail, ...detailAssets.filter(asset => asset !== chosenDetail)]
+    : detailAssets;
+  for (const asset of fallbackOrder) {
     const html = factoryCafe24StripDetailAdminLabels(asset.html || asset.content || asset.value || '');
     if (html && /<[^>]+>/.test(html)) {
       const safeCheck = factoryCafe24DetailHtmlPreflight(html);

@@ -2,46 +2,22 @@ import {
   validateProductCheckpoint,
   validateProductRunPayload,
 } from './batch-control-contract.mjs';
+import {
+  FACTORY_CONTROL_COMMAND_VERSION,
+  FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION,
+  FactoryControlCommandError,
+  hydrationPayload,
+  record,
+  selectionPayload,
+  text,
+} from './factory-control-payloads.mjs';
 
 export const FACTORY_CONTROL_COMMAND_BRIDGE_VERSION = 'factory-control-command-bridge:v1';
-export const FACTORY_CONTROL_COMMAND_VERSION = 'factory-control-command:v1';
-export const FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION = 'factory-workfile-hydration-command:v1';
-
-export class FactoryControlCommandError extends Error {
-  constructor(code) {
-    super(code);
-    this.name = 'FactoryControlCommandError';
-    this.code = code;
-  }
-}
-
-function record(value) {
-  return value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function text(value) {
-  return String(value ?? '').trim();
-}
-
-function selectionPayload(value) {
-  if (!record(value)) throw new FactoryControlCommandError('factory_control_payload_invalid');
-  const fields = [
-    'productId',
-    'productKey',
-    'stageKey',
-    'candidateId',
-    'expectedRunId',
-    'expectedInputFingerprint',
-    'idempotencyKey',
-  ];
-  for (const field of fields) {
-    if (!text(value[field])) throw new FactoryControlCommandError(`factory_control_field_missing:${field}`);
-  }
-  if (!Number.isInteger(value.expectedRevision) || value.expectedRevision < 0) {
-    throw new FactoryControlCommandError('factory_control_revision_invalid');
-  }
-  return Object.freeze({ ...value });
-}
+export {
+  FACTORY_CONTROL_COMMAND_VERSION,
+  FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION,
+  FactoryControlCommandError,
+};
 
 function productRunPayload(value) {
   try {
@@ -49,51 +25,6 @@ function productRunPayload(value) {
   } catch (error) {
     throw new FactoryControlCommandError(text(error?.code || 'factory_product_payload_invalid'));
   }
-}
-
-function hydrationPayload(value, order) {
-  if (!record(value) || !record(order)) {
-    throw new FactoryControlCommandError('factory_workfile_payload_invalid');
-  }
-  if (
-    value.contractVersion !== FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION
-    || value.capabilityVersion !== FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION
-  ) {
-    throw new FactoryControlCommandError('factory_workfile_command_version_unsupported');
-  }
-  for (const field of [
-    'fileName',
-    'workfileText',
-    'expectedSha256',
-    'expectedWorkspaceId',
-    'expectedProductId',
-    'expectedProductKey',
-    'expectedRunId',
-    'idempotencyKey',
-  ]) {
-    if (!text(value[field])) {
-      throw new FactoryControlCommandError(`factory_workfile_field_missing:${field}`);
-    }
-  }
-  if (
-    (value.expectedInputFingerprint !== undefined && !text(value.expectedInputFingerprint))
-    ||
-    !/^[a-f0-9]{64}$/u.test(text(value.expectedSha256).toLocaleLowerCase('en-US'))
-    || !Number.isInteger(value.expectedWorkfileRevision)
-    || value.expectedWorkfileRevision < 0
-  ) {
-    throw new FactoryControlCommandError('factory_workfile_identity_invalid');
-  }
-  if (
-    value.expectedProductId !== order.productId
-    || value.expectedProductKey !== order.productKey
-    || value.expectedRunId !== order.currentRunId
-    || value.expectedWorkfileRevision !== order.expectedWorkfileRevision
-    || value.idempotencyKey !== order.idempotencyKey
-  ) {
-    throw new FactoryControlCommandError('factory_workfile_identity_mismatch');
-  }
-  return Object.freeze({ ...value });
 }
 
 export function createFactoryControlCommandBridge({ requestClassicRuntime, hydrateWorkfile } = {}) {

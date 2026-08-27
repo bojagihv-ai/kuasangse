@@ -1,6 +1,6 @@
 {
   "schema": "kuasangse.runtime.v1",
-  "buildId": "20260811-webmcp-hydration-bridge-v1233",
+  "buildId": "20260811-webmcp-hydration-bridge-v1244",
   "entry": "app.html",
   "loader": "src/app-loader.js",
   "bundle": "dist/app-runtime.bundle.js",
@@ -56,6 +56,7 @@
     "src/modules/batch-control-order-intake.mjs",
     "src/modules/batch-control-worker.mjs",
     "src/modules/factory-cafe24-command-bridge.mjs",
+    "src/modules/factory-control-payloads.mjs",
     "src/modules/factory-control-command-bridge.mjs",
     "src/modules/factory-workfile-webmcp.mjs",
     "src/domains/cafe24/fields.mjs",

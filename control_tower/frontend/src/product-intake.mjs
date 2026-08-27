@@ -52,6 +52,7 @@ const errorMessage = code => ({
   color_name_required: '색상 옵션 이미지마다 색상명을 입력해 주세요.',
   image_metadata_required: '각 이미지의 이름과 이미지 확인 상태를 확인해 주세요.',
   image_payload_required: '선택한 이미지 원본을 읽지 못했습니다. 파일을 다시 선택해 주세요.',
+  source_images_missing: '이 원장 제품에는 등록된 이미지가 없습니다. 아래 “신규·미등록 제품 입력”으로 이미지를 직접 넣어 주세요.',
   product_name_required: '상품명을 입력해 주세요.',
   product_target_required: '신화사 DB 검색 결과에서 대상 제품을 먼저 선택해 주세요.',
 }[code] || code);
@@ -76,6 +77,36 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
     // 새 작업으로 시작한다.
     attachedWorkfile: null,
   };
+  /**
+   * 지금 상태로 작업을 시작할 수 있는지, 없으면 무엇이 모자란지 한 줄로 돌려준다.
+   *
+   * 여태 버튼은 늘 열려 있었고, 눌러야 "대상 제품을 먼저 선택해 주세요" 를 들었다.
+   * 무엇을 채워야 하는지는 누르기 전에 알아야 한다.
+   */
+  const submitBlocker = () => {
+    if (state.mode === 'db') {
+      if (!state.selected) return '신화사 DB에서 제품을 먼저 검색해 고르세요.';
+      if (!Array.isArray(state.selected.inputImages) || !state.selected.inputImages.length) {
+        return '고른 제품의 원본 이미지를 아직 불러오지 못했습니다.';
+      }
+      return '';
+    }
+    if (!text(document.getElementById('required-product-name')?.value)) return '상품명을 입력해 주세요.';
+    if (!state.baseImages.length) return '기본 이미지를 1장 이상 선택해 주세요.';
+    return '';
+  };
+
+  const syncSubmitReadiness = () => {
+    const blocker = submitBlocker();
+    submit.disabled = !!blocker;
+    submit.title = blocker || '';
+    const hint = document.getElementById('intake-submit-hint');
+    if (hint) {
+      hint.textContent = blocker;
+      hint.hidden = !blocker;
+    }
+  };
+
   const notifyWorkfileLink = detail => {
     const jcode = Number(detail.jcode);
     if (state.pendingWorkfileJcode !== jcode) return;
@@ -115,6 +146,7 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
       control.disabled = mode !== 'manual';
     });
     submit.textContent = mode === 'db' ? '선택 제품으로 조립공장 작업 시작' : '직접 입력 제품으로 조립공장 작업 시작';
+    syncSubmitReadiness();
     setStatus(
       'intake-status',
       mode === 'db'
@@ -186,8 +218,11 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
           dataUrl: text(image.dataUrl),
         }))
         : [];
-      if (!inputImages.length) throw new ProductIntakeError('image_payload_required');
+      // 원장에 이미지가 한 장도 없는 제품이다. 파일 읽기가 실패한 것과는 다른 일이라
+      // 같은 코드를 쓰면 "파일을 다시 선택해 주세요" 라는 엉뚱한 안내가 나간다.
+      if (!inputImages.length) throw new ProductIntakeError('source_images_missing');
       state.selected = { ...source, inputImages };
+      syncSubmitReadiness();
       renderSelected(source, readiness);
       setStatus('intake-status', `${source.productName} 선택 완료 · 원본 이미지 ${inputImages.length}장 준비`, readiness.ready ? 'ok' : 'error');
       notifyWorkfileLink({
@@ -198,7 +233,12 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
       });
     } catch (error) {
       if (selectionVersion !== state.selectionVersion) return;
-      const message = text(error.message);
+      // 여기만 서버 코드를 그대로 띄우고 있었다. 바로 위 errorMessage 에 사람 말이 이미 있는데
+      // 쓰이지 않아 "image_payload_required" 같은 글자가 화면에 그대로 나왔다.
+      const message = errorMessage(text(error.message));
+      // 이미지를 못 받았으면 고른 것으로 칠 수 없다. 버튼을 열어 두면 눌러야 실패를 안다.
+      state.selected = null;
+      syncSubmitReadiness();
       renderSelected(source, { ready: false, missingFields: [], warnings: [] }, message);
       setStatus('intake-status', `원장 준비 상태 조회 실패: ${message}`, 'error');
       notifyWorkfileLink({
@@ -288,6 +328,7 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
       dataUrl: await dataUrlFile(file),
     }))));
     renderImageList();
+    syncSubmitReadiness();
   };
 
   document.querySelectorAll('input[name="intake-mode"]').forEach(input => {
@@ -371,6 +412,7 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
     }
   };
 
+  document.getElementById('required-product-name')?.addEventListener('input', syncSubmitReadiness);
   document.getElementById('base-images').addEventListener('change', event => void readFiles(event.target.files, 'base'));
   document.getElementById('color-images').addEventListener('change', event => void readFiles(event.target.files, 'color'));
   document.getElementById('intake-workfile')?.addEventListener('change', event => void attachWorkfile(event.target.files?.[0] || null));

@@ -1372,3 +1372,72 @@ def test_direct_factory_job_reconcile_records_local_terminal_receipt_without_pdp
     incoming = {**projection, "sequence": 2, "cursor": "2"}
     factory.accept_projection(incoming)
     assert factory.current_state()["registration"]["publicationReceipt"] == terminal
+
+
+def _archive_document_client(tmp_path: Path, records: list[JsonObject]):
+    """보관함 목록만 갖춘 관제탑을 만든다. 문서 읽기 경로만 보려는 것이다."""
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    archive_root = tmp_path / "local-archive"
+    archive_root.mkdir(parents=True, exist_ok=True)
+    (archive_root / "index.json").write_text(
+        json.dumps({"assets": records}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(cache_root)})
+    return create_app(
+        config,
+        pdp_api=FakePdpApi(),
+        cafe24_bridge=FakeCafe24Bridge(),
+    ).test_client()
+
+
+def test_archive_document_returns_stored_detail_html(tmp_path: Path) -> None:
+    # Given: 상세페이지 변형의 본문이 보관함에 파일로 남아 있다.
+    archive_root = tmp_path / "local-archive"
+    item_dir = archive_root / "2026-08-27" / "detail-variant"
+    item_dir.mkdir(parents=True)
+    html_path = item_dir / "detail.html"
+    html_path.write_text('<section><img src="/api/local-archive/x/image"></section>', encoding="utf-8")
+    client = _archive_document_client(tmp_path, [{
+        "archiveId": "abc123",
+        "title": "상세페이지 변형",
+        "files": {"htmlPath": str(html_path)},
+    }])
+
+    # When: 화면이 그 변형의 본문을 청한다.
+    response = client.get("/api/factory/archive-document/abc123")
+
+    # Then: 본문을 그대로 돌려준다. 그래야 화면이 그려 보여 줄 수 있다.
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["archiveId"] == "abc123"
+    assert "<section>" in body["html"]
+    assert body["note"] == ""
+
+
+def test_archive_document_refuses_path_outside_archive_root(tmp_path: Path) -> None:
+    # Given: 기록이 보관함 폴더 밖의 파일을 가리킨다.
+    outside = tmp_path / "secret.html"
+    outside.write_text("<b>보관함 밖</b>", encoding="utf-8")
+    client = _archive_document_client(tmp_path, [{
+        "archiveId": "escape1",
+        "files": {"htmlPath": str(outside)},
+    }])
+
+    # When: 그 기록을 청한다.
+    response = client.get("/api/factory/archive-document/escape1")
+
+    # Then: 밖의 파일은 읽지 않는다. 보관함 경로를 지렛대로 삼지 못하게 한다.
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["html"] == ""
+    assert "본문이 없습니다" in body["note"]
+
+
+def test_archive_document_rejects_malformed_archive_id(tmp_path: Path) -> None:
+    client = _archive_document_client(tmp_path, [])
+
+    response = client.get("/api/factory/archive-document/..%2F..%2Fetc")
+
+    assert response.status_code in {404, 422}

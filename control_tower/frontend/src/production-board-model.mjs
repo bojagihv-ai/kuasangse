@@ -56,8 +56,10 @@ function normalizeCandidate(value) {
       confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : null,
       rationale: text(source.rationale),
       // 섹션 단계는 한 칸에 여러 섹션의 변형이 함께 온다. 어느 섹션의 것인지 잃어버리면
-      // 52개가 한 줄에 쏟아져 사람이 고를 수 없다. id 는 "섹션:변형" 꼴이다.
-      sectionId: text(source.sectionId) || text(id).split(':')[0],
+      // 52개가 한 줄에 쏟아져 사람이 고를 수 없다. 섹션 후보의 id 는 "섹션:변형" 꼴이다.
+      // 콜론이 없는 id 를 쪼개면 id 전체가 섹션 이름으로 둔갑해 화면에 그대로 샌다 —
+      // 실측 2026-08-27: 최종 후보 카드 제목이 factory_detail_mt5sy5u8_0922pk 였다.
+      sectionId: text(source.sectionId) || (text(id).includes(':') ? text(id).split(':')[0] : ''),
       variantId: text(source.variantId),
       // 변형별 그림은 저장되지 않는다. 이름("기준안 1")과 첫 문구로 고르게 한다.
       label: text(source.label),
@@ -66,6 +68,8 @@ function normalizeCandidate(value) {
       hasImage: text(source.hasImage) === '1',
       // 그림 후보와 문서 후보는 고르는 방식이 다르다. 문서는 열어 봐야 안다.
       kind: text(source.kind) || 'image',
+      // 그 문서가 보관함 어디에 있는지. 이걸 버리면 화면이 본문을 찾아갈 길이 없다.
+      documentArchiveId: text(source.documentArchiveId),
     }
     : null;
 }
@@ -118,7 +122,7 @@ function valueLabel(key) {
   return PRODUCT_VALUE_LABELS[text(key)] || text(key);
 }
 
-const OPERATOR_MESSAGES = Object.freeze({
+export const OPERATOR_MESSAGES = Object.freeze({
   factory_product_checkpoint_save_failed: '작업 저장에 실패했습니다. 조립공장에서 이 작업을 다시 열고 재개하세요.',
   factory_product_checkpoint_missing: '저장된 작업 상태가 없습니다. 처음부터 다시 실행해야 합니다.',
   factory_product_checkpoint_invalid: '저장된 작업 상태를 읽을 수 없습니다. 조립공장에서 작업파일을 다시 여세요.',
@@ -274,6 +278,15 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
         && text(record(job.requiredValues).optionMode) === 'none') {
         state = 'skipped';
       }
+      const selectedCandidate = stage && stage.selectedId
+        ? stage.candidates.find(candidate => candidate.id === stage.selectedId) || null
+        : null;
+      // 고른 것이 문서(상세페이지)면 그 단계의 보관 그림을 빌려 오면 안 된다.
+      // 그 그림은 고른 변형과 아무 상관이 없어서, 문서를 골랐는데 엉뚱한 사진이 뜬다 —
+      // 실측 2026-08-27: 최종 2/4 칸에 흰 이미지가 떴다.
+      const selectedIsDocument = selectedCandidate
+        ? candidatePresentation(selectedCandidate, definition.key) === 'document'
+        : false;
       return {
         jobId,
         stageKey: definition.key,
@@ -284,14 +297,16 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
         selectedId: stage ? stage.selectedId : '',
         selectedIds: stage && Array.isArray(stage.selectedIds) ? stage.selectedIds : [],
         reservedCandidateId: reserved,
+        selectedIsDocument,
         // 고른 컷의 그림은 진행 스냅샷에 없을 수 있다. 그때만 보관함에 남은 것을 쓴다.
         // 아직 고르지 않은 칸까지 채우면, 빈 칸이 그림을 달고 나와 표가 들쭉날쭉해진다.
-        selectedThumbnailUrl: stage && stage.selectedId
-          ? ((stage.candidates.find(candidate => candidate.id === stage.selectedId)?.thumbnailUrl || '')
-            || text(archivedStage?.thumbnailUrl))
+        selectedThumbnailUrl: stage && stage.selectedId && !selectedIsDocument
+          ? ((selectedCandidate?.thumbnailUrl || '') || text(archivedStage?.thumbnailUrl))
           : '',
-        // 크게 보기용 원본. 고른 칸에서만 쓴다.
-        selectedContentUrl: stage && stage.selectedId ? text(archivedStage?.contentUrl) : '',
+        // 크게 보기용 원본. 고른 칸에서만 쓴다. 문서에는 볼 원본 그림이 없다.
+        selectedContentUrl: stage && stage.selectedId && !selectedIsDocument
+          ? text(archivedStage?.contentUrl)
+          : '',
         // 몇 개 중 몇 번째를 골랐는지. 이게 없으면 화면은 "고름" 만 말하고 무엇을 골랐는지는 안 말한다.
         selectedIndex: stage && stage.selectedId
           ? stage.candidates.findIndex(candidate => candidate.id === stage.selectedId) + 1
@@ -631,6 +646,24 @@ export function summarizeBatchSelection(responseValue) {
  * 시간처럼 새로고침마다 흘러가는 값은 담지 않는다. 담으면 아무 일이 없어도 모든
  * 행이 매번 새로 만들어진다.
  */
+/**
+ * 이 후보를 그림으로 보여 줄지 문서로 보여 줄지 정한다.
+ *
+ * 후보가 스스로 말하지 않으면 단계가 대신 말한다. 작업 기록은 저장될 당시의 형식으로
+ * 얼어붙어 있어서, 나중에 생긴 칸(kind·summary)이 통째로 없는 오래된 작업이 남는다 —
+ * 실측 2026-08-27: RP·단색 두 작업의 후보에는 kind 가 하나도 없었다.
+ * 그때 뷰가 조건을 줄줄이 걸러 내려가면 어느 갈래에도 걸리지 않아 원시 id 가 그대로 떴다.
+ * 판정을 여기 한 곳에 모아, 어떤 세대의 기록이 와도 화면이 뜻이 통하게 한다.
+ */
+export function candidatePresentation(candidateValue, stageKey = '') {
+  const candidate = record(candidateValue);
+  if (text(candidate.kind) === 'html' || text(candidate.documentArchiveId)) return 'document';
+  if (text(candidate.thumbnailUrl)) return 'image';
+  // 최종 상세페이지 단계의 후보는 언제나 문서다. 기록이 낡아 kind 가 없어도 그렇다.
+  if (text(stageKey) === 'final_detail') return 'document';
+  return candidate.hasImage === true ? 'image' : 'unknown';
+}
+
 export function boardRowSignature(rowValue, contextValue = {}) {
   const row = record(rowValue);
   const context = record(contextValue);
@@ -638,6 +671,10 @@ export function boardRowSignature(rowValue, contextValue = {}) {
     context.busy === true,
     context.connected === true,
     context.resultsOpen === true,
+    // 프롬프트·상세 본문처럼 나중에 도착하는 것과, 펼침 상태도 행 모양을 바꾼다.
+    // 서명에서 빠지면 행 노드를 그대로 재사용해 도착해도 화면이 그대로다.
+    integer(context.promptCacheVersion), integer(context.documentCacheVersion),
+    text(context.openPrompts), context.promptAlwaysOpen === true, text(context.openCompose),
     text(row.jobId), integer(row.order), text(row.status),
     text(row.statusLabel), text(row.statusTone),
     text(row.productName), text(row.workfileName),
@@ -651,6 +688,7 @@ export function boardRowSignature(rowValue, contextValue = {}) {
       return [
         text(cell.stageKey), text(cell.state), integer(cell.candidateCount),
         integer(cell.selectedIndex), text(cell.selectedThumbnailUrl),
+        cell.selectedIsDocument === true,
         cell.pickable === true, cell.changeable === true, text(cell.reservedCandidateId),
       ];
     }),
