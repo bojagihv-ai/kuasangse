@@ -17761,7 +17761,16 @@ async function factoryRuntimeControlComposeCut(payload = {}) {
   if (!onTarget && payload.checkpoint && typeof payload.checkpoint === 'object') {
     await factoryRuntimeControlRestoreProductCheckpoint({ ...payload, jobId });
   }
-  factoryRuntimeControlAdoptProductProject(jobId);
+  const adoptedProjectId = factoryRuntimeControlAdoptProductProject(jobId);
+  // 보관함에 새 그림을 쓰려면 이 작업의 편집권이 있어야 한다. 없으면
+  // "archive mutation requires the current edit authority" 로 생성이 실패한다
+  // (실측 2026-08-27: hero 80% 에서 컷 4 생성 실패).
+  if (typeof ensureWorkspaceEditAuthority === 'function' && adoptedProjectId) {
+    const authority = await ensureWorkspaceEditAuthority(`project:${adoptedProjectId}`);
+    if (!['editing', 'offline-edit'].includes(authority?.mode)) {
+      throw factoryRuntimeBatchCommandError('factory_workspace_edit_authority_missing');
+    }
+  }
 
   if (sectionMatch) {
     const sectionId = sectionMatch[1];
