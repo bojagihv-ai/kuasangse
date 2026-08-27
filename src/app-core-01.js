@@ -856,7 +856,7 @@ const tokenTracker = {
             </div>` : ''}
         </div>
       ` : `
-        <div style="overflow-y:auto;max-height:360px">
+        <div style="overflow:visible">
           <table class="hist-table">
             <thead><tr>
               <th>시간</th><th>작업</th><th>모델</th><th>입력↑</th><th>출력↓</th><th>비용</th>

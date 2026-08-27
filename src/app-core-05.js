@@ -8283,7 +8283,7 @@ function renderFactoryRegisteredProductsPanel(factory = factoryRuntimeReadFactor
         <button class="btn-sm primary" id="factoryRecordCurrentRegistrationHistory" type="button" ${disabledAttr(!canRecordCurrent, '최종 등록 완료 상태일 때 현재 결과를 이력에 저장할 수 있습니다.')}>현재 완료 등록 이력 저장</button>
       </div>
     </div>
-    <div style="display:grid;gap:8px;max-height:460px;overflow:auto;padding-right:2px">
+    <div style="display:grid;gap:8px;overflow:visible;padding-right:2px">
       ${items.length
         ? items.map(renderFactoryRegisteredProductCard).join('')
         : `<div class="factory-small" style="border:1px dashed rgba(148,163,184,.24);border-radius:10px;padding:14px;color:var(--text-m)">
@@ -11002,7 +11002,7 @@ function renderFactoryAutomationScrapedImagePicker(market, options = {}) {
           <span class="material-icons-outlined" style="font-size:15px;color:var(--primary-h)">receipt_long</span>
           진행 로그
         </div>
-        <div data-comp-market-analysis-logs style="display:flex;flex-direction:column;gap:6px;max-height:156px;overflow:auto">
+        <div data-comp-market-analysis-logs style="display:flex;flex-direction:column;gap:6px;overflow:visible">
           ${renderCompetitorAnalyzeLogItems(analyzeLogs)}
         </div>
       </div>`
@@ -13820,7 +13820,7 @@ function renderSectionBatchRunPanel() {
       </div>
     </div>
     <div class="progress-outer" style="height:10px;margin:10px 0 0"><div class="progress-inner" style="width:${progress}%;min-width:${progress ? '28px' : '0'};font-size:0">${progress}%</div></div>
-    <div style="margin-top:10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(0,0,0,.18);padding:9px;display:grid;gap:6px;max-height:170px;overflow:auto">
+    <div style="margin-top:10px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:rgba(0,0,0,.18);padding:9px;display:grid;gap:6px;overflow:visible">
       ${logs.length ? logs.map(log => `
         <div style="display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;align-items:start;font-size:11px">
           <div style="color:var(--text-m)">${escapeHtml(log.time || '')}</div>
@@ -16740,7 +16740,7 @@ function renderCompMarketScrapedImagesPanel(marketOverride = null, options = {})
         </div>
       </div>
     </div>` : ''}
-    ${images.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;max-height:330px;overflow:auto;padding-right:4px">
+    ${images.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;overflow:visible;padding-right:4px">
       ${visibleImages.map((img, index) => {
         const id = compMarketScrapedImageId(img, index);
         const isSelected = selected.has(id);
@@ -16870,7 +16870,7 @@ function renderCompMarketScrapePanel(snapshot = null, marketOverride = null, opt
         </div>
       </div>
     </div>
-    ${(market.logs || []).length ? `<div style="margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg);padding:10px;max-height:120px;overflow:auto">${market.logs.slice(0, 8).map(renderCompMarketLog).join('')}</div>` : ''}
+    ${(market.logs || []).length ? `<div style="margin-top:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg);padding:10px;overflow:visible">${market.logs.slice(0, 8).map(renderCompMarketLog).join('')}</div>` : ''}
     ${renderCompMarketDetailActionPanel(market, totalResults)}
     ${totalResults ? `<div style="margin-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
       ${COMP_MARKET_SITES.map(site => {

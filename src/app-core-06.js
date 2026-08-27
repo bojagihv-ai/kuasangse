@@ -23380,7 +23380,7 @@ function renderServerAutomationModeEditor(mode, title, profile, status) {
       <p id="autoErrorLine-${modeId}" style="font-size:12px;color:var(--err);margin-top:4px;${error ? '' : 'display:none'}">${error ? '최근 오류: ' + escAttr(error) : ''}</p>
       <div style="margin-top:12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px">
         <div style="font-size:12px;font-weight:600;color:var(--text-m);margin-bottom:6px">작업 로그</div>
-        <div id="autoLogBox-${modeId}" style="max-height:180px;overflow-y:auto">${buildEventLogInner(mode, status, allEvents)}</div>
+        <div id="autoLogBox-${modeId}" style="overflow:visible">${buildEventLogInner(mode, status, allEvents)}</div>
       </div>
     </div>
   `;
@@ -27232,7 +27232,7 @@ function renderOptionSorterImagePreviewModal(os) {
         </div>`}
         <details style="margin-top:10px">
           <summary style="font-size:12px;color:var(--primary-h);cursor:pointer;font-weight:800">생성 프롬프트 보기</summary>
-          <pre style="white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere;max-height:260px;overflow:auto;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:11px;line-height:1.6;color:var(--text-d)">${escapeHtml(result.prompt || '')}</pre>
+          <pre style="white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere;overflow:visible;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:11px;line-height:1.6;color:var(--text-d)">${escapeHtml(result.prompt || '')}</pre>
         </details>
       </div>
     </div>`;
@@ -29220,7 +29220,7 @@ function renderCutsRunLogPanel(c) {
       </div>
       ${isBusy ? '<span class="factory-pill">실행 중</span>' : ''}
     </div>
-    <div style="display:grid;gap:7px;max-height:170px;overflow:auto">
+    <div style="display:grid;gap:7px;overflow:visible">
       ${logs.length ? logs.map(log => `<div class="factory-log-item ${log.type === 'error' ? 'err' : (log.type === 'ok' ? 'ok' : (log.type === 'warn' ? 'warn' : ''))}" style="display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px">
         <b>${escapeHtml(log.time || '')}</b>
         <span>${escapeHtml(cutsVisibleLogText(log.message || ''))}${log.detail ? `<br><small style="color:var(--text-m);font-weight:700">${escapeHtml(cutsVisibleLogText(log.detail))}</small>` : ''}</span>
