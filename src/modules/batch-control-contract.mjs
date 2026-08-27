@@ -122,7 +122,14 @@ export function validateOrder(order) {
     const isProductRun = order.command.name === 'runFactoryProduct';
     if (
       order.command.version !== BATCH_CONTROL_FACTORY_COMMAND_VERSION
-      || !['getFactoryProjection', 'selectFactoryACut', 'runFactoryProduct', 'registerFactoryCafe24'].includes(order.command.name)
+      || ![
+        'getFactoryProjection',
+        'selectFactoryACut',
+        'runFactoryProduct',
+        'registerFactoryCafe24',
+        // 관제탑에서 적어 준 프롬프트로 그 단계의 컷을 새로 만든다.
+        'composeFactoryCut',
+      ].includes(order.command.name)
     ) {
       throw new BatchWorkerContractError('factory_control_command_version_unsupported');
     }
@@ -136,6 +143,12 @@ export function validateOrder(order) {
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
     const payload = order.command.payload;
+    if (order.command.name === 'composeFactoryCut') {
+      if (!text(payload.jobId)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      if (!text(payload.stageKey)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      if (!text(payload.prompt)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
+    }
     if (order.command.name === 'registerFactoryCafe24') {
       if (!text(payload.jobId)) {
         throw new BatchWorkerContractError('factory_control_field_missing:jobId');

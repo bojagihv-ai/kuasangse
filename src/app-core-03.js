@@ -17768,15 +17768,14 @@ async function factoryRuntimeControlComposeCut(payload = {}) {
     if (typeof regenerateSection !== 'function') {
       throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
     }
+    // 섹션은 조립공장이 자기 기준으로 다시 만든다. 적어 준 프롬프트는 그 섹션의
+    // 생성 기준으로 남겨 둔다 — 범위를 가진 명령으로 쓴다.
     await factoryRuntimeBridgeAction(
-      'factory/fields:commitField',
+      'factory/runtime:updateFromInputs',
       undefined,
       draft => {
-        if (!draft.sectionPromptOverrides || typeof draft.sectionPromptOverrides !== 'object') {
-          draft.sectionPromptOverrides = {};
-        }
-        draft.sectionPromptOverrides[sectionId] = prompt;
-        return 'sectionPromptOverrides';
+        factorySetStagePromptForCurrentWork(draft, 'sections', prompt);
+        return 'sectionPrompt';
       },
       { render: false, forceSave: true },
     );
@@ -17784,8 +17783,11 @@ async function factoryRuntimeControlComposeCut(payload = {}) {
     return Object.freeze({ schema: 'factory-compose-cut:v1', jobId, stageKey, started: true });
   }
 
+  // 단계 프롬프트는 stages.<단계>.prompt 에 적힌다. 그 범위를 가진 명령으로 써야 한다.
+  // factory/fields:commitField 는 product-db 조정자라 stages 를 못 써서
+  // FACTORY_COMMAND_PATH_REJECTED 로 막힌다(실측 2026-08-26).
   await factoryRuntimeBridgeAction(
-    'factory/fields:commitField',
+    'factory/runtime:updateFromInputs',
     undefined,
     draft => {
       factorySetStagePromptForCurrentWork(draft, runnerStageId, prompt);
@@ -17793,14 +17795,21 @@ async function factoryRuntimeControlComposeCut(payload = {}) {
     },
     { render: false, forceSave: true },
   );
-  if (typeof factoryRunStage !== 'function') {
+  // 생성 실행은 조립공장이 이미 쓰는 정식 명령으로 돈다. 새 이름을 만들면
+  // "undeclared factory store command" 로 막힌다(실측 2026-08-26).
+  if (typeof factoryRuntimeWithOperationLease !== 'function'
+    || typeof factoryHandleRunStageButton !== 'function') {
     throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
   }
-  await factoryRuntimeUpdateOwnedFactory(
-    'factory/runtime:composeCut',
-    'factory',
-    draft => factoryRunStage(runnerStageId, { factory: draft }),
-  );
+  await factoryRuntimeWithOperationLease('factory/assets:runFactoryStage', undefined, operation => (
+    factoryHandleRunStageButton({
+      dataset: { factoryRunStage: runnerStageId },
+      disabled: false,
+    }, {
+      operationToken: operation.operationToken,
+      operationSignal: operation.operationSignal,
+    })
+  ));
   return Object.freeze({ schema: 'factory-compose-cut:v1', jobId, stageKey, started: true });
 }
 

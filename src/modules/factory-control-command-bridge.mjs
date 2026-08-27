@@ -213,6 +213,23 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     return Object.freeze(result);
   }
 
+  /** 사람이 적은 프롬프트로 그 단계의 컷을 새로 만들라고 고전 런타임에 넘긴다. */
+  async function composeCut(payloadValue) {
+    const payload = record(payloadValue) ? payloadValue : {};
+    if (!text(payload.jobId)) throw new FactoryControlCommandError('factory_control_field_missing:jobId');
+    if (!text(payload.stageKey)) throw new FactoryControlCommandError('factory_control_field_missing:stageKey');
+    if (!text(payload.prompt)) throw new FactoryControlCommandError('factory_control_field_missing:prompt');
+    const result = await requestClassicRuntime(Object.freeze({
+      capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION,
+      command: 'composeFactoryCut',
+      payload,
+    }));
+    if (!record(result) || result.schema !== 'factory-compose-cut:v1') {
+      throw new FactoryControlCommandError('factory_compose_receipt_invalid');
+    }
+    return Object.freeze(result);
+  }
+
   async function run(kind, name, payload = {}, order = {}) {
     if (kind === 'factory-workfile') {
       if (name === 'hydrateFactoryWorkfile') return hydrateFactoryWorkfile(payload, order);
@@ -225,6 +242,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     if (name === 'selectFactoryACut') return selectACut(payload);
     if (name === 'runFactoryProduct') return runProduct(payload);
     if (name === 'registerFactoryCafe24') return registerCafe24(payload);
+    if (name === 'composeFactoryCut') return composeCut(payload);
     throw new FactoryControlCommandError('factory_control_command_unsupported');
   }
 
@@ -234,6 +252,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     hydrateFactoryWorkfile,
     runProduct,
     selectACut,
+    composeCut,
     run,
   });
 }
