@@ -402,8 +402,21 @@ async function main() {
       .map(file => file.rel.match(/새파일검증이전상품_(project_[^/]+)/)?.[1] || '')
       .filter(Boolean),
   );
+  // 이 테스트의 이전 상품 자산이 담긴 workfiles 폴더는 이 테스트 자신의 것이다.
+  // (b93d4ca 부터 미리보기 상세 HTML 이 보관함에 남고, 그때 workspaceId 기반
+  //  폴더에 manifest.json 이 같이 생긴다. 자산 경로에는 상품명이 들어가지만
+  //  manifest 경로에는 안 들어가서, 상품명만 보던 종전 규칙이 이것을 남의
+  //  identity 로 오인했다.) 폴더 단위로 승인해야 manifest 까지 같이 허용된다.
+  const ownWorkfileFolders = new Set(
+    addedArchive
+      .filter(file => file.rel.includes('새파일검증이전상품'))
+      .map(file => file.rel.match(/^workfiles\/([^/]+)\//)?.[1] || '')
+      .filter(Boolean),
+  );
   const foreignAddedArchive = addedArchive.filter(file => {
     if (file.rel.includes('새파일검증이전상품')) return false;
+    const workfileFolder = file.rel.match(/^workfiles\/([^/]+)\//)?.[1] || '';
+    if (workfileFolder && ownWorkfileFolders.has(workfileFolder)) return false;
     return ![...archivedProjectIds].some(projectId => file.rel.startsWith(`workfiles/${projectId}__`));
   });
   fs.writeFileSync(RESULT_PATH, JSON.stringify({ proof, reloadProof, missingArchive, addedArchive, foreignAddedArchive }, null, 2));

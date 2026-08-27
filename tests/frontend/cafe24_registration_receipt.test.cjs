@@ -52,13 +52,16 @@ function readbackSettleGlobals() {
   };
 }
 
-function compile(name, globals = {}) {
+// helpers: 같은 전역에 있어 런타임에서는 그냥 보이는 함수들. 스텁으로 흉내 내면
+// 실제와 어긋나므로 원본 소스를 그대로 잘라 함께 넣는다.
+function compile(name, globals = {}, helpers = []) {
   const context = vm.createContext({
     Object, Date, Math, Number, String, Set,
     ...readbackSettleGlobals(),
     ...globals,
   });
-  vm.runInContext(`${sourceFunction(CORE, name)}\nthis.target = ${name};`, context);
+  const sources = [...helpers, name].map(entry => sourceFunction(CORE, entry)).join('\n');
+  vm.runInContext(`${sources}\nthis.target = ${name};`, context);
   return context.target;
 }
 
@@ -164,7 +167,7 @@ test('Cafe24 등록 영수증 read-back은 전송 직전 상품번호를 fallbac
       mismatches: [],
       readback: {},
     }),
-  });
+  }, ['factoryCafe24RefreshSaveVerificationFromDetail']);
   const factory = { product: { finalDb: {} } };
   const preflight = Object.freeze({ productNo: '999' });
 
@@ -227,7 +230,7 @@ test('Cafe24 등록 영수증은 재고 read-back 반영 시차만 제한적으�
         readback: { quantity: detail.raw.quantity },
       };
     },
-  });
+  }, ['factoryCafe24RefreshSaveVerificationFromDetail']);
   const factory = { product: { finalDb: {} } };
 
   const receipt = await finalize(factory, { preflight: Object.freeze({ productNo: '3011' }) });

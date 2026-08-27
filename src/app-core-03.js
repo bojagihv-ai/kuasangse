@@ -17045,12 +17045,21 @@ async function factoryRuntimeControlRestoreProductCheckpoint(payload = {}) {
   // 로컬 기록으로 이미 이 체크포인트 위에 서 있으면 서버에서 더 실어 올 것이 없다.
   // 실측: 그 상태에서 하이드레이션을 돌리자 판 214 로 맞아 있던 문서가 판 28 짜리로
   // 바뀌어, 멀쩡히 복원된 작업이 불일치로 죽었다.
-  const settledOnCheckpoint = factoryRuntimeControlProjectionMatchesCheckpoint(
-    projection,
-    checkpoint,
-    jobId,
-    RESTORED_IDENTITY_ONLY,
+  //
+  // 다만 신원이 맞는다고 내용까지 실려 있는 것은 아니다. 후보가 0개인 로컬 부분 스냅샷도
+  // 신원만은 맞는다. 그것을 '다 실렸다'로 보면 durable 에 있는 경쟁사 후보를 못 받아 와서
+  // 후보 0개인 채로 등록까지 밀고 나간다. 그래서 일감이 실제로 실려 있을 때만 건너뛴다.
+  // (판 214 짜리 온전한 문서는 후보가 실려 있으므로 위 실측 사례는 그대로 보호된다.)
+  const localCompetitorCount = Number(
+    (projection?.inputs || []).find(item => item?.key === 'competitors')?.count || 0,
   );
+  const settledOnCheckpoint = localCompetitorCount > 0
+    && factoryRuntimeControlProjectionMatchesCheckpoint(
+      projection,
+      checkpoint,
+      jobId,
+      RESTORED_IDENTITY_ONLY,
+    );
   if (canHydrateServerCheckpoint && !hydratedServerCheckpoint && !settledOnCheckpoint) {
     const hydration = await hydrateServerCheckpoint();
     if (hydration.rejected) {

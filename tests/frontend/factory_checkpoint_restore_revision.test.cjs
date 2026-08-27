@@ -322,7 +322,7 @@ test('로컬 기록을 불러온 뒤의 하이드레이션도 무변경을 실�
   // "바꿀 것 없음"(false) 을 돌려주자 hydration_failed 로 죽었다. 멀쩡히 열린 작업이
   // 복원 실패가 된다.
   const region = restoreSource();
-  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {');
+  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint');
   assert.notEqual(at, -1, '두 번째 하이드레이션 블록을 찾지 못했습니다');
   const block = region.slice(at, at + 1200);
   assert.ok(block.includes('const onCheckpoint ='), '이미 그 작업에 서 있는지 보지 않습니다');
@@ -334,7 +334,7 @@ test('로컬 기록을 불러온 뒤의 하이드레이션도 무변경을 실�
 
 test('두 번째 하이드레이션도 거절은 여전히 불일치로 알린다', () => {
   const region = restoreSource();
-  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint) {');
+  const at = region.indexOf('if (canHydrateServerCheckpoint && !hydratedServerCheckpoint');
   const block = region.slice(at, at + 1200);
   assert.ok(block.includes('if (hydration.rejected)'), '거절과 무변경을 구분하지 않습니다');
 });
