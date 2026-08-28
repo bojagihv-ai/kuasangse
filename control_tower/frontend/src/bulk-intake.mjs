@@ -187,16 +187,64 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
    * 이것 없이 투입하면 자동화 정책이 기본값으로 돌아가, 같은 제품이라도 어느 폼으로
    * 넣었느냐에 따라 자동/수동 판단이 달라진다. 잠근 스냅샷을 payload 에 실어 보낸다.
    */
-  async function lockPolicy(productId) {
-    const policyRequest = automation.snapshotRequest?.(String(productId)) || {
-      batchId: String(document.getElementById('batch-id')?.value || '').trim(),
+  // 투입 요청에 마감시한을 둔다. 실측 2026-08-28: 탭 네트워크가 잠깐 막힌 사이 투입을 누르니
+  // 요청이 거절도 응답도 없이 매달렸고, 화면은 「0/1 투입 중」인 채 모든 버튼이 잠긴 채로 남았다.
+  // 사람은 무엇이 잘못됐는지도, 다시 누를 방법도 없었다. 못 가면 못 갔다고 말해야 한다.
+  const SUBMIT_TIMEOUT_MS = 30000;
+
+  /**
+   * 조립공장이 돌려준 코드를 사람 말로 옮긴다.
+   *
+   * 'policy_identity_missing' 같은 코드를 그대로 보여 주면 무엇을 고쳐야 하는지 알 수 없다.
+   * 모르는 코드는 지어내지 말고 그대로 보여 준다 — 거짓 설명이 코드보다 나쁘다.
+   */
+  function submitFailureCopy(error) {
+    const code = String(error?.code || '');
+    const known = {
+      policy_identity_missing: '자동화 정책이 이 묶음에 붙지 않았습니다. 자동판단 화면에서 정책을 확인하고 다시 투입해 주세요.',
+      policy_snapshot_missing: '자동화 정책 스냅샷이 없습니다. 자동판단 화면에서 정책을 고른 뒤 다시 투입해 주세요.',
+      factory_product_color_name_required: '색상 옵션 사진에 색상명이 비어 있습니다.',
+      factory_product_payload_invalid: '투입 값이 조립공장 규격과 맞지 않습니다.',
+      csrf_required: '관제탑 세션이 끊겼습니다. 새로고침한 뒤 다시 투입해 주세요.',
+      session_required: '관제탑 세션이 끊겼습니다. 새로고침한 뒤 다시 투입해 주세요.',
+    };
+    return known[code] || String(code || error?.message || error);
+  }
+
+  async function requestWithDeadline(path, options, timeoutMs = SUBMIT_TIMEOUT_MS) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => controller?.abort(), timeoutMs);
+    try {
+      return await apiRequest(path, controller ? { ...options, signal: controller.signal } : options);
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error(`관제탑이 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 이 제품의 정책을 잠근다.
+   *
+   * batchId 는 반드시 이 작업이 실제로 실릴 묶음 이름이어야 한다. 조립공장은 받은
+   * policySnapshot 의 batchId·productId 가 작업의 것과 정확히 같은지 대조하고, 다르면
+   * policy_identity_missing 으로 통째로 거절한다(factory_sync.py). 화면의 '생산 묶음 이름'
+   * 칸을 그대로 쓰면 대량 투입이 만드는 묶음 이름과 어긋나 한 건도 들어가지 못한다 —
+   * 실측 2026-08-28, 실제 투입에서 전건 거절.
+   */
+  async function lockPolicy(productId, batchId) {
+    const base = automation.snapshotRequest?.(String(productId)) || {
       productId: String(productId),
       preset: String(document.getElementById('batch-policy')?.value || '').trim() || 'full_auto',
       batchOverride: { ...(automation.batchOverride || {}) },
       productOverride: { ...(automation.productOverride || {}) },
       stageOverride: { ...(automation.stageOverride || {}) },
     };
-    const policySnapshot = await apiRequest('/api/automation/policy/snapshot', {
+    const policyRequest = { ...base, batchId: String(batchId || ''), productId: String(productId) };
+    const policySnapshot = await requestWithDeadline('/api/automation/policy/snapshot', {
       method: 'POST',
       body: JSON.stringify(policyRequest),
     });
@@ -1173,6 +1221,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     const results = [];
     progress = { done: 0, total: entries.length, current: entries[0].productName };
     render();
+    try {
     for (const entry of entries) {
       progress = { done: results.length, total: entries.length, current: entry.productName };
       renderStatus();
@@ -1184,24 +1233,27 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
           sha256s.push(await digestOf(image.file));
         }
         // 큐의 직접 입력 폼과 같은 규칙: 제품마다 정책을 잠그고, 잠금 여부가 auto/manual 을 정한다.
-        const policySnapshot = await lockPolicy(entry.productName);
+        const policySnapshot = await lockPolicy(entry.productName, batchId);
         const payload = buildProductPayload(entry, {
           batchId, imageModel, dataUrls, sha256s,
           mode: policySnapshot?.locked === true ? 'auto' : 'manual',
           policySnapshot,
         });
-        await apiRequest('/api/factory/jobs', { method: 'POST', body: JSON.stringify(payload) });
+        await requestWithDeadline('/api/factory/jobs', { method: 'POST', body: JSON.stringify(payload) });
         results.push({ productName: entry.productName, status: 'queued' });
       } catch (error) {
         results.push({
           productName: entry.productName,
           status: 'error',
-          reason: String(error?.code || error?.message || error),
+          reason: submitFailureCopy(error),
         });
       }
     }
-    progress = null;
-    busy = false;
+    } finally {
+      // 무슨 일이 있어도 화면은 풀어 준다. 잠긴 채 남으면 사람이 다시 누를 길이 없다.
+      progress = null;
+      busy = false;
+    }
     const summary = summarizeBulkIntake(results);
     const failed = results.filter(item => item.status === 'error');
     setStatus(

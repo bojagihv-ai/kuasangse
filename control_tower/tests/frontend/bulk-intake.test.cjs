@@ -437,3 +437,25 @@ test('모르는 저장 기록은 되살리지 않는다', async () => {
   assert.equal(hydrateWorkingState('garbage', new Map()), null);
   assert.equal(hydrateWorkingState(null, new Map()), null);
 });
+
+test('정책 스냅샷은 작업이 실제로 실릴 묶음 이름으로 잠근다', async () => {
+  // 조립공장은 policySnapshot.batchId 와 작업의 batchId 가 정확히 같아야 받아 준다.
+  // 다르면 policy_identity_missing 으로 전건 거절한다 — 실측 2026-08-28, 실제 투입에서 재현.
+  // 가로채기(intercept)로만 확인하면 서버가 보지 않으므로 이 어긋남을 못 잡는다.
+  const { groupImageFiles, buildBulkPlan, buildProductPayload } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000' });
+  const batchId = 'batch-bulk-1-보자기';
+
+  const payload = buildProductPayload(plan.entries[0], {
+    batchId,
+    dataUrls: ['data:image/jpeg;base64,AAA='],
+    sha256s: ['aaa'],
+    mode: 'auto',
+    policySnapshot: { schema: 'automation-policy-snapshot:v1', snapshotId: 'policy:abc', locked: true, batchId, productId: '보자기' },
+  });
+
+  assert.equal(payload.batchId, batchId);
+  assert.equal(payload.policySnapshot.batchId, payload.batchId);
+  assert.equal(payload.policySnapshot.productId, payload.productName);
+});

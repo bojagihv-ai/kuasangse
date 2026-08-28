@@ -13,6 +13,10 @@ import {
   PRODUCT_VALUE_LABELS,
 } from './production-board-model.mjs?parallelBoard=36';
 
+// 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
+// 한 번에 수백 건이 와도 요청은 한 번만 나간다.
+const EVENT_REFRESH_COALESCE_MS = 250;
+
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
   'factory.product.queued',
@@ -123,6 +127,9 @@ export function mountProductionBoard(runtime, {
   let stopped = false;
   let loaded = false;
   let eventSource = null;
+  // 지금까지 화면에 반영된 이벤트 자리. 스트림은 이 다음부터 듣는다.
+  let eventCursor = '0';
+  let eventRefreshTimer = null;
 
   const grid = element('div', 'board-grid');
   grid.addEventListener('pointerdown', event => {
@@ -1480,6 +1487,9 @@ export function mountProductionBoard(runtime, {
       ]);
       jobs = Array.isArray(response?.jobs) ? response.jobs : [];
       connected = state ? state.connected === true : connected;
+      // 지금까지의 이벤트는 이 응답에 이미 반영돼 있다. 이 자리를 기억해 두었다가
+      // 이벤트 스트림을 그 다음부터 듣는다 — 처음부터 들으면 이력을 통째로 되받는다.
+      if (state && state.eventCursor !== undefined) eventCursor = String(state.eventCursor || '0');
       if (state && typeof state.capturedAt === 'string') workerHeartbeatAt = state.capturedAt;
       void fillMissingProgress();
       loaded = true;
@@ -2065,13 +2075,33 @@ export function mountProductionBoard(runtime, {
   function connectEvents() {
     if (typeof EventSourceImpl !== 'function') return;
     try {
-      eventSource = new EventSourceImpl(`${apiOrigin()}/api/factory/events?cursor=0`, { withCredentials: true });
+      // cursor=0 으로 붙으면 관제탑이 쌓아 둔 이벤트를 전부 되돌려준다. 실측 2026-08-28:
+      // 화면을 열 때마다 4초 동안 1,300건(초당 350건)이 쏟아져 크롬의 호스트당 연결이
+      // 바닥나고, 그 사이 사람이 누른 투입 요청은 소켓을 못 얻어 그대로 멎었다.
+      // 방금 읽은 자리부터 듣는다 — 그 앞은 이미 화면에 들어와 있다.
+      eventSource = new EventSourceImpl(
+        `${apiOrigin()}/api/factory/events?cursor=${encodeURIComponent(eventCursor || '0')}`,
+        { withCredentials: true },
+      );
     } catch {
       eventSource = null;
       return;
     }
-    const onEvent = () => { void refresh(); };
-    for (const type of BOARD_EVENT_TYPES) eventSource.addEventListener(type, onEvent);
+    for (const type of BOARD_EVENT_TYPES) eventSource.addEventListener(type, scheduleEventRefresh);
+  }
+
+  /**
+   * 이벤트가 몰아쳐도 다시 읽기는 한 번만 한다.
+   *
+   * 한 건마다 refresh 를 부르면 요청 수가 이벤트 수만큼 늘어난다. 사람이 보는 결과는
+   * 어차피 마지막 한 번과 같으므로, 짧게 모아서 한 번만 읽는다.
+   */
+  function scheduleEventRefresh() {
+    if (eventRefreshTimer) return;
+    eventRefreshTimer = setTimeout(() => {
+      eventRefreshTimer = null;
+      void refresh();
+    }, EVENT_REFRESH_COALESCE_MS);
   }
 
   function apiOrigin() {
@@ -2101,6 +2131,7 @@ export function mountProductionBoard(runtime, {
 
   return () => {
     stopped = true;
+    if (eventRefreshTimer) { clearTimeout(eventRefreshTimer); eventRefreshTimer = null; }
     eventSource?.close?.();
     root.removeEventListener('click', onClick);
     root.removeEventListener('change', onChange);

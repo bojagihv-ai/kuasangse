@@ -5228,6 +5228,19 @@
       onChange: key => document.getElementById("app")?.setAttribute("data-active-menu", key),
     });
   </script>
+  <script type="module">
+    // 창이 뒤에 있으면 크롬이 이 화면을 통째로 얼린다. 얼면 폴링이 멈추는데 그림은 그대로라
+    // 지금 상태처럼 보이고, 그 사이 누른 요청은 응답도 거절도 없이 매달린다.
+    import { installTabLiveness, describeFreeze } from "./src/tab-liveness.mjs?tabLiveness=1";
+    const liveness = installTabLiveness(window);
+    globalThis.controlTowerTabLiveness = liveness;
+    liveness.onResumed(state => {
+      const notice = describeFreeze(state);
+      // 얼어 있던 동안 화면이 낡았다. 사람에게 알리고 곧바로 다시 읽는다.
+      if (notice) globalThis.controlTowerRuntime?.setStatus?.("intake-status", notice, "warning");
+      window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
+    });
+  </script>
   <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=2"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
@@ -5331,7 +5344,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=64"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=16"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=65"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=18"></script>
 </body>
 </html>
