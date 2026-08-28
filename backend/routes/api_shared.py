@@ -32,7 +32,13 @@ _JEPUM_DETAIL_ROOT = r"C:\JepumScraper\data\detail_pages"
 _JEPUM_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _JEPUM_ROOT = Path(r"C:\JepumScraper")
 _JEPUM_MAIN = _JEPUM_ROOT / "main.py"
-_JEPUM_PORT = 5012
+# JepumScraper 가 듣고 있는 포트. 스크래퍼가 포트를 옮기면 여기가 어긋나고,
+# 그때 화면에는 "JepumScraper가 꺼져 있습니다" 라고만 나온다 — 멀쩡히 돌고 있는데도.
+# 실측 2026-08-28: 스크래퍼는 5003 에서 정상(detail-v83)인데 여기가 5012 를 보고 있어
+# 경쟁사 수집이 거부되고 모든 auto 작업이 52% 에서 죽었다. 원인을 찾는 데 한참 걸렸다.
+# 그래서 (1) 기본값을 실제 포트로 맞추고 (2) 환경변수로 옮길 수 있게 하고
+# (3) 아래 message 에 어느 포트를 봤는지 적는다.
+_JEPUM_PORT = int(os.getenv("JEPUM_SCRAPER_PORT", "5003") or "5003")
 _JEPUM_HEALTH_PATH = "/api/v1/health"
 _JEPUM_START_LOCK = threading.Lock()
 _JEPUM_PYTHON_CANDIDATES = (
@@ -345,7 +351,14 @@ def _jepum_scraper_status_payload():
         "root": str(_JEPUM_ROOT),
         "mainExists": _JEPUM_MAIN.is_file(),
         "pythonExists": bool(python_path),
-        "message": "JepumScraper가 실행 중입니다." if running else "JepumScraper가 꺼져 있습니다.",
+        # 어느 포트를 봤는지 말한다. 이 한 줄이 없어서 "꺼져 있습니다" 만 보고
+        # 멀쩡히 돌고 있는 서비스를 한참 찾아다녔다.
+        "message": (
+            f"JepumScraper가 실행 중입니다. (포트 {_JEPUM_PORT})"
+            if running
+            else f"JepumScraper가 포트 {_JEPUM_PORT} 에 없습니다. "
+                 "스크래퍼가 다른 포트에 떠 있으면 JEPUM_SCRAPER_PORT 로 알려 주세요."
+        ),
     }
 
 

@@ -13548,7 +13548,9 @@ async function factoryArchiveSession(options = {}) {
 
 const JEPUM_MARKET_API = {
   connectorId: 'jepumscraper_03e4c93847e44bca',
-  baseUrl: 'http://127.0.0.1:5012',
+  // 스크래퍼가 실제로 듣는 포트. 백엔드의 JEPUM_SCRAPER_PORT 와 같은 값이어야 한다 —
+  // 어긋나면 "꺼져 있습니다" 만 보이고 경쟁사 수집이 통째로 막힌다(실측 2026-08-28).
+  baseUrl: `http://127.0.0.1:${(globalThis.KUASANGSE_JEPUM_PORT || 5003)}`,
   endpoints: {
     health: 'get-api-v1-health_23702489fda04b36',
     listSearches: 'get-api-v1-searches_42bc081808b1443e',
