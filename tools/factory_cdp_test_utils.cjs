@@ -158,10 +158,18 @@ function legacyCdpCompatibilityExpression(expression) {
       let __factoryDraft = null;
       let __factoryBaseline = '';
       let __factoryProxyCache = new WeakMap();
+      // 마지막으로 draft 와 맞춰 둔 커밋 스냅샷. 스토어는 커밋할 때마다 새 객체를
+      // 내놓고 그 객체는 깊게 동결돼 있으므로, 참조가 그대로면 내용도 그대로다.
+      // (state.factory 를 읽을 때마다 팩토리 전체를 두 번 직렬화하던 비용을 없앤다.)
+      let __factorySyncedSnapshot = null;
+      // draft 를 프록시로 건드렸는지 표시한다. 보수적으로만 쓴다 — 참(건드렸을 수 있음)
+      // 이면 종전대로 정확히 비교하고, 거짓일 때만 직렬화를 건너뛴다.
+      let __factoryDraftTouched = false;
       const __ensureFactoryDraft = () => {
         if (__factoryDraft) return __factoryDraft;
         __factoryDraft = __clone(__readFactory() || {});
         __factoryBaseline = JSON.stringify(__factoryDraft);
+        __factoryDraftTouched = false;
         return __factoryDraft;
       };
       const __replaceFactoryDraft = value => {
@@ -171,13 +179,23 @@ function legacyCdpCompatibilityExpression(expression) {
         Object.assign(__factoryDraft, next);
         __factoryProxyCache = new WeakMap();
         __factoryBaseline = JSON.stringify(__factoryDraft);
+        __factorySyncedSnapshot = null;
+        __factoryDraftTouched = false;
       };
       const __refreshFactoryDraft = () => {
         if (!__factoryDraft) return false;
-        if (JSON.stringify(__factoryDraft) !== __factoryBaseline) return false;
         const latest = __readFactory();
-        if (JSON.stringify(latest) === __factoryBaseline) return false;
+        // 동결 스냅샷이고 참조까지 같으면 스토어가 바뀌지 않았다는 뜻이라,
+        // 원래 로직도 반드시 false 로 끝난다. 직렬화 없이 곧장 돌아간다.
+        // (owned draft 는 동결돼 있지 않으므로 이 빠른 길을 타지 않는다.)
+        if (latest === __factorySyncedSnapshot && Object.isFrozen(latest)) return false;
+        if (JSON.stringify(__factoryDraft) !== __factoryBaseline) return false;
+        if (JSON.stringify(latest) === __factoryBaseline) {
+          if (Object.isFrozen(latest)) __factorySyncedSnapshot = latest;
+          return false;
+        }
         __replaceFactoryDraft(latest);
+        __factorySyncedSnapshot = Object.isFrozen(latest) ? latest : null;
         return true;
       };
       const __proxify = value => {
@@ -187,15 +205,33 @@ function legacyCdpCompatibilityExpression(expression) {
           get(target, key, receiver) {
             return __proxify(Reflect.get(target, key, receiver));
           },
+          set(target, key, next, receiver) {
+            __factoryDraftTouched = true;
+            return Reflect.set(target, key, next, target);
+          },
+          deleteProperty(target, key) {
+            __factoryDraftTouched = true;
+            return Reflect.deleteProperty(target, key);
+          },
+          defineProperty(target, key, descriptor) {
+            __factoryDraftTouched = true;
+            return Reflect.defineProperty(target, key, descriptor);
+          },
         });
         __factoryProxyCache.set(value, proxy);
         return proxy;
       };
       const __commitFactory = () => {
         if (!__factoryDraft) return false;
-        if (JSON.stringify(__factoryDraft) === __factoryBaseline) return false;
+        // 프록시를 통한 쓰기가 한 번도 없었으면 draft 는 baseline 그대로다.
+        if (!__factoryDraftTouched) return false;
+        if (JSON.stringify(__factoryDraft) === __factoryBaseline) {
+          __factoryDraftTouched = false;
+          return false;
+        }
         __replaceFactory(__factoryDraft, { reason: 'legacy-cdp-test-compat' });
         __factoryBaseline = JSON.stringify(__factoryDraft);
+        __factoryDraftTouched = false;
         return true;
       };
       const state = new Proxy(__lexicalState, {
@@ -210,7 +246,10 @@ function legacyCdpCompatibilityExpression(expression) {
         set(target, key, value, receiver) {
           if (key !== 'factory') return Reflect.set(target, key, value, receiver);
           __replaceFactoryDraft(value);
+          // baseline 을 일부러 어긋나게 두어 다음 __commitFactory 가 반드시 커밋하게 만든다.
+          // 쓰기 표시도 같이 세워야 그 커밋이 건너뛰어지지 않는다.
           __factoryBaseline = JSON.stringify({});
+          __factoryDraftTouched = true;
           return true;
         },
       });
@@ -232,10 +271,12 @@ function legacyCdpCompatibilityExpression(expression) {
         },
         set(target, key, value) {
           __ensureFactoryDraft();
+          __factoryDraftTouched = true;
           return Reflect.set(__factoryDraft, key, value);
         },
         deleteProperty(target, key) {
           __ensureFactoryDraft();
+          __factoryDraftTouched = true;
           return Reflect.deleteProperty(__factoryDraft, key);
         },
         has(target, key) {
