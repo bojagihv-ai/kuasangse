@@ -73,3 +73,4 @@ output.csv
 .tmp_*
 .debug-journal*
 *~
+.design/
