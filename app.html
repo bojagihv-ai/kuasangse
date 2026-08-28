@@ -64,8 +64,8 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .fade-in{animation:fadeIn .3s ease-out}
 
 /* Layout */
-.app{display:flex;height:100vh;min-height:100vh;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;overflow-anchor:none}
-.sidebar{width:220px;background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:relative;min-height:100vh;align-self:stretch;flex-shrink:0;overflow:visible;overflow-anchor:none}
+.app{display:flex;height:100vh;min-height:100vh;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable}
+.sidebar{width:220px;background:var(--bg-card);border-right:1px solid var(--border);display:flex;flex-direction:column;position:relative;min-height:100vh;align-self:stretch;flex-shrink:0;overflow:visible}
 .logo{display:flex;align-items:center;gap:10px;padding:20px 16px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:3;background:var(--bg-card)}
 .logo-icon{font-size:28px;color:var(--primary);font-weight:900}
 .logo-text{font-weight:700;font-size:15px;line-height:1.3}
@@ -84,7 +84,7 @@ body{font-family:'Pretendard','Noto Sans KR',sans-serif;background:var(--bg);col
 .sidebar-model-card:first-child{margin-bottom:7px}
 .sidebar-api-actions{padding:12px 16px;border-top:1px solid var(--border)}
 .sidebar-api-actions .btn-sm{width:100%;justify-content:center}
-.main{flex:1;min-width:0;min-height:100vh;padding:0 76px 104px 0;overflow:visible;overflow-anchor:none}
+.main{flex:1;min-width:0;min-height:100vh;padding:0 76px 104px 0;overflow:visible}
 .top-command-row{position:sticky;top:0;z-index:220;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px;width:100%;padding:0 24px 8px 32px;background:rgba(15,15,19,.98);border-bottom:1px solid rgba(42,42,54,.92);box-shadow:0 14px 30px rgba(0,0,0,.24)}
 .workspace-authority-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:1500px;margin:10px auto 0;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--bg-card);color:var(--text);overflow-wrap:anywhere;word-break:keep-all}
 .workspace-authority-banner[data-mode="editing"]{border-color:var(--ok)}

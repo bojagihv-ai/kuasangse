@@ -2339,12 +2339,14 @@ function mainScrollElement() {
 
 function restoreMainScrollPosition(top, left) {
   const el = mainScrollElement();
-  if (el) {
-    el.scrollTop = top;
-    el.scrollLeft = left;
-  } else {
+  if (!el) {
     window.scrollTo(left, top);
+    return;
   }
+  // 이미 맞는 위치에 다시 쓰지 않는다. 같은 값이라도 반복해서 쓰면
+  // 배치가 끝나기 전 값으로 잘렸다가 되튀는 일이 생긴다.
+  if (Math.abs(el.scrollTop - top) > 1) el.scrollTop = top;
+  if (Math.abs(el.scrollLeft - left) > 1) el.scrollLeft = left;
 }
 
 function renderPreservingMainScroll() {
@@ -2353,12 +2355,11 @@ function renderPreservingMainScroll() {
   const top = before ? before.scrollTop : window.scrollY;
   const left = before ? before.scrollLeft : window.scrollX;
   render();
+  // patchAppHtml 은 morphChildren 으로 제자리 갱신하므로 노드가 살아남는다.
+  // 그래서 브라우저 스크롤 앵커링이 위치를 잡아 준다. 예전에는 앵커링을 끄고
+  // 80ms 동안 네 번 되돌렸는데, 배치가 끝나기 전 위치로 잘렸다가 되튀기를
+  // 반복해 화면이 위아래로 떨렸다. 이제 한 번만, 그것도 실제로 어긋났을 때만 쓴다.
   restoreMainScrollPosition(top, left);
-  requestAnimationFrame(() => {
-    restoreMainScrollPosition(top, left);
-    requestAnimationFrame(() => restoreMainScrollPosition(top, left));
-  });
-  setTimeout(() => restoreMainScrollPosition(top, left), 80);
 }
 
 function cloneData(value) {
