@@ -16052,6 +16052,10 @@ function compMarketNormalizeCollectionStatus(payload = {}, market = ensureCompMa
     payload?.search,
     payload?.search_report,
     payload?.searchReport,
+    // 저장된 작업을 다시 읽을 때 payload 는 job 껍데기라 search_report 가 result 아래에 있다.
+    // 이 두 줄이 없으면 '최근 VM 후보 불러오기' 로 그린 화면에서만 차단 사유가 사라진다.
+    payload?.result?.search_report,
+    payload?.result?.searchReport,
     payload?.progress,
   ].filter(value => value && typeof value === 'object');
   const pick = keys => {
@@ -16157,6 +16161,14 @@ function compMarketFinalizeCollectionReports(market = ensureCompMarketScrapeStat
       shortfall: Math.max(0, requested - accepted),
       shortfallReason: String(prior.shortfallReason || ''),
       sourceLabel: String(prior.sourceLabel || runtimes.join(', ')),
+      // 여기서 행을 새로 만들기 때문에, 이어받지 않으면 수집이 끝나는 순간 차단 사유가 사라진다.
+      // 실제로 수집 중에는 '사이트가 접근을 막아 대기 중입니다 (…)' 가 보이다가
+      // 완료되면 '수집 중 오류가 났습니다' 로 바뀌었다.
+      error: String(prior.error || ''),
+      lastStatus: String(prior.lastStatus || ''),
+      cooldownUntil: String(prior.cooldownUntil || ''),
+      consecutiveFailures: Number(prior.consecutiveFailures || 0),
+      rawCount: Number(prior.rawCount || 0),
     };
   });
   market.collectionStatus = {
