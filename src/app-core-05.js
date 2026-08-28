@@ -457,7 +457,33 @@ function renderFactoryCandidateReviewPanels(factory) {
       <button class="btn-sm" type="button" data-factory-confirm-no-cafe24-candidate style="margin-top:8px" ${cafeAbsent ? 'disabled' : ''}>${cafeAbsent ? 'Cafe24 후보 없음 · 신제품 확정됨' : 'Cafe24 후보 없음 · 신제품으로 진행'}</button>
     </div>
   </div>
-  ${factory.product.candidateReviewStatus ? `<div class="factory-small" data-factory-candidate-review-status style="margin-top:8px">${escapeHtml(factory.product.candidateReviewStatus)}</div>` : ''}`;
+  ${factory.product.candidateReviewStatus ? `<div class="factory-small" data-factory-candidate-review-status style="margin-top:8px">${escapeHtml(factory.product.candidateReviewStatus)}</div>` : ''}
+  ${renderFactoryDetachedDbSelectionRestore(factory)}`;
+}
+
+// 신원 불일치로 떼어낸 이전 DB/Cafe24 선택을 사용자가 직접 되살릴 수 있게 한다.
+// 자동으로 버리면 되돌릴 방법이 없어서, 무엇을 떼어냈는지 보여주고 선택권을 준다.
+function renderFactoryDetachedDbSelectionRestore(factory = factoryRuntimeReadFactory()) {
+  const detached = factory?.product?.detachedDbSelection;
+  if (!detached || typeof detached !== 'object') return '';
+  const dbKey = String(detached.selectedDbCandidateKey || '').trim();
+  const cafe24Key = String(detached.selectedCafe24CandidateKey || '').trim();
+  const from = String(detached.detachedFromProductName || '').trim();
+  const when = detached.detachedAt ? new Date(detached.detachedAt).toLocaleString('ko-KR') : '';
+  const parts = [
+    dbKey ? `신화사DB 키 ${escapeHtml(dbKey)}` : '',
+    cafe24Key ? `Cafe24 키 ${escapeHtml(cafe24Key)}` : '',
+  ].filter(Boolean).join(' · ');
+  return `<div class="factory-automation-panel" data-factory-detached-db-selection style="margin-top:10px;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.06)">
+    <div style="font-size:12px;font-weight:900;color:var(--warn)">이전 DB 선택을 보관해 두었습니다</div>
+    <div class="factory-small" style="margin-top:4px;line-height:1.6">
+      ${from ? `${escapeHtml(from)} 기준으로 고르셨던 값입니다. ` : ''}${parts ? `${parts}. ` : ''}${when ? `${escapeHtml(when)}에 분리했습니다. ` : ''}지우지 않았으니 그대로 되살릴 수 있습니다.
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn-sm primary" type="button" data-factory-restore-detached-db>이전 DB 선택 되돌리기</button>
+      <button class="btn-sm" type="button" data-factory-discard-detached-db>보관본 버리기</button>
+    </div>
+  </div>`;
 }
 
 function renderFactoryCandidateSizeGenerationWait(factory = factoryRuntimeReadFactory()) {

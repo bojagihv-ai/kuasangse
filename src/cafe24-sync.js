@@ -7516,6 +7516,58 @@ function factoryClearDbCandidateSelection(options = {}) {
   return true;
 }
 
+// 신원 불일치로 떼어낸 이전 DB/Cafe24 선택을 사용자가 되살린다.
+// repairFactoryProductIdentityDrift 가 값을 버리지 않고 보관해 두기 때문에 가능하다.
+function factoryRestoreDetachedDbSelection(options = {}) {
+  if (!options.factory) {
+    return factoryCafe24RunOwnedDraftMutation(
+      'factory/db:restoreDetachedDbSelection',
+      { ...options, owner: 'product-db' },
+      draft => factoryRestoreDetachedDbSelection({ ...options, factory: draft, render: false }),
+    );
+  }
+  const factory = options.factory;
+  if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
+  const detached = factory.product?.detachedDbSelection;
+  if (!detached || typeof detached !== 'object') return false;
+  const productName = factoryCaptureLockedProductName(factory) || factory.product.productName || state.productName || '현재 상품';
+  factory.product.confirmedDb = detached.confirmedDb ?? null;
+  factory.product.finalDb = detached.finalDb ?? null;
+  factory.product.selectedDbCandidateKey = String(detached.selectedDbCandidateKey || '');
+  factory.product.selectedCafe24CandidateKey = String(detached.selectedCafe24CandidateKey || '');
+  factory.product.dbCandidateResolution = String(detached.dbCandidateResolution || '');
+  factory.product.cafe24CandidateResolution = String(detached.cafe24CandidateResolution || '');
+  factory.product.cafe24DraftProductKey = String(detached.cafe24DraftProductKey || '');
+  factory.product.confirmedCafe24ProductKey = String(detached.confirmedCafe24ProductKey || '');
+  factory.product.dbLocked = detached.dbLocked === true;
+  factory.product.detachedDbSelection = null;
+  factoryRestoreLockedProductName(factory, productName);
+  factoryUpdateFinalDbFromFields(factory);
+  factorySyncAutomationOptionModeFromDbSources(factory);
+  factory.product.candidateReviewStatus = `보관해 둔 이전 DB 선택을 되돌렸습니다. 현재 상품명(${productName})과 다르면 다시 분리될 수 있으니 상품명을 확인하세요.`;
+  factoryUpdateCandidateReviewStageStatus(factory);
+  factoryLog(`이전 DB 선택 되돌림: ${productName}`, 'ok', factory);
+  return true;
+}
+
+function factoryDiscardDetachedDbSelection(options = {}) {
+  if (!options.factory) {
+    return factoryCafe24RunOwnedDraftMutation(
+      'factory/db:discardDetachedDbSelection',
+      { ...options, owner: 'product-db' },
+      draft => factoryDiscardDetachedDbSelection({ ...options, factory: draft, render: false }),
+    );
+  }
+  const factory = options.factory;
+  if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
+  if (!factory.product?.detachedDbSelection) return false;
+  factory.product.detachedDbSelection = null;
+  factory.product.candidateReviewStatus = '보관해 둔 이전 DB 선택을 버렸습니다. 후보를 다시 선택해주세요.';
+  factoryUpdateCandidateReviewStageStatus(factory);
+  factoryLog('보관한 이전 DB 선택 삭제', 'info', factory);
+  return true;
+}
+
 function factoryConfirmNoCafe24Candidate(options = {}) {
   if (!options.factory) {
     return factoryCafe24RunOwnedDraftMutation(

@@ -105,6 +105,7 @@ export function createDbFactoryTab(capabilities = {}) {
     'apply-db-candidate': 'applyDbCandidate', 'apply-cafe24-candidate': 'applyCafe24Candidate',
     'confirm-no-db-candidate': 'confirmNoDbCandidate', 'confirm-no-cafe24-candidate': 'confirmNoCafe24Candidate',
     'clear-db-candidate': 'clearDbCandidateSelection', 'clear-cafe24-candidate': 'clearCafe24CandidateSelection',
+    'restore-detached-db': 'restoreDetachedDbSelection', 'discard-detached-db': 'discardDetachedDbSelection',
     'guide-action': 'runFactoryGuideAction',
   })) commands[name] = commandFor(assertMutable, actions, action);
   const runtimeCapabilities = { getSnapshot, assertMutable, getOperationToken, isOperationCurrent, reportError, actions, renderHelpers };
@@ -130,7 +131,7 @@ export function createDbFactoryTab(capabilities = {}) {
       const readQuery = () => String(root.querySelector?.('[data-factory-db-search-query]')?.value || '').trim();
       const click = event => {
         const target = event?.target;
-        const node = target?.closest?.('[data-factory-guide-action], [data-factory-apply-db-candidate], [data-factory-apply-cafe24-candidate], [data-factory-confirm-no-db-candidate], [data-factory-confirm-no-cafe24-candidate], [data-factory-clear-db-candidate], [data-factory-clear-cafe24-candidate]');
+        const node = target?.closest?.('[data-factory-guide-action], [data-factory-apply-db-candidate], [data-factory-apply-cafe24-candidate], [data-factory-confirm-no-db-candidate], [data-factory-confirm-no-cafe24-candidate], [data-factory-clear-db-candidate], [data-factory-clear-cafe24-candidate], [data-factory-restore-detached-db], [data-factory-discard-detached-db]');
         if (!inside(node)) return;
         event.preventDefault?.(); event.stopPropagation?.();
         const guide = node.dataset?.factoryGuideAction;
@@ -140,6 +141,8 @@ export function createDbFactoryTab(capabilities = {}) {
         if (node.dataset?.factoryConfirmNoDbCandidate !== undefined) { invoke('confirm-no-db-candidate'); return; }
         if (node.dataset?.factoryConfirmNoCafe24Candidate !== undefined) { invoke('confirm-no-cafe24-candidate'); return; }
         if (node.dataset?.factoryClearDbCandidate !== undefined) { invoke('clear-db-candidate'); return; }
+        if (node.dataset?.factoryRestoreDetachedDb !== undefined) { invoke('restore-detached-db'); return; }
+        if (node.dataset?.factoryDiscardDetachedDb !== undefined) { invoke('discard-detached-db'); return; }
         if (node.dataset?.factoryClearCafe24Candidate !== undefined) invoke('clear-cafe24-candidate');
       };
       const input = event => { const node = event?.target; if (node?.matches?.('[data-factory-db-search-query]')) invoke('set-db-search-query', String(node.value || '')); };

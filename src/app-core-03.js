@@ -1186,6 +1186,10 @@ function normalizeFactoryState(saved) {
       pendingCafe24Candidates: Array.isArray(product.pendingCafe24Candidates) ? product.pendingCafe24Candidates : [],
       candidateAutoApply: !!product.candidateAutoApply,
       candidateReviewStatus: typeof product.candidateReviewStatus === 'string' ? product.candidateReviewStatus : '',
+      // 신원 불일치로 떼어낸 이전 DB/Cafe24 선택. 되돌리기 전까지 보관한다.
+      detachedDbSelection: product.detachedDbSelection && typeof product.detachedDbSelection === 'object'
+        ? product.detachedDbSelection
+        : null,
       sinhwaDbProgramStatus: product.sinhwaDbProgramStatus && typeof product.sinhwaDbProgramStatus === 'object' ? product.sinhwaDbProgramStatus : null,
       selectedDbCandidateKey: typeof product.selectedDbCandidateKey === 'string' ? product.selectedDbCandidateKey : '',
       selectedCafe24CandidateKey: typeof product.selectedCafe24CandidateKey === 'string' ? product.selectedCafe24CandidateKey : '',
@@ -2052,6 +2056,34 @@ function repairFactoryProductIdentityDrift(factory = {}) {
     factoryObjectConflictsWithIdentity(product.confirmedDb, identityKey) ||
     factoryObjectConflictsWithIdentity(product.finalDb, identityKey);
   if (staleDb) {
+    // 사람이 직접 고른 선택이다. 이름이 다르다는 이유로 그냥 버리면 되돌릴 방법이 없다.
+    // (2026-08-28 '수저집 파우치' 작업에서 고른 DB/Cafe24 후보가 이렇게 사라졌다.)
+    // 그래서 화면에서만 떼어내고 값 자체는 격리해 둔다. 되돌리기는 사용자가 정한다.
+    const detachable = {
+      confirmedDb: product.confirmedDb,
+      finalDb: product.finalDb,
+      selectedDbCandidateKey: product.selectedDbCandidateKey,
+      selectedCafe24CandidateKey: product.selectedCafe24CandidateKey,
+      dbCandidateResolution: product.dbCandidateResolution,
+      cafe24CandidateResolution: product.cafe24CandidateResolution,
+      cafe24DraftProductKey: product.cafe24DraftProductKey,
+      confirmedCafe24ProductKey: product.confirmedCafe24ProductKey,
+      dbLocked: product.dbLocked,
+    };
+    const hasSomethingToKeep = !!(
+      detachable.confirmedDb || detachable.finalDb
+      || String(detachable.selectedDbCandidateKey || '').trim()
+      || String(detachable.selectedCafe24CandidateKey || '').trim()
+    );
+    // 이 정리는 normalize 마다 돌기 때문에, 이미 비운 뒤 다시 들어와 빈 값으로
+    // 앞선 보관본을 덮어쓰지 않도록 실제로 남길 것이 있을 때만 기록한다.
+    if (hasSomethingToKeep) {
+      product.detachedDbSelection = {
+        detachedAt: Date.now(),
+        detachedFromProductName: productName,
+        ...detachable,
+      };
+    }
     product.confirmedDb = null;
     product.finalDb = null;
     product.selectedDbCandidateKey = '';
@@ -2061,7 +2093,9 @@ function repairFactoryProductIdentityDrift(factory = {}) {
     product.cafe24DraftProductKey = '';
     product.confirmedCafe24ProductKey = '';
     product.dbLocked = false;
-    product.candidateReviewStatus = `${productName} 기준과 맞지 않는 이전 DB 값을 분리했습니다. DB/Cafe24 후보를 다시 선택해주세요.`;
+    product.candidateReviewStatus = product.detachedDbSelection
+      ? `${productName} 기준과 맞지 않는 이전 DB 값을 따로 보관했습니다. 아래 '이전 DB 선택 되돌리기'로 되살리거나, 후보를 다시 선택하세요.`
+      : `${productName} 기준과 맞지 않는 이전 DB 값을 분리했습니다. DB/Cafe24 후보를 다시 선택해주세요.`;
     if (product.dbFieldSettings && typeof product.dbFieldSettings === 'object') {
       factoryProductScopedFieldIdsForRepair().forEach(fieldId => {
         const setting = product.dbFieldSettings[fieldId];
@@ -11110,6 +11144,7 @@ function factoryRuntimeCreateCommandPolicies() {
   ], 'product-db', [product, productDbUi, factoryNavigation, factoryUpdatedAt]);
   add([
     'factory/db:confirmNoDbCandidate', 'factory/db:confirmNoCafe24Candidate',
+    'factory/db:restoreDetachedDbSelection', 'factory/db:discardDetachedDbSelection',
     'factory/db:clearDbCandidateSelection', 'factory/db:clearCafe24CandidateSelection',
   ], 'product-db', [
     product, productDbUi, factoryNavigation, factoryUpdatedAt,
@@ -11962,6 +11997,22 @@ function factoryRuntimeDbActions() {
         'factory/db:confirmNoCafe24Candidate',
         operationContext,
         draft => factoryConfirmNoCafe24Candidate({ factory: draft, render: false }),
+        { render: true, patchTab: 'db', forceSave: true },
+      );
+    },
+    restoreDetachedDbSelection(_value, operationContext) {
+      return factoryRuntimeBridgeAction(
+        'factory/db:restoreDetachedDbSelection',
+        operationContext,
+        draft => factoryRestoreDetachedDbSelection({ factory: draft, render: false }),
+        { render: true, patchTab: 'db', forceSave: true },
+      );
+    },
+    discardDetachedDbSelection(_value, operationContext) {
+      return factoryRuntimeBridgeAction(
+        'factory/db:discardDetachedDbSelection',
+        operationContext,
+        draft => factoryDiscardDetachedDbSelection({ factory: draft, render: false }),
         { render: true, patchTab: 'db', forceSave: true },
       );
     },

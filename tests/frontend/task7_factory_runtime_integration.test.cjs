@@ -818,6 +818,8 @@ test('Task 7 DB installs its explicit allowlists and drives the real DOM contrac
     'cafe24OauthStatusRefreshAndRerun', 'focusSize', 'setDbSearchQuery',
     'commitDbSearchQuery', 'applyDbCandidate', 'applyCafe24Candidate',
     'confirmNoDbCandidate', 'confirmNoCafe24Candidate',
+    // 신원 불일치로 떼어낸 이전 선택을 사용자가 되돌리거나 버리는 경로.
+    'restoreDetachedDbSelection', 'discardDetachedDbSelection',
     'clearDbCandidateSelection', 'clearCafe24CandidateSelection', 'runFactoryGuideAction',
   ]);
   assert.deepEqual(Object.keys(capabilities.renderHelpers), [
