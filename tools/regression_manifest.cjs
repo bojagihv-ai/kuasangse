@@ -309,6 +309,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('SAVE-03', '7 저장/내보내기', '새 작업은 빈 상태로 완전 분리', 'tools/verify_factory_new_file_blank_cdp_v85.cjs'),
     nodeFile('SAVE-25', '7 저장/내보내기', '새 작업 포인터 교체·F5·다중 탭 문서 격리', 'tools/verify_new_work_multitab_reload_isolation_v371.cjs'),
     nodeFile('SAVE-04', '7 저장/내보내기', '같은 작업파일 범위 새로고침 복원', 'tools/verify_workfile_scoped_reload_cdp_v138.cjs'),
+    nodeFile('SAVE-26', '7 저장/내보내기', '강제 새로고침이 조립공장 생성물을 잃지 않는다', 'tools/verify_factory_assets_survive_hard_reload_v1.cjs'),
     nodeFile('SAVE-05', '7 저장/내보내기', 'Ctrl+F5 로컬 아카이브 부트스트랩', 'tools/verify_workfile_ctrl_f5_archive_bootstrap_cdp_v195.cjs'),
     nodeFile('SAVE-33', '7 저장/내보내기', '보관 archive ID 결과의 복원 경고 정확성', 'tests/frontend/session_asset_restore_warning.test.cjs', 'fast'),
     nodeFile('SAVE-38', '7 저장/내보내기', '최근 저장 작업 자동 보관 연결·새 작업 초기화 경계', 'tests/frontend/workfile_archive_autorefresh.test.cjs', 'fast'),
