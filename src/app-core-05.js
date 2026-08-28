@@ -8969,6 +8969,27 @@ function compMarketCandidateMatchesCurrentWork(item = {}, current = null, option
   return true;
 }
 
+// 마켓별 미달 사유를 사람이 읽는 문장으로 옮긴다.
+// 백엔드는 zero_result / error 처럼 구분해서 주는데 화면이 전부 'API 사유 미제공' 으로
+// 뭉개고 있었다. 2026-08-28 네이버가 'cooldown ... blocked'(연속 실패 41회) 로 막혀
+// 있었는데도 다른 마켓의 '결과 없음' 과 똑같이 보여서 원인을 찾지 못했다.
+function compMarketShortfallReasonText(reason, report = {}) {
+  const raw = String(reason || '').trim();
+  const detail = String(report?.error || report?.message || '').trim();
+  if (!raw && !detail) return '';
+  const key = raw.toLowerCase();
+  if (key === 'zero_result') return '검색은 됐지만 조건에 맞는 상품이 없었습니다.';
+  if (key === 'error' || key === 'failed') {
+    if (/cooldown|blocked/i.test(detail)) return `사이트가 접근을 막아 대기 중입니다. (${detail})`;
+    return detail ? `수집 중 오류: ${detail}` : '수집 중 오류가 났습니다. 로그를 확인하세요.';
+  }
+  if (key === 'timeout') return '응답이 늦어 시간이 초과됐습니다.';
+  if (key === 'cooldown' || /cooldown|blocked/i.test(`${key} ${detail}`)) {
+    return `사이트가 접근을 막아 대기 중입니다.${detail ? ` (${detail})` : ''}`;
+  }
+  return detail ? `${raw} · ${detail}` : raw;
+}
+
 function compMarketFilterCandidatesForCurrentWork(rows = [], current = null) {
   const scope = current || (typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null);
   return (Array.isArray(rows) ? rows : []).filter(item => compMarketCandidateMatchesCurrentWork(item, scope));
@@ -9540,6 +9561,12 @@ function factoryVmSearchSiteRows(market = {}) {
       shortfall,
       shortfallReason: String(report.shortfallReason || ''),
       sourceLabel: String(report.sourceLabel || ''),
+      // 왜 0건인지 화면에서 말할 수 있도록 상세를 그대로 옮긴다.
+      error: String(report.error || ''),
+      lastStatus: String(report.lastStatus || ''),
+      cooldownUntil: String(report.cooldownUntil || ''),
+      consecutiveFailures: Number(report.consecutiveFailures || 0),
+      rawCount: Number(report.rawCount || 0),
     };
   });
 }
@@ -9601,7 +9628,7 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
         <div style="font-size:12px;font-weight:950;line-height:1.35;margin-top:3px">${escapeHtml(row.state)}</div>
         <div style="font-size:10px;line-height:1.45;margin-top:4px">요청 ${escapeHtml(String(row.requested))} · 승인 ${escapeHtml(String(row.accepted))} · 미달 ${escapeHtml(String(row.shortfall))}</div>
         ${row.sourceLabel ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">출처 ${escapeHtml(row.sourceLabel)}</div>` : ''}
-        ${row.shortfall ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">미달 사유: ${escapeHtml(row.shortfallReason || 'API 사유 미제공')}</div>` : ''}
+        ${row.shortfall && compMarketShortfallReasonText(row.shortfallReason, row) ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">미달 사유: ${escapeHtml(compMarketShortfallReasonText(row.shortfallReason, row))}</div>` : ''}
       </div>`).join('')}
     </div>
     ${attempts.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
@@ -16907,7 +16934,7 @@ function renderCompMarketScrapePanel(snapshot = null, marketOverride = null, opt
             const requested = compMarketTargetForSite(market, site.id);
             const accepted = Number.isFinite(Number(report.accepted)) ? Number(report.accepted) : rows.length;
             const shortfall = Number.isFinite(Number(report.shortfall)) ? Number(report.shortfall) : Math.max(0, requested - accepted);
-            return `<div style="font-size:13px;font-weight:900;color:var(--text);margin-bottom:8px">${escapeHtml(site.label)} 목표 ${escapeHtml(String(requested))} <span style="color:var(--text-m);font-weight:700">승인 ${escapeHtml(String(accepted))} · 미달 ${escapeHtml(String(shortfall))}</span>${shortfall ? `<div style="font-size:10px;color:var(--warn);margin-top:3px">미달 사유: ${escapeHtml(report.shortfallReason || 'API 사유 미제공')}</div>` : ''}</div>`;
+            return `<div style="font-size:13px;font-weight:900;color:var(--text);margin-bottom:8px">${escapeHtml(site.label)} 목표 ${escapeHtml(String(requested))} <span style="color:var(--text-m);font-weight:700">승인 ${escapeHtml(String(accepted))} · 미달 ${escapeHtml(String(shortfall))}</span>${shortfall && compMarketShortfallReasonText(report.shortfallReason, report) ? `<div style="font-size:10px;color:var(--warn);margin-top:3px">미달 사유: ${escapeHtml(compMarketShortfallReasonText(report.shortfallReason, report))}</div>` : ''}</div>`;
           })()}
           <div style="display:flex;flex-direction:column;gap:8px">
             ${rows.length ? rows.map((item, idx) => renderCompMarketResultCard(item, results.indexOf(item) >= 0 ? results.indexOf(item) : idx, market)).join('') : `<div style="font-size:12px;color:var(--text-m);padding:12px;border:1px dashed var(--border);border-radius:8px">아직 후보 없음</div>`}

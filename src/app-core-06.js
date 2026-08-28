@@ -16068,6 +16068,25 @@ function compMarketNormalizeCollectionStatus(payload = {}, market = ensureCompMa
     : (reportValue && typeof reportValue === 'object'
       ? Object.entries(reportValue).map(([marketId, report]) => ({ marketId, ...(report && typeof report === 'object' ? report : {}) }))
       : []);
+  // 스크래퍼는 platforms 아래에 마켓별 실패 상세를 준다
+  // (예: 네이버쇼핑 { error: 'cooldown until ...: blocked', policy: { consecutive_failures: 41 } }).
+  // 이걸 버리면 화면에는 '결과 없음' 과 '차단됨' 이 똑같이 보인다. 마켓 id 로 맞춰 싣는다.
+  const platformValue = pick(['platforms', 'platform_reports', 'platformReports']);
+  const platformDetailByMarket = {};
+  if (platformValue && typeof platformValue === 'object' && !Array.isArray(platformValue)) {
+    for (const [platformName, detail] of Object.entries(platformValue)) {
+      const marketId = compMarketNormalizeSite(platformName);
+      if (!marketId || !detail || typeof detail !== 'object') continue;
+      const policy = detail.policy && typeof detail.policy === 'object' ? detail.policy : {};
+      platformDetailByMarket[marketId] = {
+        error: String(detail.error || detail.message || '').trim(),
+        lastStatus: String(policy.last_status || policy.lastStatus || detail.status || '').trim(),
+        cooldownUntil: String(policy.cooldown_until || policy.cooldownUntil || '').trim(),
+        consecutiveFailures: Number(policy.consecutive_failures ?? policy.consecutiveFailures ?? 0) || 0,
+        rawCount: Number(detail.raw_count ?? detail.rawCount ?? 0) || 0,
+      };
+    }
+  }
   const marketReports = reportRows.map(report => {
     const marketId = compMarketNormalizeSite(report.marketId || report.market_id || report.siteId || report.site_id || report.market || report.site || report.platform);
     const requested = report.requested ?? report.target ?? report.requested_count ?? report.requestedCount;
@@ -16081,6 +16100,14 @@ function compMarketNormalizeCollectionStatus(payload = {}, market = ensureCompMa
       shortfall: Number.isFinite(Number(shortfall)) ? Number(shortfall) : null,
       shortfallReason: String(report.shortfall_reason || report.shortfallReason || report.reason || '').trim(),
       sourceLabel: String(report.source_label || report.sourceLabel || report.source || report.runtime || '').trim(),
+      // 화면이 '왜 0건인지' 말할 수 있도록 상세를 함께 싣는다.
+      error: String(
+        report.error || report.message || platformDetailByMarket[marketId]?.error || '',
+      ).trim(),
+      lastStatus: String(platformDetailByMarket[marketId]?.lastStatus || '').trim(),
+      cooldownUntil: String(platformDetailByMarket[marketId]?.cooldownUntil || '').trim(),
+      consecutiveFailures: Number(platformDetailByMarket[marketId]?.consecutiveFailures || 0),
+      rawCount: Number(platformDetailByMarket[marketId]?.rawCount || 0),
     };
   }).filter(report => report.marketId);
   const previous = options.reset ? {} : (market.collectionStatus && typeof market.collectionStatus === 'object' ? market.collectionStatus : {});

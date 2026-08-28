@@ -297,6 +297,10 @@ test('VM 공통 인증 실패는 단일 경고로 보이고 보존된 장터 결
     escapeHtml: value => String(value ?? ''),
     escAttr: value => String(value ?? ''),
     renderCompMarketCollectionMetrics: () => '',
+    // 미달 사유 문장을 만드는 실물 헬퍼. 스텁을 두면 사유 표시가 바뀌어도 이 검증이 못 잡는다.
+    compMarketShortfallReasonText: new Function(
+      `${sourceSlice(source, 'function compMarketShortfallReasonText(', 'function compMarketFilterCandidatesForCurrentWork(')}; return compMarketShortfallReasonText;`,
+    )(),
   });
   vm.runInContext(
     `${rowSource}\n${renderSource}\nthis.siteRows = factoryVmSearchSiteRows; this.renderBoard = renderFactoryVmSearchSiteBoard;`,
@@ -346,6 +350,10 @@ test('F5 복원 뒤 오류 문자열이 없어도 실패 ETA는 장터별 정상
     escapeHtml: value => String(value ?? ''),
     escAttr: value => String(value ?? ''),
     renderCompMarketCollectionMetrics: () => '',
+    // 미달 사유 문장을 만드는 실물 헬퍼. 스텁을 두면 사유 표시가 바뀌어도 이 검증이 못 잡는다.
+    compMarketShortfallReasonText: new Function(
+      `${sourceSlice(source, 'function compMarketShortfallReasonText(', 'function compMarketFilterCandidatesForCurrentWork(')}; return compMarketShortfallReasonText;`,
+    )(),
   });
   vm.runInContext(
     `${rowSource}\n${renderSource}\nthis.siteRows = factoryVmSearchSiteRows; this.renderBoard = renderFactoryVmSearchSiteBoard;`,
