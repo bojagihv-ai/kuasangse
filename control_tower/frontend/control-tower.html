@@ -48,7 +48,10 @@
       --board-intake-thumb-size: 92px;
       --board-intake-card-min: 9rem;
       --bulk-thumb-size: 132px;
-      --bulk-name-field-basis: 20rem;
+    --bulk-row-thumb-size: 40px;
+    --bulk-ai-thumb-size: 44px;
+    --bulk-mini-action-size: 32px;
+      --bulk-name-field-basis: 25rem;
       --bulk-lightbox-max-width: 1100px;
       --space-1: 8px;
       --space-half: 4px;
@@ -1258,6 +1261,342 @@
       flex: 0 0 auto;
     }
 
+    /* 대량 투입: 사진 한 장이 한 줄, 구역이 곧 역할이다. */
+    .bulk-color-rule,
+    .bulk-defaults-extra,
+    .bulk-batch-bar {
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-color-rule > summary,
+    .bulk-defaults-extra > summary {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .bulk-color-rule[open] > summary,
+    .bulk-defaults-extra[open] > summary {
+      margin-block-end: var(--space-1);
+    }
+
+    .bulk-color-rule-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .bulk-defaults-row {
+      display: flex;
+      align-items: end;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-defaults-label {
+      align-self: center;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      inline-size: 8rem;
+    }
+
+    .bulk-defaults-extra {
+      margin-block-start: var(--space-1);
+    }
+
+    .bulk-batch-bar {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-color-rule-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-color-rule-label {
+      inline-size: 6rem;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-rule-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-half);
+      min-block-size: var(--compact-control-min-block-size);
+      padding: 0 var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      cursor: pointer;
+    }
+
+    .bulk-rule-chip[data-on="true"] {
+      border-color: var(--color-accent-border);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .bulk-rule-chip-hint {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+    }
+
+    .bulk-rule-custom {
+      inline-size: 11rem;
+      min-block-size: var(--compact-control-min-block-size);
+    }
+
+    .bulk-rule-preview {
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      background: var(--color-input-background);
+      font-family: var(--font-family-mono);
+    }
+
+    .bulk-card-head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-card-rail {
+      inline-size: var(--border-width-emphasis);
+      align-self: stretch;
+      border-radius: var(--radius-pill);
+      background: var(--color-status-ok);
+    }
+
+    .bulk-product-card[data-state="warn"] .bulk-card-rail {
+      background: var(--color-status-warn);
+    }
+
+    .bulk-card-spacer {
+      flex-grow: 1;
+    }
+
+    .bulk-card-fact,
+    .bulk-card-verdict {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-card-verdict {
+      padding: var(--badge-padding-block) var(--space-1);
+      border: var(--border-width-default) solid var(--color-ok-border);
+      border-radius: var(--radius-pill);
+      background: var(--color-ok-wash);
+      color: var(--color-status-ok);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-card-verdict[data-tone="warn"] {
+      border-color: var(--color-warn-border);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+    }
+
+    .bulk-card-verdict[data-tone="blocked"] {
+      border-color: var(--color-error-border);
+      background: var(--color-danger-wash);
+      color: var(--color-status-error);
+    }
+
+    /* 두 구역이 나란히: 기본 이미지 | 색상 옵션. 구역이 곧 역할이라 select 가 필요 없다. */
+    .bulk-zones {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(30rem, 100%), 1fr));
+      gap: var(--space-1);
+    }
+
+    .bulk-zone {
+      display: flex;
+      flex-direction: column;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .bulk-zone-label {
+      padding-block-end: var(--space-half);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .bulk-zone-head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    /* 구역이 곧 역할 — 이 버튼으로 넣으면 분류가 끝난다. */
+    .bulk-zone-add {
+      display: inline-flex;
+      align-items: center;
+      min-block-size: var(--bulk-mini-action-size);
+      padding: 0 var(--space-1);
+      border: var(--border-width-default) dashed var(--color-accent-border);
+      border-radius: var(--radius-compact);
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    /* 기본 사진은 제품의 얼굴이다. 크게 보여 무엇이 대표인지 한눈에 알게 한다. */
+    .bulk-base-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      padding-block-start: var(--space-half);
+    }
+
+    .bulk-base-cell {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-half);
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-base-cell .bulk-thumb {
+      inline-size: var(--bulk-thumb-size);
+      block-size: var(--bulk-thumb-size);
+      padding: 0;
+    }
+
+    .bulk-base-cell .bulk-shot-name {
+      flex: none;
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-base-tools {
+      display: flex;
+      align-items: center;
+      gap: var(--space-half);
+      flex-wrap: wrap;
+    }
+
+    .bulk-base-cell .bulk-color-input {
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-zone-empty {
+      margin: 0;
+      padding: var(--space-1) 0;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-shot-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-half) 0;
+      border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .bulk-shot-row .bulk-thumb {
+      inline-size: var(--bulk-row-thumb-size);
+      block-size: var(--bulk-row-thumb-size);
+      flex: none;
+      padding: 0;
+    }
+
+    .bulk-shot-name {
+      flex: 0 1 11rem;
+      min-inline-size: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bulk-shot-row .bulk-color-input {
+      inline-size: 9rem;
+    }
+
+    .bulk-color-input[data-missing="true"] {
+      border-color: var(--color-warn-border);
+    }
+
+    .bulk-move-action {
+      min-block-size: var(--bulk-mini-action-size);
+      padding: 0 var(--space-1);
+      border: 0;
+      background: none;
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .bulk-mini-action[data-on="true"] {
+      border-color: var(--color-accent-border);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .bulk-mini-action {
+      min-block-size: var(--bulk-mini-action-size);
+      padding: 0 var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .bulk-ai-panel {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      inline-size: min(52rem, 92vw);
+      padding: var(--space-3);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    .bulk-ai-rows {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .bulk-ai-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-1) 0;
+      border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .bulk-ai-row img {
+      inline-size: var(--bulk-ai-thumb-size);
+      block-size: var(--bulk-ai-thumb-size);
+      border-radius: var(--radius-compact);
+      object-fit: cover;
+    }
+
+    .bulk-ai-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
     /* 식별자는 찾아볼 때만 필요하다. 이름을 가리지 않게 작고 흐리게 둔다. */
     .a-cut-candidate-id {
       display: block;
@@ -1529,29 +1868,32 @@
     /* 제품마다 카드로 보여 준다. 사진을 눈으로 확인하고 이름과 역할을 그 자리에서 고친다. */
     .bulk-product-card {
       display: grid;
-      gap: var(--space-2);
-      padding: var(--space-3);
+      gap: var(--space-1);
+      padding: var(--space-2);
       border: var(--border-width-default) solid var(--color-border-default);
       border-radius: var(--radius-card);
       background: var(--color-card-background);
     }
 
+    /* 흠은 왼쪽 세로줄(.bulk-card-rail)로 알린다. 카드 전체를 물들이면 무엇이 문제인지가
+       아니라 카드가 통째로 노래져서, 정작 어느 칸이 비었는지는 여전히 안 보인다. */
     .bulk-product-card[data-state="warn"] {
       border-color: var(--color-warn-border);
-      background: var(--color-warn-wash);
     }
 
     .bulk-card-head {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--space-2);
-      align-items: end;
+      gap: var(--space-1);
+      align-items: center;
     }
 
+    /* 다섯 글자짜리 제품명에 화면 폭을 다 내주지 않는다. 실측 2026-08-27: 1412px 였다. */
     .bulk-name-field {
       display: grid;
-      gap: var(--space-1);
-      flex: 1 1 var(--bulk-name-field-basis);
+      gap: var(--space-half);
+      flex: 0 1 var(--bulk-name-field-basis);
+      max-inline-size: var(--bulk-name-field-basis);
     }
 
     .bulk-name-field > span {
@@ -1559,13 +1901,17 @@
       font-size: var(--font-size-compact);
     }
 
+    /* 제품명은 사람이 직접 정하는 값이다. 파일명에서 온 임시 이름을 지우고 칠 수 있게
+       카드에서 가장 도드라지는 입력칸으로 둔다. */
     .bulk-name-field input {
-      padding: var(--space-2);
+      min-block-size: var(--control-min-block-size);
+      padding: 0 var(--space-2);
+      font-size: var(--font-size-card-title);
+      font-weight: var(--font-weight-strong);
       border: var(--border-width-default) solid var(--color-accent-border);
       border-radius: var(--radius-compact);
       background: var(--color-input-background);
       color: var(--color-text-primary);
-      font-size: var(--font-size-panel-copy);
     }
 
     .bulk-card-summary,
@@ -1656,9 +2002,10 @@
       font-size: var(--font-size-panel-copy);
     }
 
+    /* 필수값 한 줄 아래에 Cafe24 접힘 상자가 온다. 옆에 붙이면 빈 상자가 자리만 차지한다. */
     .bulk-defaults {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      display: flex;
+      flex-direction: column;
       gap: var(--space-1);
     }
 
@@ -3200,34 +3547,12 @@
         text-align: start;
       }
 
-      .operator-console-grid {
-        grid-template-columns: 1fr;
-      }
-
       .operator-current-work {
         order: -1;
       }
 
-      .operator-summary-strip {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .operator-stage-list {
-        grid-template-columns: 1fr;
-      }
-
-      .operator-stage-step {
-        min-block-size: var(--control-min-block-size);
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        align-items: center;
-      }
-
-      .operator-panel-heading,
-      .operator-focus-heading,
-      .operator-now-heading {
-        align-items: flex-start;
-        flex-direction: column;
-      }
+      /* operator 콘솔의 나머지 모바일 규칙은 파일 끝의 같은 조건 블록에 있다.
+         베이스 규칙(3900행대)이 이 블록보다 뒤라, 여기 두면 소스 순서에 져서 죽는다. */
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -3291,12 +3616,15 @@
     .menu-tablist {
       display: grid;
       gap: var(--space-half);
-      grid-template-columns: repeat(7, minmax(0, 1fr));
+      /* 탭은 8개다. 열이 7개면 여덟째 탭(감사·동기화)이 혼자 다음 줄로 떨어져
+         1280px 같은 넓은 화면에서도 고아 줄이 생긴다. */
+      grid-template-columns: repeat(8, minmax(0, 1fr));
       border-bottom: var(--border-width-default) solid var(--color-border-default);
     }
 
     .menu-tab {
       display: flex;
+      min-inline-size: 0;
       min-block-size: var(--control-min-block-size);
       align-items: center;
       justify-content: space-between;
@@ -3344,7 +3672,8 @@
       white-space: nowrap;
     }
 
-    @media (min-width: 721px) and (max-width: 960px) {
+    /* 8열이 서기엔 좁은 중간 폭에서는 4열 2줄로 반듯하게 접는다. */
+    @media (min-width: 721px) and (max-width: 1100px) {
       .menu-tablist {
         grid-template-columns: repeat(4, minmax(0, 1fr));
       }
@@ -3625,9 +3954,9 @@
       align-items: start;
     }
 
-    #menu-panel-queue .operator-console-grid {
-      grid-template-columns: minmax(min(calc(var(--operator-queue-min) + var(--operator-stage-min)), 100%), 1fr) minmax(0, 1.65fr);
-    }
+    /* #menu-panel-queue 접두사를 붙인 동일 선언이 여기 있었다 — ID 특이성이 아래
+       모바일 1열 규칙을 모든 화면폭에서 이겨, 375px 에서 대기열이 34px 로 짜부라졌다.
+       베이스 규칙과 선언이 같았으므로 지워도 넓은 화면은 그대로다. */
 
     #menu-panel-queue .operator-queue-list {
       gap: var(--space-1);
@@ -3641,9 +3970,6 @@
     #menu-panel-queue .operator-job-actions {
       grid-column: 2;
       grid-row: auto;
-    }
-
-    @media (max-width: 720px) {
     }
 
     .operator-queue-panel,
@@ -4083,9 +4409,32 @@
       }
     }
 
+    /* operator 콘솔 모바일 규칙은 반드시 베이스 규칙 뒤인 여기 있어야 한다.
+       앞쪽 720px 블록에 두면 같은 특이성의 베이스가 소스 순서로 이긴다. */
     @media (max-width: 720px) {
       .operator-console-grid {
         grid-template-columns: minmax(0, 1fr);
+      }
+
+      .operator-summary-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .operator-stage-list {
+        grid-template-columns: 1fr;
+      }
+
+      .operator-stage-step {
+        min-block-size: var(--control-min-block-size);
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+      }
+
+      .operator-panel-heading,
+      .operator-focus-heading,
+      .operator-now-heading {
+        align-items: flex-start;
+        flex-direction: column;
       }
     }
 
@@ -4477,7 +4826,7 @@
           <p class="section-copy">모델·추론·service tier는 API Hub 응답만 표시하며 인증정보는 표시하지 않습니다.</p>
         </div>
         <div class="factory-card control-card control-grid">
-          <div class="field-stack"><label for="model-select">판단 모델</label><select id="model-select"><option>latestModel</option></select></div>
+          <div class="field-stack"><label for="model-select">판단 모델</label><select id="model-select"><option value="gpt-5.6-luna">gpt-5.6-luna</option></select></div>
           <div class="field-stack"><label for="reasoning-select">추론 깊이</label><select id="reasoning-select"><option>medium</option><option>low</option><option>high</option><option>xhigh</option></select></div>
           <div class="field-stack"><label for="tier-select">처리 속도</label><select id="tier-select"><option>standard</option></select></div>
           <div class="field-stack"><label for="preset-select">판단 방식</label><select id="preset-select"><option value="fast_single">빠른 단일 판단</option><option value="dual_review">고정밀 이중 검토</option></select></div>
@@ -4673,6 +5022,8 @@
       const API_BASE = localOrigin("apiBase", "http://127.0.0.1:5062");
       const FACTORY_BACKEND = localOrigin("factoryBackend", "http://127.0.0.1:5050");
       const API_HUB = localOrigin("apiHub", "http://127.0.0.1:4321");
+      // 판단에 쓸 기본 모델. 목록에 있으면 이것을 고른다.
+      const PREFERRED_JUDGMENT_MODEL = "gpt-5.6-luna";
       const session = { id: "", csrf: "" };
       const automation = {
         registry: null,
@@ -4796,8 +5147,13 @@
             select.add(new Option(value, value));
           });
           if (!select.options.length) select.add(new Option("latestModel", "latestModel"));
-          const keepsModel = chosenModel && [...select.options].some(option => option.value === chosenModel);
-          select.value = keepsModel ? chosenModel : String(options.latestModel || "latestModel");
+          // 판단 모델 기본값은 luna 다. API Hub 가 알려 주는 latestModel 은 그때그때 달라지므로,
+          // 그것을 그대로 쓰면 새로고침마다 기본이 바뀐다. luna 가 목록에 있으면 luna 를 쓴다.
+          const has = value => [...select.options].some(option => option.value === value);
+          const preferredModel = has(PREFERRED_JUDGMENT_MODEL)
+            ? PREFERRED_JUDGMENT_MODEL
+            : String(options.latestModel || "latestModel");
+          select.value = chosenModel && has(chosenModel) ? chosenModel : preferredModel;
           const populate = (id, items, fallback) => {
             const target = document.getElementById(id);
             const chosen = target.value;
@@ -4860,6 +5216,7 @@
         apiRequest, assetUrl, setStatus, automation,
         factoryBackend: FACTORY_BACKEND,
         factoryApp: FACTORY_APP,
+        apiHub: API_HUB,
       });
       void loadSession();
       void loadModelStatus();
@@ -4975,6 +5332,6 @@
     }
   </script>
   <script type="module" src="./src/production-board.mjs?parallelBoard=64"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=7"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=16"></script>
 </body>
 </html>

@@ -55,6 +55,17 @@ export function isSupportedImage(fileName) {
   return IMAGE_EXTENSIONS.includes(extensionOf(fileName));
 }
 
+// 파일명 꼬리를 색상명으로 받아들일 조건. `product_8`·`IMG 0042` 같은 카메라·내보내기
+// 꼬리표가 색상명이 되어 옵션표에 올라가면 안 된다 — 숫자가 섞였거나 촬영·내보내기
+// 상용구면 색상명이 아니라고 본다. 남색·연분홍·navy 같은 진짜 색상명은 통과한다.
+const NON_COLOR_TAIL = /\d|^(?:product|image|img|photo|pic|shot|cut|detail|main|thumb|dsc|screenshot|kakaotalk|사진|이미지|상세|대표|컷|섬네일|썸네일)$/i;
+
+function colorTailOf(rawTail) {
+  const tail = text(rawTail).replace(/[_-]+/g, ' ').trim();
+  if (!tail || tail.length > 12 || NON_COLOR_TAIL.test(tail)) return '';
+  return tail;
+}
+
 /**
  * 파일 이름에서 제품과 장 번호를 읽는다.
  * `보자기.jpg` → 보자기 1장, `보자기_2.jpg` / `보자기-3.png` → 같은 제품의 2·3번째 장.
@@ -62,11 +73,23 @@ export function isSupportedImage(fileName) {
 export function readImageName(fileName) {
   const name = text(fileName);
   const stem = name.replace(/\.[A-Za-z0-9]+$/, '');
+  // 제품명_번호_색상 (모시보자기_2_남색). 색상명을 파일명에 적어 두는 사람을 위해 받는다.
+  // 번호가 있어야 같은 제품으로 묶인다 — 번호 없이 제품명_색상 으로 적으면 그 자체가
+  // 다른 제품 이름이 되어 따로 떨어진다. 그 규칙은 그대로 둔다.
+  // 꼬리가 색상명으로 안 보이면 묶음(제품명·번호)은 그대로 두고 색상명만 비운다.
+  const withColor = /^(.*?)[ _-](\d{1,3})[ _-](.+)$/.exec(stem);
+  if (withColor && text(withColor[1])) {
+    return {
+      productName: text(withColor[1]),
+      ordinal: Number(withColor[2]),
+      colorName: colorTailOf(withColor[3]),
+    };
+  }
   const match = /^(.*?)[ _-](\d{1,3})$/.exec(stem);
   if (match && text(match[1])) {
-    return { productName: text(match[1]), ordinal: Number(match[2]) };
+    return { productName: text(match[1]), ordinal: Number(match[2]), colorName: '' };
   }
-  return { productName: stem.trim(), ordinal: 1 };
+  return { productName: stem.trim(), ordinal: 1, colorName: '' };
 }
 
 /** 고른 파일들을 제품 단위로 묶는다. 파일 본문은 아직 읽지 않는다. */
@@ -80,13 +103,13 @@ export function groupImageFiles(filesValue) {
       skipped.push({ fileName, reason: 'unsupported_type' });
       continue;
     }
-    const { productName, ordinal } = readImageName(fileName);
+    const { productName, ordinal, colorName } = readImageName(fileName);
     if (!productName) {
       skipped.push({ fileName, reason: 'product_name_missing' });
       continue;
     }
     if (!groups.has(productName)) groups.set(productName, []);
-    groups.get(productName).push({ fileName, ordinal, file });
+    groups.get(productName).push({ fileName, ordinal, colorName, file });
   }
   const products = [...groups.entries()].map(([productName, images]) => ({
     productName,
@@ -98,6 +121,8 @@ export function groupImageFiles(filesValue) {
         file: image.file,
         ordinal: index + 1,
         role: 'base',
+        // 파일명에 색상명을 적어 두었으면 그대로 들고 온다. 화면에서 고쳐 쓸 수 있다.
+        fileColorName: text(image.colorName),
         name: image.fileName.replace(/\.[A-Za-z0-9]+$/, ''),
       })),
   }));
@@ -194,7 +219,18 @@ function normalizeRequiredValues(values) {
  * 기본 사진이 없으면 만들 바탕이 없다. 이 둘을 '투입 가능' 으로 세면 버튼이 열린 채
  * 남아, 사람이 눌러야만 실패를 알게 된다.
  */
-const BLOCKING_ISSUES = new Set(['image_missing', 'base_image_missing', 'color_name_missing']);
+export const BLOCKING_ISSUES = new Set([
+  'image_missing',
+  'base_image_missing',
+  'color_name_missing',
+  // 이름 없는 제품은 작업파일명도 큐 표기도 만들 수 없다. 파일명에서 온 쓰레기 이름을
+  // 지우고 직접 칠 수 있어야 하므로, 비어 있으면 보내지 말고 여기서 막는다.
+  'product_name_missing',
+  // 자릿수를 넘긴 숫자는 조립공장이 422 로 거절한다(salePrice ≤12자리, stock ≤9자리).
+  // 보내 봐야 실패하므로 여기서 막고 이유를 말한다.
+  'sale_price_invalid',
+  'stock_invalid',
+]);
 
 function issuesFor(entry) {
   const issues = [];
@@ -202,6 +238,12 @@ function issuesFor(entry) {
   if (!entry.productName) issues.push('product_name_missing');
   if (!entry.requiredValues.category) issues.push('category_missing');
   if (!entry.requiredValues.salePrice) issues.push('sale_price_missing');
+  if (entry.requiredValues.salePrice && !/^\d{1,12}$/.test(entry.requiredValues.salePrice)) {
+    issues.push('sale_price_invalid');
+  }
+  if (entry.requiredValues.stock && !/^\d{1,9}$/.test(entry.requiredValues.stock)) {
+    issues.push('stock_invalid');
+  }
   // 옵션 사진인데 색상명이 없으면 조립공장이 옵션표 슬롯명을 정하지 못한다.
   if (entry.images.some(image => (
     ['color-option', 'base-and-color'].includes(text(record(image).role)) && !text(record(image).colorName)
@@ -252,7 +294,7 @@ export function buildBulkPlan(groupsValue, csvRowsValue = [], defaultsValue = {}
 }
 
 /** 계획표 한 줄을 조립공장 투입 payload 로 바꾼다. dataUrl 은 보낼 직전에 채운다. */
-export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha256s } = {}) {
+export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha256s, mode, policySnapshot } = {}) {
   const source = record(entry);
   const productName = text(source.productName);
   const images = list(source.images);
@@ -260,6 +302,14 @@ export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha2
   const digests = list(sha256s);
   if (!productName) throw new TypeError('product name required');
   if (!images.length || urls.length !== images.length) throw new TypeError('image payload required');
+  // 작업파일명은 조립공장이 파일 시스템 이름으로 쓴다. 금지문자(\ / : * ? " < > |)가 있거나
+  // 160자를 넘으면 서버가 factory_product_workfile_invalid 로 거절한다. 파일명에서 온
+  // 제품명(=z-image-turbo_00221_ 같은)이 그대로 흘러들 수 있으므로 여기서 다듬는다.
+  const workfileStem = productName
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'product';
   const requiredValues = normalizeRequiredValues(source.requiredValues);
   const category = requiredValues.category || '';
   // 옵션 사진에 색상명이 붙어 있을 때만 옵션이 있는 제품이다. 없는데 'provided' 로 보내면
@@ -273,10 +323,15 @@ export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha2
     contractVersion: '1.0.0',
     batchId: text(batchId) || 'batch-bulk-intake',
     idempotencyKey: `bulk-${text(batchId) || 'batch'}-${productName}-${digests[0] || images[0].fileName}`,
-    mode: 'manual',
+    // 큐의 직접 입력 폼과 같은 규칙: 잠근 정책이 있으면 그 판단(auto/manual)을 따른다.
+    // 스냅샷 없이 보내면 자동화 정책이 기본값으로 돌아가, 같은 제품이라도 어느 폼으로
+    // 넣었느냐에 따라 자동/수동이 달라진다.
+    mode: mode === 'auto' ? 'auto' : 'manual',
+    ...(policySnapshot && typeof policySnapshot === 'object' ? { policySnapshot } : {}),
+    cafe24ApprovalMode: 'existing_one_time_target_gate',
     source: { kind: 'manual' },
     productName,
-    workfileName: `${productName}.kuasangse`,
+    workfileName: `${workfileStem}.kuasangse`,
     ...(category ? { category } : {}),
     ...(imageModel ? { imageModel: text(imageModel) } : {}),
     requiredValues: { ...requiredValues, optionMode },
@@ -319,5 +374,94 @@ export function summarizeBulkIntake(resultsValue) {
     failed,
     tone: failed ? (queued ? 'warning' : 'error') : 'ok',
     copy: parts.length ? parts.join(' · ') : '투입할 제품이 없습니다.',
+  };
+}
+
+/**
+ * 새로고침(Ctrl+F5)에도 살아남아야 하는 작업 상태를 순수 데이터로 만든다.
+ *
+ * 사진 본문(File)은 여기 담지 않는다 — 각 image 의 blobId 가 IndexedDB blob 저장소를
+ * 가리킨다. 이렇게 나눠야 글자 한 자 칠 때마다 수 MB 를 다시 쓰지 않는다.
+ */
+export const WORKING_STATE_SCHEMA = 'bulk-intake-working-state:v1';
+
+export function serializeWorkingState({ grouped, csvRows, csvErrors, defaults } = {}) {
+  const source = record(grouped);
+  return {
+    schema: WORKING_STATE_SCHEMA,
+    products: list(source.products).map(productValue => {
+      const product = record(productValue);
+      return {
+        productName: text(product.productName),
+        images: list(product.images).map(imageValue => {
+          const image = record(imageValue);
+          return {
+            blobId: text(image.blobId),
+            fileName: text(image.fileName),
+            ordinal: Number(image.ordinal) || 1,
+            role: text(image.role) || 'base',
+            colorName: text(image.colorName),
+            fileColorName: text(image.fileColorName),
+            name: text(image.name),
+            type: text(record(image.file).type),
+          };
+        }),
+      };
+    }),
+    skipped: list(source.skipped).map(itemValue => {
+      const item = record(itemValue);
+      return { fileName: text(item.fileName), reason: text(item.reason) };
+    }),
+    csvRows: list(csvRows),
+    csvErrors: list(csvErrors),
+    defaults: record(defaults),
+  };
+}
+
+/**
+ * 저장해 둔 기록을 화면 상태로 되살린다. blobs 는 blobId → Blob 표.
+ *
+ * 본문이 사라진 사진은 지어내지 않고 dropped 로 보고한다 — file 없는 사진을 살려 두면
+ * 투입 단계(readAsDataUrl)에서야 터진다. 이름만 있고 사진이 없는 카드(빈 제품 추가)는
+ * 그대로 살린다. 기록이 깨졌으면 null — 빈 화면으로 시작하는 쪽이 안전하다.
+ */
+export function hydrateWorkingState(recordValue, blobsValue, makeFile) {
+  const stored = record(recordValue);
+  if (stored.schema !== WORKING_STATE_SCHEMA || !Array.isArray(stored.products)) return null;
+  const blobs = blobsValue instanceof Map ? blobsValue : new Map();
+  const build = typeof makeFile === 'function'
+    ? makeFile
+    : (blob, name, type) => new File([blob], name, { type: type || blob.type || '' });
+  const dropped = [];
+  const products = [];
+  for (const productValue of stored.products) {
+    const product = record(productValue);
+    const images = [];
+    for (const imageValue of list(product.images)) {
+      const image = record(imageValue);
+      const blob = image.blobId ? blobs.get(text(image.blobId)) : null;
+      if (!blob) {
+        if (text(image.fileName)) dropped.push(text(image.fileName));
+        continue;
+      }
+      images.push({
+        blobId: text(image.blobId),
+        fileName: text(image.fileName),
+        ordinal: Number(image.ordinal) || images.length + 1,
+        role: text(image.role) || 'base',
+        colorName: text(image.colorName),
+        fileColorName: text(image.fileColorName),
+        name: text(image.name),
+        file: build(blob, text(image.fileName), text(image.type)),
+      });
+    }
+    products.push({ productName: text(product.productName), images });
+  }
+  return {
+    grouped: { products, skipped: list(stored.skipped) },
+    csvRows: list(stored.csvRows),
+    csvErrors: list(stored.csvErrors),
+    defaults: record(stored.defaults),
+    dropped,
   };
 }

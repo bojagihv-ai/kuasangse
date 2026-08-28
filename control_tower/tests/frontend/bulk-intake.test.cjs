@@ -12,10 +12,10 @@ const files = names => names.map(name => ({ name }));
 test('파일 이름에서 제품과 장 번호를 읽는다', async () => {
   const { readImageName } = await import(MODEL_URL);
 
-  assert.deepEqual(readImageName('공단보자기 45cm.jpg'), { productName: '공단보자기 45cm', ordinal: 1 });
-  assert.deepEqual(readImageName('공단보자기_2.png'), { productName: '공단보자기', ordinal: 2 });
-  assert.deepEqual(readImageName('자수파우치-3.webp'), { productName: '자수파우치', ordinal: 3 });
-  assert.deepEqual(readImageName('보자기 12.JPG'), { productName: '보자기', ordinal: 12 });
+  assert.deepEqual(readImageName('공단보자기 45cm.jpg'), { productName: '공단보자기 45cm', ordinal: 1, colorName: '' });
+  assert.deepEqual(readImageName('공단보자기_2.png'), { productName: '공단보자기', ordinal: 2, colorName: '' });
+  assert.deepEqual(readImageName('자수파우치-3.webp'), { productName: '자수파우치', ordinal: 3, colorName: '' });
+  assert.deepEqual(readImageName('보자기 12.JPG'), { productName: '보자기', ordinal: 12, colorName: '' });
 });
 
 test('여러 장을 같은 제품으로 묶고 장 순서를 정리한다', async () => {
@@ -246,4 +246,194 @@ test('기본 사진 하나로 단일 색상 옵션까지 만든다', async () =>
   assert.deepEqual(payload.inputImages.map(image => image.role), ['base', 'color-option']);
   assert.equal(payload.inputImages[1].colorName, '남색');
   assert.equal(payload.inputImages[0].dataUrl, payload.inputImages[1].dataUrl);
+});
+
+
+test('파일명에 적어 둔 색상명을 제품 묶음을 깨지 않고 읽어 온다', async () => {
+  // Given: 제품명_번호_색상 으로 적은 사진들.
+  const { groupImageFiles, readImageName } = await import(MODEL_URL);
+
+  // When: 이름을 읽고 묶는다.
+  const parsed = readImageName('모시보자기_2_남색.png');
+  const grouped = groupImageFiles(files(['모시보자기_1.jpg', '모시보자기_2_남색.jpg', '모시보자기_3_산호.jpg']));
+
+  // Then: 세 장이 한 제품으로 묶이고, 색상명은 따로 실려 온다.
+  // 번호가 있어야 묶이므로 색상명 자리는 그 뒤다 — 번호 없이 제품명_색상 으로 적으면
+  // 그 자체가 다른 제품 이름이 되어 따로 떨어진다.
+  assert.equal(parsed.productName, '모시보자기');
+  assert.equal(parsed.ordinal, 2);
+  assert.equal(parsed.colorName, '남색');
+  assert.equal(grouped.products.length, 1);
+  assert.deepEqual(
+    grouped.products[0].images.map(image => image.fileColorName),
+    ['', '남색', '산호'],
+  );
+});
+
+test('번호만 적은 파일명은 색상명을 지어내지 않는다', async () => {
+  const { groupImageFiles } = await import(MODEL_URL);
+
+  const grouped = groupImageFiles(files(['모시보자기_1.jpg', '모시보자기_2.jpg']));
+
+  assert.deepEqual(grouped.products[0].images.map(image => image.fileColorName), ['', '']);
+});
+
+test('카메라·내보내기 꼬리표는 색상명으로 오인하지 않는다', async () => {
+  // Given: 사용자가 실제로 겪은 파일명들. product_8 이 색상명 "product 8" 로 올라갔었다.
+  const { readImageName } = await import(MODEL_URL);
+
+  // Then: 묶음(제품명·번호)은 그대로, 색상명만 비운다.
+  assert.deepEqual(readImageName('7번_01_product_8.jpg'), { productName: '7번', ordinal: 1, colorName: '' });
+  assert.deepEqual(readImageName('3.꽃핑_03_product_3.jpg'), { productName: '3.꽃핑', ordinal: 3, colorName: '' });
+  assert.equal(readImageName('보자기_2_IMG_0042.jpg').colorName, '');
+  assert.equal(readImageName('보자기_2_상세.jpg').colorName, '');
+
+  // 진짜 색상명은 계속 통과한다 — 한글도 영문도.
+  assert.equal(readImageName('모시보자기_2_남색.jpg').colorName, '남색');
+  assert.equal(readImageName('모시보자기_3_navy.jpg').colorName, 'navy');
+});
+
+test('작업파일명은 금지문자를 다듬고 길이를 자른다', async () => {
+  // Given: 파일명에서 온 별난 제품명. 조립공장은 \ / : * ? " < > | 와 160자 초과를 422 로 거절한다.
+  const { groupImageFiles, buildBulkPlan, buildProductPayload } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+  grouped.products[0].productName = '슬라브/겹보:55*55?';
+
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000' });
+  const payload = buildProductPayload({ ...plan.entries[0], productName: '슬라브/겹보:55*55?' }, {
+    batchId: 'b', dataUrls: ['data:image/jpeg;base64,AAA='], sha256s: ['aaa'],
+  });
+
+  // Then: 금지문자가 사라지고 .kuasangse 로 끝난다. 서버까지 갔다가 튕기지 않는다.
+  assert.equal(payload.workfileName, '슬라브 겹보 55 55.kuasangse');
+
+  const longName = '가'.repeat(200);
+  const longPayload = buildProductPayload(
+    { productName: longName, images: plan.entries[0].images, requiredValues: {} },
+    { batchId: 'b', dataUrls: ['data:image/jpeg;base64,AAA='], sha256s: ['aaa'] },
+  );
+  assert.ok(longPayload.workfileName.length <= 160);
+  assert.ok(longPayload.workfileName.endsWith('.kuasangse'));
+});
+
+test('자릿수를 넘긴 판매가·재고는 투입 전에 막는다', async () => {
+  // 조립공장 규칙: salePrice ^\d{1,12}$, stock ^\d{1,9}$. 넘기면 보내 봐야 422 다.
+  const { groupImageFiles, buildBulkPlan, BLOCKING_ISSUES } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+
+  const plan = buildBulkPlan(grouped, [], {
+    category: '주방', salePrice: '1234567890123', stock: '1234567890',
+  });
+
+  assert.ok(plan.entries[0].issues.includes('sale_price_invalid'));
+  assert.ok(plan.entries[0].issues.includes('stock_invalid'));
+  assert.ok(BLOCKING_ISSUES.has('sale_price_invalid'));
+  assert.ok(BLOCKING_ISSUES.has('stock_invalid'));
+  assert.equal(plan.blocked, 1);
+  assert.equal(plan.ready, 0);
+});
+
+test('차단 흠 목록은 모델이 한 곳에서 내보낸다', async () => {
+  // 화면과 제출 경로가 각자 목록을 들고 있으면 한쪽만 고쳐져 어긋난다.
+  const { BLOCKING_ISSUES } = await import(MODEL_URL);
+  for (const key of ['image_missing', 'base_image_missing', 'color_name_missing']) {
+    assert.ok(BLOCKING_ISSUES.has(key), key);
+  }
+});
+
+test('잠근 정책 스냅샷과 판단 모드를 큐 폼과 같은 규칙으로 싣는다', async () => {
+  // Given: 정책이 잠긴 제품. 스냅샷 없이 보내면 자동화 정책이 기본값으로 돌아가,
+  // 같은 제품이라도 어느 폼으로 넣었느냐에 따라 자동/수동이 달라진다.
+  const { groupImageFiles, buildBulkPlan, buildProductPayload } = await import(MODEL_URL);
+  const plan = buildBulkPlan(groupImageFiles(files(['보자기_1.jpg'])), [], { category: '주방', salePrice: '12000' });
+  const snapshot = { snapshotId: 'snap-1', locked: true, resolved: {} };
+
+  const payload = buildProductPayload(plan.entries[0], {
+    batchId: 'b', dataUrls: ['data:image/jpeg;base64,AAA='], sha256s: ['aaa'],
+    mode: 'auto', policySnapshot: snapshot,
+  });
+
+  assert.equal(payload.mode, 'auto');
+  assert.deepEqual(payload.policySnapshot, snapshot);
+  // Cafe24 승인 관문도 큐 폼과 같은 값이어야 한다.
+  assert.equal(payload.cafe24ApprovalMode, 'existing_one_time_target_gate');
+});
+
+test('스냅샷이 없으면 이전과 같이 manual 로 보낸다', async () => {
+  const { groupImageFiles, buildBulkPlan, buildProductPayload } = await import(MODEL_URL);
+  const plan = buildBulkPlan(groupImageFiles(files(['보자기_1.jpg'])), [], { category: '주방', salePrice: '12000' });
+
+  const payload = buildProductPayload(plan.entries[0], {
+    batchId: 'b', dataUrls: ['data:image/jpeg;base64,AAA='], sha256s: ['aaa'],
+  });
+
+  assert.equal(payload.mode, 'manual');
+  assert.equal('policySnapshot' in payload, false);
+});
+
+test('이름 없는 제품은 투입 가능 수에서 빠진다', async () => {
+  // 이름 없는 제품은 작업파일명도 큐 표기도 만들 수 없다. 파일명 유래 임시 이름을 지우고
+  // 직접 치게 하려면, 비어 있는 동안은 보내지 말아야 한다.
+  const { buildBulkPlan } = await import(MODEL_URL);
+
+  const plan = buildBulkPlan(
+    { products: [{ productName: '', images: [{ fileName: 'a.jpg', ordinal: 1, role: 'base' }] }], skipped: [] },
+    [],
+    { category: '주방', salePrice: '12000' },
+  );
+
+  assert.ok(plan.entries[0].issues.includes('product_name_missing'));
+  assert.equal(plan.blocked, 1);
+  assert.equal(plan.ready, 0);
+});
+test('새로고침 저장분을 되살려도 투입 계획이 그대로다', async () => {
+  // Given: 사람이 손질까지 끝낸 작업 상태 — 역할 이동, 색상명, 기본값.
+  const { groupImageFiles, serializeWorkingState, hydrateWorkingState, buildBulkPlan } = await import(MODEL_URL);
+  const fileA = new File([Buffer.from('aa')], '보자기_1.jpg', { type: 'image/jpeg' });
+  const fileB = new File([Buffer.from('bb')], '보자기_2_남색.jpg', { type: 'image/jpeg' });
+  const grouped = groupImageFiles([fileA, fileB]);
+  grouped.products[0].images[1].role = 'color-option';
+  grouped.products[0].images[1].colorName = '남색';
+  grouped.products[0].images.forEach((image, index) => { image.blobId = 'blob-' + index; });
+  const defaults = { category: '주방', salePrice: '12000', stock: '9' };
+
+  // When: 저장(JSON 왕복은 IndexedDB 구조적 복제의 근사) 후 본문 표와 함께 복원.
+  const stored = JSON.parse(JSON.stringify(serializeWorkingState({ grouped, csvRows: [], csvErrors: [], defaults })));
+  const revived = hydrateWorkingState(stored, new Map([['blob-0', fileA], ['blob-1', fileB]]));
+
+  // Then: 계획이 같고, 손질과 파일 본문이 그대로다.
+  assert.equal(revived.dropped.length, 0);
+  const before = buildBulkPlan(grouped, [], defaults);
+  const after = buildBulkPlan(revived.grouped, revived.csvRows, revived.defaults);
+  assert.equal(after.ready, before.ready);
+  assert.deepEqual(after.entries.map(entry => entry.productName), before.entries.map(entry => entry.productName));
+  assert.equal(revived.grouped.products[0].images[1].colorName, '남색');
+  assert.equal(revived.grouped.products[0].images[1].role, 'color-option');
+  assert.equal(revived.grouped.products[0].images[0].file.name, '보자기_1.jpg');
+  assert.equal(revived.defaults.stock, '9');
+});
+
+test('본문이 사라진 사진은 지어내지 않고 뺐다고 알린다', async () => {
+  const { groupImageFiles, serializeWorkingState, hydrateWorkingState } = await import(MODEL_URL);
+  const grouped = groupImageFiles([new File([Buffer.from('aa')], '보자기_1.jpg', { type: 'image/jpeg' })]);
+  grouped.products[0].images[0].blobId = 'blob-0';
+  // 이름만 있는 빈 카드(＋ 빈 제품 추가)도 함께 저장돼 있었다.
+  grouped.products.push({ productName: '수동제품', images: [] });
+
+  const revived = hydrateWorkingState(
+    serializeWorkingState({ grouped, csvRows: [], csvErrors: [], defaults: {} }),
+    new Map(),
+  );
+
+  // Then: 본문 없는 사진은 dropped 로 보고하고, 빈 카드는 이름째 살아남는다.
+  assert.deepEqual(revived.dropped, ['보자기_1.jpg']);
+  assert.deepEqual(revived.grouped.products.map(product => product.productName), ['보자기', '수동제품']);
+  assert.equal(revived.grouped.products[0].images.length, 0);
+});
+
+test('모르는 저장 기록은 되살리지 않는다', async () => {
+  const { hydrateWorkingState } = await import(MODEL_URL);
+  assert.equal(hydrateWorkingState({ schema: 'bulk-intake-working-state:v99', products: [] }, new Map()), null);
+  assert.equal(hydrateWorkingState('garbage', new Map()), null);
+  assert.equal(hydrateWorkingState(null, new Map()), null);
 });
