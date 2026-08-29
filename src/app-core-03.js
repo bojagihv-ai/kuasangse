@@ -7170,11 +7170,25 @@ async function factoryAdoptWorkfileNameOnStart(productName) {
   const name = String(productName || '').trim().slice(0, 80);
   if (!name) return false;
   const currentId = String(state.currentProjectId || '').trim();
-  if (currentId && !/^batch:/i.test(currentId)) return false;
   if (currentId) {
-    // 남의 문서 안이다. 내용은 유지하고 저장 ID를 분리해 내 작업파일로 만든다.
-    await startNewProjectDraft({ name });
-    return true;
+    // 남의 문서(batch:) 안이어도 **여기서 작업파일을 가르지 않는다.**
+    //
+    // 8/9 '잘되는상태커밋ver1' 과 지금을 대조해 배운 것:
+    //   저장 ID를 비우는 진입점이 그때는 4개였고 **전부 사람이 직접 누르는 것**이었다
+    //   ('새 작업', '다른 이름', '사본 저장'). 내가 시작 버튼에 다섯 번째를 붙였고,
+    //   그 순간 저장 ID가 비면서 신원 정리가 사람이 손으로 넣은 값을 전부 지웠다.
+    //   ("왜자꾸 너가 코딩하나할떄마다 이게날라가냐고")
+    //
+    // 규칙: **파괴적인 동작은 사람이 명시적으로 누른 순간에만 연결한다.**
+    // 편의 기능을 위해 파괴 함수를 재사용하지 않는다. 여기서는 알려만 주고,
+    // 가르는 것은 사람이 '다른 이름' 을 눌렀을 때만 한다.
+    if (/^batch:/i.test(currentId) && typeof setUiNotice === 'function') {
+      setUiNotice(
+        `지금 열려 있는 것은 생산관제가 만든 작업파일입니다. '${name}' 로 따로 저장하려면 '다른 이름' 을 눌러주세요.`,
+        'warn',
+      );
+    }
+    return false;
   }
   // 아직 저장본이 없다. 저장 ID를 흔들지 않고 이름만 세운다.
   if (String(state.currentProjectName || '').trim() === name) return false;
@@ -16634,8 +16648,16 @@ async function factoryRuntimeControlProjection() {
   if (!productKey) blockers.push('product_key');
   if (!currentRunId) blockers.push('run_id');
   if (!inputFingerprint) blockers.push('input_fingerprint');
+  // 보드에서 넣은 분류는 factoryRuntimeControlApplyCafe24Category 가 등록 행
+  // (finalDb.category = [{ category_no }]) 으로 써 넣는다. 그런데 여기서는 스칼라
+  // finalDb.category_no 만 읽고 있어, 사람이 화면에서 분류를 채워도 등록 직전 점검은
+  // 계속 category_id 로 막았다 — 실측 2026-08-29: 107 을 넣어도 차단이 안 풀렸다.
+  const categoryRowNo = Array.isArray(finalDb.category)
+    ? String(finalDb.category.find(row => row && row.category_no)?.category_no || '').trim()
+    : '';
   const categoryId = String(
-    finalDb.category_no || finalDb.categoryId || product.categoryId || preflight.categoryId || '',
+    finalDb.category_no || finalDb.categoryId || categoryRowNo
+      || product.categoryId || preflight.categoryId || '',
   ).trim();
   const categoryLabel = String(preflight.categoryLabel || '').trim();
   if (!categoryId) blockers.push('category_id');

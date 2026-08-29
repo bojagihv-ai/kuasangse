@@ -58,6 +58,10 @@ PRODUCT_JOB_INPUT_KEYS = frozenset(
         "pdpJobId",
         "policySnapshot",
         "cafe24ApprovalMode",
+        # 화면의 「Cafe24 값 지정」이 저장하는 등록값. 쓰는 곳(queue_cafe24_registration)과
+        # 읽는 곳(_cafe24_values_from_job)은 이미 이 열쇠를 쓰는데 여기에만 빠져 있어,
+        # 값을 한 번 지정하면 다음 기동에서 이 작업이 payload_invalid 로 거절됐다.
+        "cafe24Registration",
         "contractType",
         "contractVersion",
         "category",
@@ -408,7 +412,14 @@ class FactorySyncBridge:
         self._expected_build_id = expected_build_id
         if expected_build_id and WORKER_BUILD_ID.fullmatch(expected_build_id) is None:
             raise FactorySyncError("factory_worker_build_invalid")
+        # 기동 때 읽지 못한 작업을 여기 모은다. 조용히 사라지면 사람이 왜 없어졌는지 모른다.
+        self._skipped_product_jobs: list[JsonObject] = []
         self._product_jobs, recovered_startup_orphan = self._load_product_jobs()
+        for skipped in self._skipped_product_jobs:
+            print(
+                f"[factory-sync] 작업 {skipped['jobId']} 을(를) 읽지 못해 건너뜁니다: {skipped['reason']}",
+                flush=True,
+            )
         needs_asset_migration = self._asset_store is not None and any(
             isinstance(image, dict) and isinstance(image.get("dataUrl"), str)
             for job in self._product_jobs.values()
@@ -2137,9 +2148,17 @@ class FactorySyncBridge:
                 status = "blocked"
                 current_order_id = ""
                 message = MISSING_ASSET_MESSAGE
+            # 저장된 작업 하나가 읽히지 않는다고 관제탑 전체가 기동을 못 하면, 멀쩡한
+            # 나머지 작업까지 손이 닿지 않는다 — 실측 2026-08-29: 작업 1건의 payload 때문에
+            # 8건 전부가 화면에서 사라졌다. 못 읽는 작업은 건너뛰고 무엇을 건너뛰었는지 남긴다.
+            try:
+                normalized_payload = _normalize_product_job_payload(runtime_payload)
+            except FactorySyncError as error:
+                self._skipped_product_jobs.append({"jobId": job_id, "reason": error.code})
+                continue
             jobs[job_id] = _ProductJob(
                 job_id=job_id,
-                payload=_normalize_product_job_payload(runtime_payload),
+                payload=normalized_payload,
                 status=status,
                 stage_key=str(raw.get("stageKey") or ""),
                 message=message,
