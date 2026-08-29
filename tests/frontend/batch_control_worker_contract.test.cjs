@@ -875,8 +875,11 @@ test('production control auto run owns source analysis and rebuilds an exact 14-
   assert.match(runtime, /function factoryRuntimeControlExecutionMode\(payload = \{\}\)/);
   assert.match(runtime, /goalRun\.mode = factoryRuntimeControlExecutionMode\(payload\)/);
   assert.match(runtime, /factoryRunDbCandidatesForSelection\(\{ preserveManualFields: true \}\)/);
-  assert.match(runtime, /factoryRuntimeCompetitorMarketAction\(\{\s*type: 'quick-action',\s*action: 'start-vm',\s*skipConfirm: true,\s*\}\)/);
-  assert.match(runtime, /factoryRuntimeCompetitorMarketAction\(\{ type: 'quick-action', action: 'analyze-vm' \}\)/);
+  // 후보 수집·상세수집은 VM을 먼저 부르되, VM 워커가 죽어 있으면 본컴 경로로 한 번 더 간다.
+  // 확인창은 어느 쪽이든 띄우지 않는다 — 무인 워커 탭에서는 취소로 떨어져 수집이 시작조차 못 한다.
+  assert.match(runtime, /for \(const action of \['start-vm', 'start-local'\]\)/);
+  assert.match(runtime, /for \(const action of \['analyze-vm', 'detail-local'\]\)/);
+  assert.match(runtime, /factoryRuntimeCompetitorMarketAction\(\{ type: 'quick-action', action, skipConfirm: true \}\)/);
   assert.match(runtime, /factoryRunGoalLoop\(\{\s*forceDetail:/);
   assert.match(runtime, /factory_cafe24_options_incomplete/);
   assert.match(runtime, /inventoryQuantity:\s*'99'/);
