@@ -42,37 +42,23 @@ const FLOW = sourceSlice(
   'if (vmTimedOut) {',
 );
 
-test('본컴을 먼저 부른다', () => {
-  const localAt = FLOW.indexOf("runScrape('local')");
-  const vmAt = FLOW.indexOf("runScrape('vm')");
-  assert.ok(localAt >= 0, '본컴 경로 호출이 없습니다. 네이버가 다시 0건이 됩니다.');
-  assert.ok(vmAt >= 0, 'VM 경로가 사라졌습니다. 예비로 남겨야 합니다.');
-  assert.ok(localAt < vmAt, 'VM 을 먼저 부르면 제품마다 2분씩 기다렸다 실패합니다.');
+test('수동 경로는 아직 VM 을 쓴다 — 되돌린 상태를 기록해 둔다', () => {
+  // 본컴 우선으로 바꿨다가 되돌렸다. 이유는 app-core-06.js 의 주석에 남겼다.
+  // 요약: 본컴 행은 시장 상태에만 쌓이고, 그쪽은 함수 진입 때 잡아둔 currentScope 로
+  // 걸러진다. 시작 버튼이 작업 신원을 회전시켜 그 scope 가 어긋나 19건이 전부 탈락했다.
+  // VM 행은 응답 본문으로 와서 그 검사를 거치지 않기 때문에 지금까지 문제가 없었다.
+  assert.match(FLOW, /runCompMarketScrape\('vm'/);
+  assert.doesNotMatch(FLOW, /runScrape\('local'\)/, '행 선별을 고치기 전에 본컴 우선으로 되돌리면 후보가 0건이 됩니다.');
 });
 
-test('본컴이 0건일 때만 VM 으로 넘어간다', () => {
-  // 본컴이 후보를 가져왔는데도 VM 을 또 돌리면 시간만 두 배로 든다.
-  assert.match(FLOW, /if \(!scrapeResult\?\.timedOut && !localRows\.rows\.length\)/);
-  const guardAt = FLOW.indexOf('!localRows.rows.length');
-  const vmAt = FLOW.indexOf("runScrape('vm')");
-  assert.ok(guardAt >= 0 && vmAt > guardAt, 'VM 재시도가 0건 확인보다 앞에 있습니다.');
-});
-
-test('넘어갈 때 사람에게 알린다', () => {
-  // 조용히 넘어가면 왜 느린지 알 수 없다.
-  assert.match(FLOW, /본컴 후보 수집이 0건이라 VM 경로로 한 번 더 시도합니다/);
-});
-
-test('두 경로가 같은 수집 문맥을 쓴다', () => {
-  // 문맥이 갈리면 작업 전환 감지(collectionContext)와 중단이 한쪽에만 걸린다.
-  const runner = sourceSlice(FLOW, 'const runScrape = runtime =>', 'try {');
-  assert.match(runner, /runCompMarketScrape\(runtime, \{/);
-  assert.match(runner, /collectionContext,/);
-  assert.match(runner, /compMarketRunWithOwnedWorkScope\(/);
-  assert.match(runner, /timeoutMs,/);
+test('되돌린 이유가 코드에 남아 있다', () => {
+  // 다음 사람이(또는 내가) 같은 수정을 다시 시도했다가 같은 곳에서 막히지 않도록.
+  assert.match(FLOW, /본컴 우선으로 바꾸려던 시도를 되돌렸다/);
+  assert.match(FLOW, /smartstore\.naver\.com 4건/);
+  assert.match(FLOW, /factoryFreshVmCandidateRows/);
 });
 
 test('생산관제 경로의 본컴 우선은 그대로 둔다', () => {
-  // 같은 원칙이 두 경로에 다 있어야 한다. 한쪽만 고치면 다른 쪽에서 또 샌다.
+  // 그쪽은 다른 함수를 거쳐 이 행 선별을 타지 않으므로 영향이 없다.
   assert.match(CORE_03, /for \(const action of \['start-local', 'start-vm'\]\)/);
 });

@@ -2855,7 +2855,13 @@ function factoryFreshVmCandidateRows(market = {}, scrapeResult = {}, ownedScope 
       && (typeof compMarketCandidateMatchesCurrentWork === 'function'
         ? compMarketCandidateMatchesCurrentWork(item, currentScope)
         : false);
-    return (runtime === 'vm' || assistedFallback || currentSearchRow)
+    // 이 필터는 원래 VM 경로만 있던 시절에 만들어졌다. 후보 검색이 본컴을 먼저 쓰도록
+    // 바뀌면서 행에 찍히는 실행 경로가 'local' 이 되었고, 그 순간 여기서 전부 걸러져
+    // **수집은 19건인데 작업에는 0건** 이 되었다(실측 2026-08-30, COMP-NAVER 검증기).
+    // 화면 카드는 시장 상태에서 그리므로 보이지만, 작업에 안 들어가면 새로고침에 사라진다.
+    // 'local' 도 이 흐름의 정상 실행 경로다. 뒤의 search id·작업범위 검사는 그대로 둔다.
+    const currentRuntime = runtime === 'vm' || runtime === 'local';
+    return (currentRuntime || assistedFallback || currentSearchRow)
       && (!searchIds.size || !rowSearchId || searchIds.has(rowSearchId) || scopedRecovery);
   });
   const responseSourceRows = currentSearchRows(responseRows);
@@ -4786,43 +4792,41 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
     signal: collectionController.signal,
     isCurrent: () => collectionIsCurrent(),
   };
-  // 후보 검색은 본컴을 먼저 쓴다. VM 후보검색은 AHK 브리지(127.0.0.1:3011)를 거치는데
-  // 그 브리지가 응답하지 않으면 제품마다 2분씩 기다렸다 실패한다.
-  // 생산관제 경로는 02f0ce7 에서 이미 본컴 우선으로 바꿨는데, 수동 시작 버튼은 VM 고정으로
-  // 남아 있었다. 그래서 이 경로만 스마트스토어(네이버) 후보가 0건이었다.
+  // 후보 검색을 본컴 우선으로 바꾸려던 시도를 되돌렸다. 이유를 남긴다.
   //
-  // 실측 2026-08-30, API Hub(127.0.0.1:4321) 경유 JepumScraper 직접 호출:
-  //   본컴 → success · 20/20 (coupang 4 · **naver 4** · gmarket 4 · auction 4 · 11st 4)
-  //   VM   → error   · 0/20 (90초 소요)
-  // 네이버는 5개 마켓 중 유일하게 api_enabled=true 라 본컴에서 로그인 없이도 잘 나온다.
+  // 실측 2026-08-30 (COMP-NAVER 검증기로 실제 시작 버튼을 눌러 확인):
+  //   스크래퍼 자체는 본컴에서 네이버를 잘 준다 — 19건 수집, 그 중 smartstore.naver.com 4건.
+  //   그런데 **작업(factory.product.competitors)에는 0건**이 들어왔다.
   //
-  // VM 을 버린 것이 아니라 순서만 바꿨다. 본컴이 0건이면 VM 을 예비로 쓴다.
-  const runScrape = runtime => factoryResolveTaskWithTimeout(
-    compMarketRunWithOwnedWorkScope(
-      currentScope,
-      () => runCompMarketScrape(runtime, {
-        collectionContext,
-        deferMissingSiteAssistance: true,
-        skipServicePreflight: options.skipServicePreflight === true,
-        skipConfirm: options.skipConfirm === true,
-        factory,
-      }),
-    ),
-    timeoutMs,
-    () => {
-      collectionController.abort();
-      return { timedOut: true };
-    },
-  );
+  // 원인: 이 흐름의 행 선별(factoryFreshVmCandidateRows)이 VM 모양에 맞춰져 있다.
+  //   VM 경로는 응답 본문(scrapeResult.rawProducts)으로 행을 돌려주고, 그 행들은
+  //   작업범위 검사를 거치지 않는다. 본컴 경로는 행이 시장 상태(market.results)에만
+  //   쌓이고, 그쪽은 함수 진입 때 잡아둔 currentScope 로 걸러진다. 시작 버튼이 작업 신원을
+  //   회전시키기 때문에 그 scope 가 어긋나 19건이 전부 탈락했다.
+  //   (검증기에서 나중에 새 scope 로 다시 세면 19건이 그대로 통과한다 — scope 시점 문제다.)
+  //
+  // 그래서 순서만 바꾸면 사용자는 후보를 아예 못 받는다. VM 은 최소한 15건은 줬다.
+  // 본컴 우선은 **행 선별이 본컴 응답도 같은 자격으로 받아들이게 고친 뒤에** 다시 한다.
+  // 그 전까지는 VM 을 그대로 쓴다.
   try {
-    scrapeResult = await runScrape('local');
+    scrapeResult = await factoryResolveTaskWithTimeout(
+      compMarketRunWithOwnedWorkScope(
+        currentScope,
+        () => runCompMarketScrape('vm', {
+          collectionContext,
+          deferMissingSiteAssistance: true,
+          skipServicePreflight: options.skipServicePreflight === true,
+          skipConfirm: options.skipConfirm === true,
+          factory,
+        }),
+      ),
+      timeoutMs,
+      () => {
+        collectionController.abort();
+        return { timedOut: true };
+      },
+    );
     requireCurrent();
-    const localRows = factoryFreshVmCandidateRows(state.compPage?.marketScrape || market, scrapeResult || {}, currentScope);
-    if (!scrapeResult?.timedOut && !localRows.rows.length) {
-      factoryLog('본컴 후보 수집이 0건이라 VM 경로로 한 번 더 시도합니다.', 'warn', factory);
-      scrapeResult = await runScrape('vm');
-      requireCurrent();
-    }
     vmTimedOut = !!scrapeResult?.timedOut;
     if (!vmTimedOut) {
       reportVmProgress(60, 'running', 'VM 응답을 받았습니다. 후보를 정리합니다.', {
@@ -15064,6 +15068,14 @@ async function analyzeCompMarketScrapedImages(mode = 'selected') {
   market.loading = true;
   market.phase = 'analyze-running';
   state.compPage.subStep = 'analyzing';
+  // 새 분석을 시작하며 이전 결과를 비운다. 그 사이에 저장이 나가면 서버는 "분석을 잃었다"
+  // 며 막는다 — 사고로 잃는 것을 지키는 장치라 옳지만, 이건 다시 만들려고 일부러 비운
+  // 것이다. 표시를 남겨 둘을 구분하게 한다 — 실측 2026-08-30: 추적 로그에서
+  // existing.hasAnalysis=true / incoming.hasAnalysis=false / invalidatedAt=null 로 확인.
+  state.compPage.analysisInvalidatedAt = Math.max(
+    Date.now(),
+    Number(state.compPage.analysisInvalidatedAt || 0) + 1,
+  );
   state.compPage.analysisResult = null;
   state.compPage.sectionPlan = null;
   state.compPage.planEdits = {};
@@ -19492,6 +19504,9 @@ async function startCompetitorAnalysis(operationContext = null) {
       }
     }
     state.compPage.analysisResult = analysisResult;
+    // 분석이 다시 채워졌으니 "일부러 비웠다"는 표시는 거둔다. 남겨 두면 다음 저장이
+    // 무조건 통과해, 사고로 잃는 것을 막는 보호가 헐거워진다.
+    state.compPage.analysisInvalidatedAt = 0;
     state.compPage.previousAnalysisViewOnly = false;
     state.compPage.analysisImageSelection = pendingImageSelection?.key ? cloneData(pendingImageSelection) : null;
     state.compPage.pendingAnalysisImageSelection = null;
