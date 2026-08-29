@@ -4322,6 +4322,13 @@ async function refreshWorkspaceLists(renderAfter = true) {
     const counts = {};
     for (const snap of snapshots) counts[snap.projectId] = (counts[snap.projectId] || 0) + 1;
     state.projects = projects
+      // 관제탑 배치 워커가 저장한 문서(batch:...)는 사람이 만든 작업이 아니다.
+      // 이것이 목록에 섞이면 최근 순 정렬에서 맨 앞을 차지한다. 2026-08-29 실측:
+      // 전체 36건 중 10건이 배치 문서였고 **상위 7건이 전부 배치 문서**였다.
+      // 그 결과 부팅 복원이 배치 문서를 열어 제품명이 남의 작업 이름으로 바뀌었다.
+      // (사용자 화면 헤더에 ID batch:factory-job-d9881fb8... '수저집 파우치' 가 찍혀 있었다.)
+      // 워커 탭 자신은 제 문서를 찾아야 하므로 그때는 거르지 않는다.
+      .filter(project => classicRuntimeBatchWorkerMode || !/^batch:/i.test(String(project?.id || '')))
       .map(project => workspaceProjectListItem(project, counts[project.id] || 0))
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     state.snapshots = snapshots
@@ -4383,9 +4390,13 @@ async function maybeRestoreLatestSavedProjectOnStartup(projects = []) {
   const savedProjectBootstrap = workspaceKind === 'project';
   const savedProjectId = String(bootstrap?.currentProjectId || '').trim();
   const savedProjectName = String(bootstrap?.currentProjectName || '').trim();
+  // 예전에는 여기 `|| projects[0]` 폴백이 있었다. 저장된 포인터가 없으면
+  // **목록 맨 앞 문서를 묻지도 않고 열었다.** 그 자리를 배치 워커 문서가 차지하면서
+  // 사용자가 만든 적 없는 작업이 열리고 제품명이 그 이름으로 바뀌었다.
+  // 무엇을 이어서 열지 모르면 아무것도 열지 않는다. 화면의 '최근 작업파일' 목록에서
+  // 사람이 직접 고르면 된다.
   const target = (savedProjectId && projects.find(project => project.id === savedProjectId))
-    || (savedProjectName && projects.find(project => project.name === savedProjectName))
-    || projects[0];
+    || (savedProjectName && projects.find(project => project.name === savedProjectName));
   if (!target?.id || typeof loadProjectRecord !== 'function') return false;
   if ((!savedProjectBootstrap && startupCurrentWorkHasContent())
     || state.workspaceDocumentDirty

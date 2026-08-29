@@ -18079,12 +18079,30 @@ function factoryUpdateFromInputs(factory = null) {
       ]).productName
       : '') || factoryFinalRegistrationAuthoritativeProductName(factory, [factory.product?.cafe24FinalRegistration?.productName]);
     const inputName = String(finalNameEl.value || '').trim();
-    const shouldRestoreProtectedName = !activeNameEl && protectedName && (!inputName || inputName !== protectedName);
-    const nextName = shouldRestoreProtectedName ? protectedName : finalNameEl.value;
+    // 예전에는 protectedName 이 조금이라도 다르면 사람이 친 이름을 말없이 덮었다.
+    // 그런데 그 protectedName 의 출처인 factoryCurrentProductIdentityMeta 는 '잠금' 이 아니라
+    // 그냥 현재 값 조회다. 그래서 낡은 작업이 열려 있으면 그 이름이 권위처럼 굴며
+    // 사용자가 새로 친 이름을 계속 삼켰다. ("슬라브나비수수저집으로 했는데 자꾸 돌아가네")
+    // 진짜 잠금은 Cafe24 최종등록명 하나뿐이다. 등록된 이름과 화면 이름이 어긋나면
+    // 실제로 잘못된 상품에 등록될 수 있으므로 그때만 되돌린다.
+    const registrationLockedName = factoryFinalRegistrationAuthoritativeProductName(
+      factory, [factory.product?.cafe24FinalRegistration?.productName],
+    );
+    const shouldRestoreProtectedName = !activeNameEl
+      && !!registrationLockedName
+      && (!inputName || inputName !== registrationLockedName);
+    const nextName = shouldRestoreProtectedName ? registrationLockedName : finalNameEl.value;
     if (shouldRestoreProtectedName) {
       [nameEl, guideNameEl].forEach(input => {
         if (input && input !== document.activeElement) input.value = nextName;
       });
+      // 조용히 되돌리면 사람은 자기가 친 이름이 왜 사라졌는지 알 수 없다.
+      if (inputName && inputName !== nextName && typeof setUiNotice === 'function') {
+        setUiNotice(
+          `Cafe24에 '${nextName}' 로 등록된 작업이라 제품명을 되돌렸습니다. 다른 제품이면 새 작업으로 시작해주세요.`,
+          'warn',
+        );
+      }
     }
     if (typeof factorySetCurrentProductIdentity === 'function') {
       factorySetCurrentProductIdentity(nextName, { factory, syncDom: false, syncFinal: false });
