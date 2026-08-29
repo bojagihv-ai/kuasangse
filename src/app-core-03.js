@@ -17692,7 +17692,11 @@ async function factoryRuntimeControlEnsureAutoReferences(payload = {}) {
   if (payload.mode !== 'auto') return;
   let factory = factoryRuntimeReadFactory();
   const product = factory.product || {};
-  if (!product.selectedDbCandidateKey && !product.selectedCafe24CandidateKey) {
+  // 사람이 「Cafe24 대상 떼기」를 눌렀으면 다시 붙이지 않는다. 그러지 않으면 떼자마자
+  // 다음 실행에서 같은 상품을 또 골라, 버튼을 눌러도 아무것도 달라지지 않는다
+  // — 실측 2026-08-29: 530번(투톤반달파우치)이 떼어도 계속 되붙었다.
+  const autoMatchDeclined = product.cafe24AutoMatchDeclined === true;
+  if (!autoMatchDeclined && !product.selectedDbCandidateKey && !product.selectedCafe24CandidateKey) {
     await factoryRunDbCandidatesForSelection({ preserveManualFields: true });
     await factoryRuntimeControlRestoreRequiredValues(payload);
     factory = factoryRuntimeReadFactory();
@@ -18137,6 +18141,16 @@ async function factoryRuntimeControlRecoverProduct(payload = {}) {
     // 이 제품 전용 헬퍼를 쓴다. 대상 관련 값만 지우고 분석값·섹션은 건드리지 않는다 —
     // 직접 product 를 헤집으면 작업 기준이 흔들려 분석값까지 사라진다(실측).
     await factoryClearCafe24CandidateSelection();
+    // 뗐다는 사실을 남긴다. 없으면 다음 실행의 자동 매칭이 같은 상품을 또 붙인다.
+    await factoryRuntimeBridgeAction(
+      'factory/db:clearCafe24CandidateSelection',
+      null,
+      draft => {
+        draft.product = draft.product && typeof draft.product === 'object' ? draft.product : {};
+        draft.product.cafe24AutoMatchDeclined = true;
+        return true;
+      },
+    );
     const after = await factoryRuntimeControlProjection();
     return Object.freeze({
       schema: 'factory-product-recovery:v1',
