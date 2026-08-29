@@ -9348,7 +9348,16 @@ function factoryToggleAssetUse(assetId, factory, options = {}) {
   const asset = factory.assets.find(item => item.id === assetId);
   if (!asset) return;
   if (!asset.used && !factoryAssetHasCurrentProductPayload(asset, factory, { allowHtml: true }) && !factoryAssetIsCompletedCurrentSizeRun(asset, factory)) {
-    factoryLog('현재 제품과 맞지 않거나 이미지 원본이 없어 사용할 수 없습니다.', 'error', factory);
+    // 예전에는 진행 로그에 한 줄만 남겼다. 사람은 버튼을 눌러도 아무 일이 없으니
+    // '먹통' 으로 받아들인다("대표이미지 선택이 안되는데? 먹통이야 왜이래").
+    // 거부하려면 왜 거부하는지 화면에 말해야 한다.
+    const reason = factoryAssetHasCurrentProductPayload(asset, factory, { allowHtml: true })
+      ? '이미지 원본이 없습니다'
+      : '이 이미지는 현재 제품 작업의 것이 아닙니다';
+    factoryLog(`${asset.title}: 사용할 수 없습니다 · ${reason}`, 'error', factory);
+    if (typeof setUiNotice === 'function') {
+      setUiNotice(`'${asset.title}' 를 사용할 수 없습니다 · ${reason}. 필요하면 재생성해주세요.`, 'error');
+    }
     return;
   }
   asset.used = !asset.used;

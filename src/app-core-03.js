@@ -12854,7 +12854,17 @@ function factoryRuntimeAssetsActions() {
       return factoryRuntimeBridgeAction('factory/assets:sendFactoryAssetToStage', operationContext, draft => factorySendAssetToStage(String(assetId || ''), String(stageId || ''), draft, { save: false, render: false }), { render: true });
     },
     toggleFactoryAssetUse(assetId, operationContext) {
-      return factoryRuntimeBridgeAction('factory/assets:toggleFactoryAssetUse', operationContext, draft => factoryToggleAssetUse(String(assetId || ''), draft, { save: false, saveAssets: false, render: false }), { render: true });
+      // 진행 중인 다른 작업 때문에 이 클릭이 '오래된 것' 으로 판정되면 예외만 던지고 끝난다.
+      // 그러면 사람 눈에는 버튼이 죽은 것으로 보인다("먹통이야 왜이래").
+      // 삼키지 말고 왜 안 되는지 말한다.
+      try {
+        return factoryRuntimeBridgeAction('factory/assets:toggleFactoryAssetUse', operationContext, draft => factoryToggleAssetUse(String(assetId || ''), draft, { save: false, saveAssets: false, render: false }), { render: true });
+      } catch (error) {
+        if (typeof setUiNotice === 'function') {
+          setUiNotice('다른 작업이 진행 중이라 이미지 선택이 반영되지 않았습니다. 생성이 끝난 뒤 다시 눌러주세요.', 'error');
+        }
+        throw error;
+      }
     },
     selectFactoryACut(value, operationContext) {
       return factoryRuntimeBridgeAction('factory/assets:selectFactoryACut', operationContext, draft => {
