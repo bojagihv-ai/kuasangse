@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   assertChecks,
+  assertNoSilentFieldLoss,
   connectCdp,
   ensureCdp,
   evaluateFactoryCdpFixture,
@@ -220,6 +221,9 @@ async function main() {
   } catch (error) {
     failure = error;
     result = result || { ok: false, error: error?.stack || String(error) };
+    // 공통 보존 검사: 사람이 손으로 넣은 값이 조용히 사라지지 않았는가.
+    // (2026-08-29 — 회귀가 145/145 초록불인데도 사용자 값이 날아간 뒤 세운 그물)
+    await assertNoSilentFieldLoss(cdp, { allowAutoLoss: true });
   } finally {
     try { result.cleanup = await cleanupWorkspaceArtifacts(cleanupScope, cleanupAuthority, cleanupPath); } catch (error) { result.cleanup = { ok: false, error: error?.stack || String(error) }; failure = failure || error; }
     fs.writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2));

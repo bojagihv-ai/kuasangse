@@ -36,6 +36,7 @@ function sourceSlice(text, startMarker, endMarker) {
 
 // 판정 자체가 검사 대상이므로 실물을 싣는다.
 function loadRepair(currentProjectId) {
+  const losses = [];
   const source = sourceSlice(
     CORE_03,
     'function repairFactoryProductIdentityDrift(',
@@ -52,11 +53,14 @@ function loadRepair(currentProjectId) {
       return !!name && !name.includes(key) && !key.includes(name);
     },
     factoryProductScopedFieldIdsForRepair: () => ['size', 'width_mm', 'depth_mm', 'weight', 'sale_price'],
+    // 값이 사라지면 기록에 남아야 한다. 그 기록을 브라우저 검증기들이 공통으로 확인한다.
+    factoryRecordFieldLoss: (fieldId, reason, detail) => { losses.push({ fieldId, reason, manualTouched: !!(detail && detail.manualTouched) }); },
     factoryManualFieldSettingMatchesCurrentWork: () => false,   // 분리 직후엔 어느 것도 안 맞는다
     factoryBackfillManualFieldSettingScopeFromReview: () => {},
     factoryObjectHasEntries: value => !!value && Object.keys(value).length > 0,
   });
   vm.runInContext(`${source}\nthis.repair = repairFactoryProductIdentityDrift;`, context);
+  context.repair.losses = losses;   // 사라진 값의 기록. 아래 검사에서 확인한다.
   return context.repair;
 }
 
@@ -110,6 +114,11 @@ test('자동으로 채워진 값은 예전처럼 정리한다', () => {
   const fields = repair(factory).product.dbFieldSettings;
   assert.equal(fields.sale_price, undefined, '자동으로 채운 남의 값은 계속 정리되어야 합니다.');
   assert.equal(fields.weight, undefined, '무게도 자동값이면 정리 대상입니다.');
+  // 사라진 값은 반드시 기록에 남는다. 기록이 없으면 공통 보존 검사가 아무것도 못 본다.
+  const lost = repair.losses.map(entry => entry.fieldId);
+  assert.ok(lost.includes('sale_price'), `사라진 값이 기록되지 않았습니다: ${JSON.stringify(repair.losses)}`);
+  assert.ok(lost.includes('weight'));
+  assert.ok(repair.losses.every(entry => entry.manualTouched === false), '지운 것은 전부 자동값이어야 합니다.');
 });
 
 test('신원이 어긋나지 않으면 애초에 아무것도 안 지운다', () => {

@@ -1990,6 +1990,51 @@ function factoryObjectConflictsWithIdentity(value = {}, identityKey = '', option
   return !!(key && !factoryIdentityKeysCompatible(key, identityKey));
 }
 
+// ── 값이 사라진 것을 기록한다 (회귀 검증기들이 공통으로 확인한다) ───────────────
+//
+// 사용자 규칙(2026-08-29): "모든게 이미지고른거든 뭐든 안날라가야돼. 새작업 누르기전에는"
+//
+// 오늘 일일 회귀는 145/145 초록불이었는데도 사용자 화면에서 값이 날아갔다. 검사를 몇 개
+// 더 늘리는 것으로는 못 막는다. 그래서 **삭제가 일어났다는 사실 자체를 남기고**,
+// 브라우저 검증기들이 끝날 때 공통으로 "사람이 버린 것 말고 사라진 게 있나" 를 묻는다.
+// 이렇게 하면 검사 개수를 늘리지 않고도 기존 스텝 전부가 보존 검사가 된다.
+const FACTORY_DATA_LOSS_LOG_LIMIT = 200;
+
+function factoryDataLossLog() {
+  const root = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : null);
+  if (!root) return null;
+  if (!Array.isArray(root.__factoryDataLoss)) root.__factoryDataLoss = [];
+  return root.__factoryDataLoss;
+}
+
+// 사람이 '새 작업'·'다른 이름'·'사본 저장' 을 누른 순간에만 부른다.
+// 그 뒤의 삭제는 사고가 아니라 사람이 시킨 것이다.
+function factoryMarkUserRequestedReset(reason) {
+  const root = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : null);
+  if (!root) return;
+  root.__factoryUserRequestedReset = { reason: String(reason || ''), at: Date.now() };
+}
+
+function factoryUserRequestedResetRecently(windowMs = 15000) {
+  const root = typeof window !== 'undefined' ? window : (typeof self !== 'undefined' ? self : null);
+  const mark = root && root.__factoryUserRequestedReset;
+  if (!mark) return false;
+  return Date.now() - Number(mark.at || 0) <= windowMs;
+}
+
+function factoryRecordFieldLoss(fieldId, reason, detail = {}) {
+  const log = factoryDataLossLog();
+  if (!log) return;
+  log.push({
+    fieldId: String(fieldId || ''),
+    reason: String(reason || ''),
+    manualTouched: detail.manualTouched === true,
+    userRequested: factoryUserRequestedResetRecently(),
+    at: Date.now(),
+  });
+  if (log.length > FACTORY_DATA_LOSS_LOG_LIMIT) log.splice(0, log.length - FACTORY_DATA_LOSS_LOG_LIMIT);
+}
+
 function factoryProductScopedFieldIdsForRepair() {
   return [
     'sale_price', 'purchase_price', 'stock', 'quantity',
@@ -2134,6 +2179,7 @@ function repairFactoryProductIdentityDrift(factory = {}) {
           // 자동으로 채워진 값(manualTouched !== true)은 다시 만들어낼 수 있으므로 그대로 정리한다.
           if (setting && setting.manualTouched === true) return;
           if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
+            factoryRecordFieldLoss(fieldId, 'identity-drift-repair', { manualTouched: setting.manualTouched === true });
             delete product.dbFieldSettings[fieldId];
           }
         });
@@ -7206,6 +7252,8 @@ async function factoryAdoptWorkfileNameOnStart(productName) {
 }
 
 async function startNewProjectDraft(options = {}) {
+  // 사람이 직접 누른 것이다. 이 뒤의 삭제는 사고가 아니다.
+  if (typeof factoryMarkUserRequestedReset === 'function') factoryMarkUserRequestedReset('start-new-project-draft');
   // 내용은 유지하고 저장 ID만 분리 (다른 이름으로 저장 / Save As)
   // options.name 을 주면 그 이름으로 분리한다. 안 주면 예전처럼 '… 복사본'.
   const requestedName = String(options.name || '').trim().slice(0, 80);

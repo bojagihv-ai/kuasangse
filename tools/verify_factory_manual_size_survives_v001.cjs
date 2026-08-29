@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   assertChecks,
+  assertNoSilentFieldLoss,
   connectCdp,
   ensureCdp,
   evaluateFactoryCdpFixture,
@@ -199,6 +200,11 @@ async function main() {
       { ok: banner.hiddenWhenDone, message: '수집이 끝났는데도 옛 로그로 빨간 배너를 띄웠습니다.' },
       { ok: banner.shownWhenReal, message: 'VM 이 실제로 보고한 신호까지 가려버렸습니다. 폴백을 없앤 것이 아닙니다.' },
     ]);
+
+    // 공통 보존 검사 — 이 검증기가 도는 동안 사람이 버리지 않은 삭제가 있었는지 본다.
+    // 이 시나리오는 신원 정리를 일부러 일으키므로 그 사유만 허용한다.
+    step('preservation');
+    await assertNoSilentFieldLoss(cdp, { allowReasons: ['identity-drift-repair'], allowAutoLoss: true });
 
     step('screenshot');
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });

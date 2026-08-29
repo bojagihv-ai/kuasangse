@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   assertChecks,
+  assertNoSilentFieldLoss,
   connectCdp,
   ensureCdp,
   evaluate,
@@ -181,6 +182,9 @@ async function main() {
       { ok: proofAfterReload.inputValue === '선물 포장, 답례품', message: `Ctrl+F5 뒤 화면 입력값이 비었습니다: ${proofAfterReload.inputValue}` },
       { ok: proofAfterReload.inputVisible && proofAfterReload.cardText.includes('사용용도'), message: 'Ctrl+F5 뒤 사용용도 확인 카드가 화면에 보이지 않습니다.' },
     ]);
+    // 공통 보존 검사: 사람이 손으로 넣은 값이 조용히 사라지지 않았는가.
+    // (2026-08-29 — 회귀가 145/145 초록불인데도 사용자 값이 날아간 뒤 세운 그물)
+    await assertNoSilentFieldLoss(cdp, { allowAutoLoss: true });
   } finally {
     cdp.close();
     await runtime.cleanup();

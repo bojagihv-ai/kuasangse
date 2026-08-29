@@ -6535,6 +6535,16 @@ function factoryRestoreLockedProductName(factory, productName = '') {
 
 function factoryClearProductScopedDbManualFields(factory, reason = 'product-change', options = {}) {
   if (!factory || typeof factory !== 'object') throw new TypeError('factory draft is required');
+  // 여기서 사라지는 값도 기록에 남긴다. 사람이 '새 작업' 을 누른 것이 아니면 사고다.
+  if (typeof factoryRecordFieldLoss === 'function' && factory.product && factory.product.dbFieldSettings) {
+    const settings = factory.product.dbFieldSettings;
+    FACTORY_PRODUCT_SCOPED_DB_FIELD_IDS.forEach(fieldId => {
+      const setting = settings[fieldId];
+      if (!setting) return;
+      const keep = options.preserveManualFields === true && setting.manualTouched === true;
+      if (!keep) factoryRecordFieldLoss(fieldId, reason, { manualTouched: setting.manualTouched === true });
+    });
+  }
   const lockedProductName = String(options.nextProductName || '').trim()
     || factoryCaptureLockedProductName(factory);
   const product = factory.product || {};

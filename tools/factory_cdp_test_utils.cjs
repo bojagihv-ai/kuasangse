@@ -636,6 +636,49 @@ async function ensureCdp(cdpUrl) {
   }
 }
 
+// ── 공통 보존 검사 ─────────────────────────────────────────────────────────────
+//
+// 사용자 규칙(2026-08-29): "모든게 이미지고른거든 뭐든 안날라가야돼. 새작업 누르기전에는"
+//
+// 오늘 일일 회귀는 145/145 초록불이었는데도 사용자 화면에서 값이 날아갔다. 검사를 몇 개
+// 더 늘리는 것으로는 못 막는다. 그래서 검증기마다 따로 보지 않고, **끝날 때 한 번**
+// "사람이 버린 것 말고 사라진 게 있나" 를 묻는다. 이렇게 하면 검사 개수를 늘리지 않고도
+// 기존 스텝 전부가 보존 검사가 된다.
+//
+// 앱이 남긴 기록(window.__factoryDataLoss)을 읽는다. 사람이 '새 작업'·'다른 이름' 을
+// 누른 뒤의 삭제는 userRequested=true 로 표시되므로 사고로 세지 않는다.
+async function readFactoryDataLoss(cdp) {
+  try {
+    const raw = await evaluate(cdp, 'JSON.stringify((window.__factoryDataLoss || []).slice(-200))');
+    return JSON.parse(String(raw || '[]'));
+  } catch (_) {
+    return [];
+  }
+}
+
+// options.allowReasons: 이 검증기가 일부러 일으키는 삭제 사유(예: 제품 교체 시나리오).
+// 사유를 적어 두면 그것만 통과시키고 나머지는 계속 잡는다.
+async function assertNoSilentFieldLoss(cdp, options = {}) {
+  const allow = new Set(options.allowReasons || []);
+  const entries = await readFactoryDataLoss(cdp);
+  const silent = entries.filter(entry => !entry.userRequested && !allow.has(entry.reason));
+  // 사람이 손으로 넣은 값이 조용히 사라진 것은 언제나 사고다.
+  const manual = silent.filter(entry => entry.manualTouched);
+  assertChecks([
+    {
+      ok: manual.length === 0,
+      message: '사람이 손으로 넣은 값이 조용히 사라졌습니다: '
+        + JSON.stringify(manual.slice(0, 6)),
+    },
+    {
+      ok: options.allowAutoLoss === true || silent.length === 0,
+      message: '사람이 버리지 않았는데 값이 사라졌습니다: '
+        + JSON.stringify(silent.slice(0, 6)),
+    },
+  ]);
+  return entries;
+}
+
 function assertChecks(checks) {
   const failures = checks.filter(check => !check.ok).map(check => check.message);
   if (failures.length) {
@@ -653,6 +696,8 @@ function currentSourceBuildId(rootDir = process.cwd()) {
 
 module.exports = {
   assertChecks,
+  assertNoSilentFieldLoss,
+  readFactoryDataLoss,
   assertCdpRuntimeIsolation,
   connectCdp,
   currentSourceBuildId,
