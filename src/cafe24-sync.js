@@ -5736,7 +5736,7 @@ function factorySyncFromCurrentState(options = {}) {
     factory.product.cafe24Candidates = cloneData(sourceCafe24Candidates);
   }
   const dbGuess = analysis.db_match || analysis.sinhwa_match || analysis.matched_product || analysis.db_product || null;
-  if (dbGuess && !factory.product.confirmedDb) factory.product.confirmedDb = cloneData(dbGuess);
+  if (dbGuess && !factory.product.confirmedDb) factory.product.confirmedDb = factoryStampReviewScopeOnConfirmed(cloneData(dbGuess), factory);
   if (state.compPage?.analysisResult) {
     factory.product.competitors = cloneData(state.compPage.analysisResult.competitors || state.compPage.analysisResult.similar_products || state.compPage.analysisResult.products || []);
     factory.product.competitorSource = '경쟁사 분석 탭';
@@ -5959,6 +5959,23 @@ function factorySlimSinhwaReviewCandidate(candidate = {}) {
   if (Array.isArray(out.images)) out.images = out.images.slice(0, 5);
   out.product_name = factorySlimReviewText(out.product_name || out.jname || '', 180);
   return out;
+}
+
+// 사람이 확정한 상품에도 '어느 작업에서 골랐는지' 도장을 찍는다.
+// 예전에는 후보 목록에만 찍혀서, 확정본은 판정 때 이름 비교로 떨어졌다.
+// 카탈로그 이름은 제품명과 다른 것이 정상이므로 그 비교는 정상 선택을 죽인다.
+// 실측(2026-08-29): 확정 DB '누비꽃수파우치'(도장 없음)는 떼어내지고,
+// 같은 문서의 Cafe24 후보 394 '칠색단 수저집(대)…'(도장 있음)는 살아남았다.
+function factoryStampReviewScopeOnConfirmed(value, factory = factoryRuntimeReadFactory()) {
+  if (!value || typeof value !== 'object') return value;
+  const reviewProductScopeKey = factoryCandidateReviewScopeKey(factory);
+  if (!reviewProductScopeKey) return value;
+  return {
+    ...value,
+    reviewProductScopeKey,
+    reviewProductIdentityKey: factoryCandidateReviewIdentityKey(factory),
+    reviewProductName: factoryCandidateReviewProductName(factory),
+  };
 }
 
 function factorySlimReviewCandidateList(
@@ -7220,7 +7237,7 @@ async function factoryApplyDbCandidateFromReview(index, options = {}) {
       preserveCafe24: true,
       preserveManualFields,
     });
-    current.product.confirmedDb = cloneData(match);
+    current.product.confirmedDb = factoryStampReviewScopeOnConfirmed(cloneData(match), current);
     current.product.selectedDbCandidateKey = factorySinhwaCandidateKey(match) || key;
     current.product.dbCandidateResolution = 'selected';
     current.product.dbCandidates = factoryDedupeSinhwaCandidates([

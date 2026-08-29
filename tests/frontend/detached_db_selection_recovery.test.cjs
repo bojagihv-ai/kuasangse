@@ -14,6 +14,15 @@
 // 계약: 떼어내되 버리지 않는다. product.detachedDbSelection 에 보관하고,
 //       사용자가 되돌리거나 버릴 수 있어야 한다. 이 정리는 normalize 마다
 //       돌기 때문에, 이미 비운 뒤 다시 들어와 빈 값으로 보관본을 덮으면 안 된다.
+//
+// 2026-08-29 전제 교정 — 이 파일의 원래 전제가 틀렸다.
+//   위 사건에서 진짜 잘못은 '떼어내고 안 보관한 것' 이 아니라 **떼어낸 것 자체** 였다.
+//   신화사DB 카탈로그 이름('수저주머니')이 내 제품명('수저집 파우치')과 다른 것은 정상이다.
+//   그걸 신원 불일치로 보고 떼어내면 사람이 고른 것이 매번 사라진다.
+//   (사용자: "내가 한 20번정도 계속같은문제로 고통받았던 문제야")
+//   그래서 확정본은 **도장(어느 작업에서 골랐는지)** 으로만 판정한다.
+//   보관 장치는 그대로 둔다 — 도장이 진짜 남의 작업을 가리킬 때는 여전히 필요하다.
+//   근거는 confirmed_db_survives_name_mismatch.test.cjs 에 있다.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -70,8 +79,10 @@ function factoryWith(overrides = {}) {
     product: {
       userProductName: '수저집 파우치',
       productName: '수저집 파우치',
-      confirmedDb: { product_name: '수저주머니' },
-      finalDb: { product_name: '수저주머니' },
+      // 도장이 다른 작업(낙지발노리개)을 가리킨다 = 진짜로 남의 선택이다.
+      // 이름만 다른 경우는 아래 별도 테스트에서 '떼어내면 안 된다' 로 확인한다.
+      confirmedDb: { product_name: '수저주머니', reviewProductKey: '낙지발노리개' },
+      finalDb: { product_name: '수저주머니', reviewProductKey: '낙지발노리개' },
       selectedDbCandidateKey: '787',
       selectedCafe24CandidateKey: '2534',
       dbLocked: true,
@@ -111,6 +122,22 @@ test('정리가 여러 번 돌아도 보관본을 빈 값으로 덮지 않는다
   }
   assert.equal(state.product.detachedDbSelection.selectedDbCandidateKey, first);
   assert.equal(first, '787');
+});
+
+test('카탈로그 이름만 다른 확정본은 떼어내지 않는다', () => {
+  // 실제 피해의 핵심. 신화사DB 이름은 내 제품명과 다른 것이 정상이다.
+  // 실측(2026-08-29): 확정 DB '누비꽃수파우치' 가 제품명 '수저집 파우치' 와 다르다는
+  // 이유로 새로고침마다 떼어내졌다. 같은 문서의 Cafe24 후보는 도장이 있어 살아남았다.
+  const repair = loadRepair();
+  const nameOnly = factoryWith({
+    // 실물 그대로: confirmedDb 는 카탈로그 이름, finalDb 는 이 작업의 제품명을 따라간다.
+    confirmedDb: { product_name: '누비꽃수파우치' },
+    finalDb: { product_name: '수저집 파우치' },
+  });
+  const product = repair(nameOnly).product;
+  assert.equal(product.selectedDbCandidateKey, '787', '이름이 다르다는 이유로 선택을 떼어내면 안 됩니다.');
+  assert.ok(product.confirmedDb, '확정 DB 를 비우면 안 됩니다.');
+  assert.equal(product.detachedDbSelection, null, '떼어낼 일이 아니므로 보관본도 생기지 않아야 합니다.');
 });
 
 test('신원이 맞으면 건드리지 않는다', () => {

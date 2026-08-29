@@ -33817,7 +33817,9 @@ registerBindEventExtension(function bindFactoryEvents() {
       factory.product.dbLocked = !factory.product.dbLocked;
       if (state.analysis && !factory.product.confirmedDb) {
         const dbGuess = state.analysis.db_match || state.analysis.sinhwa_match || state.analysis.db_product || state.analysis.matched_product || null;
-        if (dbGuess && typeof dbGuess === 'object') factory.product.confirmedDb = cloneData(dbGuess);
+        if (dbGuess && typeof dbGuess === 'object') factory.product.confirmedDb = typeof factoryStampReviewScopeOnConfirmed === 'function'
+          ? factoryStampReviewScopeOnConfirmed(cloneData(dbGuess), factory)
+          : cloneData(dbGuess);
       }
       factoryLog(factory.product.dbLocked ? '현재 DB 기준을 확정 잠금했습니다.' : 'DB 잠금을 해제했습니다.', 'ok');
       saveLastWorkNow();

@@ -210,6 +210,21 @@ function createHarness(type, options = {}) {
     factoryDedupeSinhwaCandidates: values => values,
     factoryMergeCafe24Candidates: (_existing, incoming) => incoming,
     factoryClearProductScopedDbManualFields() {},
+    // 확정본에 '어느 작업에서 골랐는지' 도장을 찍는 실물 헬퍼.
+    // 스텁으로 두면 도장이 안 찍혀도 이 검증이 못 잡는다.
+    factoryStampReviewScopeOnConfirmed: (() => {
+      const src = fs.readFileSync(SYNC, 'utf8');
+      const start = src.indexOf('function factoryStampReviewScopeOnConfirmed(');
+      const end = src.indexOf('function factorySlimReviewCandidateList(', start);
+      assert.ok(start >= 0 && end > start, 'missing factoryStampReviewScopeOnConfirmed');
+      return new Function(`
+        ${src.slice(start, end)}
+        function factoryCandidateReviewScopeKey() { return 'workspace-a::product-a::candidate-review'; }
+        function factoryCandidateReviewIdentityKey() { return 'workspace-a::run-a::product-a::image-a::candidate-review'; }
+        function factoryCandidateReviewProductName() { return '상품 A'; }
+        return factoryStampReviewScopeOnConfirmed;
+      `)();
+    })(),
     applySinhwaDbMatch() {},
     factoryUpdateFinalDbFromFields() {},
     factoryRestoreLockedProductName() {},
