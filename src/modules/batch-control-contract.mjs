@@ -136,6 +136,8 @@ export function validateOrder(order) {
         'registerFactoryCafe24',
         // 관제탑에서 적어 준 프롬프트로 그 단계의 컷을 새로 만든다.
         'composeFactoryCut',
+        // 막힌 작업을 화면에서 되살리는 길. 잘못 붙은 Cafe24 대상을 떼거나 섹션을 다시 만든다.
+        'recoverFactoryProduct',
       ].includes(order.command.name)
     ) {
       throw new BatchWorkerContractError('factory_control_command_version_unsupported');
@@ -154,6 +156,13 @@ export function validateOrder(order) {
       if (!text(payload.jobId)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
       if (!text(payload.stageKey)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
       if (!text(payload.prompt)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
+    }
+    if (order.command.name === 'recoverFactoryProduct') {
+      if (!text(payload.jobId)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      if (!['clear-cafe24-target', 'regenerate-sections'].includes(text(payload.action))) {
+        throw new BatchWorkerContractError('factory_control_command_payload_invalid');
+      }
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
     if (order.command.name === 'registerFactoryCafe24') {

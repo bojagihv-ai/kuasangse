@@ -1230,6 +1230,23 @@ export function mountProductionBoard(runtime, {
       });
       values.disabled = busy;
       rowActions.append(values);
+      // 여기까지 왔는데 등록이 막히는 흔한 두 가지를 화면에서 풀 수 있게 한다.
+      // 이 길이 없어서, 신규 제품이 엉뚱한 기존 상품에 붙어 상세페이지가 그 상품 이름으로
+      // 만들어져도 개발자 도구를 열지 않으면 빠져나올 수 없었다 — 실측 2026-08-29.
+      const detach = button('board-mini-action ghost', 'Cafe24 대상 떼기', {
+        action: 'recover-clear-target',
+        jobId: row.jobId,
+      });
+      detach.title = '이 작업에 잘못 붙은 기존 Cafe24 상품을 뗍니다. 섹션과 컷은 그대로 둡니다.';
+      detach.disabled = busy;
+      rowActions.append(detach);
+      const resection = button('board-mini-action ghost', '섹션 다시 만들기', {
+        action: 'recover-sections',
+        jobId: row.jobId,
+      });
+      resection.title = '상세페이지 섹션을 이 제품 기준으로 다시 만듭니다. 실패해도 원래 있던 섹션은 그대로 둡니다.';
+      resection.disabled = busy;
+      rowActions.append(resection);
     }
     const results = button(
       'board-mini-action ghost',
@@ -1504,6 +1521,36 @@ export function mountProductionBoard(runtime, {
   }
 
   /** 적어 준 프롬프트로 그 단계의 컷을 새로 만들라고 지시한다. */
+  const RECOVERY_COPY = Object.freeze({
+    'clear-cafe24-target': {
+      running: '잘못 붙은 Cafe24 대상을 떼는 중입니다.',
+      done: 'Cafe24 대상을 뗐습니다. 이어서 「섹션 다시 만들기」를 눌러 주세요.',
+    },
+    'regenerate-sections': {
+      running: '섹션을 이 제품 기준으로 다시 만드는 중입니다. 몇 분 걸립니다.',
+      done: '섹션 다시 만들기를 조립공장에 지시했습니다.',
+    },
+  });
+
+  async function recoverJob(jobId, action) {
+    const copy = RECOVERY_COPY[action] || { running: '되살리는 중입니다.', done: '지시했습니다.' };
+    busy = true;
+    setStatus(copy.running, '');
+    render();
+    try {
+      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/recover`, {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      });
+      setStatus(copy.done, 'ok');
+    } catch (error) {
+      setStatus(`되살리기 실패 · ${String(error?.code || error?.message || error)}`, 'error');
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
   async function composeCut(jobId, stageKey, prompt) {
     busy = true;
     setStatus('적어 주신 프롬프트로 새 컷을 만드는 중입니다. 끝나면 후보에 나타납니다.', '');
@@ -1990,6 +2037,14 @@ export function mountProductionBoard(runtime, {
         return;
       }
       void composeCut(target.dataset.jobId, target.dataset.stageKey, prompt);
+      return;
+    }
+    if (action === 'recover-clear-target') {
+      void recoverJob(target.dataset.jobId, 'clear-cafe24-target');
+      return;
+    }
+    if (action === 'recover-sections') {
+      void recoverJob(target.dataset.jobId, 'regenerate-sections');
       return;
     }
     if (action === 'compose-open') {

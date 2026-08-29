@@ -1534,6 +1534,81 @@ class FactorySyncBridge:
             self._condition.notify_all()
             return public_job
 
+    RECOVERY_ACTIONS = frozenset({"clear-cafe24-target", "regenerate-sections"})
+
+    def queue_product_recovery(self, job_id: str, action: str) -> JsonObject:
+        """막힌 작업을 화면에서 되살리라고 조립공장에 지시한다.
+
+        화면에 이 길이 없어서, 신규 제품이 엉뚱한 기존 Cafe24 상품에 붙어 상세페이지가
+        그 상품 이름으로 만들어져도 사람이 빠져나올 방법이 없었다 — 실측 2026-08-29.
+        고치는 사람이 개발자 도구를 열어야만 하는 상태를 남겨 두지 않는다.
+        """
+        if action not in self.RECOVERY_ACTIONS:
+            raise FactorySyncError("factory_recovery_action_invalid")
+        with self._condition:
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            self._require_admitted_runtime_build_locked()
+            if job.current_order_id:
+                raise FactorySyncError("factory_product_job_busy")
+            session = (self._projection or {}).get("session")
+            if not isinstance(session, dict):
+                raise FactorySyncError("factory_session_missing")
+            checkpoint = _copy(job.checkpoint) if isinstance(job.checkpoint, dict) else None
+            registration = (self._projection or {}).get("registration")
+            on_target = isinstance(registration, dict) and registration.get("jobId") == job_id
+            if not on_target and not checkpoint:
+                raise FactorySyncError("factory_cafe24_target_mismatch")
+            identity: Mapping[str, JsonValue] = session if on_target else (job.checkpoint or {})
+            marker = uuid4().hex
+            worker_session_id = (
+                self._factory_session.session_id if self._factory_session is not None else ""
+            )
+            target_worker_id = (
+                self._factory_session.worker_id if self._factory_session is not None else ""
+            )
+            order: JsonObject = {
+                "orderId": f"factory-recover-{marker}",
+                "contractVersion": WORK_ORDER_VERSION,
+                "capabilityVersion": WORKER_CAPABILITY_VERSION,
+                "batchId": "factory-session",
+                "productId": str(identity.get("productId") or ""),
+                "productKey": str(identity.get("productKey") or ""),
+                "currentRunId": str(identity.get("runId") or ""),
+                "stageId": "recovery",
+                "operationToken": f"factory-recover:{marker}",
+                "idempotencyKey": f"factory-recover:{job_id}:{action}:{marker}",
+                "expectedWorkfileRevision": identity.get("revision"),
+                "workerSessionId": worker_session_id,
+                "targetWorkerId": target_worker_id,
+                "command": {
+                    "kind": COMMAND_KIND,
+                    "version": COMMAND_VERSION,
+                    "name": "recoverFactoryProduct",
+                    "payload": {
+                        **_copy(job.payload),
+                        "jobId": job_id,
+                        "action": action,
+                        **({"checkpoint": checkpoint} if checkpoint else {}),
+                    },
+                },
+            }
+            job.current_order_id = str(order["orderId"])
+            job.message = (
+                "Cafe24 대상을 떼는 중입니다."
+                if action == "clear-cafe24-target"
+                else "섹션을 이 제품 기준으로 다시 만드는 중입니다."
+            )
+            self._persist_product_jobs_locked()
+            self._queue(order)
+            self._append_event(
+                "factory.product.updated",
+                {"job": self._public_product_job(job)},
+            )
+            self._condition.notify_all()
+            return {"accepted": True, "orderId": order["orderId"]}
+
     def queue_compose_cut(self, job_id: str, stage_key: str, prompt: str) -> JsonObject:
         """사람이 적은 프롬프트로 그 단계의 컷을 새로 만들라고 조립공장에 지시한다.
 

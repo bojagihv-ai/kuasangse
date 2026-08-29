@@ -1658,6 +1658,32 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
 
+    @app.post("/api/factory/jobs/<job_id>/recover")
+    def factory_product_recover(job_id: str) -> Response | tuple[Response, int]:
+        """막힌 작업을 화면에서 되살린다 — 잘못 붙은 Cafe24 대상 떼기 / 섹션 다시 만들기."""
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        allowed = {"action"}
+        if payload is None or set(payload) - allowed:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        action = payload.get("action")
+        if not isinstance(action, str) or not action.strip():
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            order = factory_sync.queue_product_recovery(job_id, action.strip())
+        except FactorySyncError as error:
+            status = (
+                404
+                if error.code == "factory_product_job_not_found"
+                else 422
+                if error.code == "factory_recovery_action_invalid"
+                else 409
+            )
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
+
     @app.post("/api/factory/jobs/<job_id>/cafe24/register")
     def factory_product_cafe24_register(job_id: str) -> Response | tuple[Response, int]:
         csrf_error = require_csrf()

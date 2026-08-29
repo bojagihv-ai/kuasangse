@@ -161,6 +161,22 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     return Object.freeze(result);
   }
 
+  /** 막힌 작업을 화면에서 되살린다. 잘못 붙은 Cafe24 대상 떼기 / 섹션 다시 만들기. */
+  async function recoverProduct(payloadValue) {
+    const payload = record(payloadValue) ? payloadValue : {};
+    if (!text(payload.jobId)) throw new FactoryControlCommandError('factory_control_field_missing:jobId');
+    if (!text(payload.action)) throw new FactoryControlCommandError('factory_control_field_missing:action');
+    const result = await requestClassicRuntime(Object.freeze({
+      capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION,
+      command: 'recoverFactoryProduct',
+      payload,
+    }));
+    if (!record(result) || result.schema !== 'factory-product-recovery:v1') {
+      throw new FactoryControlCommandError('factory_recovery_receipt_invalid');
+    }
+    return Object.freeze(result);
+  }
+
   async function run(kind, name, payload = {}, order = {}) {
     if (kind === 'factory-workfile') {
       if (name === 'hydrateFactoryWorkfile') return hydrateFactoryWorkfile(payload, order);
@@ -174,6 +190,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     if (name === 'runFactoryProduct') return runProduct(payload);
     if (name === 'registerFactoryCafe24') return registerCafe24(payload);
     if (name === 'composeFactoryCut') return composeCut(payload);
+    if (name === 'recoverFactoryProduct') return recoverProduct(payload);
     throw new FactoryControlCommandError('factory_control_command_unsupported');
   }
 
@@ -184,6 +201,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     runProduct,
     selectACut,
     composeCut,
+    recoverProduct,
     run,
   });
 }

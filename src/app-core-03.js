@@ -18100,6 +18100,69 @@ async function factoryRuntimeControlComposeCut(payload = {}) {
   return Object.freeze({ schema: 'factory-compose-cut:v1', jobId, stageKey, started: true });
 }
 
+/**
+ * 막힌 작업을 화면에서 되살린다.
+ *
+ * 화면에 이 길이 없어서, 신규 제품이 엉뚱한 기존 Cafe24 상품에 붙어 상세페이지가 그 상품
+ * 이름으로 만들어져도 사람이 빠져나올 방법이 없었다 — 실측 2026-08-29.
+ * - clear-cafe24-target: 잘못 붙은 대상을 뗀다. 섹션·이미지는 건드리지 않는다.
+ * - regenerate-sections: 섹션을 다시 만든다. 실패하면 원래 있던 섹션은 그대로 둔다.
+ */
+async function factoryRuntimeControlRecoverProduct(payload = {}) {
+  const jobId = String(payload.jobId || '').trim();
+  const action = String(payload.action || '').trim();
+  if (!jobId || !action) throw factoryRuntimeBatchCommandError('factory_product_payload_invalid');
+
+  const current = await factoryRuntimeControlProjection();
+  const onTarget = String(current?.registration?.jobId || '').trim() === jobId;
+  if (!onTarget && payload.checkpoint && typeof payload.checkpoint === 'object') {
+    await factoryRuntimeControlRestoreProductCheckpoint({ ...payload, jobId });
+  }
+  const adoptedProjectId = factoryRuntimeControlAdoptProductProject(jobId);
+  if (typeof ensureWorkspaceEditAuthority === 'function' && adoptedProjectId) {
+    const authority = await ensureWorkspaceEditAuthority(`project:${adoptedProjectId}`);
+    if (!['editing', 'offline-edit'].includes(authority?.mode)) {
+      throw factoryRuntimeBatchCommandError('factory_workspace_edit_authority_missing');
+    }
+  }
+
+  if (action === 'clear-cafe24-target') {
+    if (typeof factoryClearCafe24CandidateSelection !== 'function') {
+      throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+    }
+    // 이 제품 전용 헬퍼를 쓴다. 대상 관련 값만 지우고 분석값·섹션은 건드리지 않는다 —
+    // 직접 product 를 헤집으면 작업 기준이 흔들려 분석값까지 사라진다(실측).
+    await factoryClearCafe24CandidateSelection();
+    const after = await factoryRuntimeControlProjection();
+    return Object.freeze({
+      schema: 'factory-product-recovery:v1',
+      jobId,
+      action,
+      message: 'Cafe24 대상을 뗐습니다. 이 제품 기준으로 섹션을 다시 만들어 주세요.',
+      projection: after,
+    });
+  }
+
+  if (action === 'regenerate-sections') {
+    if (typeof generateAllSections !== 'function') {
+      throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+    }
+    const ok = await generateAllSections();
+    const after = await factoryRuntimeControlProjection();
+    return Object.freeze({
+      schema: 'factory-product-recovery:v1',
+      jobId,
+      action,
+      message: ok
+        ? '섹션을 이 제품 기준으로 다시 만들었습니다.'
+        : '일부 섹션을 다시 만들지 못했습니다. 원래 있던 섹션은 그대로 두었습니다.',
+      projection: after,
+    });
+  }
+
+  throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
+}
+
 async function factoryRuntimeControlCommand(value = {}) {
   if (value?.capabilityVersion !== 'factory-control-command:v1') {
     throw factoryRuntimeBatchCommandError('factory_control_command_version_unsupported');
@@ -18109,6 +18172,7 @@ async function factoryRuntimeControlCommand(value = {}) {
   if (value.command === 'runFactoryProduct') return factoryRuntimeControlRunProduct(value.payload || {});
   if (value.command === 'registerFactoryCafe24') return factoryRuntimeControlRegisterCafe24(value.payload || {});
   if (value.command === 'composeFactoryCut') return factoryRuntimeControlComposeCut(value.payload || {});
+  if (value.command === 'recoverFactoryProduct') return factoryRuntimeControlRecoverProduct(value.payload || {});
   throw factoryRuntimeBatchCommandError('factory_control_command_unsupported');
 }
 
