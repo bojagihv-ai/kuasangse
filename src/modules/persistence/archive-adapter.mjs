@@ -67,6 +67,19 @@ export async function fetchArchiveWithAuthority({
       revision: Number(current.revision) || 0,
     };
     const response = await adapter.fetchResponse(url, { ...options, body: JSON.stringify(guardedPayload) });
+    // 서버 응답을 자체 검사보다 **먼저** 본다.
+    // 예전에는 아래 스코프 검사가 먼저 던져서, 서버가 409로 거절한 사실이
+    // '권한이 바뀌었다' 로 가려졌다. 저장이 끝날 때마다 편집권을 반납하는 동작이
+    // 이미지 업로드와 겹치면 서버가 409를 주는데, 화면에는 엉뚱한 이유가 보였다.
+    // (GENERATE-01 간헐 실패의 실제 흐름: release 200 → POST assets 409)
+    // 게다가 스코프가 그대로면 409 응답이 성공처럼 그냥 반환돼 나갔다.
+    if (!response.ok) {
+      throw createAuthorityError(
+        'ARCHIVE_REJECTED',
+        `archive mutation rejected by server (${response.status})`,
+        { status: response.status, scopeId, authority: authority.snapshot?.() || null },
+      );
+    }
     const latest = authority.snapshot();
     // 이 시점의 쓰기는 서버가 leaseId·fencingToken·expectedRevision 으로 이미 검증해 반영했다.
     // 왕복 사이에 같은 스코프 안에서 lease 가 갱신·재획득된 것뿐이라면(하이드레이션 끝의

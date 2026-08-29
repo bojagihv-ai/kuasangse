@@ -18,7 +18,23 @@ function sourceFunction(source, name) {
     ? functionStart - 6
     : functionStart;
   assert.notEqual(start, -1, `missing ${name}`);
-  const open = source.indexOf('{', source.indexOf(')', start));
+  // 매개변수 기본값에 `options = {}` 같은 중괄호가 있으면, '첫 ) 뒤의 첫 {' 를 찾는
+  // 방식은 본문이 아니라 기본값의 중괄호를 잡아 함수를 반토막으로 잘라낸다.
+  // 실제로 그렇게 깨졌다: 087da29 가 시그니처에 `options = {}` 를 추가하자
+  // factoryCafe24CurrentScopedDetailHtml 추출이 'Unexpected end of input' 로 실패했다.
+  // 앱 코드는 멀쩡했고 이 추출기만 취약했다. 괄호 짝을 세어 매개변수 끝을 정확히 찾는다.
+  const paramsOpen = source.indexOf('(', functionStart);
+  let parenDepth = 0;
+  let paramsEnd = -1;
+  for (let index = paramsOpen; index < source.length; index += 1) {
+    if (source[index] === '(') parenDepth += 1;
+    else if (source[index] === ')') {
+      parenDepth -= 1;
+      if (parenDepth === 0) { paramsEnd = index; break; }
+    }
+  }
+  assert.notEqual(paramsEnd, -1, `unterminated params for ${name}`);
+  const open = source.indexOf('{', paramsEnd);
   let depth = 0;
   let quote = '';
   let escaped = false;
