@@ -162,6 +162,11 @@ function factoryNormalizeSizeSummaryFactValue(value) {
   if (/^[0-9]+(?:\.[0-9]+)?$/.test(text)) return '';
   const parsed = factoryParseDbSizeText(text);
   if (parsed.width || parsed.depth || parsed.height) return text;
+  // 축을 둘로 쪼개지 못해도, 길이 단위가 붙은 값이면 사이즈로 인정한다.
+  // 예전에는 '20cm' 처럼 숫자가 하나뿐이면 통째로 버려서, 저장본에 값이 세 군데나
+  // 살아 있는데도 사이즈 칸이 빈칸으로 나왔다.
+  // 무게('1.00g' 등)에는 mm/cm 가 없으므로 여기에 걸리지 않는다.
+  if (/[0-9]+(?:\.[0-9]+)?\s*(?:mm|cm)(?![a-z])/i.test(text)) return text;
   return '';
 }
 
@@ -20474,6 +20479,18 @@ async function generateAllSections(operationContext = null) {
   state.sectionContents = {};
   state.sectionImages = {};
   state.aiRepairUndoStack = {};
+  // 여기서 이미 전부 비웠다. 아래에서 한 발짝이라도 미끄러지면 그대로 다 잃는다 —
+  // 실측 2026-08-29: LLM 연결이 안 돼 곧장 되돌아가는 바람에 만들어 둔 섹션 13개가
+  // 통째로 사라졌다. 8분 걸린 작업이 눌렀다는 이유만으로 없어지면 안 된다.
+  // 아직 새로 못 만든 자리에는 원래 있던 것을 도로 넣어 준다.
+  const restorePreservedSections = () => {
+    for (const key of Object.keys(preservedContents)) {
+      if (state.sectionContents[key]) continue;
+      state.sectionContents[key] = preservedContents[key];
+      if (preservedImages[key]) state.sectionImages[key] = preservedImages[key];
+      if (preservedRepairUndoStack[key]) state.aiRepairUndoStack[key] = preservedRepairUndoStack[key];
+    }
+  };
   if (!state.sectionLocks || typeof state.sectionLocks !== 'object') state.sectionLocks = {};
   orderedSections().forEach(section => {
     if (state.sectionLocks[section.id] && preservedContents[section.id]) {
@@ -20503,15 +20520,17 @@ async function generateAllSections(operationContext = null) {
   try { llm = getLLMClient(); } catch(e) {
     state.error = e.message;
     state.step = 'sections';
+    // 시작도 못 했으면 지운 것을 도로 넣는다.
+    restorePreservedSections();
     updateSectionBatchRun({
       status: 'error',
       progress: 100,
       message: '섹션 생성 시작 실패 · 100%',
-      detail: e.message,
+      detail: `${e.message} · 원래 있던 섹션은 그대로 두었습니다.`,
     }, {
       type: 'error',
       message: 'LLM 연결 실패',
-      detail: e.message,
+      detail: `${e.message} · 만들어 둔 섹션은 지우지 않았습니다.`,
       progress: 100,
     });
     render();
@@ -20740,6 +20759,9 @@ async function generateAllSections(operationContext = null) {
     detail: failedCount ? `총 ${total}개 중 ${failedCount}개 확인 필요` : `총 ${total}개 완료`,
     progress: 100,
   });
+  // 실패한 섹션 자리에는 원래 있던 내용을 도로 넣는다. 다시 만들려다 실패했다고 해서
+  // 멀쩡히 있던 것까지 빈칸이 되면, 사람은 고치려다 더 잃는다.
+  restorePreservedSections();
   savePersistentState();
   render();
   return failedCount === 0;
