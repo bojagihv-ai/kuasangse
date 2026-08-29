@@ -56,6 +56,12 @@ function loadRepair(currentProjectId) {
     // 값이 사라지면 기록에 남아야 한다. 그 기록을 브라우저 검증기들이 공통으로 확인한다.
     factoryRecordFieldLoss: (fieldId, reason, detail) => { losses.push({ fieldId, reason, manualTouched: !!(detail && detail.manualTouched) }); },
     factoryManualFieldSettingMatchesCurrentWork: () => false,   // 분리 직후엔 어느 것도 안 맞는다
+    // 3값 판정. 저장 ID를 모르면 'unknown' — 지우면 안 된다.
+    factoryManualFieldSettingOwnership: (setting, factory) => {
+      if (!setting || setting.manualTouched !== true) return 'auto';
+      const workspaceId = String(currentProjectId || factory?.workspace?.id || '').trim();
+      return workspaceId ? 'foreign' : 'unknown';
+    },
     factoryBackfillManualFieldSettingScopeFromReview: () => {},
     factoryObjectHasEntries: value => !!value && Object.keys(value).length > 0,
   });
