@@ -90,3 +90,22 @@ test('정리한 9개 박스는 다시 고정 높이로 돌아가지 않는다', 
   assert.match(core06, /이미지컷 실시간 로그/);
   assert.match(core06, /<div style="display:grid;gap:7px;overflow:visible">/);
 });
+
+test('후보 목록은 CSS 클래스로도 내부 스크롤 상자를 만들지 않는다', () => {
+  // 이 검사는 원래 런타임 소스의 **인라인 스타일만** 훑었다. 그래서 app.html 의 CSS
+  // 클래스로 선언된 상자를 통째로 놓쳤고, 2026-08-29 사용자 제보로 드러났다.
+  //
+  // 실제 피해: '이거 픽할때마다 화면이 위로 확확 튀는데 왜그래?'
+  //   .factory-candidate-list 가 max-height:360px + overflow-y:auto 였다. 후보를 고르면
+  //   목록이 다시 그려지면서 안쪽 스크롤이 맨 위로 떨어졌다.
+  //   격리 브라우저 실측(PERF-04): 1061 -> 0.
+  const html = fs.readFileSync(path.join(ROOT, 'app.html'), 'utf8');
+  const rule = /\.factory-candidate-list\s*\{([^}]*)\}/.exec(html);
+  assert.ok(rule, '.factory-candidate-list 규칙을 찾지 못했습니다.');
+  const css = rule[1];
+
+  assert.doesNotMatch(css, /max-height:\s*\d+px/, '후보 목록에 고정 높이를 주면 내용이 잘립니다.');
+  assert.doesNotMatch(css, /overflow-y:\s*(?:auto|scroll)/, '후보 목록에 자체 세로 스크롤을 만들면 고를 때마다 맨 위로 되돌아갑니다.');
+  assert.match(css, /overflow-y:\s*visible/);
+  assert.match(css, /height:\s*auto/);
+});

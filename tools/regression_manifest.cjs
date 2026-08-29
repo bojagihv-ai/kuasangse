@@ -300,6 +300,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('PERF-00', '공통/성능', '진행률 갱신은 공정/로그 패널을 다시 만들지 않음', 'tools/verify_factory_progress_patch_perf_v217.cjs'),
     nodeFile('PERF-02', '공통/성능', '분석·상세생성 주기 갱신은 전체 화면을 다시 만들지 않음', 'tools/verify_factory_periodic_ticker_patch_cdp_v001.cjs'),
     nodeFile('PERF-03', '공통/성능', 'VM 후보 폴링은 DB 화면을 전체 다시 그리지 않음', 'tools/verify_factory_vm_poll_render_stability_cdp_v002.cjs'),
+    nodeFile('PERF-04', '공통/성능', '후보 픽·필수값 입력이 스크롤 위치를 맨 위로 되돌리지 않음', 'tools/verify_factory_render_scroll_jump_cdp_v001.cjs'),
     nodeFile('GENERATE-01', '2~6 생성 공정', '생성 중·완료·실패 상태 전이', 'tools/verify_factory_generation_status_cdp_v119.cjs'),
     nodeFile('GENERATE-02', '3 필수값/5 생성', '완료 사이즈 결과의 후보 확정 후 보존·확대·선택', 'tools/verify_factory_size_preview_confirm_cdp_v545.cjs'),
     nodeTestPattern('GENERATE-03', '3 필수값/5 생성', 'canonical 자산에서 빠진 보존 사이즈컷 원본 확대', 'tests/frontend/factory_size_vm_latency_regression.test.cjs', '^GENERATE-03:'),

@@ -214,7 +214,10 @@ test('candidate request lookup keeps the same product-scope rule after run metad
 test('candidate review cards stay within a narrow DB panel without horizontal scrolling', () => {
   const html = source(APP_HTML);
 
-  assert.match(html, /\.factory-candidate-list\{[^}]*overflow-x:clip;overflow-y:auto/);
+  // 가로는 계속 클립한다(좁은 패널에서 카드가 삐져나가지 않게).
+  // 세로는 visible 이어야 한다 — auto 로 두면 후보를 고를 때마다 안쪽 스크롤이
+  // 맨 위로 되돌아간다(2026-08-29 실측 1061 -> 0, PERF-04).
+  assert.match(html, /\.factory-candidate-list\{[^}]*overflow-x:clip;overflow-y:visible/);
   assert.match(html, /\.factory-candidate-card-top\{[^}]*grid-template-columns:24px 64px minmax\(0,1fr\)/);
   assert.match(html, /\.factory-candidate-actions\{[^}]*min-width:0/);
   assert.match(html, /\.factory-candidate-actions \.btn-sm\{[^}]*flex:1 1 120px/);
