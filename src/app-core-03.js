@@ -18316,6 +18316,8 @@ const render = function render() {
     menu,
     activeMenuHtml: renderActiveRuntimeMenu(menu),
   });
+  // 늦게 도착한 다시 그리기로 누른 카드가 밀렸으면 여기서 한 번 되민다.
+  if (typeof applyPendingRenderScrollAnchorAfterRender === 'function') applyPendingRenderScrollAnchorAfterRender();
 };
 
 function getCurrentStepLabel() {

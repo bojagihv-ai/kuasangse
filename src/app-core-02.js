@@ -2447,22 +2447,54 @@ function captureRenderScrollAnchors() {
 // 여기서는 '기준이 움직인 만큼' 만 쓰고, 안 움직였으면 아무것도 쓰지 않아 수렴한다.
 let renderScrollAnchorCorrectionToken = 0;
 
+// 다시 그리기는 비동기이고, 작업파일이 커지거나 서버가 느리면 **한참 뒤에** 한 번 더 온다.
+// 예전에는 클릭 후 400ms 까지만 확인해서, 그 뒤에 도착한 렌더에 카드가 밀려도 손을 못 썼다.
+// 실측: 회귀 PERF-04 가 단독 실행에서는 늘 통과하는데(4/4) 전체 실행에서만 실패했다
+// (카드 top 210 -> 608). 145개 스텝이 보관·상태 폴더를 공유해 뒤로 갈수록 렌더가 늦어진다.
+//
+// 그렇다고 시간을 늘려 계속 훑으면 안 된다. 그렇게 했다가 DB-10(실제 포인터 클릭 검사)이
+// 3/3 결정적으로 깨졌다 — 보정이 스크롤을 움직이는 사이 다음 클릭 좌표가 어긋난 것이다.
+// 그래서 시계가 아니라 **렌더에 매단다.** 렌더가 없으면 아무것도 건드리지 않는다.
+const RENDER_SCROLL_ANCHOR_SETTLE_MS = 2500;
+let renderScrollAnchorPending = null;
+
 function scheduleRenderScrollAnchorCorrection() {
   const anchors = captureRenderScrollAnchors();
   if (!anchors.length) return;
   renderScrollAnchorCorrectionToken += 1;
   const token = renderScrollAnchorCorrectionToken;
+  // 렌더를 거치지 않는 즉시 반영 경로를 위해 짧게 몇 번은 그대로 확인한다.
   const attempt = () => {
     if (token !== renderScrollAnchorCorrectionToken) return;
     applyRenderScrollAnchors(anchors);
   };
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(attempt);
-  // 다시 그리기가 비동기라 한 프레임 뒤에는 아직 안 끝났을 수 있다.
   [60, 180, 400].forEach(delay => setTimeout(attempt, delay));
+  // 그 뒤에 오는 늦은 렌더는 render() 가 끝날 때 한 번만 되민다.
+  renderScrollAnchorPending = { anchors, token, deadline: Date.now() + RENDER_SCROLL_ANCHOR_SETTLE_MS };
+}
+
+// render() 끝에서 부른다. 늦게 도착한 다시 그리기로 카드가 밀렸으면 그때 한 번 되민다.
+// 렌더가 일어나지 않았으면 호출 자체가 없으므로 스크롤을 건드릴 일도 없다.
+function applyPendingRenderScrollAnchorAfterRender() {
+  const pending = renderScrollAnchorPending;
+  if (!pending) return;
+  if (pending.token !== renderScrollAnchorCorrectionToken || Date.now() > pending.deadline) {
+    renderScrollAnchorPending = null;
+    return;
+  }
+  const apply = () => {
+    if (!renderScrollAnchorPending || pending.token !== renderScrollAnchorCorrectionToken) return;
+    applyRenderScrollAnchors(pending.anchors);
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(apply);
+  else apply();
 }
 
 // 기준이 살아남았으면, 그것이 화면에서 움직인 만큼만 스크롤을 되민다.
-function applyRenderScrollAnchors(anchors) {
+// 반환값은 '기준을 찾아 처리했는가' 다. 호출부(renderPreservingMainScroll)가 그 의미로 쓰므로
+// 바꾸면 안 된다. 실제로 되밀었는지는 stats.moved 로 따로 알린다.
+function applyRenderScrollAnchors(anchors, stats = null) {
   if (!anchors || !anchors.length) return false;
   const el = mainScrollElement();
   if (!el) return false;
@@ -2470,7 +2502,10 @@ function applyRenderScrollAnchors(anchors) {
     if (!entry.node.isConnected) continue;
     const delta = entry.node.getBoundingClientRect().top - entry.top;
     if (!Number.isFinite(delta)) continue;
-    if (Math.abs(delta) > 1) el.scrollTop += delta;
+    if (Math.abs(delta) > 1) {
+      el.scrollTop += delta;
+      if (stats) stats.moved = true;
+    }
     return true;
   }
   return false;
