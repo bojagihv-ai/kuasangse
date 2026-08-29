@@ -2126,6 +2126,13 @@ function repairFactoryProductIdentityDrift(factory = {}) {
           if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
             factoryBackfillManualFieldSettingScopeFromReview(setting, review, normalized, fieldId, identityKey);
           }
+          // 사람이 직접 넣은 값은 자동으로 지우지 않는다.
+          // 사용자 규칙(2026-08-29): "필수값뿐만아니라 모든게 이미지고른거든 뭐든
+          // 안날라가야돼. 새작업 누르기전에는"
+          // 지우는 것은 사람이 '새 작업' 을 눌렀을 때만이어야 한다. 신원이 어긋나 보인다는
+          // 이유로 손으로 채운 값을 없애면, 되돌릴 방법이 없고 무엇이 사라졌는지도 모른다.
+          // 자동으로 채워진 값(manualTouched !== true)은 다시 만들어낼 수 있으므로 그대로 정리한다.
+          if (setting && setting.manualTouched === true) return;
           if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
             delete product.dbFieldSettings[fieldId];
           }

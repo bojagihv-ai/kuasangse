@@ -10561,11 +10561,11 @@ function renderFactoryManualInterventionPrompt(factory = {}, context = {}) {
   const intervention = market?.manualIntervention
     || compMarketLegacyManualInterventionFromText(sourceText, market, {});
   if (!intervention) return '';
-  // 지어낸 추측인데 수집이 이미 끝났거나 지금 돌고 있으면 배너를 띄우지 않는다.
-  // 옛 로그 한 줄 때문에 '로그인 필요' 가 계속 뜨던 원인이다.
-  if (intervention.inferredFromLogText) {
+  // VM 이 실제로 보고한 신호가 아니라 로그 글자에서 지어낸 것이면, 지금 정말로 멈춰
+  // 사람을 기다리는 중일 때만 띄운다. 수집이 돌고 있거나 이미 끝났으면 옛 흔적이다.
+  if (!market?.manualIntervention) {
     const phase = String(market?.phase || '').trim();
-    if (market?.loading || /^detail-done$/i.test(phase) || /^(done|idle|ready)$/i.test(phase)) return '';
+    if (market?.loading || /^(detail-done|done|idle|ready)$/i.test(phase)) return '';
   }
   const retryAvailable = compMarketManualRetryAvailable(market);
   return `<div data-factory-manual-intervention role="alert" style="margin-top:12px;border:2px solid rgba(248,113,113,.9);border-radius:12px;background:linear-gradient(135deg,rgba(127,29,29,.48),rgba(41,17,24,.94));padding:13px;box-shadow:0 8px 20px rgba(127,29,29,.2)">
@@ -16072,17 +16072,14 @@ function ensureCompMarketScrapeState(options = {}) {
       next.error,
       ...(Array.isArray(next.logs) ? next.logs.slice(0, 12).map(log => log?.message) : []),
     ].filter(Boolean).join(' ');
-    // 예전에는 로그 글자에서 지어낸 추측을 manualIntervention 에 그대로 대입했다.
-    // 그 자리는 VM 이 실제로 보고한 신호가 들어가는 곳이라, 추측이 사실로 굳어
-    // 로그가 밀려 사라진 뒤에도 배너가 남았다("두번째껀 왜자꾸뜨냐고").
-    // 추측은 추측이라고 표시해 두고, 실제 신호가 오면 그것이 이긴다.
-    const inferred = compMarketLegacyManualInterventionFromText(legacyDetailText, next, raw);
-    next.manualIntervention = inferred ? { ...inferred, inferredFromLogText: true } : null;
-    if (next.manualIntervention) {
-      if (!next.loading && /^detail/i.test(String(next.phase || '')) && !/^detail-done$/i.test(String(next.phase || ''))) {
-        next.phase = 'detail-manual';
-      }
-    }
+    // 로그 글자에서 지어낸 추측을 **상태에 저장하지 않는다.**
+    // 예전에는 manualIntervention 에 대입하고 phase 까지 'detail-manual' 로 바꿨다.
+    // 그 두 자리는 VM 이 실제로 보고한 사실이 들어가는 곳이라, 추측이 사실로 굳어
+    // 옛 로그 한 줄 때문에 빨간 배너가 계속 되살아났다
+    // ("두번쨰껀 왜자꾸뜨냐고" / "이거 뻘건거 왜뜨냐고").
+    // 화면 표시는 renderFactoryManualInterventionPrompt 가 **그때그때 새로 추론**한다.
+    // 그래서 로그에서 그 흔적이 사라지면 배너도 함께 사라진다. 눌러앉지 않는다.
+    void legacyDetailText;
   }
   if (hiddenCandidateCount > 0) {
     const message = `현재 상품명과 맞지 않는 VM 후보 ${hiddenCandidateCount}건을 기본 후보에서 숨겼습니다. VM 후보를 다시 수집해주세요.`;

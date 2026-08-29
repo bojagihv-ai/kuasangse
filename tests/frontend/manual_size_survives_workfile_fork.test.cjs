@@ -91,13 +91,25 @@ test('작업파일을 가르는 중이면 직접 친 값을 지우지 않는다'
   assert.ok(fields.weight, '자동값도 판단 근거가 없을 때는 함부로 지우지 않습니다.');
 });
 
-test('저장 ID를 알면 예전처럼 남의 값을 정리한다', () => {
-  // 보호를 통째로 없앤 것이 아니다. 판단할 수 있을 때는 판단한다.
+test('저장 ID를 알아도 사람이 넣은 값은 지우지 않는다', () => {
+  // 사용자 규칙: "모든게 이미지고른거든 뭐든 안날라가야돼. 새작업 누르기전에는"
+  // 지우는 것은 사람이 '새 작업' 을 눌렀을 때만이어야 한다.
   const repair = loadRepair('project_mine');
   const factory = factoryWithTypedSize('자수 미니 파우치 시험용');
   const fields = repair(factory).product.dbFieldSettings;
-  assert.equal(fields.size, undefined, '다른 작업의 값은 계속 정리되어야 합니다.');
-  assert.equal(fields.width_mm, undefined);
+  assert.equal(fields.size?.manualValue, '가로3.5cm*세로18cm', '손으로 채운 값은 남아야 합니다.');
+  assert.equal(fields.width_mm?.manualValue, '3.5cm');
+  assert.equal(fields.depth_mm?.manualValue, '18cm');
+});
+
+test('자동으로 채워진 값은 예전처럼 정리한다', () => {
+  // 자동값은 다시 만들어낼 수 있으므로 남의 것이면 치운다. 보호를 통째로 없앤 게 아니다.
+  const repair = loadRepair('project_mine');
+  const factory = factoryWithTypedSize('자수 미니 파우치 시험용');
+  factory.product.dbFieldSettings.sale_price = { manualValue: '12500', manualTouched: false, workspaceId: 'batch:old-job' };
+  const fields = repair(factory).product.dbFieldSettings;
+  assert.equal(fields.sale_price, undefined, '자동으로 채운 남의 값은 계속 정리되어야 합니다.');
+  assert.equal(fields.weight, undefined, '무게도 자동값이면 정리 대상입니다.');
 });
 
 test('신원이 어긋나지 않으면 애초에 아무것도 안 지운다', () => {
