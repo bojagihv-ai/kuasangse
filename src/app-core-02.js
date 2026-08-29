@@ -2349,12 +2349,111 @@ function restoreMainScrollPosition(top, left) {
   if (Math.abs(el.scrollLeft - left) > 1) el.scrollLeft = left;
 }
 
+// 누른 것을 기준으로 삼기 위해, 클릭 직전의 화면 위치를 기억해 둔다.
+let renderScrollAnchorNodes = null;
+let renderScrollAnchorAt = 0;
+
+function installRenderScrollAnchorCapture() {
+  if (installRenderScrollAnchorCapture.installed) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  installRenderScrollAnchorCapture.installed = true;
+  const remember = event => {
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') return;
+    const pressed = target.closest('button, a, input, select, textarea, label, [role="button"]') || target;
+    // 누른 버튼은 다시 그릴 때 다른 버튼으로 교체될 수 있다('이 신화사DB 맞음' → '확정됨').
+    // 그때를 대비해 그것을 담고 있는 카드도 함께 기억한다.
+    const container = typeof pressed.closest === 'function'
+      ? pressed.closest('.factory-candidate-card, .factory-candidate-panel, .factory-card, section')
+      : null;
+    renderScrollAnchorNodes = [pressed, container || pressed.parentElement]
+      .filter(node => node && typeof node.getBoundingClientRect === 'function');
+    renderScrollAnchorAt = Date.now();
+  };
+  // pointerdown 만 듣던 때는 키보드로 누른 버튼과 element.click() 을 놓쳤다.
+  // click 은 캡처 단계에서 듣기 때문에 앱의 위임 처리기보다 먼저 도착한다.
+  document.addEventListener('pointerdown', remember, true);
+  document.addEventListener('click', event => {
+    remember(event);
+    // 누른 뒤의 다시 그리기는 경로가 여럿이고 비동기다. 어떤 것은
+    // renderPreservingMainScroll 을 거치지 않고 곧장 render() 나 탭 패치를 부른다.
+    // 그래서 렌더 함수가 아니라 '누른 순간' 에 매달아 두고, 화면이 자리잡을 때까지
+    // 몇 번 확인하며 되민다. 이미 제자리면 아무것도 쓰지 않으므로 떨림이 생기지 않는다.
+    scheduleRenderScrollAnchorCorrection();
+  }, true);
+  // 사람이 스스로 스크롤하면 우리 보정이 방해가 된다. 그때는 즉시 그만둔다.
+  const cancel = () => { renderScrollAnchorCorrectionToken += 1; };
+  document.addEventListener('wheel', cancel, { capture: true, passive: true });
+  document.addEventListener('touchmove', cancel, { capture: true, passive: true });
+  document.addEventListener('keydown', event => {
+    if (/^(Arrow|Page|Home|End)/.test(String(event.key || ''))) cancel();
+  }, true);
+}
+
+// 다시 그리기 직전에, 기준으로 쓸 요소와 그 화면 높이를 확정한다.
+function captureRenderScrollAnchors() {
+  const anchors = [];
+  const push = node => {
+    if (!node || node === document.body || node === document.documentElement) return;
+    if (!node.isConnected || typeof node.getBoundingClientRect !== 'function') return;
+    if (anchors.some(entry => entry.node === node)) return;
+    anchors.push({ node, top: node.getBoundingClientRect().top });
+  };
+  // 값을 입력하는 중이라면 그 칸이 가장 정확한 기준이다.
+  push(document.activeElement);
+  if (renderScrollAnchorNodes && Date.now() - renderScrollAnchorAt < 2000) {
+    renderScrollAnchorNodes.forEach(push);
+  }
+  return anchors;
+}
+
+// 누른 뒤 화면이 자리잡을 때까지 몇 번 확인하며 되민다.
+// 고정된 숫자를 반복해서 쓰던 예전 방식은 배치 중간값에 잘려 떨림을 만들었다.
+// 여기서는 '기준이 움직인 만큼' 만 쓰고, 안 움직였으면 아무것도 쓰지 않아 수렴한다.
+let renderScrollAnchorCorrectionToken = 0;
+
+function scheduleRenderScrollAnchorCorrection() {
+  const anchors = captureRenderScrollAnchors();
+  if (!anchors.length) return;
+  renderScrollAnchorCorrectionToken += 1;
+  const token = renderScrollAnchorCorrectionToken;
+  const attempt = () => {
+    if (token !== renderScrollAnchorCorrectionToken) return;
+    applyRenderScrollAnchors(anchors);
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(attempt);
+  // 다시 그리기가 비동기라 한 프레임 뒤에는 아직 안 끝났을 수 있다.
+  [60, 180, 400].forEach(delay => setTimeout(attempt, delay));
+}
+
+// 기준이 살아남았으면, 그것이 화면에서 움직인 만큼만 스크롤을 되민다.
+function applyRenderScrollAnchors(anchors) {
+  if (!anchors || !anchors.length) return false;
+  const el = mainScrollElement();
+  if (!el) return false;
+  for (const entry of anchors) {
+    if (!entry.node.isConnected) continue;
+    const delta = entry.node.getBoundingClientRect().top - entry.top;
+    if (!Number.isFinite(delta)) continue;
+    if (Math.abs(delta) > 1) el.scrollTop += delta;
+    return true;
+  }
+  return false;
+}
+
 function renderPreservingMainScroll() {
   if (typeof shouldDeferFactoryWizardFullRender === 'function' && shouldDeferFactoryWizardFullRender()) return;
+  installRenderScrollAnchorCapture();
   const before = mainScrollElement();
   const top = before ? before.scrollTop : window.scrollY;
   const left = before ? before.scrollLeft : window.scrollX;
+  // 스크롤 숫자만 지키면 부족하다. 동작을 누르면 진행 안내가 뜨고 목록이 접혀
+  // 페이지가 짧아지는데, 그러면 브라우저가 스크롤을 끝으로 잘라내면서 화면이 위로 올라간다.
+  // (실측: 최대 3074 -> 1595, 누른 카드가 화면 210 -> 608 로 밀림)
+  // 그래서 '방금 누른 것' 을 기준으로 잡고, 그것이 제자리에 있도록 되민다.
+  const anchors = captureRenderScrollAnchors();
   render();
+  if (applyRenderScrollAnchors(anchors)) return;
   // patchAppHtml 은 morphChildren 으로 제자리 갱신하므로 노드가 살아남는다.
   // 그래서 브라우저 스크롤 앵커링이 위치를 잡아 준다. 예전에는 앵커링을 끄고
   // 80ms 동안 네 번 되돌렸는데, 배치가 끝나기 전 위치로 잘렸다가 되튀기를

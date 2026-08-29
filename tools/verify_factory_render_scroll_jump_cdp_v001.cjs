@@ -31,6 +31,8 @@ const RESULT_PATH = path.join(OUT_DIR, 'factory-render-scroll-jump-v001.json');
 
 // 사람이 보던 자리에서 이만큼 넘게 밀리면 '튀었다' 고 본다.
 const ALLOWED_DRIFT_PX = 48;
+// 누른 것이 화면에서 이만큼 넘게 움직이면 사람 눈에 '확 튀었다' 로 보인다.
+const ANCHOR_DRIFT_PX = 64;
 
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -145,6 +147,12 @@ async function main() {
       const beforePick = el2.scrollTop;
       const beforePickList = list()?.scrollTop ?? -1;
       const pickButton = document.querySelector('[data-factory-apply-db-candidate]:not([disabled])');
+      // UX 계약: 스크롤 숫자가 아니라 **누른 것이 화면에서 같은 자리에 있어야** 한다.
+      // 동작을 누르면 내용이 접혀 페이지가 짧아지고, 브라우저가 스크롤을 끝으로 잘라내면서
+      // 화면이 위로 올라간다. 그때 사람이 보던 카드가 어디로 갔는지를 잰다.
+      const anchorCard = pickButton ? pickButton.closest('.factory-candidate-card') : null;
+      const anchorTopBefore = anchorCard ? Math.round(anchorCard.getBoundingClientRect().top) : null;
+      let anchorTopAfter = anchorTopBefore;
       let pickSettled = beforePick;
       let pickListSettled = beforePickList;
       const pickMaxBefore = Math.max(0, el2.scrollHeight - el2.clientHeight);
@@ -160,14 +168,26 @@ async function main() {
       let cardsAfter = cardsBefore;
       let panelsAfter = panelsBefore;
       if (pickButton) {
+        // 실제 사용자는 pointerdown -> mouseup -> click 순서로 누른다.
+        // element.click() 만 부르면 pointerdown 이 나지 않아 실제와 다른 경로가 된다.
+        const rect = pickButton.getBoundingClientRect();
+        const opts = { bubbles: true, cancelable: true, clientX: rect.left + 4, clientY: rect.top + 4 };
+        pickButton.dispatchEvent(new PointerEvent('pointerdown', opts));
+        pickButton.dispatchEvent(new MouseEvent('mouseup', opts));
         pickButton.click();
-        await wait(400);
+        await wait(700);
         const after = scroller();
         pickSettled = after?.scrollTop ?? -1;
         pickListSettled = list()?.scrollTop ?? -1;
         pickMaxAfter = after ? Math.max(0, after.scrollHeight - after.clientHeight) : -1;
         cardsAfter = cardCount();
         panelsAfter = panelHeights();
+        if (anchorCard && anchorCard.isConnected) {
+          anchorTopAfter = Math.round(anchorCard.getBoundingClientRect().top);
+        } else {
+          const replacement = document.querySelector('.factory-candidate-card');
+          anchorTopAfter = replacement ? Math.round(replacement.getBoundingClientRect().top) : null;
+        }
         const f2 = window.factoryState();
         arrayAfter = (f2?.product?.dbCandidates || []).length;
         scopeKeyAfter = String((f2?.product?.dbCandidates || [])[0]?.reviewProductScopeKey || '');
@@ -183,7 +203,8 @@ async function main() {
         pick: { found: !!pickButton, before: beforePick, settled: pickSettled,
                 maxBefore: pickMaxBefore, maxAfter: pickMaxAfter,
                 cardsBefore, cardsAfter, panelsBefore, panelsAfter,
-                arrayBefore, arrayAfter, scopeKeyAfter, confirmedAfter, selectedAfter },
+                arrayBefore, arrayAfter, scopeKeyAfter, confirmedAfter, selectedAfter,
+                anchorTopBefore, anchorTopAfter },
         innerList: {
           max: listMax, before: listBefore, sync: listSync, settled: listSettled, nodeKept: listNodeKept,
           pickBefore: beforePickList, pickSettled: pickListSettled,
@@ -227,6 +248,16 @@ async function main() {
           || result.pick.maxAfter < result.pick.before
           || drift(result.pick.before, result.pick.settled) <= ALLOWED_DRIFT_PX,
         message: `내용이 그대로면 후보를 골라도 위치를 지킨다 (before=${result.pick.before} settled=${result.pick.settled} 최대 ${result.pick.maxBefore}->${result.pick.maxAfter}, 카드 ${result.pick.cardsBefore}->${result.pick.cardsAfter})`,
+      },
+      {
+        // 진짜 UX 계약. 사람이 누른 것은 화면에서 같은 높이에 머물러야 한다.
+        // 다만 동작 때문에 내용이 접혀 페이지가 크게 짧아지면, 되밀 여유 자체가 없어진다.
+        // 그때는 '할 수 있는 만큼(끝까지) 밀었는가' 로 본다. 아무것도 안 하고 그냥
+        // 잘려버리는 것과, 최대치까지 밀어 최대한 붙잡는 것은 체감이 다르다.
+        ok: !result.pick.found || result.pick.anchorTopBefore === null
+          || drift(result.pick.anchorTopBefore, result.pick.anchorTopAfter) <= ANCHOR_DRIFT_PX
+          || Number(result.pick.settled) >= Number(result.pick.maxAfter) - 1,
+        message: `누른 것을 제자리에 붙잡는다 (카드 top ${result.pick.anchorTopBefore} -> ${result.pick.anchorTopAfter}, 스크롤 ${result.pick.settled}/${result.pick.maxAfter})`,
       },
     ];
 

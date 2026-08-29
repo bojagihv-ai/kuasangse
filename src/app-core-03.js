@@ -18102,6 +18102,10 @@ async function renderClassicRuntimeAfterHydration(options = {}) {
 }
 
 const render = function render() {
+  // 누른 것을 기준으로 화면 위치를 지키는 장치를 여기서 건다.
+  // 예전에는 renderPreservingMainScroll 안에서만 걸었는데, 후보 픽처럼
+  // 그 함수를 거치지 않고 곧장 render()·탭 패치로 가는 경로에서는 아예 설치되지 않았다.
+  if (typeof installRenderScrollAnchorCapture === 'function') installRenderScrollAnchorCapture();
   if (classicRuntimeHydrationActive || classicRuntimeBatchWorkerMode) return;
   if (shouldDeferFactoryWizardFullRender()) return;
   if (state.step !== 'factory' && typeof factoryRemoveCompetitorPreviewPortal === 'function') {
