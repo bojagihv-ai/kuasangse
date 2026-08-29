@@ -22,7 +22,9 @@ test('normal app installs a stale-build gate after the coordinated boot is ready
   assert.match(source, /function installRuntimeBuildFreshnessGuard\s*\(/);
   assert.match(source, /id\s*=\s*['"]kuasangseRuntimeStaleGate['"]/);
   assert.match(source, /새 빌드 적용/);
-  assert.match(source, /if \(!isBatchWorker\)[\s\S]{0,180}?installRuntimeBuildFreshnessGuard\(buildId\)/);
+  assert.match(source, /if \(!isBatchWorker\)[\s\S]{0,240}?installRuntimeBuildFreshnessGuard\(\s*buildId\b/);
+  // 내용 지문까지 넘겨야 '같은 번호 다른 내용' 을 잡는다. 번호만 넘기면 가드가 침묵한다.
+  assert.match(source, /installRuntimeBuildFreshnessGuard\([\s\S]{0,80}?runtimeBuildSignature\(manifest\)/);
 });
 
 test('build guard blocks a stale tab exactly once and keeps same-build tabs interactive', async () => {

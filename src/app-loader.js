@@ -201,6 +201,18 @@
     return String(manifest?.buildId || '').trim();
   }
 
+  // buildId 만으로는 '같은 번호, 다른 내용' 을 구분하지 못한다.
+  // buildId 카운터는 git 이 추적하는 매니페스트 안에 있어서 되돌리기 한 번에 되감기고,
+  // 그러면 이미 쓴 번호가 다른 내용으로 다시 발급된다. 그때 이 가드는
+  // nextBuildId === currentBuildId 라 영원히 침묵하고, 탭은 낡은 코드를 계속 돌린다.
+  // 내용 지문을 함께 봐서 그 침묵 구간을 없앤다. 지문이 없는 매니페스트는 예전처럼 동작한다.
+  function runtimeBuildSignature(manifest) {
+    const buildId = runtimeBuildId(manifest);
+    if (!buildId) return '';
+    const digest = String(manifest?.sourceDigest || '').trim();
+    return digest ? `${buildId}@${digest}` : buildId;
+  }
+
   function showRuntimeStaleGate(currentBuildId, nextBuildId) {
     if (document.getElementById('kuasangseRuntimeStaleGate')) return;
     document.documentElement.dataset.kuasangseRuntimeStale = '1';
@@ -237,7 +249,9 @@
     applyButton?.focus();
   }
 
-  function installRuntimeBuildFreshnessGuard(currentBuildId, options = {}) {
+  // currentSignature 를 주면 내용 지문까지 비교한다. 주지 않으면 buildId 만 보던
+  // 예전 동작 그대로다(하위 호환).
+  function installRuntimeBuildFreshnessGuard(currentBuildId, options = {}, currentSignature = '') {
     const windowObject = options.windowObject || window;
     const documentObject = options.documentObject || document;
     const read = options.readManifest || readManifest;
@@ -250,8 +264,13 @@
       if (disposed || stale || checking) return stale;
       checking = true;
       try {
-        const nextBuildId = runtimeBuildId(await read());
-        if (!nextBuildId || nextBuildId === currentBuildId) return false;
+        const nextManifest = await read();
+        const nextBuildId = runtimeBuildId(nextManifest);
+        if (!nextBuildId) return false;
+        // 비교는 지문까지 포함해서 하고, 사람에게 보여주는 것은 번호 그대로 둔다.
+        const baseline = currentSignature || currentBuildId;
+        const nextSignature = currentSignature ? runtimeBuildSignature(nextManifest) : nextBuildId;
+        if (nextSignature === baseline) return false;
         stale = true;
         onStale(currentBuildId, nextBuildId);
         return true;
@@ -348,7 +367,9 @@
 
       if (!isBatchWorker) {
         if (runtimeBuildGuardDisposer) runtimeBuildGuardDisposer();
-        const runtimeBuildGuard = installRuntimeBuildFreshnessGuard(buildId);
+        const runtimeBuildGuard = installRuntimeBuildFreshnessGuard(
+          buildId, {}, runtimeBuildSignature(manifest),
+        );
         runtimeBuildGuardDisposer = runtimeBuildGuard.dispose;
         void runtimeBuildGuard.checkNow();
       }

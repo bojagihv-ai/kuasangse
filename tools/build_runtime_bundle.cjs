@@ -61,16 +61,21 @@ function syncRuntimeManifestBuildId(root = ROOT, manifest = readRuntimeManifest(
   const bundlePath = path.join(root, manifest.bundle || '');
   const existingMetadata = readExistingRuntimeBundleMetadata(bundlePath);
   const sourceDigest = runtimeSourceDigestForManifest(root, manifest);
-  if (
-    !existingMetadata?.sourceDigest ||
-    existingMetadata.sourceDigest === sourceDigest ||
-    String(existingMetadata.buildId || '') !== String(manifest.buildId || '')
-  ) {
+  const digestUnchanged = existingMetadata?.sourceDigest === sourceDigest;
+  const manifestAlreadyStamped = String(manifest.sourceDigest || '') === sourceDigest;
+  if (!existingMetadata?.sourceDigest || (digestUnchanged && manifestAlreadyStamped)) {
     return manifest;
   }
+  // 예전에는 dist 와 매니페스트의 buildId 가 어긋나면 번호를 그대로 뒀다.
+  // 그런데 git restore 직후가 정확히 그 상태(dist=v1258, manifest=v1255)라,
+  // 내용이 바뀌었는데도 번호가 유지돼 '같은 번호 다른 내용' 이 만들어졌다.
+  // 그러면 브라우저 가드는 영원히 침묵한다. 내용이 바뀌었으면 번호를 올린다.
   const nextManifest = {
     ...manifest,
-    buildId: nextRuntimeBuildId(manifest.buildId),
+    ...(digestUnchanged ? {} : { buildId: nextRuntimeBuildId(manifest.buildId) }),
+    // 번호는 되감길 수 있어도 내용 지문은 내용에서 나온다.
+    // 가드가 이 값을 함께 봐서 번호 재사용을 잡아낸다.
+    sourceDigest,
   };
   fs.writeFileSync(
     path.join(root, 'src', 'runtime-manifest.json'),
