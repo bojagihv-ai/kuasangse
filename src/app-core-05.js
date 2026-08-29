@@ -10561,6 +10561,12 @@ function renderFactoryManualInterventionPrompt(factory = {}, context = {}) {
   const intervention = market?.manualIntervention
     || compMarketLegacyManualInterventionFromText(sourceText, market, {});
   if (!intervention) return '';
+  // 지어낸 추측인데 수집이 이미 끝났거나 지금 돌고 있으면 배너를 띄우지 않는다.
+  // 옛 로그 한 줄 때문에 '로그인 필요' 가 계속 뜨던 원인이다.
+  if (intervention.inferredFromLogText) {
+    const phase = String(market?.phase || '').trim();
+    if (market?.loading || /^detail-done$/i.test(phase) || /^(done|idle|ready)$/i.test(phase)) return '';
+  }
   const retryAvailable = compMarketManualRetryAvailable(market);
   return `<div data-factory-manual-intervention role="alert" style="margin-top:12px;border:2px solid rgba(248,113,113,.9);border-radius:12px;background:linear-gradient(135deg,rgba(127,29,29,.48),rgba(41,17,24,.94));padding:13px;box-shadow:0 8px 20px rgba(127,29,29,.2)">
     <div style="font-size:15px;font-weight:950;color:#fff;line-height:1.35">사용자 확인 필요 · VM 상세수집 일시정지</div>
@@ -16066,7 +16072,12 @@ function ensureCompMarketScrapeState(options = {}) {
       next.error,
       ...(Array.isArray(next.logs) ? next.logs.slice(0, 12).map(log => log?.message) : []),
     ].filter(Boolean).join(' ');
-    next.manualIntervention = compMarketLegacyManualInterventionFromText(legacyDetailText, next, raw);
+    // 예전에는 로그 글자에서 지어낸 추측을 manualIntervention 에 그대로 대입했다.
+    // 그 자리는 VM 이 실제로 보고한 신호가 들어가는 곳이라, 추측이 사실로 굳어
+    // 로그가 밀려 사라진 뒤에도 배너가 남았다("두번째껀 왜자꾸뜨냐고").
+    // 추측은 추측이라고 표시해 두고, 실제 신호가 오면 그것이 이긴다.
+    const inferred = compMarketLegacyManualInterventionFromText(legacyDetailText, next, raw);
+    next.manualIntervention = inferred ? { ...inferred, inferredFromLogText: true } : null;
     if (next.manualIntervention) {
       if (!next.loading && /^detail/i.test(String(next.phase || '')) && !/^detail-done$/i.test(String(next.phase || ''))) {
         next.phase = 'detail-manual';

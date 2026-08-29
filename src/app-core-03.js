@@ -2110,16 +2110,27 @@ function repairFactoryProductIdentityDrift(factory = {}) {
       ? `${productName} 기준과 맞지 않는 이전 DB 값을 따로 보관했습니다. 아래 '이전 DB 선택 되돌리기'로 되살리거나, 후보를 다시 선택하세요.`
       : `${productName} 기준과 맞지 않는 이전 DB 값을 분리했습니다. DB/Cafe24 후보를 다시 선택해주세요.`;
     if (product.dbFieldSettings && typeof product.dbFieldSettings === 'object') {
-      factoryProductScopedFieldIdsForRepair().forEach(fieldId => {
-        const setting = product.dbFieldSettings[fieldId];
-        const review = normalized.automation?.fieldReview?.[fieldId];
-        if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
-          factoryBackfillManualFieldSettingScopeFromReview(setting, review, normalized, fieldId, identityKey);
-        }
-        if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
-          delete product.dbFieldSettings[fieldId];
-        }
-      });
+      // 사람이 직접 친 값을 지울지 말지는 '지금 작업이 무엇인지' 를 알 때만 판단할 수 있다.
+      // 작업파일을 새로 가르는 순간에는 저장 ID가 잠시 비어 있는데(startNewProjectDraft),
+      // 그때 판정하면 **모든 수동 입력값이 '남의 것' 으로 몰려 통째로 지워진다.**
+      // 실제로 그 사고가 났다: 사용자가 확인까지 눌러 넣은 사이즈/가로/세로가
+      // 새로고침마다 사라졌다("왜자꾸 너가 코딩하나할떄마다 이게날라가냐고").
+      // 모른다는 것은 남의 것이라는 뜻이 아니다. 모를 때는 건드리지 않는다.
+      const currentWorkspaceId = String(
+        state.currentProjectId || normalized.workspace?.id || normalized.workspaceId || '',
+      ).trim();
+      if (currentWorkspaceId) {
+        factoryProductScopedFieldIdsForRepair().forEach(fieldId => {
+          const setting = product.dbFieldSettings[fieldId];
+          const review = normalized.automation?.fieldReview?.[fieldId];
+          if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
+            factoryBackfillManualFieldSettingScopeFromReview(setting, review, normalized, fieldId, identityKey);
+          }
+          if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
+            delete product.dbFieldSettings[fieldId];
+          }
+        });
+      }
     }
     if (normalized.automation && typeof normalized.automation === 'object') {
       normalized.automation.optionMode = 'pending';
