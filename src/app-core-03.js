@@ -12533,6 +12533,38 @@ function factoryRuntimeRunLegacyCompetitorMarketAction(actionName, operationCont
   });
 }
 
+// 본컴 후보 수집이 쓸 제품명을 시장 상태에 넣는다. VM 경로가 쓰는 것과 같은 우선순위다.
+function factoryRuntimeControlSeedLocalCompetitorName(market) {
+  if (!market || typeof market !== 'object') return '';
+  const clean = typeof cleanDbSearchTerm === 'function' ? cleanDbSearchTerm : (value => String(value || '').trim());
+  if (clean(market.productName)) return String(market.productName).trim();
+  let factory = {};
+  try {
+    factory = factoryRuntimeReadFactory() || {};
+  } catch (_) {
+    factory = {};
+  }
+  const analysis = factory.product?.analysis || state.analysis || {};
+  const productName = clean(
+    factory.automation?.dbSearchQuery
+    || factory.product?.productName
+    || state.productName
+    || analysis.product_name
+    || factory.product?.naturalHint
+    || '',
+  );
+  if (!productName) return '';
+  market.productName = productName;
+  market.searchKeyword = productName;
+  if (typeof compMarketApplyCurrentWorkScope === 'function'
+    && typeof factoryCompetitorCandidateScopePayload === 'function') {
+    try {
+      compMarketApplyCurrentWorkScope(market, factoryCompetitorCandidateScopePayload('competitors', factory));
+    } catch (_) { /* 범위를 못 붙여도 이름만으로 수집은 시작할 수 있다 */ }
+  }
+  return productName;
+}
+
 function factoryRuntimeCompetitorMarketAction(payload = {}, operationContext) {
   const type = String(payload.type || '').trim();
   const quickAction = type === 'quick-action' ? String(payload.action || '').trim() : '';
@@ -12672,13 +12704,25 @@ function factoryRuntimeCompetitorMarketAction(payload = {}, operationContext) {
     });
   }
   if (type === 'quick-action' && asyncActions.has(quickAction)) {
-    if (quickAction === 'start-local' && !compMarketConfirmLocalCandidateCollection()) return false;
+    // 조립공장이 무인으로 돌리는 경로에서는 확인창을 띄우지 않는다. 사람이 없는 워커 탭에서
+    // window.confirm 은 취소로 떨어지고, 수집이 시작조차 못 한 채 "결과 0건" 으로 보였다
+    // — 실측 2026-08-29: 본컴 수집기는 같은 이름으로 8건을 돌려주는데 앱만 0건이었다.
+    if (quickAction === 'start-local'
+      && payload.skipConfirm !== true
+      && !compMarketConfirmLocalCandidateCollection()) return false;
     return factoryRuntimeRunLegacyCompetitorMarketAction(
       'factory/competitor:market:quick-action',
       operationContext,
       (market, operationToken) => {
         const selectedIds = Array.isArray(market.selectedIds) ? market.selectedIds.map(String) : [];
-        if (quickAction === 'start-local') return runCompMarketScrape('local');
+        if (quickAction === 'start-local') {
+          // VM 경로(factoryRunVmCompetitorCollectionForSelection)는 제품명을 시장 상태에
+          // 넣어 주는데, 본컴 경로는 그 준비 없이 runCompMarketScrape 로 바로 들어간다.
+          // 그러면 제품명이 비어 수집기에 검색을 만들지도 못하고 조용히 0건으로 끝난다
+          // — 실측 2026-08-29: 수집기에는 요청 자체가 남지 않았다.
+          factoryRuntimeControlSeedLocalCompetitorName(market);
+          return runCompMarketScrape('local');
+        }
         if (quickAction === 'reload') return reloadCompMarketSearchResultsFromCurrentId();
         if (quickAction === 'detail-vm') {
           return runCompMarketDetailCapture(selectedIds, { operationToken });
@@ -17731,16 +17775,27 @@ async function factoryRuntimeControlEnsureAutoReferences(payload = {}) {
   }
 
   let competitor = factoryRuntimeControlCompetitorSnapshot();
+  // 자동 실행이 VM 경로 하나에만 묶여 있었다. VM 안 수집 워커가 응답하지 않으면
+  // 본컴 JepumScraper 가 멀쩡히 떠 있어도 후보 0건으로 끝나고, 화면에는 "결과가 없다"
+  // 고만 떠서 조작자가 원인을 알 수 없었다 — 실측 2026-08-29: VM 은 running/visible
+  // 인데 worker(127.0.0.1:5502)가 timeout. 그래서 VM 이 비면 본컴 경로로 한 번 더 간다.
+  const collectAttempts = [];
   if (!competitor.candidates.length) {
-    await factoryRuntimeCompetitorMarketAction({
-      type: 'quick-action',
-      action: 'start-vm',
-      skipConfirm: true,
-    });
-    competitor = factoryRuntimeControlCompetitorSnapshot();
+    for (const action of ['start-vm', 'start-local']) {
+      try {
+        await factoryRuntimeCompetitorMarketAction({ type: 'quick-action', action, skipConfirm: true });
+      } catch (error) {
+        collectAttempts.push(`${action === 'start-vm' ? 'VM' : '본컴'} 수집 실패: ${error?.message || error}`);
+        continue;
+      }
+      competitor = factoryRuntimeControlCompetitorSnapshot();
+      if (competitor.candidates.length) break;
+      collectAttempts.push(`${action === 'start-vm' ? 'VM' : '본컴'} 수집 결과 0건`);
+    }
   }
   if (!competitor.candidates.length) {
-    throw factoryRuntimeBatchCommandError('경쟁사 후보 수집 결과가 없어 상세수집을 진행할 수 없습니다.');
+    const detail = collectAttempts.length ? ` (${collectAttempts.join(' / ')})` : '';
+    throw factoryRuntimeBatchCommandError(`경쟁사 후보 수집 결과가 없어 상세수집을 진행할 수 없습니다.${detail}`);
   }
   if (!competitor.selectedIds.length) {
     const firstId = typeof compMarketResultId === 'function'
@@ -17750,16 +17805,29 @@ async function factoryRuntimeControlEnsureAutoReferences(payload = {}) {
     await factoryRuntimeCompetitorMarketAction({ type: 'toggle-candidate', candidateId: firstId });
     competitor = factoryRuntimeControlCompetitorSnapshot();
   }
+  // 후보 수집과 같은 이유로 상세수집도 VM 경로 하나에만 묶여 있었다. VM 워커가 죽어 있으면
+  // 본컴 상세수집(화면의 「본컴 상세수집」 버튼과 같은 경로)이 멀쩡해도 쓰이지 않는다.
+  const detailAttempts = [];
   if (!competitor.detailImages.length) {
-    await factoryRuntimeCompetitorMarketAction({ type: 'quick-action', action: 'analyze-vm' });
-    competitor = factoryRuntimeControlCompetitorSnapshot();
+    for (const action of ['analyze-vm', 'detail-local']) {
+      try {
+        await factoryRuntimeCompetitorMarketAction({ type: 'quick-action', action, skipConfirm: true });
+      } catch (error) {
+        detailAttempts.push(`${action === 'analyze-vm' ? 'VM' : '본컴'} 상세수집 실패: ${error?.message || error}`);
+        continue;
+      }
+      competitor = factoryRuntimeControlCompetitorSnapshot();
+      if (competitor.detailImages.length) break;
+      detailAttempts.push(`${action === 'analyze-vm' ? 'VM' : '본컴'} 상세수집 이미지 0장`);
+    }
   }
   if (!competitor.analysis && competitor.detailImages.length) {
     await factoryRuntimeCompetitorMarketAction({ type: 'analyze-images', mode: 'all' });
     competitor = factoryRuntimeControlCompetitorSnapshot();
   }
   if (!competitor.analysis || !competitor.detailImages.length) {
-    throw factoryRuntimeBatchCommandError('경쟁사 상세수집 또는 이미지 분석이 완료되지 않았습니다.');
+    const detail = detailAttempts.length ? ` (${detailAttempts.join(' / ')})` : '';
+    throw factoryRuntimeBatchCommandError(`경쟁사 상세수집 또는 이미지 분석이 완료되지 않았습니다.${detail}`);
   }
   state.competitorData = factoryRuntimeDetachedValue(competitor.analysis);
   void saveLastWorkNow({ sync: false });

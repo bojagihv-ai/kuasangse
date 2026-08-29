@@ -57,6 +57,7 @@ const errorMessage = code => ({
   source_images_missing: '이 원장 제품에는 등록된 이미지가 없습니다. 아래 “신규·미등록 제품 입력”으로 이미지를 직접 넣어 주세요.',
   product_name_required: '상품명을 입력해 주세요.',
   product_target_required: '신화사 DB 검색 결과에서 대상 제품을 먼저 선택해 주세요.',
+  idempotency_conflict: '같은 묶음·같은 제품명·같은 사진으로 이미 넣은 작업이 있습니다. 값만 고쳐 다시 넣으려면 대기열에서 그 작업을 지우거나, 생산 묶음 이름을 바꿔 주세요.',
 }[code] || code);
 
 export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
@@ -495,9 +496,12 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
                 source: state.attachedWorkfile.source,
               }
               : { source: { kind: 'manual' } }),
+            // 열쇠에 제품명이 빠져 있으면, 같은 사진으로 이름·필수값만 고쳐 다시 넣을 때
+            // 서버가 앞 작업과 같은 요청으로 보고 idempotency_conflict 로 막는다.
+            // 대량 투입 쪽 규칙(묶음+제품명+사진)과 맞춘다.
             idempotencyKey: state.attachedWorkfile
               ? `factory-${batchId}-workfile-${state.attachedWorkfile.source.sha256}`
-              : `factory-${batchId}-manual-${manifest.inputImages[0].sha256}`,
+              : `factory-${batchId}-manual-${manifest.productName}-${manifest.inputImages[0].sha256}`,
             policySnapshot,
             cafe24ApprovalMode: 'existing_one_time_target_gate',
           }),
