@@ -617,17 +617,46 @@ function renderWorkfileSaveStatus() {
   return `<span class="workfile-save-status ${savedAt ? 'saved' : ''}" id="workfileSaveStatus" role="status">${savedAt ? `저장 완료${durationLabel} · 마지막 저장: ${escapeHtml(savedAt)}` : '저장 전'}</span>`;
 }
 
+// 성능 표시는 안전 · 주의 · 경고 세 단계다.
+// 예전에는 두 단계뿐이었고 자동저장이 1초를 1밀리초라도 넘으면 곧바로 빨간불이 켜졌다.
+// 실제로는 아무 문제 없는 구간인데 경고가 뜨니, 놀라서 확인해 보면 "아무 일 아닙니다"
+// 였다. 그런 표시는 곧 신뢰를 잃고, 정말 느려졌을 때도 무시하게 된다.
+const RUNTIME_PERFORMANCE_BANDS = {
+  render: { warn: 150, bad: 400 },
+  persistence: { warn: 2000, bad: 5000 },
+};
+
+function runtimePerformanceBandLevel(value, band) {
+  if (value > band.bad) return 'bad';
+  if (value > band.warn) return 'warn';
+  return 'ok';
+}
+
+function runtimePerformanceDurationText(ms) {
+  const value = Math.max(0, Math.round(Number(ms) || 0));
+  // 1초를 넘으면 밀리초보다 초가 읽기 쉽다.
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}초` : `${value}ms`;
+}
+
 function runtimePerformanceBudgetModel(renderMs, persistenceMs) {
   const measuredRenderMs = Math.max(0, Math.round(Number(renderMs) || 0));
   const measuredPersistenceMs = Math.max(0, Math.round(Number(persistenceMs) || 0));
+  const renderLevel = runtimePerformanceBandLevel(measuredRenderMs, RUNTIME_PERFORMANCE_BANDS.render);
+  const persistenceLevel = runtimePerformanceBandLevel(measuredPersistenceMs, RUNTIME_PERFORMANCE_BANDS.persistence);
+  const levels = [renderLevel, persistenceLevel];
+  const level = levels.includes('bad') ? 'bad' : (levels.includes('warn') ? 'warn' : 'ok');
   const slow = [];
-  if (measuredRenderMs > 150) slow.push('render');
-  if (measuredPersistenceMs > 1000) slow.push('persistence');
+  if (renderLevel !== 'ok') slow.push('render');
+  if (persistenceLevel !== 'ok') slow.push('persistence');
   return {
     renderMs: measuredRenderMs,
     persistenceMs: measuredPersistenceMs,
     measured: measuredRenderMs > 0 || measuredPersistenceMs > 0,
-    overBudget: slow.length > 0,
+    level,
+    renderLevel,
+    persistenceLevel,
+    // 빨간불은 '정말 느릴 때' 만 켠다.
+    overBudget: level === 'bad',
     slow,
   };
 }
@@ -641,10 +670,12 @@ function renderRuntimePerformanceStatus() {
   if (!model.measured) {
     return '<span class="workfile-save-status" id="runtimePerformanceStatus" role="status">성능 계측 대기</span>';
   }
-  const label = model.overBudget
-    ? `성능 확인 필요 · 렌더 ${model.renderMs}ms · 자동저장 ${model.persistenceMs}ms`
-    : `성능 정상 · 렌더 ${model.renderMs}ms · 자동저장 ${model.persistenceMs}ms`;
-  return `<span class="workfile-save-status ${model.overBudget ? 'error' : 'saved'}" id="runtimePerformanceStatus" role="status" data-performance-over-budget="${model.overBudget ? '1' : '0'}" title="예산: 렌더 150ms, 자동저장 1000ms">${escapeHtml(label)}</span>`;
+  const headline = { ok: '속도 정상', warn: '조금 느려짐', bad: '많이 느림' }[model.level];
+  const tone = { ok: 'saved', warn: 'warn', bad: 'error' }[model.level];
+  const label = `${headline} · 화면 그리기 ${runtimePerformanceDurationText(model.renderMs)}`
+    + ` · 자동저장 ${runtimePerformanceDurationText(model.persistenceMs)}`;
+  const hint = '화면 그리기가 0.15초·0.4초를, 자동저장이 2초·5초를 넘으면 각각 주의(주황)·경고(빨강)로 바뀝니다.';
+  return `<span class="workfile-save-status ${tone}" id="runtimePerformanceStatus" role="status" data-performance-level="${model.level}" data-performance-over-budget="${model.overBudget ? '1' : '0'}" title="${escAttr(hint)}">${escapeHtml(label)}</span>`;
 }
 
 function renderWorkfileBuildLabel() {
@@ -699,9 +730,13 @@ function renderGlobalDbSyncStatusStrip() {
     : (state.currentProjectId ? '저장됨' : '초안');
   const activeStepLabel = typeof getCurrentStepLabel === 'function' ? getCurrentStepLabel() : '작업 화면';
   const info = latestDbSyncInfo();
+  // 이 배지는 '조립공장에서 확정한 값을 AI 분석 화면으로 넘긴 기록' 이다.
+  // 조립공장에서 고른 신화사DB 후보와는 다른 것인데, 예전에는 둘 다 그냥 'DB' 라고만
+  // 불러서 오해를 샀다. DB 후보를 골라 둔 채로 '제품정보 DB: 연결 기록 없음' 을 보면
+  // 고른 것이 날아간 줄 알게 된다. 무엇에 대한 기록인지 이름에 드러낸다.
   const syncLabel = info?.syncedAt && typeof formatLatestDbSyncTime === 'function'
-    ? `제품정보 DB: ${formatLatestDbSyncTime(info.syncedAt)}`
-    : '제품정보 DB: 연결 기록 없음';
+    ? `AI 분석에 넘김: ${formatLatestDbSyncTime(info.syncedAt)}`
+    : 'AI 분석에 아직 안 넘김';
   const summary = info?.summary || [
     info?.product_name || info?.productName || '',
     info?.db_jcode ? `신화사 #${info.db_jcode}` : '',
@@ -717,7 +752,7 @@ function renderGlobalDbSyncStatusStrip() {
       <div class="db-workfile-current-step">현재 화면 ${escapeHtml(activeStepLabel)}</div>
     </div>
     <div class="db-workfile-title">
-      <div class="db-workfile-sync">
+      <div class="db-workfile-sync" title="조립공장에서 확정한 값을 AI 분석 화면으로 넘긴 기록입니다. 조립공장에서 고른 신화사DB 후보와는 다릅니다.">
         ${escapeHtml(syncLabel)}${summary ? ` <span>${escapeHtml(summary)}</span>` : ''}
         <span id="workBundleSyncStatus">${escapeHtml(workBundleSyncStatusLabel)}</span>
       </div>
