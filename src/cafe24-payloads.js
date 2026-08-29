@@ -2533,8 +2533,17 @@ function factoryCafe24ResolveSectionScopeCheck(appState = {}, currentScope = {},
   };
 }
 
-function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactory()) {
+/**
+ * 지금 보낼 상세페이지 HTML 을 고른다.
+ *
+ * options.ignoreChosenDetail: 고른 최종 A컷을 건너뛰고 현재 섹션으로만 만든다.
+ * 고른 A컷이 오염돼 막혔을 때, 섹션을 다시 만들어 새 A컷을 세우려면 이 길이 필요하다 —
+ * 그러지 않으면 막힌 A컷 때문에 새 A컷도 못 만들어 회복 경로가 통째로 닫힌다
+ * (실측 2026-08-29: 섹션 14개를 다 다시 만들고도 등록이 풀리지 않았다).
+ */
+function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactory(), options = {}) {
   const appState = typeof state !== 'undefined' ? state : {};
+  const ignoreChosenDetail = !!(options && options.ignoreChosenDetail);
   const assets = Array.isArray(factory.assets) ? factory.assets : [];
   const detailHtmlImageCount = html => (String(html || '').match(/<img\b[^>]*\bsrc\s*=/gi) || []).length;
   const detailHtmlAltKey = value => String(value || '')
@@ -2619,7 +2628,8 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
   const selectedDetailIds = Array.isArray(factory.stages?.detail?.selectedAssetIds)
     ? factory.stages.detail.selectedAssetIds.map(value => String(value || '').trim()).filter(Boolean)
     : [];
-  const chosenDetail = selectedDetailIds.length
+  // ignoreChosenDetail 이면 고른 A컷을 아예 없는 셈 친다 — 오염된 A컷이 새 A컷을 막지 않게.
+  const chosenDetail = (!ignoreChosenDetail && selectedDetailIds.length)
     ? detailAssets.find(asset => (
       String(asset?.id || '') === selectedDetailIds[selectedDetailIds.length - 1]
     )) || null

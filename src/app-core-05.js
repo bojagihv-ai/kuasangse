@@ -5893,6 +5893,14 @@ function factoryFinalRegistrationDetailModel(factory) {
 function factoryEnsureCurrentDetailHtmlAsset(factory) {
   if (typeof factoryCafe24CurrentScopedDetailHtml !== 'function') return { stored: false };
   let scoped = factoryCafe24CurrentScopedDetailHtml(factory);
+  // 고른 A컷이 막혀 있으면 그것 때문에 새 A컷도 못 만든다. 이 함수의 일은 '지금 미리보기를
+  // 남기는 것' 이므로, 막힌 A컷은 건너뛰고 현재 섹션으로 다시 만들어 본다. 그렇게 만든
+  // 스냅샷이 깨끗하면 사람은 그것을 골라 빠져나갈 수 있다 — 실측 2026-08-29: 섹션을 전부
+  // 다시 만들고도 오염된 A컷 하나 때문에 등록이 영영 풀리지 않았다.
+  if (scoped && scoped.blocked && /^detail-(foreign-product|light-placeholder|admin-label)-blocked$/.test(String(scoped.source || ''))) {
+    const rebuilt = factoryCafe24CurrentScopedDetailHtml(factory, { ignoreChosenDetail: true });
+    if (rebuilt && !rebuilt.blocked && String(rebuilt.html || '').trim()) scoped = rebuilt;
+  }
   let html = String(scoped?.html || '').trim();
   const previewStatus = typeof factoryCurrentPreviewSectionStatus === 'function'
     ? factoryCurrentPreviewSectionStatus(state)
