@@ -1230,9 +1230,11 @@ export function mountProductionBoard(runtime, {
       });
       values.disabled = busy;
       rowActions.append(values);
-      // 여기까지 왔는데 등록이 막히는 흔한 두 가지를 화면에서 풀 수 있게 한다.
-      // 이 길이 없어서, 신규 제품이 엉뚱한 기존 상품에 붙어 상세페이지가 그 상품 이름으로
-      // 만들어져도 개발자 도구를 열지 않으면 빠져나올 수 없었다 — 실측 2026-08-29.
+    }
+    // 되살리기는 Cafe24 등록 버튼과 조건이 달라야 한다. 등록이 막혀 blocked 가 된 순간
+    // 이 버튼들이 같이 사라지면, 정작 필요할 때 없다 — 실측 2026-08-29에 그렇게 사라졌다.
+    // 만들기가 끝난 뒤(완료·차단 어느 쪽이든)에는 늘 보이게 둔다.
+    if ((row.status === 'completed' || row.status === 'blocked') && !row.cafe24Registered) {
       const detach = button('board-mini-action ghost', 'Cafe24 대상 떼기', {
         action: 'recover-clear-target',
         jobId: row.jobId,
@@ -1522,13 +1524,15 @@ export function mountProductionBoard(runtime, {
 
   /** 적어 준 프롬프트로 그 단계의 컷을 새로 만들라고 지시한다. */
   const RECOVERY_COPY = Object.freeze({
+    // 여기서 하는 일은 '지시'까지다. 실제로 됐는지는 조립공장이 보고해야 알 수 있으므로
+    // 끝난 것처럼 말하지 않는다 — 실측 2026-08-29: '뗐습니다' 라고 해 놓고 워커는 거절했다.
     'clear-cafe24-target': {
       running: '잘못 붙은 Cafe24 대상을 떼는 중입니다.',
-      done: 'Cafe24 대상을 뗐습니다. 이어서 「섹션 다시 만들기」를 눌러 주세요.',
+      done: 'Cafe24 대상 떼기를 조립공장에 지시했습니다. 이 줄의 상태가 바뀌면 끝난 것입니다.',
     },
     'regenerate-sections': {
       running: '섹션을 이 제품 기준으로 다시 만드는 중입니다. 몇 분 걸립니다.',
-      done: '섹션 다시 만들기를 조립공장에 지시했습니다.',
+      done: '섹션 다시 만들기를 조립공장에 지시했습니다. 이 줄의 상태가 바뀌면 끝난 것입니다.',
     },
   });
 

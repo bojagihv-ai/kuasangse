@@ -18119,7 +18119,11 @@ async function factoryRuntimeControlRecoverProduct(payload = {}) {
     await factoryRuntimeControlRestoreProductCheckpoint({ ...payload, jobId });
   }
   const adoptedProjectId = factoryRuntimeControlAdoptProductProject(jobId);
-  if (typeof ensureWorkspaceEditAuthority === 'function' && adoptedProjectId) {
+  // 편집권은 보관함에 새로 쓰는 일에만 필요하다. 대상 떼기는 고른 후보를 지우는 것뿐이라
+  // 여기서 편집권을 요구하면 정작 막힌 작업을 풀 수 없다 — 실측 2026-08-29:
+  // factory_product_workspace_authority_unavailable 로 떼기 자체가 거절됐다.
+  if (action !== 'clear-cafe24-target'
+    && typeof ensureWorkspaceEditAuthority === 'function' && adoptedProjectId) {
     const authority = await ensureWorkspaceEditAuthority(`project:${adoptedProjectId}`);
     if (!['editing', 'offline-edit'].includes(authority?.mode)) {
       throw factoryRuntimeBatchCommandError('factory_workspace_edit_authority_missing');
