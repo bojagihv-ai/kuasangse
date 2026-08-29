@@ -1919,10 +1919,28 @@ export function mountProductionBoard(runtime, {
       event.stopPropagation();
       const cellNode = zoomTarget.closest('[data-zoom-cell]');
       const payload = cellNode ? zoomPayloads.get(cellNode.dataset.zoomCell) : null;
-      openZoom(payload || {
-        source: zoomTarget.dataset.zoomSrc,
-        label: zoomTarget.dataset.zoomLabel || '',
-      });
+      // 후보 패널에서 그림을 눌러 크게 보면 고르는 길이 사라져 있었다. 닫고 카드로
+      // 돌아가 다시 눌러야 했다 — 크게 보고 그 자리에서 고르라고 만든 창인데 정작
+      // 거기서 못 골랐다. 카드가 이미 들고 있는 작업·단계·후보 번호를 그대로 물려준다.
+      const pickNode = zoomTarget.closest('[data-action="pick"]');
+      openZoom(payload || (pickNode && pickNode.dataset.candidateId
+        ? {
+          source: zoomTarget.dataset.zoomSrc,
+          label: zoomTarget.dataset.zoomLabel || '',
+          jobId: pickNode.dataset.jobId || '',
+          stageKey: pickNode.dataset.stageKey || '',
+          candidates: [{
+            id: pickNode.dataset.candidateId,
+            thumbnailUrl: zoomTarget.dataset.zoomSrc,
+            contentUrl: zoomTarget.dataset.zoomSrc,
+          }],
+          startIndex: 0,
+          canPick: !pickNode.disabled,
+        }
+        : {
+          source: zoomTarget.dataset.zoomSrc,
+          label: zoomTarget.dataset.zoomLabel || '',
+        }));
       return;
     }
     const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
