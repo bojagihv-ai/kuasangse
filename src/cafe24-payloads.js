@@ -2304,7 +2304,22 @@ function factoryCafe24DetailForeignProductCheck(html = '', factory = factoryRunt
     .replace(/<[^>]+>/g, ' ');
   const normalizedHtml = factoryCafe24DetailNormalizeName(text);
   const conflicts = foreignTerms.filter(term => normalizedHtml.includes(term)).slice(0, 8);
-  return { ok: conflicts.length === 0, conflicts, expectedTerms };
+  // 어느 섹션이 그 이름을 물고 있는지 짚어 준다. 이것이 없으면 "섹션을 다시 생성해주세요"
+  // 만 보고 사람이 전체를 몇 번이고 다시 만들게 된다 — 실측 2026-08-29: 보관함 파일은
+  // 모두 깨끗한데 살아 있는 섹션에만 남아 있어, 어디를 고쳐야 하는지 알 길이 없었다.
+  const sections = appState && typeof appState.sectionContents === 'object' && appState.sectionContents
+    ? appState.sectionContents
+    : {};
+  const locations = conflicts.length
+    ? Object.entries(sections).filter(([, value]) => {
+      const body = factoryCafe24DetailNormalizeName(
+        String(typeof value === 'string' ? value : JSON.stringify(value || ''))
+          .replace(/<[^>]+>/g, ' '),
+      );
+      return conflicts.some(term => body.includes(term));
+    }).map(([key]) => String(key)).slice(0, 6)
+    : [];
+  return { ok: conflicts.length === 0, conflicts, expectedTerms, locations };
 }
 
 function factoryCafe24BuildMarketSafeDetailHtml(finalDb = {}, factory = factoryRuntimeReadFactory()) {
@@ -2678,7 +2693,7 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
             source: 'detail-foreign-product-blocked',
             blocked: true,
             sectionCount,
-            message: `상세페이지 HTML에 현재 상품과 다른 상품명 단서가 남아 있어 전송하지 않습니다: ${foreignCheck.conflicts.slice(0, 3).join(', ')}. 현재 상품 기준으로 섹션을 다시 생성해주세요.`,
+            message: `상세페이지 HTML에 현재 상품과 다른 상품명 단서가 남아 있어 전송하지 않습니다: ${foreignCheck.conflicts.slice(0, 3).join(', ')}${(foreignCheck.locations || []).length ? ` (남은 섹션: ${foreignCheck.locations.join(', ')})` : ''}. 현재 상품 기준으로 섹션을 다시 생성해주세요.`,
           };
         }
         // 고른 A컷이 먼저다. 이미지 수로 겨루기 전에 사람의 지시를 따른다.
