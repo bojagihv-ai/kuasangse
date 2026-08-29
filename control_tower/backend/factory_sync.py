@@ -3126,6 +3126,25 @@ class FactorySyncBridge:
             )
             self._condition.notify_all()
             return
+        if result.get("schema") == "factory-product-recovery:v1":
+            # 되살리기(대상 떼기 / 섹션 다시 만들기) 영수증. 진행 상태는 건드리지 않고
+            # 무엇을 했는지만 남긴다 — 이 주문은 단계를 넘기는 주문이 아니다.
+            recovered_job_id = str(result.get("jobId") or "").strip()
+            recovered = self._product_jobs.get(recovered_job_id)
+            if recovered is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            recovered.current_order_id = ""
+            recovered.message = str(result.get("message") or "되살리기를 마쳤습니다.")
+            projection = result.get("projection")
+            if isinstance(projection, dict):
+                self._projection = _validate_projection(projection)
+            self._persist_product_jobs_locked()
+            self._append_event(
+                "factory.product.updated",
+                {"job": self._public_product_job(recovered)},
+            )
+            self._condition.notify_all()
+            return
         if result.get("schema") != "factory-a-cut-receipt:v1":
             raise FactorySyncError("factory_a_cut_receipt_invalid")
         projection = result.get("projection")
