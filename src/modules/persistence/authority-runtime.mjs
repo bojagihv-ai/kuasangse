@@ -55,9 +55,15 @@ export function createPersistenceAuthorityRuntime(authority = null) {
     const currentRevision = Number(current.revision) || 0;
     const envelopeRevision = Number(envelope.metadata.revision.counter) || 0;
     if (currentScope !== envelopeScope
-      || currentLease !== envelopeLease
       || currentFence !== envelopeFence
       || currentRevision <= envelopeRevision) return null;
+    // 편집권 비교는 막는 쪽(assertReplicaCanPublish)과 같은 규칙이어야 한다. 거기서는
+    // 양쪽에 열쇠가 다 있을 때만 다름을 따지고, 한쪽이 비면 그냥 통과시킨다. 그래서
+    // 열쇠가 기록되지 않은 replica 는 STALE_REVISION 까지 내려오는데, 여기서 엄격히
+    // 비교해 버리면 그 충돌을 못 알아보고 재조정을 아예 시도하지 않는다. 결과는 영구
+    // 저장 거부 루프였다 — 실측 2026-08-29: 워커 탭이 70초마다 같은 오류를 반복하며
+    // 화면에서 넣은 값이 하나도 저장되지 않았고, 화면에는 아무 표시도 없었다.
+    if (currentLease && envelopeLease && currentLease !== envelopeLease) return null;
     const currentDigest = String(current.digest || '');
     const envelopeDigest = String(envelope.digest || '');
     const sameDigest = currentDigest !== '' && currentDigest === envelopeDigest;

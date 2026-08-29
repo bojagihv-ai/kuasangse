@@ -2046,6 +2046,41 @@ function factoryProductScopedFieldIdsForRepair() {
   ];
 }
 
+// 판정을 참/거짓 둘로 두면 **'모른다' 가 곧 '지워도 된다' 가 된다.**
+// 오늘 사고가 정확히 그것이었다 — 작업파일을 가르는 순간 저장 ID가 잠시 비었고,
+// 그러자 모든 값이 '내 것이 아니다' 로 판정돼 지워졌다. 모른다는 것은 남의 것이라는
+// 뜻이 아니다. 그래서 네 갈래로 나눈다:
+//   'mine'    도장이 지금 작업과 맞는다 — 내 것이 확실하다
+//   'foreign' 도장이 있는데 다르다 — 남의 것이 확실하다
+//   'unknown' 판단할 근거가 없다 (지금 작업을 모르거나, 값에 도장이 아예 없다)
+//   'auto'    사람이 넣은 값이 아니다 — 필요하면 다시 만들어낼 수 있다
+// 삭제는 **확실할 때만** 한다. 'unknown' 은 건드리지 않는다.
+function factoryManualFieldSettingOwnership(setting = {}, factory = {}, fieldId = '', identityKey = '') {
+  if (!setting || typeof setting !== 'object' || !fieldId) return 'unknown';
+  if (setting.manualTouched !== true) return 'auto';
+  if (!identityKey) return 'unknown';
+  const workspaceId = String(state.currentProjectId || factory.workspace?.id || factory.workspaceId || '').trim();
+  const productKey = typeof factoryCurrentProductKey === 'function'
+    ? factoryCurrentProductKey(factory)
+    : identityKey;
+  const currentRunId = typeof factoryCurrentWorkflowRunId === 'function'
+    ? factoryCurrentWorkflowRunId(factory)
+    : String(factory.automation?.currentRunId || factory.product?.currentRunId || '').trim();
+  const inputImageFingerprint = typeof factoryCurrentInputImageFingerprint === 'function'
+    ? factoryCurrentInputImageFingerprint(factory)
+    : String(factory.product?.lockedInputImageFingerprint || factory.product?.inputImageFingerprint || '').trim();
+  // 지금 작업이 무엇인지 모르면 아무 판단도 하지 않는다.
+  if (!workspaceId || !productKey || !currentRunId || !inputImageFingerprint) return 'unknown';
+  // 값에 도장이 아예 없으면 낡은 데이터다. 남의 것이라는 증거가 아니다.
+  if (!setting.workspaceId && !setting.productKey && !setting.currentRunId) return 'unknown';
+  const matches = setting.workspaceId === workspaceId
+    && factoryIdentityKeysCompatible(setting.productKey, productKey)
+    && setting.currentRunId === currentRunId
+    && setting.inputImageFingerprint === inputImageFingerprint
+    && setting.stageId === `field:${fieldId}`;
+  return matches ? 'mine' : 'foreign';
+}
+
 function factoryManualFieldSettingMatchesCurrentWork(setting = {}, factory = {}, fieldId = '', identityKey = '') {
   if (!setting || setting.manualTouched !== true || !fieldId || !identityKey) return false;
   const workspaceId = String(state.currentProjectId || factory.workspace?.id || factory.workspaceId || '').trim();
@@ -2174,10 +2209,11 @@ function repairFactoryProductIdentityDrift(factory = {}) {
           // 사람이 직접 넣은 값은 자동으로 지우지 않는다.
           // 사용자 규칙(2026-08-29): "필수값뿐만아니라 모든게 이미지고른거든 뭐든
           // 안날라가야돼. 새작업 누르기전에는"
-          // 지우는 것은 사람이 '새 작업' 을 눌렀을 때만이어야 한다. 신원이 어긋나 보인다는
-          // 이유로 손으로 채운 값을 없애면, 되돌릴 방법이 없고 무엇이 사라졌는지도 모른다.
-          // 자동으로 채워진 값(manualTouched !== true)은 다시 만들어낼 수 있으므로 그대로 정리한다.
+          // 지우는 것은 사람이 '새 작업' 을 눌렀을 때만이어야 한다.
           if (setting && setting.manualTouched === true) return;
+          // 자동으로 채워진 값이라도 **확실할 때만** 지운다.
+          // 'unknown'(지금 작업을 모르거나 도장이 없는 낡은 값)은 건드리지 않는다.
+          if (setting && factoryManualFieldSettingOwnership(setting, normalized, fieldId, identityKey) === 'unknown') return;
           if (setting && !factoryManualFieldSettingMatchesCurrentWork(setting, normalized, fieldId, identityKey)) {
             factoryRecordFieldLoss(fieldId, 'identity-drift-repair', { manualTouched: setting.manualTouched === true });
             delete product.dbFieldSettings[fieldId];
