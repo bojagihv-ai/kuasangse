@@ -4792,22 +4792,23 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
     signal: collectionController.signal,
     isCurrent: () => collectionIsCurrent(),
   };
-  // 후보 검색을 본컴 우선으로 바꾸려던 시도를 되돌렸다. 이유를 남긴다.
+  // 후보 검색을 본컴 우선으로 바꾸려던 시도를 **두 번** 되돌렸다. 기록을 남긴다.
   //
-  // 실측 2026-08-30 (COMP-NAVER 검증기로 실제 시작 버튼을 눌러 확인):
-  //   스크래퍼 자체는 본컴에서 네이버를 잘 준다 — 19건 수집, 그 중 smartstore.naver.com 4건.
-  //   그런데 **작업(factory.product.competitors)에는 0건**이 들어왔다.
+  // 왜 하려 했나 (실측 2026-08-30, API Hub 경유 JepumScraper):
+  //   본컴 → success 20/20 (coupang 4 · **naver 4** · gmarket 4 · auction 4 · 11st 4)
+  //   VM   → error   0/20 (90초 소요)
+  //   네이버는 5개 마켓 중 유일하게 api_enabled=true 라 본컴에서 로그인 없이도 잘 나온다.
+  //   그래서 이 경로만 스마트스토어 후보가 0건이었다.
   //
-  // 원인: 이 흐름의 행 선별(factoryFreshVmCandidateRows)이 VM 모양에 맞춰져 있다.
-  //   VM 경로는 응답 본문(scrapeResult.rawProducts)으로 행을 돌려주고, 그 행들은
-  //   작업범위 검사를 거치지 않는다. 본컴 경로는 행이 시장 상태(market.results)에만
-  //   쌓이고, 그쪽은 함수 진입 때 잡아둔 currentScope 로 걸러진다. 시작 버튼이 작업 신원을
-  //   회전시키기 때문에 그 scope 가 어긋나 19건이 전부 탈락했다.
-  //   (검증기에서 나중에 새 scope 로 다시 세면 19건이 그대로 통과한다 — scope 시점 문제다.)
+  // 1차 시도: 순서만 바꿨다 → 수집 19건(네이버 4건 포함)인데 **작업 반영 0건**.
+  //   원인: 본컴은 행을 응답으로 안 돌려줬고(rawProducts: []), 시장 상태에만 쌓인 행은
+  //   함수 진입 때 잡아둔 currentScope 로 걸러진다. 시작 버튼이 작업 신원을 회전시켜
+  //   그 범위가 어긋나 전부 탈락했다.
+  // 2차 시도: 본컴도 행을 응답으로 돌려주게 고치고 다시 켰다
+  //   → 이번엔 렌더러가 45초 이상 멈춰 CDP 평가가 죽었다. 원인 미확정.
   //
-  // 그래서 순서만 바꾸면 사용자는 후보를 아예 못 받는다. VM 은 최소한 15건은 줬다.
-  // 본컴 우선은 **행 선별이 본컴 응답도 같은 자격으로 받아들이게 고친 뒤에** 다시 한다.
-  // 그 전까지는 VM 을 그대로 쓴다.
+  // 사용자에게는 VM 이라도 15건을 주는 편이 낫다. 원인을 확정하기 전까지 VM 을 쓴다.
+  // 다음에 볼 것: 본컴 응답이 커진 뒤 어디서 멈추는지(대량 행 정규화/렌더 의심).
   try {
     scrapeResult = await factoryResolveTaskWithTimeout(
       compMarketRunWithOwnedWorkScope(
@@ -17969,6 +17970,10 @@ async function runCompMarketScrape(mode = 'vm', options = {}) {
       pickedCount: picked.length,
       searchId: market.searchId || '',
       vmSearchId: market.vmSearchId || '',
+      // 본컴도 행을 돌려주게 바꿔 봤다가 되돌렸다(2026-08-30).
+      // 본컴 우선 자체를 되돌렸으므로 이 자리도 원래대로 둔다. 자세한 경위는
+      // factoryRunVmCompetitorCollectionForSelection 의 주석에 남겼다.
+      // 기존 계약(comp_market_finalize_results)이 이 형태를 못박고 있다.
       rawProducts: collectMode === 'vm' ? products : [],
     };
   } catch(e) {

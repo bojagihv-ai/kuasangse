@@ -53,9 +53,10 @@ test('수동 경로는 아직 VM 을 쓴다 — 되돌린 상태를 기록해 �
 
 test('되돌린 이유가 코드에 남아 있다', () => {
   // 다음 사람이(또는 내가) 같은 수정을 다시 시도했다가 같은 곳에서 막히지 않도록.
-  assert.match(FLOW, /본컴 우선으로 바꾸려던 시도를 되돌렸다/);
-  assert.match(FLOW, /smartstore\.naver\.com 4건/);
-  assert.match(FLOW, /factoryFreshVmCandidateRows/);
+  assert.match(FLOW, /본컴 우선으로 바꾸려던 시도를 \*\*두 번\*\* 되돌렸다/);
+  assert.match(FLOW, /naver 4/);
+  assert.match(FLOW, /작업 반영 0건/);
+  assert.match(FLOW, /렌더러가 45초 이상 멈춰/);
 });
 
 test('생산관제 경로의 본컴 우선은 그대로 둔다', () => {
