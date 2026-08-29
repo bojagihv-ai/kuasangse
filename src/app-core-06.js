@@ -4786,25 +4786,43 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
     signal: collectionController.signal,
     isCurrent: () => collectionIsCurrent(),
   };
+  // 후보 검색은 본컴을 먼저 쓴다. VM 후보검색은 AHK 브리지(127.0.0.1:3011)를 거치는데
+  // 그 브리지가 응답하지 않으면 제품마다 2분씩 기다렸다 실패한다.
+  // 생산관제 경로는 02f0ce7 에서 이미 본컴 우선으로 바꿨는데, 수동 시작 버튼은 VM 고정으로
+  // 남아 있었다. 그래서 이 경로만 스마트스토어(네이버) 후보가 0건이었다.
+  //
+  // 실측 2026-08-30, API Hub(127.0.0.1:4321) 경유 JepumScraper 직접 호출:
+  //   본컴 → success · 20/20 (coupang 4 · **naver 4** · gmarket 4 · auction 4 · 11st 4)
+  //   VM   → error   · 0/20 (90초 소요)
+  // 네이버는 5개 마켓 중 유일하게 api_enabled=true 라 본컴에서 로그인 없이도 잘 나온다.
+  //
+  // VM 을 버린 것이 아니라 순서만 바꿨다. 본컴이 0건이면 VM 을 예비로 쓴다.
+  const runScrape = runtime => factoryResolveTaskWithTimeout(
+    compMarketRunWithOwnedWorkScope(
+      currentScope,
+      () => runCompMarketScrape(runtime, {
+        collectionContext,
+        deferMissingSiteAssistance: true,
+        skipServicePreflight: options.skipServicePreflight === true,
+        skipConfirm: options.skipConfirm === true,
+        factory,
+      }),
+    ),
+    timeoutMs,
+    () => {
+      collectionController.abort();
+      return { timedOut: true };
+    },
+  );
   try {
-    scrapeResult = await factoryResolveTaskWithTimeout(
-      compMarketRunWithOwnedWorkScope(
-        currentScope,
-        () => runCompMarketScrape('vm', {
-          collectionContext,
-          deferMissingSiteAssistance: true,
-          skipServicePreflight: options.skipServicePreflight === true,
-          skipConfirm: options.skipConfirm === true,
-          factory,
-        }),
-      ),
-      timeoutMs,
-      () => {
-        collectionController.abort();
-        return { timedOut: true };
-      },
-    );
+    scrapeResult = await runScrape('local');
     requireCurrent();
+    const localRows = factoryFreshVmCandidateRows(state.compPage?.marketScrape || market, scrapeResult || {}, currentScope);
+    if (!scrapeResult?.timedOut && !localRows.rows.length) {
+      factoryLog('본컴 후보 수집이 0건이라 VM 경로로 한 번 더 시도합니다.', 'warn', factory);
+      scrapeResult = await runScrape('vm');
+      requireCurrent();
+    }
     vmTimedOut = !!scrapeResult?.timedOut;
     if (!vmTimedOut) {
       reportVmProgress(60, 'running', 'VM 응답을 받았습니다. 후보를 정리합니다.', {
