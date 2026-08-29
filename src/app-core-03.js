@@ -10663,7 +10663,9 @@ function factoryRuntimeCreateCommandPolicies() {
   ]);
   const persistenceMetadata = part('factory', ['cafe24FieldView', 'lastSavedAt']);
   const workspaceIdentity = part('factory', [
-    'workIdentity', 'workspace', 'currentProjectId', 'currentProjectName',
+    // productName 은 작업 신원 검사가 읽는 값이다. 여기 없으면 새 제품으로 바뀌지 않아
+    // 앞 제품 이름이 남고, 두 번째 제품의 작업파일 저장이 통째로 막힌다.
+    'workIdentity', 'workspace', 'currentProjectId', 'currentProjectName', 'productName',
   ]);
   const explicitWorkIdentityTransition = part('factory', [
     'workIdentity', 'automation.workIdentityTransition',
@@ -17394,6 +17396,11 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
       draft.workspace.name = productName;
       draft.currentProjectId = draft.workspace.id;
       draft.currentProjectName = productName;
+      // 화면 맨 위의 제품명도 새 제품으로 바꾼다. 여기를 안 바꾸면 앞 제품 이름이 그대로
+      // 남아, 작업 신원 검사가 '서로 다른 제품이 섞였다'(WORK_IDENTITY_PRODUCT_CONFLICT)로
+      // 작업파일 저장을 막는다 — 실측 2026-08-29: 한 워커 세션에서 직접 입력 제품을 둘째로
+      // 돌리자 곧바로 factory_product_workfile_save_failed 로 죽었다. 첫 제품은 멀쩡했다.
+      draft.productName = productName;
       draft.batchJobId = jobId;
       draft.goalRun = draft.goalRun && typeof draft.goalRun === 'object' ? draft.goalRun : {};
       draft.goalRun.jobId = jobId;

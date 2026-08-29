@@ -108,6 +108,10 @@ test('factory product preparation is a declared store command with its real writ
   assert.equal(policy.coordinator, 'factory');
   const paths = new Set(policy.parts.flatMap(part => part.paths));
   for (const pathName of [
+    // productName 은 작업 신원 검사가 읽는 값이다. 새 제품으로 안 바뀌면 앞 제품 이름이
+    // 남아 WORK_IDENTITY_PRODUCT_CONFLICT 로 둘째 제품의 작업파일 저장이 막힌다
+    // — 실측 2026-08-29, factory_product_workfile_save_failed 로 나타났다.
+    'productName',
     'workspace', 'currentProjectId', 'currentProjectName', 'product', 'automation.dbSearchQuery',
     'automation.activeTab', 'automation.activeTaskId', 'automation.optionMode', 'automation.optionSourceSummary',
     'stages.db', 'batchJobId', 'goalRun', 'logs', 'logStageId',
