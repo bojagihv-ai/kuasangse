@@ -8,8 +8,8 @@
     "digest": "74b85b809caaf810"
   },
   "factory-sync-model.mjs": {
-    "token": "selectedId=3",
-    "digest": "e4a54a2a381b18ce"
+    "token": "selectedId=4",
+    "digest": "bad9c31e2915e5e8"
   },
   "menu-shell.mjs": {
     "token": "menuReorg=3",
@@ -24,8 +24,8 @@
     "digest": "ad9cd83f376aa8cc"
   },
   "workfile-job-tabs-model.mjs": {
-    "token": "workfileTabs=2",
-    "digest": "5ab46a48c1268803"
+    "token": "workfileTabs=3",
+    "digest": "b9805168dac50480"
   },
   "workfile-identity-model.mjs": {
     "token": "actualB=1",

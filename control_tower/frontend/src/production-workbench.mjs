@@ -6,7 +6,7 @@ import {
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
   reconcileFactoryProjectionForSameWork,
-} from './factory-sync-model.mjs?selectedId=3';
+} from './factory-sync-model.mjs?selectedId=4';
 import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
 import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=1';
 // 사람 말로 옮긴 사유 표는 보드 모델이 들고 있다. 화면마다 따로 두면 한쪽만 번역되어
@@ -18,7 +18,7 @@ import {
   workfileIdentityMatches,
   workfileTargetIdentityMatches,
   workfileTabIdentity,
-} from './workfile-job-tabs-model.mjs?workfileTabs=2';
+} from './workfile-job-tabs-model.mjs?workfileTabs=3';
 
 export {
   buildCandidateReviewActions,
@@ -34,9 +34,9 @@ export {
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
   reconcileFactoryProjectionForSameWork,
-} from './factory-sync-model.mjs?selectedId=3';
+} from './factory-sync-model.mjs?selectedId=4';
 export { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
-export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=2';
+export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=3';
 
 const STAGE_LABELS = Object.freeze({
   representative: '대표 이미지',
@@ -793,6 +793,20 @@ export function projectFactoryConnectivity(projectionValue, {
     });
   }
   if (projection.connected === true) {
+    // 연결됐다고 다 괜찮은 것이 아니다. 워커가 저장하지 못하고 있으면 화면에서 넣은 값이
+    // 하나도 붙지 않는데, 지금까지 그 사실이 워커 탭 콘솔에만 남아 조작자는 값을 잘못
+    // 넣은 줄로 알았다 — 실측 2026-08-29. 연결됨보다 이것을 먼저 말한다.
+    const storageWarning = text(projection.storage?.warning);
+    if (storageWarning) {
+      return Object.freeze({
+        state: 'storage-blocked',
+        factoryLabel: '조립공장 저장 실패',
+        transportLabel,
+        detail: `${storageWarning} 이 상태에서는 화면에서 넣은 값이 저장되지 않습니다.`,
+        observedAt: text(lastEventAt || projection.capturedAt),
+        tone: 'error',
+      });
+    }
     return Object.freeze({
       state: 'connected',
       factoryLabel: '조립공장 연결됨',

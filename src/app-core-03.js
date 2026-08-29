@@ -9136,7 +9136,18 @@ function buildSectionScopedDbSummary(sectionId = 'overview', analysisOverride = 
   const cafe24Status = pick('display_status', 'selling_status', 'display', 'selling') || (typeof productInfoCafe24Value === 'function' ? productInfoCafe24Value(a, ['display_status', 'selling_status', 'display', 'selling']) : '');
   const cafe24Sync = a.factory_sync_status || state.lastDbSyncStatus || null;
   const hasCafe24Context = !!(cafe24Match || cafe24No || cafe24Code || (cafe24Sync && typeof cafe24Sync === 'object' && (cafe24Sync.cafe24_product_no || cafe24Sync.cafe24_product_code)));
-  if (hasCafe24Context && fieldIds.has('product_name')) {
+  // 사람이 「Cafe24 대상 떼기」를 눌렀으면 그 상품명을 섹션 프롬프트에 실으면 안 된다.
+  // 실으면 LLM 이 그 이름으로 본문을 쓰고 — 실측 2026-08-29: "투톤반달파우치는 면 100%
+  // 소재에…" — 등록 직전 점검이 남의 상품명이라며 막는다. 떼기를 눌러도, 섹션을 몇 번을
+  // 다시 만들어도 같은 이름이 또 박히던 뿌리가 여기였다.
+  const cafe24TargetDeclined = (() => {
+    try {
+      return factoryRuntimeReadFactory()?.product?.cafe24AutoMatchDeclined === true;
+    } catch (_) {
+      return false;
+    }
+  })();
+  if (hasCafe24Context && !cafe24TargetDeclined && fieldIds.has('product_name')) {
     add('Cafe24 확정 상품명', cafe24Name);
   }
   if (hasCafe24Context && (fieldIds.has('sale_price') || fieldIds.has('retail_price') || fieldIds.has('supply_price'))) {
@@ -16808,6 +16819,14 @@ async function factoryRuntimeControlProjection() {
     }),
     inputs: factoryControlInputGroups(factory),
     stages,
+    // 워커가 저장하지 못하고 있다는 사실이 지금까지 이 탭 콘솔에만 남았다. 조작자는
+    // 관제탑을 보고 있으므로, 화면에서 넣은 값이 붙지 않아도 이유를 알 길이 없었다
+    // — 실측 2026-08-29: 저장 거부가 70초마다 반복되는 동안 화면은 아무 말도 없었고,
+    // 사람은 값을 잘못 넣은 줄로 안다. 관제탑까지 실어 보낸다.
+    storage: Object.freeze({
+      ok: !String(state.storageWarning || '').trim(),
+      warning: String(state.storageWarning || '').trim(),
+    }),
     progress: factoryControlProgress(factory),
     registration: Object.freeze({
       status: blockers.length

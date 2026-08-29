@@ -130,6 +130,12 @@ export function normalizeFactoryProjection(value) {
       items: clone(list(record(item).items)),
     })).filter(item => item.key),
     stages: list(source.stages).map(normalizeStage),
+    // 워커가 저장하지 못하고 있다는 사실. 여기서 떨어뜨리면 관제탑은 "연결됨" 만 보고
+    // 화면에서 넣은 값이 왜 안 붙는지 끝내 말해 주지 못한다.
+    storage: {
+      ok: record(source.storage).ok !== false,
+      warning: text(record(source.storage).warning),
+    },
     progress: clone(record(source.progress)),
     registration: clone(record(source.registration)),
     receipts: list(source.receipts).map(clone),

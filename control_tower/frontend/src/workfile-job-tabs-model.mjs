@@ -1,4 +1,4 @@
-import { normalizeFactoryProjection } from './factory-sync-model.mjs?selectedId=3';
+import { normalizeFactoryProjection } from './factory-sync-model.mjs?selectedId=4';
 
 function record(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
