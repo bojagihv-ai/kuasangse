@@ -1545,7 +1545,7 @@ class FactorySyncBridge:
             self._condition.notify_all()
             return public_job
 
-    RECOVERY_ACTIONS = frozenset({"clear-cafe24-target", "regenerate-sections"})
+    RECOVERY_ACTIONS = frozenset({"clear-cafe24-target", "regenerate-sections", "unlock-sections"})
 
     def queue_product_recovery(self, job_id: str, action: str) -> JsonObject:
         """막힌 작업을 화면에서 되살리라고 조립공장에 지시한다.

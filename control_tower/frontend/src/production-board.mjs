@@ -1249,6 +1249,16 @@ export function mountProductionBoard(runtime, {
       resection.title = '상세페이지 섹션을 이 제품 기준으로 다시 만듭니다. 실패해도 원래 있던 섹션은 그대로 둡니다.';
       resection.disabled = busy;
       rowActions.append(resection);
+      // 잠근 섹션은 다시 만들기가 일부러 보존하고 개별 재생성도 거부한다. 그래서 잠긴 채로
+      // 잘못된 내용이 들어 있으면 몇 번을 다시 만들어도 그대로인데, 푸는 길이 앱 화면에만
+      // 있어 관제탑에서 일하는 사람은 빠져나올 수 없었다 — 실측 2026-08-29.
+      const unlock = button('board-mini-action ghost', '섹션 잠금 풀기', {
+        action: 'recover-unlock',
+        jobId: row.jobId,
+      });
+      unlock.title = '잠긴 섹션을 풉니다. 잠긴 섹션은 「섹션 다시 만들기」가 건너뛰므로, 먼저 풀어야 새로 만들어집니다.';
+      unlock.disabled = busy;
+      rowActions.append(unlock);
     }
     const results = button(
       'board-mini-action ghost',
@@ -1533,6 +1543,10 @@ export function mountProductionBoard(runtime, {
     'regenerate-sections': {
       running: '섹션을 이 제품 기준으로 다시 만드는 중입니다. 몇 분 걸립니다.',
       done: '섹션 다시 만들기를 조립공장에 지시했습니다. 이 줄의 상태가 바뀌면 끝난 것입니다.',
+    },
+    'unlock-sections': {
+      running: '잠긴 섹션을 푸는 중입니다.',
+      done: '섹션 잠금 풀기를 조립공장에 지시했습니다. 푼 뒤에 「섹션 다시 만들기」를 눌러야 새로 만들어집니다.',
     },
   });
 
@@ -2067,6 +2081,10 @@ export function mountProductionBoard(runtime, {
     }
     if (action === 'recover-sections') {
       void recoverJob(target.dataset.jobId, 'regenerate-sections');
+      return;
+    }
+    if (action === 'recover-unlock') {
+      void recoverJob(target.dataset.jobId, 'unlock-sections');
       return;
     }
     if (action === 'compose-open') {

@@ -11477,6 +11477,9 @@ function factoryRuntimeCreateCommandPolicies() {
   add(['factory/sections:runFactoryStage'], 'detail-document', [
     part('detail-document', ['automation']), factoryWorkflowStatus, product, factoryWorkflowAssets,
   ]);
+  // 섹션 잠금 풀기. 잠금은 state.sectionLocks 에만 있고 draft 를 건드리지 않지만,
+  // 이 명령도 다른 되살리기와 같은 문을 지나야 저장까지 이어진다.
+  add(['factory/sections:unlock'], 'detail-document', [detailDocument, factoryUpdatedAt]);
   add([
     'factory/publish:guide:focus-final-registration',
     'factory/publish:guide:focus-materials',
@@ -18395,6 +18398,43 @@ async function factoryRuntimeControlRecoverProduct(payload = {}) {
       message: ok
         ? '섹션을 이 제품 기준으로 다시 만들었습니다.'
         : '일부 섹션을 다시 만들지 못했습니다. 원래 있던 섹션은 그대로 두었습니다.',
+      projection: after,
+    });
+  }
+
+  if (action === 'unlock-sections') {
+    // 잠근 섹션은 「섹션 다시 만들기」가 일부러 보존하고 개별 재생성도 거부한다. 그래서
+    // 잠긴 채로 남의 상품명에 오염되면 몇 번을 다시 만들어도 그대로다 — 실측 2026-08-29:
+    // specifications 하나 때문에 재생성 네 번이 헛돌았다. 푸는 길이 앱 화면에만 있어
+    // 관제탑에서 일하는 사람은 빠져나올 수 없었다.
+    const locks = state.sectionLocks && typeof state.sectionLocks === 'object' ? state.sectionLocks : {};
+    const unlocked = Object.keys(locks).filter(key => locks[key]);
+    if (!unlocked.length) {
+      const after = await factoryRuntimeControlProjection();
+      return Object.freeze({
+        schema: 'factory-product-recovery:v1',
+        jobId,
+        action,
+        message: '잠긴 섹션이 없습니다.',
+        projection: after,
+      });
+    }
+    await factoryRuntimeBridgeAction(
+      'factory/sections:unlock',
+      null,
+      () => {
+        state.sectionLocks = {};
+        return true;
+      },
+      { render: false, forceSave: true },
+    );
+    if (typeof savePersistentState === 'function') await savePersistentState({ force: true });
+    const after = await factoryRuntimeControlProjection();
+    return Object.freeze({
+      schema: 'factory-product-recovery:v1',
+      jobId,
+      action,
+      message: `잠긴 섹션 ${unlocked.length}개를 풀었습니다: ${unlocked.slice(0, 6).join(', ')}. 이제 섹션 다시 만들기가 이 섹션들도 새로 만듭니다.`,
       projection: after,
     });
   }

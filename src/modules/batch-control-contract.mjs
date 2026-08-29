@@ -160,7 +160,7 @@ export function validateOrder(order) {
     }
     if (order.command.name === 'recoverFactoryProduct') {
       if (!text(payload.jobId)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
-      if (!['clear-cafe24-target', 'regenerate-sections'].includes(text(payload.action))) {
+      if (!['clear-cafe24-target', 'regenerate-sections', 'unlock-sections'].includes(text(payload.action))) {
         throw new BatchWorkerContractError('factory_control_command_payload_invalid');
       }
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
