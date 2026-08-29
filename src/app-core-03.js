@@ -17903,13 +17903,17 @@ async function factoryRuntimeControlEnsureAutoReferences(payload = {}) {
   }
 
   let competitor = factoryRuntimeControlCompetitorSnapshot();
-  // 자동 실행이 VM 경로 하나에만 묶여 있었다. VM 안 수집 워커가 응답하지 않으면
-  // 본컴 JepumScraper 가 멀쩡히 떠 있어도 후보 0건으로 끝나고, 화면에는 "결과가 없다"
-  // 고만 떠서 조작자가 원인을 알 수 없었다 — 실측 2026-08-29: VM 은 running/visible
-  // 인데 worker(127.0.0.1:5502)가 timeout. 그래서 VM 이 비면 본컴 경로로 한 번 더 간다.
+  // 후보 검색은 본컴을 먼저 쓴다. VM 후보검색은 AHK 브리지(127.0.0.1:3011)를 거치는데
+  // 그 브리지가 응답하지 않으면 autoconnect 가 제품마다 2분씩 기다렸다가 실패하고,
+  // 그때서야 본컴으로 넘어갔다 — 실측 2026-08-29: 제품 하나당 순수 대기 2분.
+  // 본컴이 실패할 때만 VM 을 예비로 쓴다. 순서만 바꾼 것이고 VM 을 버린 것이 아니다.
+  //
+  // 상세수집(analyze-vm)은 이 순서와 다르다. 그쪽은 공유폴더로 VM 과 주고받아
+  // AHK 브리지를 타지 않고 정상 동작하므로, VM 을 먼저 쓴다. 두 경로를 같은 것으로
+  // 보고 함께 뒤집으면 잘 되던 상세수집까지 본컴으로 끌어내리게 된다.
   const collectAttempts = [];
   if (!competitor.candidates.length) {
-    for (const action of ['start-vm', 'start-local']) {
+    for (const action of ['start-local', 'start-vm']) {
       try {
         await factoryRuntimeCompetitorMarketAction({ type: 'quick-action', action, skipConfirm: true });
       } catch (error) {
