@@ -5,6 +5,8 @@ import {
   ProductIntakeError,
 } from './product-intake-model.mjs';
 import { resolveWorkfileIdentity } from './workfile-identity-model.mjs';
+// 크기 한 줄에서 가로·세로를 읽는 규칙은 대량 투입과 한 곳에서 나눠 쓴다.
+import { readSizePair, resolveSizePair } from './bulk-intake-model.mjs?bulkIntake=10';
 
 export {
   buildDbSnapshotRequest,
@@ -413,6 +415,22 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
   };
 
   document.getElementById('required-product-name')?.addEventListener('input', syncSubmitReadiness);
+  // 크기에 '20x15' 처럼 적으면 가로·세로 칸을 채워 준다. 사람이 그 칸을 직접 건드린 뒤에는
+  // 덮어쓰지 않는다 — 안 그러면 손으로 고쳐 둔 값이 다음 타자에 되돌아간다.
+  for (const id of ['required-width', 'required-depth']) {
+    document.getElementById(id)?.addEventListener('input', event => {
+      event.target.dataset.touched = event.target.value.trim() ? 'true' : 'false';
+    });
+  }
+  document.getElementById('required-size')?.addEventListener('input', event => {
+    const pair = readSizePair(event.target.value);
+    for (const [id, value] of [['required-width', pair.widthMm], ['required-depth', pair.depthMm]]) {
+      if (!value) continue;
+      const field = document.getElementById(id);
+      if (!field || field.dataset.touched === 'true') continue;
+      field.value = value;
+    }
+  });
   document.getElementById('base-images').addEventListener('change', event => void readFiles(event.target.files, 'base'));
   document.getElementById('color-images').addEventListener('change', event => void readFiles(event.target.files, 'color'));
   document.getElementById('intake-workfile')?.addEventListener('change', event => void attachWorkfile(event.target.files?.[0] || null));
@@ -444,6 +462,13 @@ export function mountProductIntake({ apiRequest, setStatus, automation = {} }) {
             material: document.getElementById('required-material').value,
             originCountry: document.getElementById('required-origin').value,
             size: document.getElementById('required-size').value,
+            // 조립공장은 사이즈이미지를 그릴 때 가로·세로를 mm 숫자 두 개로 요구한다.
+            // 칸이 비었으면 크기 한 줄에서 읽어 온 값을 쓴다.
+            ...resolveSizePair({
+              size: document.getElementById('required-size').value,
+              widthMm: document.getElementById('required-width')?.value,
+              depthMm: document.getElementById('required-depth')?.value,
+            }),
             salePrice: document.getElementById('required-sale-price').value,
             stock: document.getElementById('required-stock').value,
             usage: document.getElementById('required-usage').value,

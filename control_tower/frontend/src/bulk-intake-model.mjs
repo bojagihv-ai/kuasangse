@@ -6,6 +6,9 @@ const CSV_COLUMNS = Object.freeze({
   material: ['material', '소재', '재질'],
   originCountry: ['origincountry', '원산지', '제조국'],
   size: ['size', '크기', '사이즈', '규격'],
+  // 조립공장 사이즈이미지 단계는 가로·세로를 숫자 두 개로 요구한다. 크기 한 줄로는 못 쪼갠다.
+  widthMm: ['widthmm', 'width', '가로', '너비', '폭'],
+  depthMm: ['depthmm', 'depth', '세로', '길이'],
   salePrice: ['saleprice', '판매가', '가격', '단가'],
   usage: ['usage', '용도', '쓰임'],
   stock: ['stock', '재고', '수량'],
@@ -20,6 +23,9 @@ const REQUIRED_VALUE_KEYS = Object.freeze([
   'material',
   'originCountry',
   'size',
+  // 가로·세로(mm). 조립공장은 이 둘이 있어야 사이즈이미지를 그린다 — 크기 한 줄로는 못 쪼갠다.
+  'widthMm',
+  'depthMm',
   'salePrice',
   'usage',
   'stock',
@@ -208,6 +214,10 @@ function normalizeRequiredValues(values) {
     const raw = result[key];
     result[key] = /^[fn]$|^(false|no)$|안\s*함|숨김|비노출|중지|미진열|미판매|아니/i.test(raw) ? 'F' : 'T';
   }
+  // 가로·세로는 mm 숫자로 맞춘다. 직접 적은 칸이 우선이고, 비었으면 크기 한 줄에서 읽어 온다.
+  const pair = resolveSizePair(result);
+  if (pair.widthMm) result.widthMm = pair.widthMm; else delete result.widthMm;
+  if (pair.depthMm) result.depthMm = pair.depthMm; else delete result.depthMm;
   return result;
 }
 
@@ -230,7 +240,17 @@ export const BLOCKING_ISSUES = new Set([
   // 보내 봐야 실패하므로 여기서 막고 이유를 말한다.
   'sale_price_invalid',
   'stock_invalid',
+  // 가로·세로가 없으면 조립공장이 사이즈이미지를 그릴 수 없다. 신화사 DB 에서 고른 제품은
+  // DB 가 채워 주지만 직접 입력한 제품은 아무도 못 채운다 — 실측 2026-08-28, 6단계 중
+  // 2단계에서 '가로/세로 DB 사이즈값을 먼저 채워주세요' 로 멈췄다. 여기서 미리 막는다.
+  'size_mm_missing',
+  // 2000mm 를 넘는 값은 조립공장이 조용히 버린다(factoryNormalizeDimensionFactValue).
+  // 버려지면 다시 '가로/세로가 비었다' 로 돌아오므로, 왜 그런지 여기서 말해 준다.
+  'size_mm_invalid',
 ]);
+
+/** 조립공장이 받아들이는 치수 상한(mm). 이 위는 조용히 버려진다. */
+const MAX_DIMENSION_MM = 2000;
 
 function issuesFor(entry) {
   const issues = [];
@@ -252,6 +272,12 @@ function issuesFor(entry) {
   }
   if (!entry.images.some(image => text(record(image).role) !== 'color-option')) {
     issues.push('base_image_missing');
+  }
+  const width = text(entry.requiredValues.widthMm);
+  const depth = text(entry.requiredValues.depthMm);
+  if (!width || !depth) issues.push('size_mm_missing');
+  else if (Number(width) > MAX_DIMENSION_MM || Number(depth) > MAX_DIMENSION_MM) {
+    issues.push('size_mm_invalid');
   }
   return issues;
 }
@@ -463,5 +489,73 @@ export function hydrateWorkingState(recordValue, blobsValue, makeFile) {
     csvErrors: list(stored.csvErrors),
     defaults: record(stored.defaults),
     dropped,
+  };
+}
+
+/**
+ * 크기 한 줄에서 가로·세로를 읽어 낸다. 단위는 mm 로 맞춘다.
+ *
+ * 조립공장의 사이즈이미지 단계는 가로·세로를 **숫자 두 개**로 요구한다(mm). 그런데 사람은
+ * 크기를 '20x15cm' 처럼 한 줄로 적는다. 그 한 줄에서 읽어 낼 수 있으면 읽어 주고,
+ * 못 읽으면 빈 값을 돌려준다 — 지어내면 엉뚱한 크기의 사이즈컷이 만들어진다.
+ *
+ * 실측 2026-08-28: 크기를 '20cm' 한 덩어리로만 받아, 직접 입력한 제품이 사이즈 단계에서
+ * '가로/세로 DB 사이즈값을 먼저 채워주세요' 로 전부 멈췄다.
+ */
+export function readSizePair(sizeValue) {
+  const raw = text(sizeValue).toLowerCase();
+  if (!raw) return { widthMm: '', depthMm: '' };
+  // 가로/세로를 말로 적은 경우가 먼저다 — '가로 200 세로 150mm'.
+  const labelled = /(?:가로|w)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?[^0-9]{0,6}?(?:세로|깊이|d|h)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?/i.exec(raw);
+  if (labelled) {
+    return {
+      widthMm: toMillimetres(labelled[1], labelled[2] || labelled[4]),
+      depthMm: toMillimetres(labelled[3], labelled[4] || labelled[2]),
+    };
+  }
+  // '20x15', '20*15cm', '200 x 150 mm' 처럼 두 수를 붙여 적은 경우.
+  const paired = /(\d+(?:\.\d+)?)\s*(mm|cm|m)?\s*[x*×╳]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?/i.exec(raw);
+  if (paired) {
+    const unit = paired[4] || paired[2];
+    return { widthMm: toMillimetres(paired[1], unit), depthMm: toMillimetres(paired[3], unit) };
+  }
+  // '45cm 정사각' 처럼 한 수만 적었으면 가로·세로가 같다고 볼 근거가 없다. 비워 둔다.
+  return { widthMm: '', depthMm: '' };
+}
+
+/**
+ * 숫자와 단위를 mm 정수 문자열로 바꾼다.
+ *
+ * 단위를 안 적었을 때 무엇으로 볼지는 어느 칸에서 왔느냐에 달렸다.
+ * - 크기 한 줄('20x15')은 사람이 cm 로 적는다.
+ * - 가로/세로 칸은 라벨에 mm 라고 적혀 있으므로 그대로 mm 다.
+ * 이 둘을 같게 두면 250 이라고 친 가로가 2500mm 가 된다 — 실측으로 잡은 자리다.
+ */
+export function toMillimetres(numberValue, unitValue, fallbackUnit = 'cm') {
+  const amount = Number(numberValue);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const unit = text(unitValue).toLowerCase() || fallbackUnit;
+  const factor = unit === 'mm' ? 1 : unit === 'm' ? 1000 : 10;
+  const millimetres = Math.round(amount * factor);
+  return millimetres > 0 ? String(millimetres) : '';
+}
+
+/**
+ * 사람이 적은 가로/세로 칸 값을 mm 로 다듬는다. '20cm' 도 '200' 도 받는다.
+ * 칸이 비어 있으면 크기 한 줄에서 읽어 온 값으로 메운다 — 직접 적은 값이 언제나 우선이다.
+ */
+export function resolveSizePair(values) {
+  const source = record(values);
+  const fromSize = readSizePair(source.size);
+  const pick = (typed, derived) => {
+    const raw = text(typed);
+    if (!raw) return derived;
+    const match = /(\d+(?:\.\d+)?)\s*(mm|cm|m)?/i.exec(raw.toLowerCase());
+    // 이 칸은 mm 칸이다. 단위를 안 적었으면 적힌 그대로 mm 로 읽는다.
+    return match ? toMillimetres(match[1], match[2], 'mm') : '';
+  };
+  return {
+    widthMm: pick(source.widthMm, fromSize.widthMm),
+    depthMm: pick(source.depthMm, fromSize.depthMm),
   };
 }

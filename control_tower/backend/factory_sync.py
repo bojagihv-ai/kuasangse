@@ -71,7 +71,17 @@ PRODUCT_REQUIRED_VALUE_KEYS = frozenset(
 # Cafe24 등록 대상 값. 투입할 때 지정해 두면 등록이 그대로 따라가고, 비워 두면 등록 시점에
 # 정하거나 운영자가 스토어에서 직접 고른다. 필수로 두면 기존 투입이 전부 막히므로 선택이다.
 PRODUCT_OPTIONAL_VALUE_KEYS = frozenset(
-    {"cafe24CategoryId", "supplyPrice", "displayStatus", "sellingStatus"}
+    {
+        "cafe24CategoryId",
+        "supplyPrice",
+        "displayStatus",
+        "sellingStatus",
+        # 가로·세로(mm). 조립공장이 사이즈이미지를 그릴 때 쓴다. 신화사 DB 에서 고른 제품은
+        # DB 가 채워 주므로 필수로 두지 않는다 — 필수로 올리면 이미 큐에 있는 작업의
+        # 작업파일 재연결이 전부 막힌다(아래 rebind 게이트).
+        "widthMm",
+        "depthMm",
+    }
 )
 PRODUCT_VALUE_KEYS = PRODUCT_REQUIRED_VALUE_KEYS | PRODUCT_OPTIONAL_VALUE_KEYS
 CAFE24_REGISTRATION_VALUE_KEYS = frozenset(

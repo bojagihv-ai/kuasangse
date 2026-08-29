@@ -108,6 +108,8 @@ export const PRODUCT_VALUE_LABELS = Object.freeze({
   material: '소재',
   originCountry: '원산지',
   size: '사이즈/규격',
+  widthMm: '가로(mm)',
+  depthMm: '세로(mm)',
   salePrice: '판매가',
   stock: '기본 재고',
   usage: '사용용도',

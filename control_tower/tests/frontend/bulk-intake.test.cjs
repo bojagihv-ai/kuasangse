@@ -69,13 +69,14 @@ test('파일 묶음과 CSV 와 기본값을 합쳐 투입 계획을 만든다', 
   const grouped = groupImageFiles(files(['보자기.jpg', '파우치_1.jpg', '파우치_2.jpg']));
   const csv = parseIntakeCsv('제품명,분류,판매가\n보자기,주방,12000\n없는제품,잡화,5000');
 
-  const plan = buildBulkPlan(grouped, csv.rows, { material: '면 100%', originCountry: '대한민국' });
+  const plan = buildBulkPlan(grouped, csv.rows, { material: '면 100%', originCountry: '대한민국', size: '20x15cm' });
 
   assert.equal(plan.entries.length, 2);
   const [wrapper, pouch] = plan.entries;
   assert.equal(wrapper.productName, '보자기');
   assert.deepEqual(wrapper.requiredValues, {
-    material: '면 100%', originCountry: '대한민국', category: '주방', salePrice: '12000',
+    material: '면 100%', originCountry: '대한민국', size: '20x15cm',
+    widthMm: '200', depthMm: '150', category: '주방', salePrice: '12000',
   });
   assert.deepEqual(wrapper.issues, []);
   assert.equal(wrapper.matchedCsv, true);
@@ -188,8 +189,8 @@ test('조립공장이 채울 수 없는 흠은 투입 가능 수에서 빠진다
   const pouch = grouped.products.find(product => product.productName === '보자기');
   pouch.images[1].role = 'color-option';
 
-  // When: 계획을 세운다.
-  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000' });
+  // When: 계획을 세운다. (가로·세로는 조립공장이 못 채우므로 여기서는 채워 둔다)
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', size: '20x15cm' });
 
   // Then: 색상명이 없는 제품은 막히고, 값만 빈 제품은 투입할 수 있다.
   // 막는 흠을 '투입 가능' 으로 세면 버튼이 열린 채 남아 눌러야만 실패를 알게 된다.
@@ -215,10 +216,11 @@ test('기본 사진이 없는 제품도 투입 가능 수에서 빠진다', asyn
 
 test('값만 비어 있는 제품은 여전히 투입할 수 있다', async () => {
   // 분류·판매가는 조립공장이 채운다. 이것까지 막으면 정상 흐름이 멈춘다.
+  // 가로·세로는 조립공장이 못 채우므로 여기서는 채워 두고, 나머지만 비운다.
   const { groupImageFiles, buildBulkPlan } = await import(MODEL_URL);
   const grouped = groupImageFiles(files(['파우치_1.jpg']));
 
-  const plan = buildBulkPlan(grouped, [], {});
+  const plan = buildBulkPlan(grouped, [], { size: '20x15cm' });
 
   assert.ok(plan.entries[0].issues.includes('category_missing'));
   assert.equal(plan.ready, 1);
@@ -233,7 +235,7 @@ test('기본 사진 하나로 단일 색상 옵션까지 만든다', async () =>
   grouped.products[0].images[0].role = 'base-and-color';
   grouped.products[0].images[0].colorName = '남색';
 
-  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000' });
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', size: '20x15cm' });
   assert.deepEqual(plan.entries[0].issues, []);
 
   const payload = buildProductPayload(plan.entries[0], {
@@ -458,4 +460,77 @@ test('정책 스냅샷은 작업이 실제로 실릴 묶음 이름으로 잠근�
   assert.equal(payload.batchId, batchId);
   assert.equal(payload.policySnapshot.batchId, payload.batchId);
   assert.equal(payload.policySnapshot.productId, payload.productName);
+});
+
+test('크기 한 줄에서 가로·세로를 읽어 mm 로 맞춘다', async () => {
+  // 조립공장 사이즈이미지 단계는 가로·세로를 mm 숫자 두 개로 요구한다.
+  const { readSizePair, resolveSizePair } = await import(MODEL_URL);
+
+  // 크기 칸은 사람이 cm 로 적는다.
+  assert.deepEqual(readSizePair('20x15cm'), { widthMm: '200', depthMm: '150' });
+  assert.deepEqual(readSizePair('20*15'), { widthMm: '200', depthMm: '150' });
+  assert.deepEqual(readSizePair('200 x 150 mm'), { widthMm: '200', depthMm: '150' });
+  assert.deepEqual(readSizePair('가로 200 세로 150mm'), { widthMm: '200', depthMm: '150' });
+  // 애매하면 지어내지 않는다. 틀린 치수로 사이즈컷이 만들어지면 사람이 못 알아챈다.
+  assert.deepEqual(readSizePair('45cm 정사각'), { widthMm: '', depthMm: '' });
+  assert.deepEqual(readSizePair('20cm'), { widthMm: '', depthMm: '' });
+
+  // 가로/세로 칸은 라벨이 mm 다 — 단위를 안 적으면 적힌 그대로 mm.
+  assert.deepEqual(resolveSizePair({ size: '20x15cm', widthMm: '250' }), { widthMm: '250', depthMm: '150' });
+  assert.deepEqual(resolveSizePair({ widthMm: '25cm', depthMm: '30cm' }), { widthMm: '250', depthMm: '300' });
+  // 직접 적은 값이 언제나 크기 파싱보다 우선한다.
+  assert.deepEqual(resolveSizePair({ size: '20x15cm' }), { widthMm: '200', depthMm: '150' });
+});
+
+test('가로·세로가 없으면 투입 전에 막는다', async () => {
+  // 신화사 DB 에서 고른 제품은 DB 가 채워 주지만 직접 입력한 제품은 아무도 못 채운다.
+  // 그대로 보내면 6단계 중 2단계에서 멈춘다 — 실측 2026-08-28.
+  const { groupImageFiles, buildBulkPlan, BLOCKING_ISSUES } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+
+  const blocked = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', size: '45cm 정사각' });
+  assert.ok(blocked.entries[0].issues.includes('size_mm_missing'));
+  assert.ok(BLOCKING_ISSUES.has('size_mm_missing'));
+  assert.equal(blocked.ready, 0);
+
+  // 크기에 두 수를 적으면 저절로 풀린다.
+  const ready = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', size: '20x15cm' });
+  assert.deepEqual(ready.entries[0].issues, []);
+  assert.equal(ready.entries[0].requiredValues.widthMm, '200');
+  assert.equal(ready.entries[0].requiredValues.depthMm, '150');
+  assert.equal(ready.ready, 1);
+});
+
+test('2000mm 를 넘는 치수는 조용히 버려지기 전에 잡는다', async () => {
+  // factoryNormalizeDimensionFactValue 는 2000 초과를 빈 값으로 만든다. 그러면 화면에는
+  // 다시 '가로/세로가 비었다' 로만 돌아와 이유를 알 수 없다.
+  const { groupImageFiles, buildBulkPlan } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', widthMm: '2500', depthMm: '150' });
+
+  assert.ok(plan.entries[0].issues.includes('size_mm_invalid'));
+  assert.equal(plan.ready, 0);
+});
+
+test('가로·세로가 조립공장 payload 까지 살아서 간다', async () => {
+  const { groupImageFiles, buildBulkPlan, buildProductPayload } = await import(MODEL_URL);
+  const grouped = groupImageFiles(files(['보자기_1.jpg']));
+  const plan = buildBulkPlan(grouped, [], { category: '주방', salePrice: '12000', size: '20x15cm' });
+
+  const payload = buildProductPayload(plan.entries[0], {
+    batchId: 'batch-bulk', dataUrls: ['data:image/jpeg;base64,AAA='], sha256s: ['aaa'],
+  });
+
+  assert.equal(payload.requiredValues.widthMm, '200');
+  assert.equal(payload.requiredValues.depthMm, '150');
+});
+
+test('CSV 의 가로·세로 열도 읽는다', async () => {
+  const { parseIntakeCsv } = await import(MODEL_URL);
+
+  const parsed = parseIntakeCsv(['제품명,분류,판매가,가로,세로', '보자기,주방,12000,200,150'].join('\n'));
+
+  assert.equal(parsed.rows[0].requiredValues.widthMm, '200');
+  assert.equal(parsed.rows[0].requiredValues.depthMm, '150');
 });

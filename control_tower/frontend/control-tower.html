@@ -4693,7 +4693,9 @@
                 <div class="field-stack"><label for="required-category">상품 종류 *</label><input id="required-category" placeholder="예: 수저집" required></div>
                 <div class="field-stack"><label for="required-material">소재 *</label><input id="required-material" required></div>
                 <div class="field-stack"><label for="required-origin">원산지 *</label><input id="required-origin" required></div>
-                <div class="field-stack"><label for="required-size">사이즈/규격 *</label><input id="required-size" required></div>
+                <div class="field-stack"><label for="required-size">사이즈/규격 *</label><input id="required-size" placeholder="예: 20x15cm" required></div>
+            <div class="field-stack"><label for="required-width">가로(mm)</label><input id="required-width" inputmode="numeric" placeholder="예: 200"></div>
+            <div class="field-stack"><label for="required-depth">세로(mm)</label><input id="required-depth" inputmode="numeric" placeholder="예: 150"></div>
                 <div class="field-stack"><label for="required-sale-price">판매가 *</label><input id="required-sale-price" inputmode="decimal" required></div>
                 <div class="field-stack"><label for="required-stock">기본 재고 *</label><input id="required-stock" inputmode="numeric" value="99" required></div>
                 <div class="field-stack"><label for="required-usage">사용용도 *</label><input id="required-usage" placeholder="예: 수저 보관, 선물 포장" required></div>
@@ -5241,10 +5243,10 @@
       window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=2"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=3&amp;workBundleCompleteness=6&amp;factoryQueue=5&amp;operatorConsole=19&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=3&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=5";
+    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=6";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");
@@ -5344,7 +5346,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=65"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=18"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=66"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=19"></script>
 </body>
 </html>

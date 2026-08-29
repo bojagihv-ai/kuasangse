@@ -117,6 +117,9 @@ const PRODUCT_REQUIRED_VALUE_KEYS = Object.freeze([
   'category', 'material', 'originCountry', 'size', 'salePrice', 'stock', 'usage', 'optionMode',
   // 관제탑에서 고르는 Cafe24 등록 대상 값. 비어 있어도 되지만 오면 받아야 한다.
   'cafe24CategoryId', 'supplyPrice', 'displayStatus', 'sellingStatus',
+  // 가로·세로(mm). 사이즈이미지를 그릴 때 쓴다. 여기 없으면 큐에는 들어가는데 워커가
+  // factory_product_payload_invalid 로 거절해, 화면에는 성공처럼 보이고 실행만 안 된다.
+  'widthMm', 'depthMm',
 ]);
 const PRODUCT_IMAGE_KEYS = Object.freeze([
   'role', 'ordinal', 'name', 'fileName', 'colorName', 'sha256', 'dataUrl',

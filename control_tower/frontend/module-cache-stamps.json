@@ -1,11 +1,11 @@
 {
   "bulk-intake-model.mjs": {
-    "token": "bulkIntake=9",
-    "digest": "135ce6b2c91357a9"
+    "token": "bulkIntake=10",
+    "digest": "a3a5229351d6669e"
   },
   "production-board-model.mjs": {
-    "token": "parallelBoard=36",
-    "digest": "fd3781816c5137cf"
+    "token": "parallelBoard=37",
+    "digest": "74b85b809caaf810"
   },
   "factory-sync-model.mjs": {
     "token": "selectedId=3",

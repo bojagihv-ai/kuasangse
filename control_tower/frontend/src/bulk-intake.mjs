@@ -4,12 +4,13 @@ import {
   buildProductPayload,
   groupImageFiles,
   hydrateWorkingState,
+  readSizePair,
   isSupportedImage,
   parseIntakeCsv,
   readImageName,
   serializeWorkingState,
   summarizeBulkIntake,
-} from './bulk-intake-model.mjs?bulkIntake=9';
+} from './bulk-intake-model.mjs?bulkIntake=10';
 
 // 회색 글씨는 보기일 뿐 값이 아니다. '주방' 처럼만 적어 두면 이미 채워진 것처럼 읽혀서,
 // 아래 카드가 "분류 비어 있음" 이라고 말하는 것과 서로 어긋나 보인다. 보기라고 못박는다.
@@ -20,7 +21,11 @@ const DEFAULT_FIELDS = Object.freeze([
   { key: 'category', label: '분류', placeholder: '예: 주방', group: 'product' },
   { key: 'material', label: '소재', placeholder: '예: 면 100%', group: 'product' },
   { key: 'originCountry', label: '원산지', placeholder: '예: 대한민국', group: 'product' },
-  { key: 'size', label: '크기', placeholder: '예: 45cm', group: 'product' },
+  { key: 'size', label: '크기', placeholder: '예: 20x15cm', group: 'product' },
+  // 조립공장이 사이즈이미지를 그리려면 가로·세로가 숫자 두 개로 있어야 한다.
+  // 크기에 '20x15' 처럼 적으면 아래 두 칸이 저절로 채워지고, 그 위에 직접 고칠 수 있다.
+  { key: 'widthMm', label: '가로(mm)', placeholder: '예: 200', group: 'product' },
+  { key: 'depthMm', label: '세로(mm)', placeholder: '예: 150', group: 'product' },
   { key: 'salePrice', label: '판매가', placeholder: '예: 12000', group: 'product' },
   // 재고는 조립공장 필수값인데 이 폼에만 빠져 있었다. 큐의 직접 입력 폼에는 있다.
   { key: 'stock', label: '재고', placeholder: '예: 99', group: 'product' },
@@ -41,6 +46,8 @@ const ISSUE_LABELS = Object.freeze({
   sale_price_missing: '판매가 비어 있음',
   sale_price_invalid: '판매가 자릿수 초과 (12자리까지)',
   stock_invalid: '재고 자릿수 초과 (9자리까지)',
+  size_mm_missing: '가로·세로 비어 있음',
+  size_mm_invalid: '가로·세로가 2000mm 초과',
 });
 
 /**
@@ -1339,8 +1346,34 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     }
   }
 
+  /**
+   * 크기 한 줄에 '20x15' 처럼 적으면 가로·세로 칸을 대신 채워 준다.
+   *
+   * 사람이 그 칸을 직접 건드린 뒤에는 절대 덮어쓰지 않는다 — 타이핑할 때마다 파서가 돌면
+   * 손으로 고쳐 둔 값이 다음 글자에 되돌아간다. 손댄 칸은 data-touched 로 표시해 둔다.
+   */
+  function fillSizePairFromSize(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.dataset) return;
+    const key = target.dataset.defaultKey;
+    if (key === 'widthMm' || key === 'depthMm') {
+      target.dataset.touched = target.value.trim() ? 'true' : 'false';
+      return;
+    }
+    if (key !== 'size') return;
+    const pair = readSizePair(target.value);
+    for (const [pairKey, value] of [['widthMm', pair.widthMm], ['depthMm', pair.depthMm]]) {
+      if (!value) continue;
+      const field = defaultsBox.querySelector(`[data-default-key="${pairKey}"]`);
+      if (!field || field.dataset.touched === 'true') continue;
+      field.value = value;
+    }
+  }
+
   imageInput.addEventListener('change', onImagePick);
   csvInput.addEventListener('change', onCsvPick);
+  // 채우기가 먼저 돌아야 rebuild 가 채워진 값을 읽는다.
+  defaultsBox.addEventListener('input', fillSizePairFromSize);
   defaultsBox.addEventListener('input', rebuild);
   root.addEventListener('click', onClick);
   rebuild();
@@ -1349,6 +1382,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   return () => {
     imageInput.removeEventListener('change', onImagePick);
     csvInput.removeEventListener('change', onCsvPick);
+    defaultsBox.removeEventListener('input', fillSizePairFromSize);
     defaultsBox.removeEventListener('input', rebuild);
     root.removeEventListener('click', onClick);
   };

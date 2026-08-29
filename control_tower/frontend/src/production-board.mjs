@@ -11,7 +11,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=36';
+} from './production-board-model.mjs?parallelBoard=37';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
 // 한 번에 수백 건이 와도 요청은 한 번만 나간다.
@@ -315,7 +315,9 @@ export function mountProductionBoard(runtime, {
 ]);
 
   const REQUIRED_VALUE_ORDER = Object.freeze([
-    'category', 'material', 'originCountry', 'size', 'salePrice', 'stock', 'usage', 'optionMode',
+    // 가로·세로가 없으면 사이즈이미지 단계에서 막히므로, 여기서도 채울 수 있어야 한다.
+    'category', 'material', 'originCountry', 'size', 'widthMm', 'depthMm',
+    'salePrice', 'stock', 'usage', 'optionMode',
   ]);
 
   async function fileToImage(file, role, ordinal) {

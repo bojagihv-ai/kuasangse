@@ -17416,6 +17416,13 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
       if (sourceKind === 'manual') {
         const manualDb = {
           ...requiredValues,
+          ...Object.fromEntries(
+            // 관제탑의 widthMm/depthMm 을 신화사 DB 이름(width_mm/depth_mm)으로 바꿔 준다.
+            // 이 이름이라야 사이즈이미지 단계가 값을 본다(factoryCollectDbSizeFacts).
+            [['widthMm', 'width_mm'], ['depthMm', 'depth_mm']]
+              .map(([from, to]) => [to, String((requiredValues || {})[from] ?? '').trim()])
+              .filter(([, value]) => value),
+          ),
           usage,
           stock,
           quantity: stock,
@@ -17526,6 +17533,17 @@ async function factoryRuntimeControlRestoreRequiredValues(payload = {}) {
     : '99';
   const authoritative = {
     ...requiredValues,
+    ...{
+    // 사이즈이미지 단계는 confirmedDb 의 width_mm / depth_mm 를 읽는다. 관제탑 투입값은
+    // widthMm / depthMm 라 이름이 달라 그대로는 안 보인다 — 실측 2026-08-28, 직접 입력한
+    // 제품이 2단계에서 '가로/세로 DB 사이즈값을 먼저 채워주세요' 로 전부 멈췄다.
+    // 이 함수는 테스트가 파일에서 잘라내 단독 실행하므로 바깥 헬퍼를 쓰지 않는다.
+    ...Object.fromEntries(
+      [['widthMm', 'width_mm'], ['depthMm', 'depth_mm']]
+        .map(([from, to]) => [to, String((requiredValues || {})[from] ?? '').trim()])
+        .filter(([, value]) => value),
+    ),
+  },
     product_name: productName,
     jname: productName,
     stock,
@@ -17538,6 +17556,12 @@ async function factoryRuntimeControlRestoreRequiredValues(payload = {}) {
       draft.product = draft.product && typeof draft.product === 'object' ? draft.product : {};
       draft.product.finalDb = factoryRuntimeDetachedValue({
         ...(draft.product.finalDb || {}),
+        ...authoritative,
+      });
+      // 사이즈 사실 수집은 sourceType==='final' 행을 걸러 낸다. finalDb 에만 써 두면
+      // 체크포인트로 다시 열 때마다 가로·세로가 사라져 같은 자리에서 또 멈춘다.
+      draft.product.confirmedDb = factoryRuntimeDetachedValue({
+        ...(draft.product.confirmedDb || {}),
         ...authoritative,
       });
       draft.product.requirementsSnapshot = factoryRuntimeDetachedValue({
