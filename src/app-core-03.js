@@ -12580,6 +12580,14 @@ function factoryRuntimeMarkCompetitorDetailSelectionChanged(market, message = ''
 
 function factoryRuntimeMarkCompetitorImageSelectionChanged(compPage, reason = '') {
   if (!compPage.analysisResult && !compPage.sectionPlan) return;
+  // 일부러 분리했다는 표시를 남긴다. 서버는 분석 결과가 사라지는 저장을 막는데(사고로
+  // 잃는 것을 지키기 위해), 이 표시가 없으면 "선택이 바뀌어 분리한 것"과 "실수로 잃은 것"을
+  // 구분하지 못해 완성된 작업이 마지막 저장에서 막힌다 — 실측 2026-08-29:
+  // factory_product_checkpoint_save_failed ... dropped protected work data: compPage.analysisResult
+  compPage.analysisInvalidatedAt = Math.max(
+    Date.now(),
+    Number(compPage.analysisInvalidatedAt || 0) + 1,
+  );
   compPage.analysisResult = null;
   compPage.sectionPlan = null;
   compPage.planEdits = {};

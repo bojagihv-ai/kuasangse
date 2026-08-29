@@ -389,7 +389,16 @@ def _last_work_derived_state_drop_reason(existing, incoming):
         for key, value in existing_details.items()
     ):
         return "compPage.marketScrape.detailResults"
+    # 분석 결과는 사고로 잃으면 안 되지만, 선택 이미지가 바뀌어 앱이 "일부러 분리한" 경우도
+    # 있다. 그 둘을 구분하지 못하면 완성된 작업이 마지막 저장에서 막힌다 — 실측 2026-08-29.
+    # 위 selectedIds 가 detailSelectionVersion 으로 하는 것과 같은 방식: 들어온 쪽이 더 새로운
+    # 분리 표시를 달고 있을 때만 허용한다. 표시가 없으면 보호는 그대로다.
+    existing_invalidated = _last_work_nonnegative_int(existing_comp.get("analysisInvalidatedAt"))
+    incoming_invalidated = _last_work_nonnegative_int(incoming_comp.get("analysisInvalidatedAt"))
+    analysis_invalidated_on_purpose = incoming_invalidated > existing_invalidated
     for key in ("analysisResult", "sectionPlan", "planEdits"):
+        if analysis_invalidated_on_purpose:
+            continue
         if _last_work_value_dropped(existing_comp.get(key), incoming_comp.get(key)):
             return f"compPage.{key}"
     return ""
