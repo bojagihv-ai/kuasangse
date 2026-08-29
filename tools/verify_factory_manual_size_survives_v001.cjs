@@ -54,6 +54,8 @@ async function main() {
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, factoryCdpFixtureReadyExpression() + " && typeof saveLastWorkNow === 'function'", 60000);
 
+    const step = name => console.error('[step] ' + name);
+    step('navigated');
     const seed = String(Date.now());
 
     // 1~2) 배치 문서 안에서 사이즈를 손으로 넣고 '확인' 을 누른다.
@@ -116,6 +118,7 @@ async function main() {
       };
     }`);
 
+    step('typed');
     assertChecks([
       { ok: typed.size === SIZE_TEXT, message: '확인을 눌렀는데 사이즈가 안 들어갔습니다: ' + typed.size },
       { ok: typed.touched, message: '손으로 넣은 값인데 manualTouched 표시가 없습니다.' },
@@ -125,7 +128,7 @@ async function main() {
     ]);
 
     // 3) 저장 ID가 비는 순간에 신원 정리가 도는 상황 — 오늘 사고가 난 바로 그 지점.
-    const afterRepair = await evaluateFactoryCdpFixture(cdp, `({ setAppState, readFactory, replaceFactory, renderApp }) => {
+    const afterRepair = await evaluateFactoryCdpFixture(cdp, `({ setAppState, readAppState, readFactory, replaceFactory, renderApp }) => {
       const factory = structuredClone(readFactory());
       setAppState({ currentProjectId: '', currentProjectName: '' });
       factory.workspace = { id: '', name: '', createdAt: null, updatedAt: null };
@@ -145,9 +148,19 @@ async function main() {
         screenSize: pick('size').value || '',
         screenWidth: pick('width_mm').value || '',
         screenDepth: pick('depth_mm').value || '',
+        // 신원 정리가 정말 발동했는지 증명한다. 발동도 안 했으면 이 검사는 아무것도 안 지킨다.
+        repairFired: !!current.product.detachedDbSelection || current.product.finalDb === null,
+        settingKeys: Object.keys(settings),
+        stateProjectId: String(readAppState().currentProjectId || ''),
       };
     }`);
 
+    step('repaired');
+    assertChecks([
+      // 전제부터 검사한다. 이 둘이 성립하지 않으면 아래 검사는 아무것도 안 지킨다.
+      { ok: afterRepair.repairFired, message: '신원 정리가 발동조차 안 했습니다. 진단=' + JSON.stringify(afterRepair) },
+      { ok: afterRepair.stateProjectId === '', message: "저장 ID가 비는 상황을 못 만들었습니다(='" + afterRepair.stateProjectId + "'). 사고 조건이 재현되지 않았습니다." },
+    ]);
     assertChecks([
       { ok: afterRepair.size === SIZE_TEXT, message: "신원 정리가 손으로 넣은 사이즈를 지웠습니다: '" + afterRepair.size + "'" },
       { ok: afterRepair.screenSize === SIZE_TEXT, message: "화면에서 사이즈가 비어 보입니다: '" + afterRepair.screenSize + "'" },
@@ -180,18 +193,23 @@ async function main() {
       };
     }`);
 
+    step('banner');
     assertChecks([
       { ok: banner.hiddenWhileRunning, message: '수집이 도는 중인데도 옛 로그로 빨간 배너를 띄웠습니다.' },
       { ok: banner.hiddenWhenDone, message: '수집이 끝났는데도 옛 로그로 빨간 배너를 띄웠습니다.' },
       { ok: banner.shownWhenReal, message: 'VM 이 실제로 보고한 신호까지 가려버렸습니다. 폴백을 없앤 것이 아닙니다.' },
     ]);
 
+    step('screenshot');
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(shot.data, 'base64'));
     fs.writeFileSync(RESULT_PATH, JSON.stringify({ typed, afterRepair, banner, screenshot: SCREENSHOT_PATH }, null, 2));
     process.stdout.write('[OK] 손으로 넣은 사이즈가 살아남았습니다 · 배너도 눌러앉지 않습니다\n' + RESULT_PATH + '\n');
   } finally {
     cdp.close();
+    // 이걸 빼먹으면 검사가 전부 통과하고 [OK] 를 찍은 뒤에도 프로세스가 안 끝나
+    // 회귀 하네스가 360초 만에 '실패' 로 처리한다. 실제로 그렇게 3/3 실패했다.
+    await runtime.cleanup();
   }
 }
 
