@@ -407,8 +407,14 @@ def _last_work_derived_state_drop_reason(existing, incoming):
         and existing_search_id != incoming_search_id
         and _list_len(incoming_market.get("results")) > 0
     )
+    # 탈출구는 앱이 재검색 때 실제로 비우는 것에만 건다. 앱은 results/groupedResults/
+    # selectedIds/searchId 만 비우고 scrapedImages(상세 캡처 이미지)와 localResults/vmResults 는
+    # 일부러 보존한다(src/app-core-06.js:4755-4763 preservedMarket). 그 둘까지 탈출구에 넣으면
+    # 앱이 지키려는 것을 서버 보호가 꺼 버린다 - 실측: 결과 70건+이미지 40장이 새 searchId 를 단
+    # 부분 스냅샷 하나에 사유 없이 사라졌다.
+    RESCRAPE_REPLACES = frozenset({"results"})
     for key in ("results", "vmResults", "localResults", "scrapedImages"):
-        if rescraped_on_purpose:
+        if rescraped_on_purpose and key in RESCRAPE_REPLACES:
             continue
         if _list_len(existing_market.get(key)) > _list_len(incoming_market.get(key)):
             return f"compPage.marketScrape.{key}.length"

@@ -6,6 +6,12 @@ from routes.api_shared import api
 from services import vm_candidate_bridge
 
 
+@api.route("/vm-bridge/readiness", methods=["GET"])
+def vm_bridge_readiness():
+    """VM 경로를 쓸 수 있는지 값싸게 답한다(파일 stat 한 번)."""
+    return jsonify(vm_candidate_bridge.watcher_readiness())
+
+
 @api.route("/vm-candidate-search", methods=["POST"])
 def submit_vm_candidate_search():
     payload = request.get_json(silent=True) or {}

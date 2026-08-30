@@ -74,3 +74,42 @@ def test_같은_검색이면_상세결과_보호는_그대로다():
     existing = _with_details("search_same", ["coupang_1"], {"coupang_1": {"images": ["a.png"]}})
     incoming = _with_details("search_same", ["coupang_1"], {})
     assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.marketScrape.detailResults")
+
+
+# 적대적 검증(2026-08-31)이 실제로 실행해서 찾아낸 구멍. 탈출구가 근거보다 넓어,
+# 앱이 재검색 때 **일부러 보존하는** 값까지 서버 보호가 꺼졌다.
+# 앱이 비우는 것은 results/groupedResults/selectedIds/searchId 뿐이다
+# (src/app-core-06.js:4755-4763 preservedMarket).
+
+def _market(search_id, ids, **extra_fields):
+    snapshot = _snapshot(search_id, ids)
+    snapshot["assets"]["compPage"]["marketScrape"].update(extra_fields)
+    return snapshot
+
+
+def test_재검색이어도_상세캡처_이미지는_지킨다():
+    existing = _market("search_old", ["c0", "c1"], scrapedImages=[{"id": "img1"}, {"id": "img2"}])
+    incoming = _market("search_new", ["c9"], scrapedImages=[])
+    reason = _last_work_derived_state_drop_reason(existing, incoming)
+    assert reason.startswith("compPage.marketScrape.scrapedImages"), reason
+
+
+def test_재검색이어도_본컴_결과는_지킨다():
+    existing = _market("search_old", ["c0", "c1"], localResults=[{"id": "c0"}, {"id": "c1"}])
+    incoming = _market("search_new", ["c9"], localResults=[])
+    reason = _last_work_derived_state_drop_reason(existing, incoming)
+    assert reason.startswith("compPage.marketScrape.localResults"), reason
+
+
+def test_재검색이어도_VM_결과는_지킨다():
+    existing = _market("search_old", ["c0"], vmResults=[{"id": "c0"}])
+    incoming = _market("search_new", ["c9"], vmResults=[])
+    reason = _last_work_derived_state_drop_reason(existing, incoming)
+    assert reason.startswith("compPage.marketScrape.vmResults"), reason
+
+
+def test_보존하는_값이_그대로면_재검색은_통과한다():
+    kept = {"scrapedImages": [{"id": "img1"}], "localResults": [{"id": "c0"}], "vmResults": []}
+    existing = _market("search_old", ["c0", "c1"], **kept)
+    incoming = _market("search_new", ["c9"], **kept)
+    assert _last_work_derived_state_drop_reason(existing, incoming) == ""

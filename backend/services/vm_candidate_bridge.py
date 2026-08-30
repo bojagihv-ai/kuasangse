@@ -110,6 +110,39 @@ def _watcher_is_responsive() -> bool:
     return _watcher_heartbeat_is_fresh()
 
 
+def watcher_readiness() -> dict:
+    """VM 게스트 watcher 가 살아 있는지 한 번의 파일 stat 으로 답한다.
+
+    후보검색은 제출할 때 이 판정을 해서 5초 안에 실패를 알려 준다. 그런데 상세수집은
+    같은 확인 없이 VM 으로 보내고 job_timeout(3600초) 만큼 기다렸다 - 실측 2026-08-31:
+    같은 고장으로 후보는 5초, 상세는 한 시간이 걸렸다. 화면이 먼저 물어볼 수 있게 연다.
+    """
+    path = _watcher_heartbeat_path()
+    try:
+        age_seconds = time.time() - path.stat().st_mtime
+    except OSError:
+        return {
+            "ok": False,
+            "watcherAlive": False,
+            "heartbeatAgeSeconds": None,
+            "maxAgeSeconds": _WATCHER_HEARTBEAT_MAX_AGE_SECONDS,
+            "reason": "vm_bridge_guest_watcher_unavailable",
+            "message": "VM 내부 watcher 하트비트를 찾지 못했습니다. VM 안에서 후보 수집 워커를 다시 띄워야 합니다.",
+        }
+    alive = age_seconds <= _WATCHER_HEARTBEAT_MAX_AGE_SECONDS
+    return {
+        "ok": alive,
+        "watcherAlive": alive,
+        "heartbeatAgeSeconds": round(age_seconds, 1),
+        "maxAgeSeconds": _WATCHER_HEARTBEAT_MAX_AGE_SECONDS,
+        "reason": "" if alive else "vm_bridge_guest_watcher_unavailable",
+        "message": "" if alive else (
+            f"VM 내부 watcher 가 {int(age_seconds)}초 동안 응답하지 않았습니다. "
+            "VM 안에서 후보 수집 워커를 다시 띄워야 VM 경로를 쓸 수 있습니다."
+        ),
+    }
+
+
 def _vboxmanage_path() -> Path | None:
     configured = str(os.getenv("KUASANGSE_VBOXMANAGE", "")).strip()
     if configured:

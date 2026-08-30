@@ -15652,11 +15652,31 @@ async function compMarketEnsureVmDetailCaptureReady(options = {}) {
   renderStatus();
   const health = await compMarketFetchVmCandidateBridge('/health', {}, 15000);
   const healthOk = health?.ok !== false;
+  // /health 는 이 앱 백엔드가 살아 있다는 뜻일 뿐 VM 과 아무 상관이 없다. VM 을 쓸 수
+  // 있는지는 게스트 watcher 하트비트로만 알 수 있다. 그걸 묻지 않아서, watcher 가 죽어도
+  // "VM 준비됨" 으로 판정하고 상세수집을 VM 으로 보내 3600초를 기다렸다 - 실측 2026-08-31:
+  // 같은 고장을 후보검색은 5초 만에 알아채는데 상세수집만 한 시간이 걸렸다.
+  // 판정 경로가 없는(옛) 백엔드에서는 예전처럼 통과시킨다. 새로 막지는 않는다.
+  let watcher = null;
+  try {
+    watcher = await compMarketFetchVmCandidateBridge('/api/vm-bridge/readiness', {}, 8000);
+  } catch (error) {
+    compMarketLog(`VM watcher 상태를 확인하지 못했습니다: ${String(error?.message || error)}`, 'warn', marketOptions);
+  }
+  const watcherKnown = !!watcher && typeof watcher.watcherAlive === 'boolean';
+  const watcherAlive = watcherKnown ? watcher.watcherAlive === true : true;
+  const usable = healthOk && watcherAlive;
   const data = {
     ...health,
-    ok: healthOk,
-    ready: healthOk,
-    enabled: healthOk,
+    ...(watcher || {}),
+    ok: usable,
+    ready: usable,
+    enabled: usable,
+    watcherAlive,
+    watcherKnown,
+    heartbeatAgeSeconds: watcher?.heartbeatAgeSeconds ?? null,
+    message: usable ? '' : String(watcher?.message || '')
+      || 'VM 상세수집 경로를 쓸 수 없습니다. VM 안의 후보 수집 워커를 다시 띄워주세요.',
     runtime: 'vm',
     transport: 'shared_folder',
   };
@@ -15777,7 +15797,9 @@ function compMarketIsVmDetailResult(result = {}) {
 async function compMarketTryVmScrapeDetails(market, ids) {
   if (!market.sessionId) throw new Error('VM 상세페이지 수집에 필요한 session_id가 없습니다.');
   const vmStatus = await compMarketEnsureVmDetailCaptureReady();
-  if (!(vmStatus.ready || vmStatus.runtime === 'vm' || vmStatus.enabled)) {
+  // runtime 은 'vm' 상수라서 OR 에 넣으면 이 가드는 영원히 통과한다. 판정을 넣어 둔 의미가
+  // 없어지고, watcher 가 죽어도 VM 으로 보내 한 시간을 버렸다 - 실측 2026-08-31.
+  if (!(vmStatus.ready || vmStatus.enabled)) {
     throw new Error(`VM 상세페이지 수집 연결 실패: ${vmStatus.message || compMarketVmStatusText(vmStatus) || '워커 준비 안 됨'}`);
   }
   compMarketSetStatus(`VM 상세페이지 수집 시작: 선택 후보 ${ids.length}건`, 'detail-vm', 'info');

@@ -3975,13 +3975,32 @@ function buildWorkspacePayload(options = {}) {
     : null;
   const compPageSources = [storedCompPage, factoryCompPage, stateCompPage]
     .filter(source => source && typeof source === 'object');
-  const compPageSnapshot = compPageSources.reduce((merged, source) => ({
-    ...merged,
-    ...source,
-    ...(merged.marketScrape || source.marketScrape
-      ? { marketScrape: mergeCompMarketStoredState(merged.marketScrape || {}, source.marketScrape || {}) }
-      : {}),
-  }), {});
+  // 파생 분석 결과는 "지금 이 화면 사본에 없다" 는 이유만으로 지워지면 안 된다. 아래 펼치기는
+  // 뒤 원본이 앞을 통째로 덮으므로, state.compPage.analysisResult 가 null 이면 저장된 쪽에 값이
+  // 있어도 최종 payload 가 null 이 되고 서버가 마지막 저장을 통째로 거절한다.
+  // 실측 2026-08-31: 100% 까지 끝난 작업이 여기서 막혀
+  // "dropped protected work data: compPage.analysisResult" 로 18회 연속 거절됐다.
+  // marketScrape 가 mergeCompMarketStoredState 로 받는 보호를 분석 묶음에도 준다.
+  // 다만 "일부러 분리했다" 표시(analysisInvalidatedAt)가 더 새로우면 비우는 것을 허용한다 —
+  // 서버의 판정 규칙과 같은 기준이어야 양쪽이 어긋나지 않는다.
+  const derivedAnalysisKeys = ['analysisResult', 'sectionPlan', 'planEdits'];
+  const compPageSnapshot = compPageSources.reduce((merged, source) => {
+    const next = {
+      ...merged,
+      ...source,
+      ...(merged.marketScrape || source.marketScrape
+        ? { marketScrape: mergeCompMarketStoredState(merged.marketScrape || {}, source.marketScrape || {}) }
+        : {}),
+    };
+    const mergedMark = Number(merged.analysisInvalidatedAt || 0);
+    const sourceMark = Number(source.analysisInvalidatedAt || 0);
+    if (!(sourceMark > mergedMark)) {
+      for (const key of derivedAnalysisKeys) {
+        next[key] = mergeSameWorkDerivedValue(merged[key], source[key]);
+      }
+    }
+    return next;
+  }, {});
   const inputImageFingerprint = currentWorkspaceInputImageFingerprint(factorySnapshot);
   const workIdentity = ensureActiveWorkIdentity({
     factorySnapshot,
