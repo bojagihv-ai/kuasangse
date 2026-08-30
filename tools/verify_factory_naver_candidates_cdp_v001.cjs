@@ -235,7 +235,59 @@ async function main() {
             fingerprint: String((row && row.inputImageFingerprint) || '').slice(0, 24),
             workspaceId: String((row && row.workspaceId) || ''),
           })),
-          // 비교 대상: 지금 작업의 범위. 위 행들과 이 값이 다르면 '남의 것' 으로 걸러진다.
+          // 조립공장 실행이 아예 안 돌면 runId 가 없어 수집한 행이 전부 걸러진다.
+          // 그 실행을 막는 가장 흔한 원인이 '필수 프로그램 사전점검' 이라 함께 찍는다.
+          preflight: (factory.automation && factory.automation.localServicePreflight) || null,
+          goalRun: {
+            running: !!(factory.goalRun && factory.goalRun.running),
+            progress: (factory.goalRun && factory.goalRun.progress) || 0,
+            currentRunId: String((factory.goalRun && factory.goalRun.currentRunId) || ''),
+            status: String((factory.goalRun && factory.goalRun.status) || '').slice(0, 120),
+          },
+          automationRunId: String((factory.automation && factory.automation.currentRunId) || ''),
+          // ★ 첫 행을 실제 판정 함수에 넣어 **어느 관문에서 걸리는지** 직접 물어본다.
+          //   값만 늘어놓고 눈으로 맞춰 보다가 두 번 헛짚었다. 코드에게 물어보는 게 확실하다.
+          whyRejected: (() => {
+            const rows = Array.isArray(market.results) ? market.results : [];
+            const row = rows[0];
+            if (!row) return { note: '행 없음' };
+            const scope = typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null;
+            const out = {
+              matches: typeof compMarketCandidateMatchesCurrentWork === 'function'
+                ? compMarketCandidateMatchesCurrentWork(row, scope) : null,
+              usable: typeof compMarketIsUsableCandidate === 'function' ? compMarketIsUsableCandidate(row) : null,
+              hasWorkStamp: typeof compMarketHasWorkPayloadStamp === 'function' ? compMarketHasWorkPayloadStamp(row) : null,
+              scopeKey: String((scope && scope.scopeKey) || ''),
+              rowWorkKey: String(row.factoryWorkKey || row.workScopeKey || (row.metadata && row.metadata.factoryWorkKey) || ''),
+            };
+            try {
+              out.workKeysCompatible = typeof compMarketWorkKeysCompatible === 'function'
+                ? compMarketWorkKeysCompatible(out.scopeKey, out.rowWorkKey) : null;
+            } catch (err) { out.workKeysError = String(err && err.message || err); }
+            return out;
+          })(),
+          // ★ 판정에 **실제로 쓰이는** 범위를 그대로 찍는다.
+          //   손으로 비슷하게 만들어 찍으면 엉뚱한 걸 보게 된다 — 실제로 그래서 한 번 헛짚었다.
+          //   compMarketCurrentScopeIsComplete 는 productKey 와 stageId 둘 다 있어야 true 이고,
+          //   false 면 compMarketCandidateMatchesCurrentWork 가 **모든 행을 버린다**(app-core-05.js:8876).
+          realScope: (() => {
+            const out = {};
+            try {
+              out.workScope = typeof compMarketCurrentWorkScope === 'function' ? compMarketCurrentWorkScope() : null;
+            } catch (err) { out.workScopeError = String(err && err.message || err); }
+            try {
+              out.candidateScope = typeof factoryCompetitorCandidateScopePayload === 'function'
+                ? factoryCompetitorCandidateScopePayload('competitors', factory) : null;
+            } catch (err) { out.candidateScopeError = String(err && err.message || err); }
+            try {
+              out.isComplete = typeof compMarketCurrentScopeIsComplete === 'function'
+                ? compMarketCurrentScopeIsComplete(out.workScope) : null;
+              out.hasAnyKey = typeof compMarketCurrentScopeHasAnyKey === 'function'
+                ? compMarketCurrentScopeHasAnyKey(out.workScope) : null;
+            } catch (err) { out.completeError = String(err && err.message || err); }
+            return out;
+          })(),
+          // (참고) 손으로 만든 근사값 — 위 realScope 가 진짜다.
           currentScope: {
             workspaceId: String((factory.workspace && factory.workspace.id) || ''),
             productKey: typeof factoryCurrentProductKey === 'function' ? String(factoryCurrentProductKey() || '') : '',
@@ -254,6 +306,24 @@ async function main() {
       console.error('[진단:' + label + '] ' + JSON.stringify(info, null, 1));
       return info;
     };
+
+    // ★ 수집이 **끝난 그 순간**을 잡아 둔다.
+    //   시간초과 시점(6분 뒤)에만 찍으면 이미 조립공장 실행이 끝난 뒤라
+    //   "작업 범위가 안 맞는다" 는 결과만 보이고 **언제부터 안 맞았는지** 알 수 없다.
+    //   실제로 그 때문에 원인을 실행 종료 탓인지 수집 탓인지 가르지 못했다.
+    (async () => {
+      const until = Date.now() + COLLECT_TIMEOUT_MS;
+      while (Date.now() < until) {
+        try {
+          const ready = await evaluate(cdp, `(() => {
+            const market = typeof ensureCompMarketScrapeState === 'function' ? ensureCompMarketScrapeState() : {};
+            return Array.isArray(market.results) && market.results.length > 0;
+          })()`);
+          if (ready) { await dumpDiagnostics('수집직후'); return; }
+        } catch (error) { /* 아직 뜨는 중이거나 잠깐 막힌 것 */ }
+        await new Promise(resolve => setTimeout(resolve, 4000));
+      }
+    })().catch(() => {});
 
     try {
       await waitFor(

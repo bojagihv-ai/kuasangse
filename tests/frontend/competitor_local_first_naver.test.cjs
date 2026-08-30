@@ -24,16 +24,25 @@
 // ── 2026-08-30 실측: 배치 전환 뒤 남은 문제 (수집 아님, **작업 반영**) ──
 //   본컴 배치는 잘 된다: 한 검색으로 39초에 20건, 스마트스토어(네이버) 4건 포함.
 //     "본컴에서 5개 사이트를 한 번에 검색 중..." → 후보 검색 대기 1/160 → 26/160 → 완료
-//     실행 기록도 하나(5개 사이트 담김, status=done, total=20).
 //   그런데 factory.product.competitors 는 0 이다. 수집한 19~20건이 작업으로 안 들어온다.
-//   원인 후보를 진단으로 좁혀 두었다 — **작업 범위 두 값이 서로 엇갈린다**:
-//     지금 작업 : workspaceId=naver_candidates_1788069294174 · runId=(빈 값)
-//     수집한 행 : workspaceId=(빈 값)                        · runId=factory_work_run_...
-//     productKey 와 이미지 지문은 양쪽이 일치한다.
-//   즉 도장은 찍혔는데 workspaceId 는 안 찍히고, 비교하는 쪽은 runId 가 비어 있다.
-//   이 증상은 배치 전환 **이전에도 같았다**(포트 수정 직후 실행도 9분간 0건).
-//   다음 사람은 tools/verify_factory_naver_candidates_cdp_v001.cjs 의 [진단:시간초과] 덤프를
-//   그대로 보면 된다 — currentScope 와 rowStamps 를 나란히 찍는다.
+//
+//   ★ 내가 한 번 잘못 짚었다. 기록으로 남긴다.
+//     처음엔 "작업 범위(workspaceId·runId)가 어긋나 걸러진다" 고 판단했다. **아니었다.**
+//     실제 판정 함수에 첫 행을 그대로 넣어 물어보니 전부 통과한다:
+//       matches=true · usable=true · hasWorkStamp=true · workKeysCompatible=true
+//     범위 열쇠에 no_run 이 박혀 있고 행 열쇠에는 실행번호가 있어도 호환으로 처리된다.
+//     값을 눈으로 맞춰 보지 말고 **판정 함수에 직접 물어봐야 한다.**
+//
+//   지금까지 확인된 사실:
+//     - 수집·필터는 통과한다. 걸러져서 0건이 되는 것이 아니다.
+//     - factory.goalRun.running=false · stage=idle · automation.currentRunId='' 이다.
+//       즉 조립공장 실행이 돌고 있지 않은 상태에서 수집만 따로 돈다.
+//     - 사전점검(localServicePreflight)은 null 이라 그것 때문도 아니다.
+//     - 배치 이전 커밋(3287192)에서도 똑같이 0건이다. 배치가 만든 문제가 아니다.
+//     - 예전 '잘 되던' 커밋(5c1acbf)은 지금 조건에서 **시작조차 못 한다**(포트 알림창에 얼어붙음).
+//   다음에 볼 곳: 수집 결과를 작업에 넣는 상위 흐름
+//     (factoryRunVmCompetitorCollectionForSelection)이 이 경로에서 호출되는지.
+//   장치: tools/verify_factory_naver_candidates_cdp_v001.cjs 의 [진단:수집직후]/[진단:시간초과]
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
