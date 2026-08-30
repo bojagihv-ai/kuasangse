@@ -6409,6 +6409,38 @@ async function withCurrentInputArchiveForWorkBundle(bundle) {
   return next;
 }
 
+// 자산관에 올릴 원본을 마지막으로 한 번 더 찾는다.
+// 사진을 백업에서 되살리면 inputImages 에는 '__stored_in_indexeddb__' 표식만 남고
+// 실제 바이트는 IndexedDB 에 있다. 그대로 두면 플랜이 '필수 자산 없음' 으로 판정해
+// **아예 올리려는 시도조차 하지 않는다.**
+// 실측 2026-08-30: work_bundle_required_assets_missing:1:input:factory_input_restore_...
+//   → 화면에는 "로컬 작업파일은 저장됐지만 신화사 자산관 동기화는 보류됐습니다" 만 뜬다.
+// 플랜에는 이미 payload.productImageBackup.primary 로 되돌아가는 길이 있다(work-bundle-input-assets.mjs).
+// 그 백업을 실제 바이트로 채워 주면 그 길이 살아난다.
+async function withHydratedImageBackupForWorkBundle(bundle) {
+  const payload = bundle?.project?.payload;
+  if (!payload || typeof payload !== 'object') return bundle;
+  if (typeof hydrateWorkspacePayloadImageBackup !== 'function') return bundle;
+  const backupPrimary = payload.productImageBackup?.primary;
+  const existing = String(backupPrimary?.base64 || '').trim();
+  if (existing && existing !== '__stored_in_indexeddb__') return bundle;
+  let hydrated = null;
+  try {
+    hydrated = await hydrateWorkspacePayloadImageBackup(payload);
+  } catch (error) {
+    console.warn('자산관 업로드용 원본 이미지 복원 실패:', error);
+    return bundle;
+  }
+  const filled = String(hydrated?.productImageBackup?.primary?.base64 || '').trim();
+  if (!filled || filled === '__stored_in_indexeddb__') return bundle;
+  // 원본을 건드리지 않는다. 바뀔 때만 복사한다.
+  const next = typeof structuredClone === 'function'
+    ? structuredClone(bundle)
+    : JSON.parse(JSON.stringify(bundle));
+  next.project.payload = hydrated;
+  return next;
+}
+
 async function scheduleCurrentWorkBundleSync(bundle, options = {}) {
   let plan = null;
   try {
@@ -6422,7 +6454,9 @@ async function scheduleCurrentWorkBundleSync(bundle, options = {}) {
     const workBundle = await import(moduleUrl);
     const scopedBundle = scopeWorkBundleForCurrentBranch(bundle, options);
     if (!scopedBundle) return null;
-    const recoverableBundle = await withCurrentInputArchiveForWorkBundle(scopedBundle);
+    const archiveRecovered = await withCurrentInputArchiveForWorkBundle(scopedBundle);
+    // 로컬 자산관에서 못 찾았으면 이미지 백업에서라도 원본을 채운다.
+    const recoverableBundle = await withHydratedImageBackupForWorkBundle(archiveRecovered);
     const fileName = String(options.fileName || recoverableBundle?.project?.name || '상세페이지 작업.kuasangse');
     const workspaceId = String(recoverableBundle.workspaceId || '').trim();
     const scheme = workBundle.resolveWorkBundleSourceScheme(options);
