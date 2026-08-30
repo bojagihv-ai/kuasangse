@@ -328,6 +328,19 @@ def _last_work_rows_have_sparse_drop(existing_rows, incoming_rows, *, match_by_p
     ))
 
 
+def _last_work_candidate_ids(market):
+    """후보 목록에 남아 있는 상품 식별자를 모은다."""
+    ids = set()
+    for row in market.get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        for key in ("id", "product_id", "worker_product_id"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                ids.add(value)
+    return ids
+
+
 def _last_work_comp_page(snapshot):
     assets = snapshot.get("assets") if isinstance(snapshot, dict) and isinstance(snapshot.get("assets"), dict) else {}
     comp = assets.get("compPage") if isinstance(assets.get("compPage"), dict) else {}
@@ -422,6 +435,15 @@ def _last_work_derived_state_drop_reason(existing, incoming):
             return f"compPage.marketScrape.{key}"
     existing_details = existing_market.get("detailResults") if isinstance(existing_market.get("detailResults"), dict) else {}
     incoming_details = incoming_market.get("detailResults") if isinstance(incoming_market.get("detailResults"), dict) else {}
+    if rescraped_on_purpose:
+        # 새로 검색하면 옛 후보의 상세 결과는 그 후보와 함께 낡는다. 다만 재검색을 핑계로
+        # 살아 있는 것까지 지우면 안 되므로, 지금도 후보 목록에 남아 있는 것만 계속 지킨다.
+        # 실측 2026-08-31: 재검색 뒤 detailResults 4건이 통째로 막혀 저장이 되지 않았다.
+        surviving = _last_work_candidate_ids(incoming_market)
+        existing_details = {
+            key: value for key, value in existing_details.items()
+            if str(key) in surviving
+        }
     if any(
         key not in incoming_details
         or _last_work_value_dropped(value, incoming_details.get(key))
@@ -507,10 +529,25 @@ def _last_work_trace(stage, workspace_id, existing, incoming, extra=None):
             inner = light.get("compPage") if isinstance(light.get("compPage"), dict) else {}
             return inner or (snapshot.get("compPage") if isinstance(snapshot.get("compPage"), dict) else {})
         ex, inc = comp_of(existing), comp_of(incoming)
+        def market_of(comp):
+            market = comp.get("marketScrape") if isinstance(comp.get("marketScrape"), dict) else {}
+            details = market.get("detailResults") if isinstance(market.get("detailResults"), dict) else {}
+            return {
+                "searchId": market.get("searchId"),
+                "results": _list_len(market.get("results")),
+                "vmResults": _list_len(market.get("vmResults")),
+                "localResults": _list_len(market.get("localResults")),
+                "scrapedImages": _list_len(market.get("scrapedImages")),
+                "detailResults": len(details),
+                "selectedIds": _list_len(market.get("selectedIds")),
+                "detailSelectionVersion": market.get("detailSelectionVersion"),
+            }
+
         record = {
             "at": datetime.now().isoformat(timespec="seconds"),
             "stage": stage,
             "workspaceId": workspace_id,
+            "market": {"existing": market_of(ex), "incoming": market_of(inc)},
             "existing": {
                 "hasAnalysis": bool(ex.get("analysisResult")),
                 "invalidatedAt": ex.get("analysisInvalidatedAt"),

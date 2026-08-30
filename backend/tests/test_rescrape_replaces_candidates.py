@@ -49,3 +49,28 @@ def test_들어온_쪽에만_검색값이_있어도_보호는_그대로다():
     existing = _snapshot("", ["coupang_1", "coupang_2"])
     incoming = _snapshot("search_new", ["coupang_1"])
     assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.marketScrape.results")
+
+
+def _with_details(search_id, ids, details):
+    snapshot = _snapshot(search_id, ids)
+    snapshot["assets"]["compPage"]["marketScrape"]["detailResults"] = details
+    return snapshot
+
+
+def test_재검색하면_사라진_후보의_상세결과는_버려도_된다():
+    existing = _with_details("search_old", ["coupang_1"], {"coupang_1": {"images": ["a.png"]}})
+    incoming = _with_details("search_new", ["naver_9"], {})
+    assert _last_work_derived_state_drop_reason(existing, incoming) == ""
+
+
+def test_재검색이어도_살아남은_후보의_상세결과는_지킨다():
+    existing = _with_details("search_old", ["coupang_1"], {"coupang_1": {"images": ["a.png"]}})
+    # 새 검색이지만 coupang_1 은 여전히 후보에 있다. 그 상세 결과를 지우는 것은 사고다.
+    incoming = _with_details("search_new", ["coupang_1", "naver_9"], {})
+    assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.marketScrape.detailResults")
+
+
+def test_같은_검색이면_상세결과_보호는_그대로다():
+    existing = _with_details("search_same", ["coupang_1"], {"coupang_1": {"images": ["a.png"]}})
+    incoming = _with_details("search_same", ["coupang_1"], {})
+    assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.marketScrape.detailResults")
