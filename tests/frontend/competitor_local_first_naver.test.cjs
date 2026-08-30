@@ -16,12 +16,25 @@
 //   사이트별: coupang 4 · smartstore.naver.com 4 · gmarket 4 · auction 3 · 11st 4
 //
 // ── 세 번 헛짚은 기록 (다음에 같은 함정에 빠지지 않도록) ──
-//   본컴 경로는 사이트를 **하나씩 순차로** 돈다(app-core-06.js 의 originalSelectedSites 루프,
-//   사이트당 최대 70회 폴링 × 1.5초, 옥션만 36회). 그래서 약 116초가 걸린다.
-//   VM 경로는 한 번에 전 사이트를 검색한다(compMarketTryVmSearch).
-//   이 차이를 모르고 검증기 대기를 2~5분으로 짧게 잡아, 세 번 모두
-//   "수집은 되는데 작업에 안 들어온다" 로 오진했다. 실제로는 아직 도는 중이었다.
+//   예전 본컴 경로는 사이트를 **하나씩 순차로** 돌았다(사이트당 최대 70회 폴링 × 1.5초).
+//   빈 사이트마다 105초를 통째로 버려 5개면 최대 525초 — 9분이 지나도 후보가 없었다.
+//   그 느림을 세 번 모두 "수집은 되는데 작업에 안 들어온다" 로 오진했다.
+//   2026-08-30 본컴도 **한 번에 전 사이트 검색**으로 바꿨다(실측 120초).
 //   호출자 타임아웃은 factoryVmCandidateTimeoutMs()*3 = 30분이라 원래 충분했다.
+// ── 2026-08-30 실측: 배치 전환 뒤 남은 문제 (수집 아님, **작업 반영**) ──
+//   본컴 배치는 잘 된다: 한 검색으로 39초에 20건, 스마트스토어(네이버) 4건 포함.
+//     "본컴에서 5개 사이트를 한 번에 검색 중..." → 후보 검색 대기 1/160 → 26/160 → 완료
+//     실행 기록도 하나(5개 사이트 담김, status=done, total=20).
+//   그런데 factory.product.competitors 는 0 이다. 수집한 19~20건이 작업으로 안 들어온다.
+//   원인 후보를 진단으로 좁혀 두었다 — **작업 범위 두 값이 서로 엇갈린다**:
+//     지금 작업 : workspaceId=naver_candidates_1788069294174 · runId=(빈 값)
+//     수집한 행 : workspaceId=(빈 값)                        · runId=factory_work_run_...
+//     productKey 와 이미지 지문은 양쪽이 일치한다.
+//   즉 도장은 찍혔는데 workspaceId 는 안 찍히고, 비교하는 쪽은 runId 가 비어 있다.
+//   이 증상은 배치 전환 **이전에도 같았다**(포트 수정 직후 실행도 9분간 0건).
+//   다음 사람은 tools/verify_factory_naver_candidates_cdp_v001.cjs 의 [진단:시간초과] 덤프를
+//   그대로 보면 된다 — currentScope 와 rowStamps 를 나란히 찍는다.
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -79,10 +92,91 @@ test('두 경로가 같은 수집 문맥과 타임아웃을 쓴다', () => {
   assert.match(runner, /timeoutMs,/);
 });
 
-test('오래 걸리는 이유가 코드에 적혀 있다', () => {
-  // 이걸 모르면 또 "멈췄다" 고 오진한다. 실제로 세 번 그랬다.
-  assert.match(FLOW, /사이트를 하나씩 순차/);
-  assert.match(FLOW, /115\.8초|116초|약 116/);
+test('한 번에 전 사이트를 검색한다고 코드에 적혀 있다', () => {
+  // 이 계약이 지키려는 것은 문장이 아니라 **"느린 것을 멈춤으로 오진하지 말라"** 는 것이다.
+  // 그래서 배치로 바꾸면서 문장이 아니라 새 실측값으로 갈아끼운다.
+  assert.match(FLOW, /한 번에 전 사이트를 검색한다/);
+  assert.match(FLOW, /120초/);
+  assert.doesNotMatch(FLOW, /★ 본컴은 \*\*사이트를 하나씩 순차로\*\* 돈다/,
+    '순차라는 낡은 설명이 남아 있으면 다음 사람이 또 525초를 기다린다.');
+});
+
+test('본컴이 전 사이트를 한 번에 검색한다', () => {
+  // 사이트별 순차 루프로 되돌아가면 빈 사이트마다 105초를 버려 최대 525초가 된다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /compMarketTryV1Search\(market, originalSelectedSites,/,
+    '전 사이트를 한 번에 넘겨야 합니다. [site] 하나씩 넘기면 다시 느려집니다.');
+  // 부정 검사를 '옛 for 문법 하나' 로만 걸면 다른 문법으로 순차가 되살아나도 못 잡는다.
+  // 실제로 검토에서 `for (const site of ...)` 안에 단일 사이트 검색을 넣어도 통과했다.
+  // 그래서 **문법이 아니라 행위**를 막는다 — 사이트 하나짜리 검색 호출 자체를 금지한다.
+  assert.doesNotMatch(local, /compMarketTryV1Search\(market, \[/,
+    '사이트 하나씩 검색하는 호출이 되살아났습니다. 빈 사이트마다 105초를 버리게 됩니다.');
+  assert.doesNotMatch(local, /for \(const \[index, site\] of originalSelectedSites\.entries\(\)\)/,
+    '사이트별 순차 루프가 되살아났습니다.');
+});
+
+test('검색이 하나면 실행 기록도 하나다', () => {
+  // 사이트별로 5개를 남기면 같은 searchId 를 가리키는 런이 6개가 되고
+  // (products 의 _source_sites 로 만들어지는 통합 런 1개가 더 붙는다),
+  // '다시 불러오기' 가 같은 검색을 여섯 번 읽는다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /rememberLocalSearchRun\(originalSelectedSites, \{/,
+    '배치 실행 기록은 전 사이트를 담은 하나여야 합니다.');
+  assert.doesNotMatch(local, /rememberLocalSearchRun\(site, \{[\s\S]{0,200}status: rows\.length/,
+    '사이트별로 런을 쪼개면 같은 검색을 여러 번 읽게 됩니다.');
+});
+
+test('복구하는 동안 화면이 "끝났다" 고 거짓말하지 않는다', () => {
+  // publishLocalProgress 가 loading=false·phase='done' 을 찍어 완료 화면이 실제로 그려진다.
+  // 그 뒤로 복구가 수십 초~수 분 더 도는데, 그대로 두면 이 저장소가 제일 크게 데인
+  // "멈춘 것처럼 보이는 화면" 이 된다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  const recoverAt = local.indexOf('compMarketRecoverRecentCompletedProductsForSites');
+  const reviveAt = local.indexOf('market.loading = true;');
+  assert.ok(reviveAt >= 0 && reviveAt < recoverAt, '복구 전에 실행 패널을 되살려야 합니다.');
+  assert.match(local, /0건 · 최근 완료 검색에서 복구 중\.\.\./, '무엇을 하는 중인지 화면에 적어야 합니다.');
+  // 복구가 0건이어도 마지막에 반드시 다시 그려야 "복구 중..." 에서 굳지 않는다.
+  const tail = local.slice(recoverAt);
+  assert.match(tail, /복구할 최근 완료 검색을 찾지 못했습니다/);
+  assert.ok(tail.lastIndexOf('render();') > tail.lastIndexOf('if (recoveredProducts.length) {'),
+    '복구 결과와 무관하게 마지막에 한 번 그려야 합니다.');
+});
+
+test('상태 조회가 한 번 흔들렸다고 전 사이트를 버리지 않는다', () => {
+  // 배치는 검색이 하나라 이 예외 하나가 5개 사이트를 다 날린다.
+  // 순차일 때는 사이트 하나만 잃었다. 폭발 범위가 커진 만큼 견디게 한다.
+  const poll = sourceSlice(CORE_06, "const waitLabel = searchRuntime === 'vm'", 'finalStatus = status;');
+  assert.match(poll, /statusFailStreak \+= 1;/);
+  assert.match(poll, /if \(statusFailStreak >= 3\) throw new Error/);
+  // 그래도 죽었으면, 이미 발급된 검색 결과를 한 번은 읽어 본다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /const startedSearchId = String\(market\.searchId \|\| ''\)\.trim\(\);/);
+  assert.match(local, /compMarketReadV1SearchProducts\(startedSearchId, market, originalSelectedSites, 'local'\)/);
+});
+
+test('0건인 사이트만 골라 복구한다', () => {
+  // 순차에서는 사이트마다 재시도·benchmark 구제를 각각 받았다. 배치는 전체가 0건일 때만
+  // 그 구제가 걸리므로, 네이버만 0건인 상황이 그대로 구멍이 된다. 그 구멍을 메우는 계약이다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /const emptySites = originalSelectedSites\.filter\(/);
+  assert.match(local, /compMarketRecoverRecentCompletedProductsForSites\(market, emptySites, 'local', collectionContext\)/);
+});
+
+test('실행 기록을 남긴다', () => {
+  // 이 기록이 없으면 "수집은 됐는데 작업에 안 들어온다" 가 된다
+  // (factoryFreshVmCandidateRows 가 허용 searchId 집합으로 쓴다).
+  // 배치 런이 하나여야 한다는 것은 아래 '검색이 하나면 실행 기록도 하나다' 가 따로 지킨다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /rememberLocalSearchRun\(/);
+  assert.match(local, /status: batchProducts\.length \? 'done' : 'zero_result'/);
+  assert.match(local, /status: 'recovered'/, '복구분도 기록해야 아래 mergedRuns 덮어쓰기에서 살아남습니다.');
+});
+
+test('수집 중에도 어느 사이트를 도는지 화면에 남는다', () => {
+  // activeSiteLabel 이 비면 사이트판이 본컴 수집 중에도 'VM 검색 중' 이라고 거짓말한다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /market\.activeSiteLabel = `\$\{originalSelectedSites\.length\}개 사이트 동시`/);
+  assert.match(local, /compMarketSetSiteSearchStatus\(market, originalSelectedSites, '본컴 검색 중', 'busy'\)/);
 });
 
 test('생산관제 경로의 본컴 우선은 그대로 둔다', () => {

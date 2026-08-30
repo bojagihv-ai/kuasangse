@@ -36,7 +36,9 @@ const RESULT_PATH = path.join(OUT_DIR, 'factory-naver-candidates-v001.json');
 // 실측 2026-08-30: 본컴 경로는 사이트를 하나씩 순차로 돌기 때문에 **약 116초** 걸린다
 // (사이트당 최대 70회 폴링 × 1.5초, 옥션만 36회). 짧게 잡았다가 세 번 헛짚었다 —
 // 멈춘 것으로 보였지만 그냥 아직 도는 중이었다. 넉넉히 준다.
-const COLLECT_TIMEOUT_MS = Number(process.env.KUASANGSE_NAVER_TIMEOUT_MS || 600000);
+// 회귀 스텝 제한보다 **짧아야 한다.** 길면 스텝이 먼저 죽어 아래 진단 덤프가 실행되지 않고,
+// 그러면 "왜 후보가 안 들어왔는지" 를 아무것도 모른 채 실패만 본다 — 실제로 그렇게 두 번 헛돌았다.
+const COLLECT_TIMEOUT_MS = Number(process.env.KUASANGSE_NAVER_TIMEOUT_MS || 360000);
 const KEYWORD = process.env.KUASANGSE_NAVER_KEYWORD || '수저집 파우치';
 
 async function main() {
@@ -136,7 +138,9 @@ async function main() {
       let worst = 0;
       let worstAt = 0;
       const probeStart = Date.now();
-      for (let i = 0; i < 40; i += 1) {
+      // 예산 계산: 응답성 측정 60초 + 수집 대기 360초 + 준비 30초 ≈ 450초 < 스텝 제한 540초.
+      // 예전엔 측정만 120초를 먹어 진단 덤프가 실행되기 전에 스텝이 죽었다.
+      for (let i = 0; i < 20; i += 1) {
         const t0 = Date.now();
         try {
           await evaluate(cdp, '1');
@@ -149,7 +153,7 @@ async function main() {
         if (took > worst) { worst = took; worstAt = Math.round((Date.now() - probeStart) / 1000); }
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
-      console.error('[응답성] 클릭 후 2분간 가장 긴 응답 지연: ' + worst + 'ms (' + worstAt + '초 지점)');
+      console.error('[응답성] 클릭 후 1분간 가장 긴 응답 지연: ' + worst + 'ms (' + worstAt + '초 지점)');
     }
     // 눌렀는데 흐름이 시작조차 안 하면 아래 검사는 아무것도 지키지 못한다.
     await waitFor(
@@ -192,6 +196,11 @@ async function main() {
           marketError: String(market.error || '').slice(0, 160),
           marketLoading: !!market.loading,
           // 수집 결과가 작업으로 안 넘어오는 경우가 있어, 시장 상태 쪽도 함께 센다.
+          // ★ 이 안의 정규식에는 역슬래시를 쓰지 말 것. 이 표현식 전체가 템플릿 문자열이라
+          //   역슬래시가 풀려 슬래시 두 개가 되고, 그게 주석이 되어 뒤 코드가 통째로 죽는다.
+          //   실제로 그래서 이 진단 덤프가 줄곧 SyntaxError 로 죽었고,
+          //   왜 후보가 0건인지 알려줄 유일한 장치가 벙어리였다.
+          //   문자클래스([/] [.])를 쓰면 이 문제 자체가 없다. 아래 265행도 같은 방식이다.
           marketHosts: (() => {
             const rows = Array.isArray(market.results) ? market.results : [];
             const counts = {};
@@ -199,9 +208,9 @@ async function main() {
               let host = '';
               for (const key of Object.keys(row || {})) {
                 const value = row[key];
-                if (typeof value === 'string' && /^https?:\/\//.test(value)) {
-                  const m = value.match(/^https?:\/\/([^\/?#]+)/);
-                  if (m) { host = m[1].replace(/^www\./, ''); break; }
+                if (typeof value === 'string' && /^https?:[/][/]/.test(value)) {
+                  const m = value.match(/^https?:[/][/]([^/?#]+)/);
+                  if (m) { host = m[1].replace(/^www[.]/, ''); break; }
                 }
               }
               const bucket = host || String((row && (row.siteId || row.site)) || '(주소없음)');
@@ -210,6 +219,36 @@ async function main() {
             return { total: rows.length, counts };
           })(),
           logs: logs.map(entry => String((entry && entry.message) || '').slice(0, 200)),
+          // 시장(경쟁사 수집)은 자기 로그를 따로 쌓는다. factory.logs 만 보면
+          // "수집은 됐는데 작업에 안 들어온다" 의 원인을 하나도 알 수 없다.
+          marketLogs: (Array.isArray(market.logs) ? market.logs.slice(-22) : [])
+            .map(entry => String((entry && (entry.message || entry.text)) || '').slice(0, 150)),
+          // 행이 작업으로 넘어가려면 작업 도장이 있어야 한다. 복구된 행에는 없다.
+          rowStamps: (Array.isArray(market.results) ? market.results.slice(0, 6) : []).map(row => ({
+            site: String((row && (row.siteId || row.site || row.platform)) || ''),
+            searchId: String((row && row._search_id) || ''),
+            recovered: !!(row && (row._recovered_search_result || row.previousWorkCandidate)),
+            productKey: String((row && row.factoryProductKey) || ''),
+            stageId: String((row && row.stageId) || ''),
+            // 도장이 있어도 **작업 범위**가 어긋나면 전부 탈락한다. 그 값을 같이 본다.
+            runId: String((row && row.currentRunId) || ''),
+            fingerprint: String((row && row.inputImageFingerprint) || '').slice(0, 24),
+            workspaceId: String((row && row.workspaceId) || ''),
+          })),
+          // 비교 대상: 지금 작업의 범위. 위 행들과 이 값이 다르면 '남의 것' 으로 걸러진다.
+          currentScope: {
+            workspaceId: String((factory.workspace && factory.workspace.id) || ''),
+            productKey: typeof factoryCurrentProductKey === 'function' ? String(factoryCurrentProductKey() || '') : '',
+            runId: typeof factoryCurrentWorkflowRunId === 'function' ? String(factoryCurrentWorkflowRunId() || '') : '',
+            fingerprint: typeof factoryCurrentInputImageFingerprint === 'function'
+              ? String(factoryCurrentInputImageFingerprint() || '').slice(0, 24) : '',
+          },
+          searchRuns: (Array.isArray(market.searchRuns) ? market.searchRuns : []).map(run => ({
+            searchId: String((run && run.searchId) || '').slice(-12),
+            sites: (run && run.sites) || [],
+            status: String((run && run.status) || ''),
+            total: (run && run.total) || 0,
+          })),
         };
       }`);
       console.error('[진단:' + label + '] ' + JSON.stringify(info, null, 1));
