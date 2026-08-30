@@ -11323,15 +11323,34 @@ function factoryRuntimeCreateCommandPolicies() {
       'goalRun.currentRunId',
     ]),
   ]);
+  // ★ competitors 를 빠뜨리면 **수집에 성공할수록 전부 잃는다.**
+  //   이 흐름은 경쟁사 수집이 성공했을 때만 factory.competitors.compPage 에 쓴다
+  //   (app-core-06.js 의 factorySyncCompetitorMarketToOwnedFactory).
+  //   그 경로가 정책에 없으면 커밋 순간 FACTORY_COMMAND_PATH_REJECTED 가 나고
+  //   드래프트가 통째로 폐기된다 — 후보 19건, 실행번호, 실행 상태, 단계, 로그까지 함께.
+  //   화면에는 시장 결과만 남는데 그건 작업 밖(state.compPage)에 있기 때문이다.
+  //   실측 2026-08-30: 바로 이것 때문에 "수집 19건인데 작업 반영 0건" 이었다.
+  //   같은 함수를 단독으로 부르는 factory/competitor:runVmCandidatesForSelection 에는
+  //   이 part 가 있어서 '다시 수집' 버튼만 되고 파란 시작 버튼은 안 됐다.
   add(['factory/start:runDb'], 'factory', [
     factoryWorkflow,
     product,
     factoryWorkflowAssets,
     part('cafe24', ['openMarketSync']),
+    part('competitors', ['competitors']),
   ]);
 
-  add(['factory/db:rerunDbVmOnly'], 'product-db', [factoryWorkflow, product]);
-  add(['factory/db:runDb'], 'product-db', [factoryWorkflow, product, factoryWorkflowAssets]);
+  // 아래 둘도 같은 흐름을 타므로 같은 경로가 필요하다.
+  // rerunDbVmOnly 는 stages 까지 빠져 있었다(factorySetStageStatus('db', ...) 를 쓴다).
+  add(['factory/db:rerunDbVmOnly'], 'product-db', [
+    factoryWorkflow, product, factoryWorkflowAssets,
+    part('competitors', ['competitors']),
+  ]);
+  add(['factory/db:runDb'], 'product-db', [
+    factoryWorkflow, product, factoryWorkflowAssets,
+    part('cafe24', ['openMarketSync']),
+    part('competitors', ['competitors']),
+  ]);
 
   add([
     'factory/db:rerunDbQuery', 'factory/db:rerunCafe24Query', 'factory/db:appendCafe24Query',
@@ -11711,6 +11730,21 @@ function factoryRuntimeRequireCurrentFollowupReceipt(actionName, receipt) {
 function factoryRuntimeReportError(error) {
   const failure = error instanceof Error ? error : new Error(String(error || 'factory runtime error'));
   if (failure.message !== 'READ_ONLY') state.error = failure.message;
+  // ★ 조용히 묻지 않는다. 예전에는 state.error 한 줄만 적고 끝이라,
+  //   커밋이 통째로 거절돼 작업이 폐기돼도 화면에도 로그에도 아무 말이 없었다.
+  //   "수집 19건인데 작업 반영 0건" 의 원인을 찾는 데 그래서 한참 걸렸다.
+  //   특히 정책 거절(FACTORY_COMMAND_PATH_REJECTED)은 개발자가 고쳐야 하는 것이므로
+  //   반드시 눈에 띄어야 한다.
+  if (failure.message !== 'READ_ONLY') {
+    try { console.error('[factory] 작업 저장 실패: ' + failure.message); } catch (logError) { void logError; }
+    if (/FACTORY_COMMAND_PATH_REJECTED|STALE_FACTORY_/.test(failure.message)) {
+      try {
+        if (typeof factoryLog === 'function') {
+          factoryLog(`작업 저장이 거절되어 이번 작업 내용이 반영되지 않았습니다: ${failure.message}`, 'error');
+        }
+      } catch (logError) { void logError; }
+    }
+  }
   return failure;
 }
 
