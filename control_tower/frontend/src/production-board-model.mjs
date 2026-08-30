@@ -136,6 +136,10 @@ export const OPERATOR_MESSAGES = Object.freeze({
   factory_worker_build_not_admitted: '허용되지 않은 조립공장 버전입니다. 조립공장을 최신으로 실행하세요.',
   factory_session_missing: '조립공장 연결이 끊겼습니다. 조립공장 창을 다시 여세요.',
   stale_factory_session: '조립공장 연결이 새로 맺어졌습니다. 이 작업을 다시 재개하세요.',
+  // 조립공장 탭을 다시 열거나 다른 작업이 끼어들면 앞선 지시가 밀린다. 이 코드가
+  // 그대로 보이면 조작자는 무슨 일인지 알 수 없다 - 실측 2026-08-31: 화면에
+  // STALE_FACTORY_RUNTIME_ACTION: factory/competitor:market:analyze-images 만 떴다.
+  STALE_FACTORY_RUNTIME_ACTION: '앞선 지시가 밀렸습니다. 「다시 시도」를 누르면 저장된 지점부터 이어집니다.',
   stale_workfile_revision: '작업파일이 더 최신 상태입니다. 조립공장에서 작업파일을 다시 여세요.',
   stale_run_fingerprint: '입력이 바뀌어 이전 결과와 맞지 않습니다. 작업을 다시 실행하세요.',
   candidate_membership_invalid: '고른 컷이 현재 후보에 없습니다. 후보를 다시 확인하세요.',
