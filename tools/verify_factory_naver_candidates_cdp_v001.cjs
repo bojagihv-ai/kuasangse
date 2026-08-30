@@ -50,8 +50,9 @@ async function main() {
   try {
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
-    await cdp.send('Network.enable');
-    await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    // Network 도메인은 켜지 않는다. 후보 19건의 이미지가 쏟아지면 이벤트가 CDP 채널을
+    // 채워 측정을 흐린다. 다만 **이것은 아래 멈춤의 원인이 아니었다** — 꺼도 똑같이 멈춘다.
+    // 원인 후보에서 '도구 탓' 을 지우려고 끈 것이지, 고쳐서 끈 것이 아니다.
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 960, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, factoryCdpFixtureReadyExpression() + " && typeof saveLastWorkNow === 'function'", 60000);
@@ -124,6 +125,36 @@ async function main() {
       return true;
     })()`);
     step('clicked');
+    // ★ 페이지가 정말 멈추는지 잰다. 사소한 식(`1`)을 3초마다 평가해 가장 긴 지연을 남긴다.
+    //
+    // 이 장치를 지우지 말 것. 이것이 없어서 같은 오진을 세 번 했다 —
+    // 수집이 아직 도는 중인데도 "수집이 멈췄다 / 작업 반영 0건" 으로 읽었다.
+    //
+    // 미해결 결함 (2026-08-30 실측, 3회 연속 동일):
+    //   클릭 후 **63초 지점**부터 `1` 평가조차 60초 타임아웃으로 죽는다. 매번 63초로 같다.
+    //   사람 눈에는 화면이 1분 넘게 얼어붙는 것으로 보인다.
+    //   원인에서 지운 것: CDP Network 이벤트(꺼도 동일), 중간 발행의 영속화(꺼도 동일).
+    //   다음에 볼 것: 렌더러가 죽는지(Inspector.targetCrashed 를 받아 본다),
+    //                 60초짜리 타이머/대기를 가진 코드가 무엇인지.
+    {
+      let worst = 0;
+      let worstAt = 0;
+      const probeStart = Date.now();
+      for (let i = 0; i < 40; i += 1) {
+        const t0 = Date.now();
+        try {
+          await evaluate(cdp, '1');
+        } catch (error) {
+          worst = Math.max(worst, Date.now() - t0);
+          console.error('[응답성] 평가 실패 ' + Math.round((Date.now() - probeStart) / 1000) + '초 지점: ' + String(error && error.message || error).slice(0, 80));
+          break;
+        }
+        const took = Date.now() - t0;
+        if (took > worst) { worst = took; worstAt = Math.round((Date.now() - probeStart) / 1000); }
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      console.error('[응답성] 클릭 후 2분간 가장 긴 응답 지연: ' + worst + 'ms (' + worstAt + '초 지점)');
+    }
     // 눌렀는데 흐름이 시작조차 안 하면 아래 검사는 아무것도 지키지 못한다.
     await waitFor(
       cdp,
