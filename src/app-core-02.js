@@ -5183,6 +5183,18 @@ function getCurrentDocumentWorkspaceScope(projectId = '') {
   const restoredId = String(
     factory?.workspace?.id || factory?.currentProjectId || '',
   ).replace(/^project:/i, '').trim();
+  // ★ 생산관제(다량생산) 워커가 만든 batch: 문서를 **사람 세션의 문서로 삼지 않는다.**
+  //   이 한 줄이 없어서, 배치 문서가 한 번 실려 오면 그 뒤로 저장도 복원도 전부
+  //   그 배치 문서 범위로 나갔다. 그래서 조립공장에서 일하다 새로고침하면
+  //   8/29 배치 워커가 남긴 값(수저집 파우치 · 12500.00 · 9930 · 1.00g · 면 100% · 생활)이
+  //   통째로 되살아났다. 사람이 만든 작업파일이 아닌데도.
+  //   (실측 2026-08-30: backend/.local/pdp-last-work-scoped/ff2f7f1d....json,
+  //    workspaceId = project:batch:factory-job-d9881fb8...)
+  //   워커 자신이 돌 때(classicRuntimeBatchWorkerMode)는 그 문서가 제 작업이므로 그대로 쓴다.
+  //   시작 복원에도 같은 규칙이 이미 있다(app-core-03.js 의 batch: 필터).
+  const isBatchDocument = /^batch:/i.test(restoredId);
+  const batchWorkerMode = typeof classicRuntimeBatchWorkerMode !== 'undefined' && classicRuntimeBatchWorkerMode;
+  if (isBatchDocument && !batchWorkerMode) return '';
   return restoredId && !/^draft:/i.test(restoredId)
     ? workspacePersistenceApi().normalizeProjectScope(restoredId)
     : '';
