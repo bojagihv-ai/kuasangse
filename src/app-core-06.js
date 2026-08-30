@@ -17548,7 +17548,18 @@ async function runCompMarketScrape(mode = 'vm', options = {}) {
       compMarketLog('VM 후보검색은 AHK 브리지로 VM 안의 JepumScraper 워커에서 실행합니다. 본컴 Chrome 후보검색 경로를 사용하지 않습니다.', 'info');
     }
 
-    const originalSelectedSites = [...market.selectedSites];
+    // 사이트 하나만 다시 수집할 수 있다. 스마트스토어만 막혔을 때 전부 다시 돌리는 건 낭비다.
+    // (주인님 2026-08-30: "스마트스토어만 클릭해서 따로 수집, 옥션만 따로 수집")
+    const requestedOnlySites = Array.isArray(options.onlySites)
+      ? options.onlySites.map(compMarketNormalizeSite).filter(Boolean)
+      : [];
+    const originalSelectedSites = requestedOnlySites.length
+      ? requestedOnlySites.filter(site => market.selectedSites.includes(site))
+      : [...market.selectedSites];
+    if (requestedOnlySites.length && !originalSelectedSites.length) {
+      compMarketLog('고른 사이트가 현재 선택 목록에 없습니다.', 'warn');
+      return { ok: false, collectMode, error: '고른 사이트가 선택 목록에 없습니다.' };
+    }
     const originalProductName = market.productName;
     const originalSearchKeyword = market.searchKeyword || originalProductName;
     const candidateSearchTerms = collectMode === 'vm'

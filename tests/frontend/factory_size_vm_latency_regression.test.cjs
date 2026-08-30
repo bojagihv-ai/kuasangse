@@ -1055,7 +1055,12 @@ test('Gmarket manual retry scopes the failed candidate and uses the authenticate
   assert.match(competitorGuideBridge, /runCompMarketDetailCapture\(receipt\.value,\s*\{\s*runtime:\s*'vm',\s*selectionMode:\s*'subset',\s*reuseVmSearchSession:\s*false,\s*operationToken:\s*receipt\.operationToken/);
   assert.doesNotMatch(competitorGuideBridge, /compMarketResumeDetailJob\(/);
   assert.match(shellGuideDelegation, /target\?\.closest\?\.\('\[data-factory-guide-action\]'\)/);
-  assert.match(shellGuideDelegation, /handlers\.runGuideAction\?\.\(action\)/);
+  // 지키려는 것은 "껍데기가 직접 일하지 않고 guide-action 경계로 넘긴다" 이다.
+  // 2026-08-30 사이트 하나만 다시 수집하는 기능이 생기면서 어느 사이트인지도 함께 넘긴다
+  // ({ action, site }). 경계는 그대로이므로 호출 모양만 넓힌다.
+  assert.match(shellGuideDelegation, /handlers\.runGuideAction\?\.\(/);
+  assert.match(shellGuideDelegation, /site \? \{ action, site \} : action/,
+    '사이트 정보를 안 넘기면 사이트별 다시 수집이 어느 사이트인지 모릅니다.');
   assert.match(shellGuideDelegation, /event\?\.preventDefault\?\.\(\)/);
   assert.match(runtimeBridgeSource, /function runFactoryShellGuideAction[\s\S]*factoryRuntimeReportError\(error\)[\s\S]*render\(\)/);
 });

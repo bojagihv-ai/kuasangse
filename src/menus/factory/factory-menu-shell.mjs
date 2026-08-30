@@ -14,6 +14,8 @@ const SHELL_GUIDE_ACTIONS = new Set([
   'resume-comp-market-detail',
   'rerun-vm-competitors',
   'rerun-local-competitors',
+  // 사이트 하나만 다시 수집(예: 스마트스토어만). 어느 사이트인지 data-site 로 함께 온다.
+  'rerun-site-competitors',
 ]);
 
 function clean(value) { return String(value ?? '').trim(); }
@@ -85,7 +87,9 @@ export function bindFactoryMenuShell(root, handlers = {}) {
       else {
         const action = attribute(guide, 'data-factory-guide-action', 'factoryGuideAction');
         if (!guide || !SHELL_GUIDE_ACTIONS.has(action)) return;
-        result = handlers.runGuideAction?.(action);
+        const site = clean(attribute(guide, 'data-site', 'site'));
+        // 사이트가 실려 오면 객체로 넘긴다. 그 외에는 예전처럼 문자열 그대로.
+        result = handlers.runGuideAction?.(site ? { action, site } : action);
       }
       event?.preventDefault?.();
       if (result && typeof result.catch === 'function') result.catch(() => {});

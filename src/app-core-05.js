@@ -9637,6 +9637,15 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
         <div style="font-size:10px;line-height:1.45;margin-top:4px">요청 ${escapeHtml(String(row.requested))} · 승인 ${escapeHtml(String(row.accepted))} · 미달 ${escapeHtml(String(row.shortfall))}</div>
         ${row.sourceLabel ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">출처 ${escapeHtml(row.sourceLabel)}</div>` : ''}
         ${row.shortfall && compMarketShortfallReasonText(row.shortfallReason, row) ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">미달 사유: ${escapeHtml(compMarketShortfallReasonText(row.shortfallReason, row))}</div>` : ''}
+        ${row.siteId ? `<button class="btn-sm" type="button"
+          data-factory-guide-action="rerun-site-competitors"
+          data-site="${escAttr(row.siteId)}"
+          ${market.loading ? 'disabled' : ''}
+          title="${escAttr(market.loading
+            ? '수집이 끝난 뒤 눌러주세요.'
+            : `${row.label}만 다시 수집합니다. 다른 사이트 결과는 그대로 둡니다.`)}"
+          style="margin-top:6px;width:100%;font-size:10px;padding:4px 6px"
+          >이 사이트만 다시 수집</button>` : ''}
       </div>`).join('')}
     </div>
     ${attempts.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">

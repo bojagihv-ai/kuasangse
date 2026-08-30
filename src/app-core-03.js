@@ -11430,6 +11430,9 @@ function factoryRuntimeCreateCommandPolicies() {
   add([
     'factory/competitor:guide:rerun-local-competitors',
     'factory/competitor:guide:rerun-vm-competitors',
+    // 사이트 하나만 다시 수집. 형제들과 같은 범위를 써야 한다 —
+    // 빠뜨리면 수집에 성공하는 순간 저장이 거절되어 작업이 통째로 버려진다(300edbe 참고).
+    'factory/competitor:guide:rerun-site-competitors',
   ], 'competitors', [part('competitors', ['compPage'])], 'competitors');
   add([
     'factory/competitor:market:candidate-target', 'factory/competitor:market:source-view',
@@ -12477,7 +12480,11 @@ function factoryRuntimeFieldsHelpers() {
 }
 
 function factoryRuntimeCompetitorGuideAction(actionValue, operationContext) {
-  const action = String(actionValue || '').trim();
+  // 예전에는 문자열만 받았다. 사이트 하나만 다시 수집하려면 어느 사이트인지도 실어야 해서
+  // 객체({ action, site, runtime })도 받도록 넓혔다. 문자열은 예전 그대로 동작한다.
+  const detail = actionValue && typeof actionValue === 'object' ? actionValue : {};
+  const action = String(detail.action ?? actionValue ?? '').trim();
+  const options = detail;
   if (action === 'open-vm-capture') {
     return runFactoryShellGuideAction(action);
   }
@@ -12534,6 +12541,20 @@ function factoryRuntimeCompetitorGuideAction(actionValue, operationContext) {
       'factory/competitor:guide:rerun-local-competitors',
       operationContext,
       () => runCompMarketScrape('local'),
+    );
+  }
+  // 사이트 하나만 다시 수집한다. 스마트스토어만 막혔는데 다섯 곳을 전부 다시 도는 건 낭비다.
+  // 실행 경로(본컴/VM)는 지금 화면에서 고른 것을 그대로 따른다 — 사용자가 고른 것을 바꾸지 않는다.
+  if (action === 'rerun-site-competitors') {
+    const site = String(options.site || '').trim();
+    if (!site) return false;
+    const runtime = String(options.runtime || '').trim()
+      || (ensureCompMarketScrapeState().collectMode === 'local' ? 'local' : 'vm');
+    if (runtime === 'local' && !compMarketConfirmLocalCandidateCollection()) return false;
+    return factoryRuntimeRunLegacyCompetitorMarketAction(
+      'factory/competitor:guide:rerun-site-competitors',
+      operationContext,
+      () => runCompMarketScrape(runtime, { onlySites: [site] }),
     );
   }
   return factoryRuntimeBridgeAction(`factory/competitor:guide:${action || '<empty>'}`, operationContext, draft => {

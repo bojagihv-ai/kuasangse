@@ -1,6 +1,6 @@
 {
   "schema": "kuasangse.runtime.v1",
-  "buildId": "20260811-webmcp-hydration-bridge-v1332",
+  "buildId": "20260811-webmcp-hydration-bridge-v1334",
   "entry": "app.html",
   "loader": "src/app-loader.js",
   "bundle": "dist/app-runtime.bundle.js",
@@ -167,5 +167,5 @@
     "src/cafe24-sync.js",
     "src/app-core-06.js"
   ],
-  "sourceDigest": "e57577e917758845465e982ba2fb2456cf0bf75531b01f27396b828e39d4b531"
+  "sourceDigest": "9c738017c596258575cf08f15fa81b652d5765344522d4bd5e47903d5b517a04"
 }
