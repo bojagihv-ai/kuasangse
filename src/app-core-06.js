@@ -4792,42 +4792,55 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
     signal: collectionController.signal,
     isCurrent: () => collectionIsCurrent(),
   };
-  // 후보 검색을 본컴 우선으로 바꾸려던 시도를 **두 번** 되돌렸다. 기록을 남긴다.
+  // 후보 검색은 본컴을 먼저 쓴다. 본컴이 0건일 때만 VM 을 예비로 쓴다.
   //
-  // 왜 하려 했나 (실측 2026-08-30, API Hub 경유 JepumScraper):
+  // 실측 2026-08-30, API Hub(127.0.0.1:4321) 경유 JepumScraper:
   //   본컴 → success 20/20 (coupang 4 · **naver 4** · gmarket 4 · auction 4 · 11st 4)
   //   VM   → error   0/20 (90초 소요)
-  //   네이버는 5개 마켓 중 유일하게 api_enabled=true 라 본컴에서 로그인 없이도 잘 나온다.
-  //   그래서 이 경로만 스마트스토어 후보가 0건이었다.
+  // 네이버는 5개 마켓 중 유일하게 api_enabled=true 라 본컴에서 로그인 없이도 잘 나온다.
+  // 이 경로만 VM 고정이라 스마트스토어 후보가 0건이었다(생산관제는 02f0ce7 에서 이미 바뀜).
   //
-  // 1차 시도: 순서만 바꿨다 → 수집 19건(네이버 4건 포함)인데 **작업 반영 0건**.
-  //   원인: 본컴은 행을 응답으로 안 돌려줬고(rawProducts: []), 시장 상태에만 쌓인 행은
-  //   함수 진입 때 잡아둔 currentScope 로 걸러진다. 시작 버튼이 작업 신원을 회전시켜
-  //   그 범위가 어긋나 전부 탈락했다.
-  // 2차 시도: 본컴도 행을 응답으로 돌려주게 고치고 다시 켰다
-  //   → 이번엔 렌더러가 45초 이상 멈춰 CDP 평가가 죽었다. 원인 미확정.
+  // ★ 본컴은 **사이트를 하나씩 순차로** 돈다(아래 originalSelectedSites 루프,
+  //   사이트당 최대 70회 폴링 × 1.5초, 옥션만 36회). 그래서 **약 116초** 걸린다.
+  //   VM 은 compMarketTryVmSearch 로 한 번에 전 사이트를 검색한다.
+  //   이 차이를 모르고 검증 대기를 2~5분으로 잡았다가 **세 번 오진했다** —
+  //   "수집은 되는데 작업에 안 들어온다" 로 보였지만 실제로는 아직 도는 중이었다.
+  //   호출자 타임아웃은 factoryVmCandidateTimeoutMs()*3 = 30분이라 원래 충분하다.
+  //   실제 버튼을 눌러 확인: 수집 19건(네이버 4) → 작업 반영 19건(네이버 4), 115.8초.
   //
-  // 사용자에게는 VM 이라도 15건을 주는 편이 낫다. 원인을 확정하기 전까지 VM 을 쓴다.
-  // 다음에 볼 것: 본컴 응답이 커진 뒤 어디서 멈추는지(대량 행 정규화/렌더 의심).
+  // (아래는 예전에 되돌렸던 기록이다. 원인은 필터도 draft 유실도 아니었다 — 그냥 느렸다.)
+  //   1차: 순서만 바꿨다 → "수집 19건인데 작업 반영 0건" 으로 보여 되돌렸다.
+  //   2차: rawProducts 를 본컴도 돌려주게 고쳤다 → "렌더러 45초 멈춤" 으로 보여 되돌렸다.
+  //   둘 다 오진이었다. 검증 대기가 짧아 아직 도는 중인 것을 실패로 읽었다.
+  //   rawProducts 계약은 원래대로 두었다(comp_market_finalize_results 가 못박고 있다).
+  const runScrape = runtime => factoryResolveTaskWithTimeout(
+    compMarketRunWithOwnedWorkScope(
+      currentScope,
+      () => runCompMarketScrape(runtime, {
+        collectionContext,
+        deferMissingSiteAssistance: true,
+        skipServicePreflight: options.skipServicePreflight === true,
+        skipConfirm: options.skipConfirm === true,
+        factory,
+      }),
+    ),
+    timeoutMs,
+    () => {
+      collectionController.abort();
+      return { timedOut: true };
+    },
+  );
   try {
-    scrapeResult = await factoryResolveTaskWithTimeout(
-      compMarketRunWithOwnedWorkScope(
-        currentScope,
-        () => runCompMarketScrape('vm', {
-          collectionContext,
-          deferMissingSiteAssistance: true,
-          skipServicePreflight: options.skipServicePreflight === true,
-          skipConfirm: options.skipConfirm === true,
-          factory,
-        }),
-      ),
-      timeoutMs,
-      () => {
-        collectionController.abort();
-        return { timedOut: true };
-      },
-    );
+    scrapeResult = await runScrape('local');
     requireCurrent();
+    const localRows = scrapeResult?.timedOut
+      ? { rows: [] }
+      : factoryFreshVmCandidateRows(state.compPage?.marketScrape || market, scrapeResult || {}, currentScope);
+    if (!scrapeResult?.timedOut && !localRows.rows.length) {
+      factoryLog('본컴 후보 수집이 0건이라 VM 경로로 한 번 더 시도합니다.', 'warn', factory);
+      scrapeResult = await runScrape('vm');
+      requireCurrent();
+    }
     vmTimedOut = !!scrapeResult?.timedOut;
     if (!vmTimedOut) {
       reportVmProgress(60, 'running', 'VM 응답을 받았습니다. 후보를 정리합니다.', {

@@ -33,7 +33,10 @@ const SCREENSHOT_PATH = path.join(OUT_DIR, 'factory-naver-candidates-v001.png');
 const RESULT_PATH = path.join(OUT_DIR, 'factory-naver-candidates-v001.json');
 
 // 수집이 실제 외부 사이트를 도는 흐름이라 넉넉히 준다.
-const COLLECT_TIMEOUT_MS = Number(process.env.KUASANGSE_NAVER_TIMEOUT_MS || 300000);
+// 실측 2026-08-30: 본컴 경로는 사이트를 하나씩 순차로 돌기 때문에 **약 116초** 걸린다
+// (사이트당 최대 70회 폴링 × 1.5초, 옥션만 36회). 짧게 잡았다가 세 번 헛짚었다 —
+// 멈춘 것으로 보였지만 그냥 아직 도는 중이었다. 넉넉히 준다.
+const COLLECT_TIMEOUT_MS = Number(process.env.KUASANGSE_NAVER_TIMEOUT_MS || 600000);
 const KEYWORD = process.env.KUASANGSE_NAVER_KEYWORD || '수저집 파우치';
 
 async function main() {
