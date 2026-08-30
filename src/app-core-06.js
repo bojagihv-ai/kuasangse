@@ -17561,7 +17561,14 @@ async function runCompMarketScrape(mode = 'vm', options = {}) {
       return { ok: false, collectMode, error: '고른 사이트가 선택 목록에 없습니다.' };
     }
     const originalProductName = market.productName;
-    const originalSearchKeyword = market.searchKeyword || originalProductName;
+    // 검색어를 바꿔서 다시 수집할 수 있다. 제품명 그대로는 안 잡히는데
+    // 짧게 줄이거나 다른 말로 하면 잡히는 경우가 많다(주인님 2026-08-31).
+    // 작업의 제품명은 건드리지 않는다 — 이번 검색에만 쓴다.
+    const requestedKeyword = String(options.searchKeyword || '').trim();
+    const originalSearchKeyword = requestedKeyword || market.searchKeyword || originalProductName;
+    if (requestedKeyword) {
+      compMarketLog(`검색어를 '${requestedKeyword}' 로 바꿔 수집합니다. (작업 제품명은 그대로 둡니다)`, 'info');
+    }
     const candidateSearchTerms = collectMode === 'vm'
       ? factoryVmCompetitorSearchTerms(
           originalProductName,

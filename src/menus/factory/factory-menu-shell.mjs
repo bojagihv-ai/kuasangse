@@ -16,6 +16,8 @@ const SHELL_GUIDE_ACTIONS = new Set([
   'rerun-local-competitors',
   // 사이트 하나만 다시 수집(예: 스마트스토어만). 어느 사이트인지 data-site 로 함께 온다.
   'rerun-site-competitors',
+  // 검색어를 바꿔서 다시 수집. 입력한 검색어가 data-search-keyword 로 함께 온다.
+  'rerun-with-keyword',
 ]);
 
 function clean(value) { return String(value ?? '').trim(); }
@@ -88,8 +90,14 @@ export function bindFactoryMenuShell(root, handlers = {}) {
         const action = attribute(guide, 'data-factory-guide-action', 'factoryGuideAction');
         if (!guide || !SHELL_GUIDE_ACTIONS.has(action)) return;
         const site = clean(attribute(guide, 'data-site', 'site'));
-        // 사이트가 실려 오면 객체로 넘긴다. 그 외에는 예전처럼 문자열 그대로.
-        result = handlers.runGuideAction?.(site ? { action, site } : action);
+        // 검색어 입력칸이 있으면 지금 값을 읽어 함께 넘긴다.
+        const keywordSelector = clean(attribute(guide, 'data-keyword-source', 'keywordSource'));
+        const keywordInput = keywordSelector ? root?.querySelector?.(keywordSelector) : null;
+        const searchKeyword = clean(keywordInput?.value);
+        // 실릴 것이 있으면 객체로 넘긴다. 그 외에는 예전처럼 문자열 그대로.
+        result = (site || searchKeyword)
+          ? handlers.runGuideAction?.({ action, site, searchKeyword })
+          : handlers.runGuideAction?.(action);
       }
       event?.preventDefault?.();
       if (result && typeof result.catch === 'function') result.catch(() => {});

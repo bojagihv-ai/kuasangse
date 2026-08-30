@@ -1059,8 +1059,8 @@ test('Gmarket manual retry scopes the failed candidate and uses the authenticate
   // 2026-08-30 사이트 하나만 다시 수집하는 기능이 생기면서 어느 사이트인지도 함께 넘긴다
   // ({ action, site }). 경계는 그대로이므로 호출 모양만 넓힌다.
   assert.match(shellGuideDelegation, /handlers\.runGuideAction\?\.\(/);
-  assert.match(shellGuideDelegation, /site \? \{ action, site \} : action/,
-    '사이트 정보를 안 넘기면 사이트별 다시 수집이 어느 사이트인지 모릅니다.');
+  assert.match(shellGuideDelegation, /\{ action, site, searchKeyword \}/,
+    '사이트·검색어를 안 넘기면 사이트별/검색어별 다시 수집이 무엇을 할지 모릅니다.');
   assert.match(shellGuideDelegation, /event\?\.preventDefault\?\.\(\)/);
   assert.match(runtimeBridgeSource, /function runFactoryShellGuideAction[\s\S]*factoryRuntimeReportError\(error\)[\s\S]*render\(\)/);
 });

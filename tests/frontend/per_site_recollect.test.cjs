@@ -41,7 +41,10 @@ test('사이트 카드마다 다시 수집 버튼이 있다', () => {
 
 test('껍데기가 사이트를 함께 넘긴다', () => {
   assert.match(SHELL, /'rerun-site-competitors',/, '껍데기가 이 동작을 무시하면 버튼이 죽습니다.');
-  assert.match(SHELL, /site \? \{ action, site \} : action/);
+  // 2026-08-31 검색어 바꿔 수집이 생기면서 실을 것이 하나 늘었다.
+  // 지켜야 할 것은 "실을 것이 있으면 객체로, 없으면 예전처럼 문자열" 이다.
+  assert.match(SHELL, /\(site \|\| searchKeyword\)/);
+  assert.match(SHELL, /\{ action, site, searchKeyword \}/);
   // 예전 동작(문자열)은 그대로여야 한다.
   assert.match(SHELL, /handlers\.runGuideAction\?\.\(/);
 });
@@ -50,7 +53,7 @@ test('액션이 사이트를 받아 그 사이트만 수집한다', () => {
   const handler = sourceSlice(CORE_03, "if (action === 'rerun-site-competitors') {", 'return factoryRuntimeBridgeAction(`factory/competitor:guide:');
   assert.match(handler, /const site = String\(options\.site \|\| ''\)\.trim\(\);/);
   assert.match(handler, /if \(!site\) return false;/, '사이트 없이 부르면 전체 수집이 돌아버립니다.');
-  assert.match(handler, /runCompMarketScrape\(runtime, \{ onlySites: \[site\] \}\)/);
+  assert.match(handler, /runCompMarketScrape\(runtime, \{ onlySites: \[site\], searchKeyword: options\.searchKeyword \}\)/);
 });
 
 test('실행 경로는 사용자가 고른 것을 따른다', () => {

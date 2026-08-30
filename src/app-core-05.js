@@ -9519,7 +9519,12 @@ function factoryVmSearchSiteRows(market = {}) {
       state = '이번 실행 미확정';
       tone = 'muted';
     } else if (!loading && hasAttempt && (!state || /대기|검색 중|수집 중|보조수집/.test(state))) {
-      state = '검색 완료 · 결과 없음';
+      // ★ 사이트별 보고가 없으면 '검색 완료' 라고 단정하지 않는다.
+      //   실측 2026-08-31: 네이버는 실제로 검색을 돌았지만 사이트가 접속을 막았다
+      //   (스크래퍼: "네이버쇼핑 접속 제한 + 통합검색 폴백에서도 결과 없음").
+      //   그런데 화면은 '검색 완료 · 결과 없음' 이라고만 말해, 주인님이 "실제로 검색은 했니?" 하고
+      //   되물어야 했다. 물건이 없는 것과 막힌 것은 완전히 다른 얘기다. 모르면 모른다고 한다.
+      state = '결과 없음 · 사유 미확인';
       tone = 'warn';
     }
     if (!state) {
@@ -9541,7 +9546,7 @@ function factoryVmSearchSiteRows(market = {}) {
         state = `${count}건 확보`;
         tone = 'ok';
       } else if (hasAttempt) {
-        state = '검색 완료 · 결과 없음';
+        state = '결과 없음 · 사유 미확인';
         tone = 'warn';
       } else {
         state = '대기';
@@ -9602,6 +9607,8 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
   if (!shouldShow || !rows.length) return '';
   const isLocalSearch = market.collectMode === 'local';
   const boardTitle = isLocalSearch ? '오픈마켓별 후보 검색 현황' : '오픈마켓별 VM 검색 현황';
+  // 어떤 검색어로 돌았는지 카드에 적는다. 제품명과 다를 수 있다(검색어 바꿔 수집).
+  const searchTermLabel = String(market.searchKeyword || market.productName || '').trim().slice(0, 24);
   const busyLabel = isLocalSearch ? '본컴 검색 중' : 'VM 검색 중';
   const statusReason = /실패|network|HTTP|연결 실패/i.test(String(market.status || '')) ? String(market.status || '').trim() : '';
   const restoredFailureReason = !market.loading && String(market.collectionStatus?.eta || '').trim() === '실패'
@@ -9635,7 +9642,9 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
         <div style="font-size:11px;font-weight:950;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(row.label)}</div>
         <div style="font-size:12px;font-weight:950;line-height:1.35;margin-top:3px">${escapeHtml(row.state)}</div>
         <div style="font-size:10px;line-height:1.45;margin-top:4px">요청 ${escapeHtml(String(row.requested))} · 승인 ${escapeHtml(String(row.accepted))} · 미달 ${escapeHtml(String(row.shortfall))}</div>
-        ${row.sourceLabel ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">출처 ${escapeHtml(row.sourceLabel)}</div>` : ''}
+        <div style="font-size:10px;line-height:1.4;margin-top:2px;opacity:.85">
+          경로 ${escapeHtml(isLocalSearch ? '본컴' : 'VM')}${row.sourceLabel ? ` · 출처 ${escapeHtml(row.sourceLabel)}` : ''}${searchTermLabel ? ` · 검색어 ${escapeHtml(searchTermLabel)}` : ''}
+        </div>
         ${row.shortfall && compMarketShortfallReasonText(row.shortfallReason, row) ? `<div style="font-size:10px;line-height:1.4;margin-top:2px">미달 사유: ${escapeHtml(compMarketShortfallReasonText(row.shortfallReason, row))}</div>` : ''}
         ${row.siteId ? `<button class="btn-sm" type="button"
           data-factory-guide-action="rerun-site-competitors"
@@ -9647,6 +9656,20 @@ function renderFactoryVmSearchSiteBoard(market = {}, options = {}) {
           style="margin-top:6px;width:100%;font-size:10px;padding:4px 6px"
           >이 사이트만 다시 수집</button>` : ''}
       </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,.07)">
+      <span style="font-size:10px;color:var(--text-m);white-space:nowrap">검색어 바꿔 수집</span>
+      <input type="text" id="compMarketKeywordOverride"
+        value="${escAttr(searchTermLabel)}"
+        placeholder="예: 수저집"
+        title="${escAttr('제품명 그대로는 안 잡히는데 짧게 줄이면 잡히는 경우가 많습니다. 작업 제품명은 바뀌지 않고 이번 검색에만 씁니다.')}"
+        style="flex:1;min-width:120px;font-size:11px;padding:4px 7px;border-radius:7px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.28);color:var(--text)" />
+      <button class="btn-sm" type="button"
+        data-factory-guide-action="rerun-with-keyword"
+        data-keyword-source="#compMarketKeywordOverride"
+        ${market.loading ? 'disabled' : ''}
+        title="${escAttr(market.loading ? '수집이 끝난 뒤 눌러주세요.' : '이 검색어로 전체 사이트를 다시 수집합니다. 작업 제품명은 그대로 둡니다.')}"
+        style="font-size:10px;padding:4px 8px">이 검색어로 수집</button>
     </div>
     ${attempts.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
       ${attempts.map((attempt, index) => `<span class="factory-pill" title="${escAttr(attempt.status || '')}">${escapeHtml(attempt.label || `검색 ${index + 1}`)} · ${escapeHtml(attempt.term || '')} · ${escapeHtml(attempt.status || '대기')}</span>`).join('')}

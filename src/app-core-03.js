@@ -11472,6 +11472,7 @@ function factoryRuntimeCreateCommandPolicies() {
     // 사이트 하나만 다시 수집. 형제들과 같은 범위를 써야 한다 —
     // 빠뜨리면 수집에 성공하는 순간 저장이 거절되어 작업이 통째로 버려진다(300edbe 참고).
     'factory/competitor:guide:rerun-site-competitors',
+    'factory/competitor:guide:rerun-with-keyword',
   ], 'competitors', [part('competitors', ['compPage'])], 'competitors');
   add([
     'factory/competitor:market:candidate-target', 'factory/competitor:market:source-view',
@@ -12593,7 +12594,25 @@ function factoryRuntimeCompetitorGuideAction(actionValue, operationContext) {
     return factoryRuntimeRunLegacyCompetitorMarketAction(
       'factory/competitor:guide:rerun-site-competitors',
       operationContext,
-      () => runCompMarketScrape(runtime, { onlySites: [site] }),
+      () => runCompMarketScrape(runtime, { onlySites: [site], searchKeyword: options.searchKeyword }),
+    );
+  }
+  // 검색어를 바꿔서 다시 수집한다. 제품명 그대로는 안 잡히는데 짧게 줄이면 잡히는 경우가 많다.
+  // 작업의 제품명은 바꾸지 않는다 — 이번 검색에만 쓴다.
+  if (action === 'rerun-with-keyword') {
+    const keyword = String(options.searchKeyword || '').trim();
+    if (!keyword) {
+      if (typeof compMarketLog === 'function') compMarketLog('검색어를 입력해주세요.', 'warn');
+      return false;
+    }
+    const runtime = String(options.runtime || '').trim()
+      || (ensureCompMarketScrapeState().collectMode === 'local' ? 'local' : 'vm');
+    if (runtime === 'local' && !compMarketConfirmLocalCandidateCollection()) return false;
+    const onlySites = String(options.site || '').trim() ? [String(options.site).trim()] : undefined;
+    return factoryRuntimeRunLegacyCompetitorMarketAction(
+      'factory/competitor:guide:rerun-with-keyword',
+      operationContext,
+      () => runCompMarketScrape(runtime, { searchKeyword: keyword, ...(onlySites ? { onlySites } : {}) }),
     );
   }
   return factoryRuntimeBridgeAction(`factory/competitor:guide:${action || '<empty>'}`, operationContext, draft => {
