@@ -167,7 +167,7 @@ test('0건인 사이트만 골라 복구한다', () => {
   // 순차에서는 사이트마다 재시도·benchmark 구제를 각각 받았다. 배치는 전체가 0건일 때만
   // 그 구제가 걸리므로, 네이버만 0건인 상황이 그대로 구멍이 된다. 그 구멍을 메우는 계약이다.
   const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
-  assert.match(local, /const emptySites = originalSelectedSites\.filter\(/);
+  assert.match(local, /(const|let) emptySites = originalSelectedSites\.filter\(/);
   assert.match(local, /compMarketRecoverRecentCompletedProductsForSites\(market, emptySites, 'local', collectionContext\)/);
 });
 
@@ -212,6 +212,39 @@ test('화면이 얼어붙는 현상을 재는 장치가 검증기에 있다', ()
   //   사람이 자리를 비우면 앱이 통째로 멈춘다. 막지 않는 안내로 바꾸는 것이 옳다.
   const verifier = fs.readFileSync(path.join(ROOT, 'tools/verify_factory_naver_candidates_cdp_v001.cjs'), 'utf8');
   assert.match(verifier, /응답성/, '얼어붙음을 재는 장치가 사라졌습니다. 다시 오진하게 됩니다.');
+});
+
+test('일시적 실패와 진짜 0건을 구분해 재검색한다', () => {
+  // 0건에는 두 종류가 있다. '물건이 없다'(zero_result·insufficient_results)와
+  // '일시적 실패'(error·timeout·blocked). 앞은 다시 해도 소용없고 뒤는 대개 한 번에 잡힌다.
+  // 실측 2026-08-30: 같은 제품명으로 연속 검색했더니 한 번은 네이버 error 0건,
+  // 다음엔 네이버 4건에 옥션 0건. 사이트별 실패가 무작위로 섞인다.
+  const local = sourceSlice(CORE_06, '// 사이트를 하나씩 돌지 않는다.', 'market.selectedSites = originalSelectedSites;');
+  assert.match(local, /const siteFailureReason = site =>/);
+  assert.match(local, /error\|timeout\|blocked\|cooldown\|fail\|denied\|forbidden/,
+    '일시적 실패를 가려내는 조건이 사라졌습니다.');
+  assert.match(local, /const retrySites = emptySites\.filter\(/);
+  assert.match(local, /routeLabel: '본컴 재검색'/);
+  // 재검색은 **오류 사이트만** 대상이어야 한다. 전부 다시 하면 두 배로 느려진다.
+  assert.match(local, /compMarketTryV1Search\(market, retrySites, \{/);
+  // 재검색 결과도 기록해야 작업 반영 필터를 통과한다.
+  assert.match(local, /rememberLocalSearchRun\(retrySites, \{/);
+});
+
+test('스크래퍼가 사람 손을 요구하면 화면에 알린다', () => {
+  // 스크래퍼 스펙이 스스로 user_action_policy: poll_status_and_follow_interaction 이라고 말한다.
+  // 앱은 이 값을 한 번도 안 읽었고, 그래서 네이버가 로그인/인증을 요구하면
+  // 화면에는 아무 말 없이 0건만 남았다. 그 침묵이 "네이버가 안 잡힌다" 의 한 갈래다.
+  assert.match(CORE_06, /function compMarketAnnounceInteractionNeed\(/);
+  assert.match(CORE_06, /사용자 조작 필요:/);
+  assert.match(CORE_06, /next\.interaction = \{/, '스크래퍼의 interaction 을 받아 적어야 합니다.');
+  // 폴링에서 실제로 따라야 한다. 받아만 적고 안 보면 소용없다.
+  const poll = sourceSlice(CORE_06, "const waitLabel = searchRuntime === 'vm'", 'finalStatus = status;');
+  const after = CORE_06.slice(CORE_06.indexOf('finalStatus = status;'));
+  assert.match(after.slice(0, 400), /compMarketAnnounceInteractionNeed\(market\)/);
+  void poll;
+  // 매 폴링마다 떠들면 로그가 묻힌다. 같은 내용은 한 번만.
+  assert.match(CORE_06, /market\.lastInteractionSignature === signature/);
 });
 
 test('실제 버튼을 누르는 검증기가 파일로 남아 있다', () => {
