@@ -117,6 +117,13 @@ export function createBrowserWorkspacePersistence(root) {
       const current = authority?.snapshot?.();
       return sessionAssetRecordMatchesAuthority(record, current, scopeId) ? record : null;
     },
+    // 주인을 잃은 초안 되살리기용. 권한 검사를 거치지 않는 것은
+    // 작업파일용과 같은 이유다 — 아직 내 것이 아닌 기록을 '읽어서' 내 것으로 옮겨오는 단계다.
+    // 옮겨온 뒤에는 반드시 현재 가지에 묶고(bindWorkspaceSnapshotToCurrentBranch)
+    // 신원 검증을 통과해야만 쓴다.
+    loadDraftSessionAssetsForRecovery(scopeId) {
+      return adapters.indexeddb.getDraftSessionAssetsForRecovery(normalizeWorkspaceScope(scopeId));
+    },
     loadDocumentSessionAssetsForBranchMigration(scopeId) {
       const documentScopeId = normalizeProjectScope(scopeId);
       return adapters.indexeddb.getDocumentSessionAssetsForBranchMigration(documentScopeId);

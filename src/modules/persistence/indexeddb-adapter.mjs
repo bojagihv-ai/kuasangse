@@ -168,6 +168,16 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
         : records;
     },
     getSessionAssets,
+    // 탭이 죽어 주인을 잃은 **초안**을 되살리기 위한 읽기.
+    // 초안 범위는 탭마다 새로 만들어지므로(draft:lastwork_...), 새 탭은 앞 탭이 저장한
+    // 내용을 영영 못 찾는다. 실측 2026-08-30: 그렇게 버려진 초안이 1,369개 쌓여 있었다.
+    // 작업파일용(getDocumentSessionAssetsForBranchMigration)과 같은 모양이고,
+    // 다른 점은 project: 가 아니라 draft: 범위만 받는다는 것뿐이다.
+    async getDraftSessionAssetsForRecovery(draftScopeId) {
+      const scopeId = normalizeWorkspaceScope(draftScopeId);
+      if (!scopeId.startsWith('draft:')) return null;
+      return getSessionAssets(scopeId);
+    },
     async getDocumentSessionAssetsForBranchMigration(projectId) {
       const scopeId = normalizeProjectScope(projectId);
       const scoped = await getSessionAssets(scopeId);
