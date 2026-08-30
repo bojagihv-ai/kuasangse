@@ -7306,7 +7306,12 @@ async function deleteSnapshotRecord(snapshotId) {
 //     이후 이름 변경은 사람이 '다른 이름' 으로 한다.
 //   - 다량생산(배치 워커) 탭에서는 아무것도 하지 않는다. 워커는 제 문서를 그대로 써야 한다.
 async function factoryAdoptWorkfileNameOnStart(productName) {
-  if (typeof classicRuntimeBatchWorkerMode !== 'undefined' && classicRuntimeBatchWorkerMode) return false;
+  // typeof 로는 못 막는다. 이 변수는 아래에서 let 으로 선언되므로 선언 전 접근이면
+  // typeof 조차 ReferenceError 를 던진다. 지금은 이 함수가 늦게 불려 안 터지지만 지뢰라 감싼다.
+  // (같은 함정이 app-core-02.js 에서 실제로 터져 강제 새로고침에 생성물이 통째로 사라졌다 — SAVE-26)
+  let batchWorkerModeNow = false;
+  try { batchWorkerModeNow = classicRuntimeBatchWorkerMode === true; } catch (_) { batchWorkerModeNow = false; }
+  if (batchWorkerModeNow) return false;
   const name = String(productName || '').trim().slice(0, 80);
   if (!name) return false;
   const currentId = String(state.currentProjectId || '').trim();

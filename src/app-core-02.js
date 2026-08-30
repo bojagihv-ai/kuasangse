@@ -5193,7 +5193,12 @@ function getCurrentDocumentWorkspaceScope(projectId = '') {
   //   워커 자신이 돌 때(classicRuntimeBatchWorkerMode)는 그 문서가 제 작업이므로 그대로 쓴다.
   //   시작 복원에도 같은 규칙이 이미 있다(app-core-03.js 의 batch: 필터).
   const isBatchDocument = /^batch:/i.test(restoredId);
-  const batchWorkerMode = typeof classicRuntimeBatchWorkerMode !== 'undefined' && classicRuntimeBatchWorkerMode;
+  // ★ typeof 로는 못 막는다. classicRuntimeBatchWorkerMode 는 **뒤에 오는 파일에서 let 으로**
+  //   선언되므로, 부팅 초반(복원 중)에는 선언 전 접근이 되어 typeof 조차 ReferenceError 를 던진다.
+  //   그 예외가 복원 경로를 끊어 강제 새로고침에서 생성물 10개가 통째로 사라졌다
+  //   (실측 2026-08-30, 일일 회귀 SAVE-26). var 나 undeclared 였다면 안 났을 함정이다.
+  let batchWorkerMode = false;
+  try { batchWorkerMode = classicRuntimeBatchWorkerMode === true; } catch (_) { batchWorkerMode = false; }
   if (isBatchDocument && !batchWorkerMode) return '';
   return restoredId && !/^draft:/i.test(restoredId)
     ? workspacePersistenceApi().normalizeProjectScope(restoredId)
