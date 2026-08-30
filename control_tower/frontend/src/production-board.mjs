@@ -79,6 +79,13 @@ export function mountProductionBoard(runtime, {
   let jobs = [];
   let openCell = { jobId: '', stageKey: '' };
   let statusLine = { copy: '병렬 생산 보드를 불러오는 중입니다.', tone: '' };
+  // busy 는 보드 전체의 버튼을 한꺼번에 잠근다. 그래서 이 깃발이 한 번 걸린 채 남으면
+  // 「다시 시도」·「작업 재개」·「Cafe24 등록」이 모두 죽고, 화면은 아무 말도 하지 않는다.
+  // 실측 2026-08-31: 카드가 "다음: 다시 시도 누르기" 라고 적어 둔 바로 그 버튼이 잠겨
+  // 있어 몇 번을 눌러도 요청이 나가지 않았다. 새로고침해야만 풀렸다.
+  // 원인은 깃발을 세운 뒤 try 밖에서 render()/setStatus() 를 부른 것이었다. 그 사이에서
+  // 예외가 한 번 나면 finally 가 없으니 깃발이 영원히 걸린다. 아래 일곱 군데 모두
+  // busy = true 다음 줄이 곧바로 try 여야 하고, 내리는 일은 finally 에만 있어야 한다.
   let busy = false;
   let autoResume = true;
   let connected = null;
@@ -1553,9 +1560,9 @@ export function mountProductionBoard(runtime, {
   async function recoverJob(jobId, action) {
     const copy = RECOVERY_COPY[action] || { running: '되살리는 중입니다.', done: '지시했습니다.' };
     busy = true;
-    setStatus(copy.running, '');
-    render();
     try {
+      setStatus(copy.running, '');
+      render();
       await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/recover`, {
         method: 'POST',
         body: JSON.stringify({ action }),
@@ -1571,9 +1578,9 @@ export function mountProductionBoard(runtime, {
 
   async function composeCut(jobId, stageKey, prompt) {
     busy = true;
-    setStatus('적어 주신 프롬프트로 새 컷을 만드는 중입니다. 끝나면 후보에 나타납니다.', '');
-    render();
     try {
+      setStatus('적어 주신 프롬프트로 새 컷을 만드는 중입니다. 끝나면 후보에 나타납니다.', '');
+      render();
       await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/compose-cut`, {
         method: 'POST',
         body: JSON.stringify({ stageKey, prompt }),
@@ -1590,8 +1597,8 @@ export function mountProductionBoard(runtime, {
 
   async function submitBatch(body) {
     busy = true;
-    render();
     try {
+      render();
       const response = await apiRequest('/api/factory/jobs/selections', {
         method: 'POST',
         body: JSON.stringify({ ...body, autoResume }),
@@ -1608,8 +1615,8 @@ export function mountProductionBoard(runtime, {
 
   async function clearReservations(jobIds) {
     busy = true;
-    render();
     try {
+      render();
       const results = await Promise.allSettled(
         jobIds.map(jobId => apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/selection/clear`, {
           method: 'POST',
@@ -1629,8 +1636,8 @@ export function mountProductionBoard(runtime, {
 
   async function resumeSelected(jobIds) {
     busy = true;
-    render();
     try {
+      render();
       const response = await apiRequest('/api/factory/jobs/resume', {
         method: 'POST',
         body: JSON.stringify(jobIds ? { jobIds } : {}),
@@ -1665,8 +1672,8 @@ export function mountProductionBoard(runtime, {
 
   async function saveProductIntake(jobId, values, images) {
     busy = true;
-    render();
     try {
+      render();
       // 이미지를 먼저 올린다. 이미지가 옵션 여부를 정하므로, 값이 그 뒤에 와야
       // 사람이 고른 옵션 여부가 최종으로 남는다.
       if (images.length) {
@@ -1697,8 +1704,8 @@ export function mountProductionBoard(runtime, {
 
   async function registerCafe24(jobId, values = {}) {
     busy = true;
-    render();
     try {
+      render();
       await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/cafe24/register`, {
         method: 'POST',
         body: JSON.stringify(values),
