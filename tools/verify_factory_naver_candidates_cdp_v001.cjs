@@ -179,7 +179,7 @@ async function main() {
             }
             return { total: rows.length, counts };
           })(),
-          logs: logs.map(entry => String((entry && entry.message) || '').slice(0, 130)),
+          logs: logs.map(entry => String((entry && entry.message) || '').slice(0, 200)),
         };
       }`);
       console.error('[진단:' + label + '] ' + JSON.stringify(info, null, 1));
@@ -202,6 +202,19 @@ async function main() {
       await dumpDiagnostics('시간초과');
       throw error;
     }
+    // ★ 측정: waitFor 를 통과한 **직후**에 한 번 찍는다.
+    // 여기서 후보>0·로그>0 인데 마지막에 0·0 이면 '긴 draft 가 끝에서 버려졌다' 가 확정된다.
+    // 행 필터로는 로그 배열이 지워지지 않으므로, 로그가 사라졌다는 것이 결정적 증거다.
+    const rightAfter = await evaluateFactoryCdpFixture(cdp, `({ readFactory }) => {
+      const f = readFactory();
+      return {
+        competitors: ((f.product && f.product.competitors) || []).length,
+        logs: Array.isArray(f.logs) ? f.logs.length : -1,
+        dbStage: String((f.stages && f.stages.db && f.stages.db.status) || ''),
+        goalRunning: !!(f.goalRun && f.goalRun.running),
+      };
+    }`);
+    console.error('[직후] ' + JSON.stringify(rightAfter));
     step('collected');
 
     // 5) 후보 주소를 호스트별로 센다.
@@ -248,6 +261,7 @@ async function main() {
         rowSearchIds: Array.from(new Set(fromMarket.map(row =>
           String((row && (row._search_id || row.search_id || row._vm_search_id)) || '(없음)')))).slice(0, 3),
         marketSearchId: String(market.searchId || market.vmSearchId || '(없음)'),
+        logsLen: Array.isArray(factory.logs) ? factory.logs.length : -1,
         // 실제 필터를 그 자리에서 돌려 어디서 떨어지는지 본다.
         filter: (() => {
           try {
@@ -284,7 +298,7 @@ async function main() {
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     fs.writeFileSync(SCREENSHOT_PATH, Buffer.from(shot.data, 'base64'));
-    fs.writeFileSync(RESULT_PATH, JSON.stringify({ prepared, collected, screenshot: SCREENSHOT_PATH }, null, 2));
+    fs.writeFileSync(RESULT_PATH, JSON.stringify({ prepared, midRun, rightAfter, collected, screenshot: SCREENSHOT_PATH }, null, 2));
 
     console.error('[집계] ' + JSON.stringify(collected));
     assertChecks([
