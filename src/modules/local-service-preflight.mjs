@@ -89,8 +89,13 @@ export async function ensureRequiredLocalServices(factory, runtime, options = {}
       .map(item => `${item.service.label}: 포트 ${item.status?.port || '?'}에 다른 프로그램이 실행 중입니다.`)
       .join('\n');
     logFactory(runtime, factory, `로컬 프로그램 포트 충돌: ${detail}`, 'error');
-    setPreflightState(runtime, factory, 'failed', `필수 프로그램 포트 충돌: ${detail}`, { sourceMode });
-    runtime.window?.alert?.(`필수 프로그램을 시작할 수 없습니다.\n\n${detail}\n\n해당 포트를 사용 중인 다른 프로그램을 종료하거나 포트를 변경한 뒤 다시 실행해주세요.`);
+    // alert() 로 알리지 않는다. 알림창은 **앱 전체를 멈춰 세운다** — 사람이 자리를 비우면
+    // 화면이 통째로 굳고, 밖에서 보면 프로그램이 죽은 것과 구별되지 않는다.
+    // 2026-08-30 이 알림창 하나 때문에 "수집이 멈췄다" 고 세 번 오진했다.
+    // 알릴 내용은 로그와 아래 화면 상태에 그대로 남는다. 창만 없애는 것이지 정보를 지우는 게 아니다.
+    const conflictHelp = '해당 포트를 사용 중인 다른 프로그램을 종료하거나 포트를 변경한 뒤 다시 실행해주세요.';
+    setPreflightState(runtime, factory, 'failed', `필수 프로그램 포트 충돌: ${detail}
+${conflictHelp}`, { sourceMode });
     return false;
   }
 
@@ -138,8 +143,8 @@ export async function ensureRequiredLocalServices(factory, runtime, options = {}
       }
     }
     logFactory(runtime, factory, `로컬 프로그램 실행 실패: ${detail}`, 'error');
-    setPreflightState(runtime, factory, 'failed', `로컬 프로그램 실행 실패: ${detail}`, { sourceMode });
-    runtime.window?.alert?.(`필수 프로그램 실행을 확인하지 못했습니다.\n\n${detail}`);
+    setPreflightState(runtime, factory, 'failed', `필수 프로그램 실행을 확인하지 못했습니다: ${detail}`, { sourceMode });
+    // 여기도 마찬가지다 — 알리되 세우지는 않는다.
     return false;
   }
 

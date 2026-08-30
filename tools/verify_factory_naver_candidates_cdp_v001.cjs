@@ -50,9 +50,7 @@ async function main() {
   try {
     await cdp.send('Page.enable');
     await cdp.send('Runtime.enable');
-    // Network 도메인은 켜지 않는다. 후보 19건의 이미지가 쏟아지면 이벤트가 CDP 채널을
-    // 채워 측정을 흐린다. 다만 **이것은 아래 멈춤의 원인이 아니었다** — 꺼도 똑같이 멈춘다.
-    // 원인 후보에서 '도구 탓' 을 지우려고 끈 것이지, 고쳐서 끈 것이 아니다.
+    // Network 도메인은 켜지 않는다. 후보 이미지가 쏟아지면 이벤트가 측정을 흐린다.
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 960, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Page.navigate', { url: APP_URL });
     await waitFor(cdp, factoryCdpFixtureReadyExpression() + " && typeof saveLastWorkNow === 'function'", 60000);
@@ -127,15 +125,13 @@ async function main() {
     step('clicked');
     // ★ 페이지가 정말 멈추는지 잰다. 사소한 식(`1`)을 3초마다 평가해 가장 긴 지연을 남긴다.
     //
-    // 이 장치를 지우지 말 것. 이것이 없어서 같은 오진을 세 번 했다 —
-    // 수집이 아직 도는 중인데도 "수집이 멈췄다 / 작업 반영 0건" 으로 읽었다.
-    //
-    // 미해결 결함 (2026-08-30 실측, 3회 연속 동일):
-    //   클릭 후 **63초 지점**부터 `1` 평가조차 60초 타임아웃으로 죽는다. 매번 63초로 같다.
-    //   사람 눈에는 화면이 1분 넘게 얼어붙는 것으로 보인다.
-    //   원인에서 지운 것: CDP Network 이벤트(꺼도 동일), 중간 발행의 영속화(꺼도 동일).
-    //   다음에 볼 것: 렌더러가 죽는지(Inspector.targetCrashed 를 받아 본다),
-    //                 60초짜리 타이머/대기를 가진 코드가 무엇인지.
+    // 이 장치를 지우지 말 것. 이것이 없어서 같은 오진을 세 번 했다.
+    // 2026-08-30 이 장치로 근본 원인을 잡았다: 앱이 alert() 를 띄우고 사람의 대답을
+    // 기다리느라 화면 전체가 멈춰 있었다. 문구는 "포트 5003에 다른 프로그램이 실행 중입니다"
+    // 였고 사실이었다 — 스크래퍼가 43000 으로 옮겨간 것을 앱만 몰랐다.
+    // (참고: connectCdp 에는 이벤트 수신 기능이 없어 대화창을 감시할 수 없다.
+    //  열려 있는지 보려면 Page.handleJavaScriptDialog 를 보내 보면 된다 —
+    //  없으면 'No dialog is showing' 으로 답한다.)
     {
       let worst = 0;
       let worstAt = 0;

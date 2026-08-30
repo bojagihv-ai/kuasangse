@@ -460,6 +460,7 @@ test('local-service preflight never launches into a wrong-service port conflict'
   let startCalls = 0;
   let confirmCalls = 0;
   let alertCalls = 0;
+  const factory = {};
   const runtime = {
     fetchJsonWithTimeout: async (url, options) => {
       if (options.method === 'POST') startCalls += 1;
@@ -479,13 +480,22 @@ test('local-service preflight never launches into a wrong-service port conflict'
   };
 
   // When: preflight runs.
-  const ready = await ensureRequiredLocalServices({}, runtime);
+  const ready = await ensureRequiredLocalServices(factory, runtime);
+  const screenMessage = String(factory.automation?.localServicePreflight?.message || '');
 
   // Then: it reports immediately without confirmation, launch, or polling.
   assert.equal(ready, false);
   assert.equal(confirmCalls, 0);
   assert.equal(startCalls, 0);
-  assert.equal(alertCalls, 1);
+  // 전제 정정 (2026-08-30): 예전에는 여기서 alert() 를 한 번 띄우는 것이 계약이었다.
+  // 그런데 alert() 는 **앱 전체를 멈춰 세운다.** 사람이 답하기 전까지 화면이 통째로 굳고,
+  // 밖에서 보면 프로그램이 죽은 것과 구별되지 않는다.
+  // 실제로 포트 5003 이 이메일통합에 넘어가고 스크래퍼가 43000 으로 옮겨간 날,
+  // 이 알림창 하나 때문에 "수집이 멈췄다 / 네이버가 0건이다" 로 세 번 오진했다.
+  // 알릴 내용은 로그와 화면 상태에 그대로 남으므로 정보는 잃지 않는다.
+  assert.equal(alertCalls, 0, '알림창은 앱 전체를 세웁니다. 화면 상태로 알려야 합니다.');
+  assert.match(screenMessage, /포트 충돌/, '무엇이 잘못됐는지 화면에 남아야 합니다.');
+  assert.match(screenMessage, /종료하거나 포트를 변경/, '어떻게 풀어야 하는지도 남아야 합니다.');
 });
 
 test('Cafe24-only preflight does not check or launch Sinhwa DB', async () => {

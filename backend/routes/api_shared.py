@@ -38,8 +38,16 @@ _JEPUM_MAIN = _JEPUM_ROOT / "main.py"
 # 경쟁사 수집이 거부되고 모든 auto 작업이 52% 에서 죽었다. 원인을 찾는 데 한참 걸렸다.
 # 그래서 (1) 기본값을 실제 포트로 맞추고 (2) 환경변수로 옮길 수 있게 하고
 # (3) 아래 message 에 어느 포트를 봤는지 적는다.
-_JEPUM_PORT = int(os.getenv("JEPUM_SCRAPER_PORT", "5003") or "5003")
+# 2026-08-30 또 같은 사고가 났다. 이번엔 5003 이 **이메일통합**에 영구 배정되어
+# 스크래퍼가 43000 으로 옮겨간 것이었다(포트 관리국 기록). 앱은 여전히 5003 을 보고,
+# 거기 있는 메일 프로그램을 "남의 프로그램" 으로 판정해 수집을 통째로 막았다.
+# 숫자를 또 고쳐 넣는 것으로는 세 번째 사고를 못 막는다. 그래서 **외우지 않고 찾는다.**
 _JEPUM_HEALTH_PATH = "/api/v1/health"
+_JEPUM_API_HUB_BASE = os.getenv("KUA_API_HUB_BASE", "http://127.0.0.1:4321").rstrip("/")
+# 마지막으로 확인된 자리들. 환경변수 → 지난번 찾은 포트 → 허브가 아는 주소 → 알려진 후보 순.
+_JEPUM_FALLBACK_PORTS = (43000, 5003)
+_JEPUM_PORT_CACHE = {"port": None, "checked_at": 0.0}
+_JEPUM_PORT_CACHE_TTL = 30.0
 _JEPUM_START_LOCK = threading.Lock()
 _JEPUM_PYTHON_CANDIDATES = (
     Path(r"C:\Users\kua\AppData\Local\Python\pythoncore-3.14-64\python.exe"),
@@ -298,9 +306,89 @@ def _cafe24_control_status_payload():
     }
 
 
-def _jepum_scraper_port_open(timeout=0.8):
+def _jepum_port_health_ok(port, timeout=1.5):
+    """그 포트에 있는 것이 **스크래퍼 본인인지** 검진으로 확인한다.
+
+    포트가 열려 있다는 것만으로는 아무것도 모른다. 실제로 5003 에는 메일 프로그램이
+    열려 있었고, 그걸 스크래퍼로 착각하거나 침입자로 몰면 둘 다 사고가 된다.
+    """
     try:
-        with socket.create_connection(("127.0.0.1", _JEPUM_PORT), timeout=timeout):
+        resp = requests.get(f"http://127.0.0.1:{port}{_JEPUM_HEALTH_PATH}", timeout=timeout)
+    except (requests.RequestException, ValueError):
+        return False
+    if resp.ok:
+        return True
+    # 인증이 켜져 있으면 401 로 막지만, 그건 스크래퍼가 살아 있다는 뜻이다.
+    try:
+        payload = resp.json() if "json" in resp.headers.get("content-type", "").lower() else {}
+    except ValueError:
+        payload = {}
+    return resp.status_code == 401 and isinstance(payload, dict) and payload.get("code") == "unauthorized"
+
+
+def _jepum_port_from_api_hub(timeout=1.5):
+    """API 허브에 스크래퍼가 지금 어디 있는지 묻는다.
+
+    주인님 규칙: "항상 API를 얻어올땐 우선은 API허브를통해얻어와".
+    허브는 커넥터의 baseUrl 을 알고 있으므로, 포트가 옮겨져도 허브만 최신이면 따라간다.
+    """
+    try:
+        resp = requests.get(f"{_JEPUM_API_HUB_BASE}/api/connectors", timeout=timeout)
+        items = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if isinstance(items, dict):
+        items = items.get("connectors") or items.get("items") or []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        if "jepumscraper" not in str(item.get("id") or "").lower():
+            continue
+        base = str(item.get("baseUrl") or item.get("base_url") or "").strip()
+        if not base:
+            continue
+        try:
+            return urlparse(base).port or (443 if base.startswith("https") else 80)
+        except ValueError:
+            return None
+    return None
+
+
+def _jepum_scraper_port(force=False):
+    """스크래퍼가 실제로 듣고 있는 포트를 찾아낸다. 30초간 기억한다."""
+    env_port = os.getenv("JEPUM_SCRAPER_PORT")
+    if env_port:
+        try:
+            return int(env_port)
+        except ValueError:
+            pass
+    now = time.time()
+    cached = _JEPUM_PORT_CACHE.get("port")
+    if not force and cached and (now - _JEPUM_PORT_CACHE.get("checked_at", 0.0)) < _JEPUM_PORT_CACHE_TTL:
+        return cached
+    candidates = []
+    if cached:
+        candidates.append(cached)
+    hub_port = _jepum_port_from_api_hub()
+    if hub_port:
+        candidates.append(hub_port)
+    candidates.extend(_JEPUM_FALLBACK_PORTS)
+    seen = set()
+    for port in candidates:
+        if not port or port in seen:
+            continue
+        seen.add(port)
+        if _jepum_port_health_ok(port):
+            _JEPUM_PORT_CACHE["port"] = port
+            _JEPUM_PORT_CACHE["checked_at"] = now
+            return port
+    # 아무 데서도 못 찾았다. 마지막으로 알던 자리를 답해 메시지에 포트를 적을 수 있게 한다.
+    return cached or hub_port or _JEPUM_FALLBACK_PORTS[0]
+
+
+def _jepum_scraper_port_open(timeout=0.8, port=None):
+    try:
+        with socket.create_connection(("127.0.0.1", port or _jepum_scraper_port()), timeout=timeout):
             return True
     except OSError:
         return False
@@ -314,13 +402,15 @@ def _jepum_scraper_python_executable():
 
 
 def _jepum_scraper_status_payload():
-    port_open = _jepum_scraper_port_open()
+    # 어느 포트를 볼지부터 찾는다. 외운 번호를 믿다가 두 번 사고가 났다.
+    port = _jepum_scraper_port()
+    port_open = _jepum_scraper_port_open(port=port)
     health_ok = False
     health_detail = ""
     if port_open:
         try:
             resp = requests.get(
-                f"http://127.0.0.1:{_JEPUM_PORT}{_JEPUM_HEALTH_PATH}",
+                f"http://127.0.0.1:{port}{_JEPUM_HEALTH_PATH}",
                 timeout=2,
             )
             payload = resp.json() if "json" in resp.headers.get("content-type", "").lower() else {}
@@ -347,16 +437,16 @@ def _jepum_scraper_status_payload():
         "portConflict": port_conflict,
         "healthOk": health_ok,
         "healthDetail": health_detail,
-        "port": _JEPUM_PORT,
+        "port": port,
         "root": str(_JEPUM_ROOT),
         "mainExists": _JEPUM_MAIN.is_file(),
         "pythonExists": bool(python_path),
         # 어느 포트를 봤는지 말한다. 이 한 줄이 없어서 "꺼져 있습니다" 만 보고
         # 멀쩡히 돌고 있는 서비스를 한참 찾아다녔다.
         "message": (
-            f"JepumScraper가 실행 중입니다. (포트 {_JEPUM_PORT})"
+            f"JepumScraper가 실행 중입니다. (포트 {port})"
             if running
-            else f"JepumScraper가 포트 {_JEPUM_PORT} 에 없습니다. "
+            else f"JepumScraper가 포트 {port} 에 없습니다. "
                  "스크래퍼가 다른 포트에 떠 있으면 JEPUM_SCRAPER_PORT 로 알려 주세요."
         ),
     }
