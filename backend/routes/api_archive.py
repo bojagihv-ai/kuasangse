@@ -328,6 +328,27 @@ def _last_work_rows_have_sparse_drop(existing_rows, incoming_rows, *, match_by_p
     ))
 
 
+def _last_work_comp_page(snapshot):
+    assets = snapshot.get("assets") if isinstance(snapshot, dict) and isinstance(snapshot.get("assets"), dict) else {}
+    comp = assets.get("compPage") if isinstance(assets.get("compPage"), dict) else {}
+    return comp
+
+
+def _last_work_analysis_invalidated_on_purpose(existing, incoming):
+    """앱이 분석을 일부러 떼어 냈는지 판정한다.
+
+    선택 이미지가 바뀌면 앱은 분석을 비운다. 그것을 사고로 보면 완성된 작업이 마지막
+    저장에서 막힌다. 관문이 둘(파생 보호와 no-comp-analysis)인데 한쪽만 이 표시를 보면
+    다른 쪽이 그대로 막는다 - 실측 2026-08-31: 표시를 달고도 저장이 계속 거절됐다.
+    """
+    existing_comp = _last_work_comp_page(existing)
+    incoming_comp = _last_work_comp_page(incoming)
+    return (
+        _last_work_nonnegative_int(incoming_comp.get("analysisInvalidatedAt"))
+        > _last_work_nonnegative_int(existing_comp.get("analysisInvalidatedAt"))
+    )
+
+
 def _last_work_derived_state_drop_reason(existing, incoming):
     existing_assets = existing.get("assets") if isinstance(existing.get("assets"), dict) else {}
     incoming_assets = incoming.get("assets") if isinstance(incoming.get("assets"), dict) else {}
@@ -359,7 +380,23 @@ def _last_work_derived_state_drop_reason(existing, incoming):
     incoming_comp = incoming_assets.get("compPage") if isinstance(incoming_assets.get("compPage"), dict) else {}
     existing_market = existing_comp.get("marketScrape") if isinstance(existing_comp.get("marketScrape"), dict) else {}
     incoming_market = incoming_comp.get("marketScrape") if isinstance(incoming_comp.get("marketScrape"), dict) else {}
+    # 후보를 새로 검색하면 목록이 통째로 바뀐다. 그것을 "저장된 작업을 잃었다" 로 보면
+    # 재검색한 작업은 그 뒤 어떤 저장도 통과하지 못한다 - 실측 2026-08-31: 거절 70건이
+    # 전부 compPage.marketScrape.results.content[...].missing 이었고, 화면은 아무 말도
+    # 하지 않은 채 워커가 10초마다 저장에 실패했다.
+    # selectedIds 가 detailSelectionVersion 으로 하는 것과 같은 방식이다. 검색 세션이 실제로
+    # 바뀌었고 들어온 쪽에 후보가 남아 있을 때만 교체를 허용한다. 빈 목록은 여전히 막는다.
+    existing_search_id = str(existing_market.get("searchId") or "").strip()
+    incoming_search_id = str(incoming_market.get("searchId") or "").strip()
+    rescraped_on_purpose = bool(
+        existing_search_id
+        and incoming_search_id
+        and existing_search_id != incoming_search_id
+        and _list_len(incoming_market.get("results")) > 0
+    )
     for key in ("results", "vmResults", "localResults", "scrapedImages"):
+        if rescraped_on_purpose:
+            continue
         if _list_len(existing_market.get(key)) > _list_len(incoming_market.get(key)):
             return f"compPage.marketScrape.{key}.length"
         sparse_reason = _last_work_rows_sparse_drop_reason(existing_market.get(key), incoming_market.get(key))
@@ -368,6 +405,8 @@ def _last_work_derived_state_drop_reason(existing, incoming):
     existing_groups = existing_market.get("groupedResults") if isinstance(existing_market.get("groupedResults"), dict) else {}
     incoming_groups = incoming_market.get("groupedResults") if isinstance(incoming_market.get("groupedResults"), dict) else {}
     for group, rows in existing_groups.items():
+        if rescraped_on_purpose:
+            continue
         if (
             _list_len(rows) > _list_len(incoming_groups.get(group))
             or _last_work_rows_have_sparse_drop(rows, incoming_groups.get(group))
@@ -539,8 +578,14 @@ def save_last_work():
             "savedAt": existing.get("savedAt"),
         })
 
-    if existing and _last_work_has_required_field_drop(existing, incoming):
-        _last_work_trace("required-field-drop", workspace_id, existing, incoming)
+    dropped_required_fields = [
+        field_id for field_id in _LAST_WORK_REQUIRED_FIELD_ALIASES
+        if _last_work_required_field_value(existing, field_id)
+        and not _last_work_required_field_value(incoming, field_id)
+    ] if existing else []
+    if dropped_required_fields:
+        _last_work_trace("required-field-drop", workspace_id, existing, incoming,
+                         {"reason": ", ".join(dropped_required_fields)})
         return jsonify({
             "ok": True,
             "accepted": False,
@@ -557,7 +602,8 @@ def save_last_work():
 
     derived_drop_reason = existing and _last_work_derived_state_drop_reason(existing, incoming)
     if derived_drop_reason:
-        _last_work_trace("derived-drop", workspace_id, existing, incoming)
+        _last_work_trace("derived-drop", workspace_id, existing, incoming,
+                         {"reason": derived_drop_reason})
         return jsonify({
             "ok": True,
             "accepted": False,
@@ -572,8 +618,12 @@ def save_last_work():
             "savedAt": existing.get("savedAt"),
         })
 
-    if existing and not force and _snapshot_has_comp_analysis(existing) and not _snapshot_has_comp_analysis(incoming):
-        _last_work_trace("no-comp-analysis", workspace_id, existing, incoming)
+    if (existing and not force
+            and _snapshot_has_comp_analysis(existing)
+            and not _snapshot_has_comp_analysis(incoming)
+            and not _last_work_analysis_invalidated_on_purpose(existing, incoming)):
+        _last_work_trace("no-comp-analysis", workspace_id, existing, incoming,
+                         {"reason": "분석 결과가 없고 일부러 분리했다는 표시도 없음"})
         return jsonify({
             "ok": True,
             "accepted": False,
