@@ -21,7 +21,7 @@ def _snapshot(comp_page):
 def test_분석이_이유없이_사라지면_막는다():
     existing = _snapshot({"analysisResult": {"conclusion": "지켜야 할 분석"}})
     incoming = _snapshot({"analysisResult": None})
-    assert _last_work_derived_state_drop_reason(existing, incoming) == "compPage.analysisResult"
+    assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.analysisResult")
 
 
 def test_일부러_분리했다는_표시가_더_새로우면_허용한다():
@@ -40,14 +40,14 @@ def test_표시가_같거나_오래되면_여전히_막는다():
     })
     same = _snapshot({"analysisResult": None, "analysisInvalidatedAt": 200})
     older = _snapshot({"analysisResult": None, "analysisInvalidatedAt": 100})
-    assert _last_work_derived_state_drop_reason(existing, same) == "compPage.analysisResult"
-    assert _last_work_derived_state_drop_reason(existing, older) == "compPage.analysisResult"
+    assert _last_work_derived_state_drop_reason(existing, same).startswith("compPage.analysisResult")
+    assert _last_work_derived_state_drop_reason(existing, older).startswith("compPage.analysisResult")
 
 
 def test_표시가_아예_없으면_보호는_그대로다():
     existing = _snapshot({"analysisResult": {"conclusion": "이전 분석"}})
     incoming = _snapshot({"analysisResult": None})
-    assert _last_work_derived_state_drop_reason(existing, incoming) == "compPage.analysisResult"
+    assert _last_work_derived_state_drop_reason(existing, incoming).startswith("compPage.analysisResult")
 
 
 def test_섹션계획도_같은_표시를_따른다():

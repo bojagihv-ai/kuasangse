@@ -400,7 +400,13 @@ def _last_work_derived_state_drop_reason(existing, incoming):
         if analysis_invalidated_on_purpose:
             continue
         if _last_work_value_dropped(existing_comp.get(key), incoming_comp.get(key)):
-            return f"compPage.{key}"
+            # 어느 표시를 보고 막았는지 함께 남긴다. 이게 없으면 "왜 아직도 막히나" 를
+            # 알아내려고 매번 코드를 뒤져야 한다 — 실측 2026-08-30: 두 번 헛짚었다.
+            return (
+                f"compPage.{key}"
+                f" (분리표시 기존={existing_invalidated} 들어온={incoming_invalidated},"
+                f" 들어온 compPage 키={sorted(incoming_comp)[:8]})"
+            )
     return ""
 
 @api.route("/last-work", methods=["GET"])
@@ -438,6 +444,55 @@ def get_last_work():
     return response
 
 
+def _last_work_trace(stage, workspace_id, existing, incoming, extra=None):
+    """last-work 저장이 어디서 막히는지 파일로 남긴다.
+
+    거절 사유만 보고 원인을 짐작하다 세 번 빗나갔다(실측 2026-08-30). 요청이 도착했는지,
+    어느 분기에서, 어떤 값으로 막혔는지를 남겨야 추측 없이 확정할 수 있다.
+    KUASANGSE_LASTWORK_TRACE 를 끄면 아무것도 남기지 않는다.
+    """
+    import os
+    from datetime import datetime
+
+    if os.environ.get("KUASANGSE_LASTWORK_TRACE", "1") != "1":
+        return
+    try:
+        def comp_of(snapshot):
+            if not isinstance(snapshot, dict):
+                return {}
+            assets = snapshot.get("assets") if isinstance(snapshot.get("assets"), dict) else {}
+            comp = assets.get("compPage") if isinstance(assets.get("compPage"), dict) else {}
+            if comp:
+                return comp
+            light = snapshot.get("lightweight") if isinstance(snapshot.get("lightweight"), dict) else {}
+            inner = light.get("compPage") if isinstance(light.get("compPage"), dict) else {}
+            return inner or (snapshot.get("compPage") if isinstance(snapshot.get("compPage"), dict) else {})
+        ex, inc = comp_of(existing), comp_of(incoming)
+        record = {
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "stage": stage,
+            "workspaceId": workspace_id,
+            "existing": {
+                "hasAnalysis": bool(ex.get("analysisResult")),
+                "invalidatedAt": ex.get("analysisInvalidatedAt"),
+                "keys": sorted(ex)[:14],
+            },
+            "incoming": {
+                "hasAnalysis": bool(inc.get("analysisResult")),
+                "invalidatedAt": inc.get("analysisInvalidatedAt"),
+                "keys": sorted(inc)[:14],
+            },
+        }
+        if extra:
+            record["extra"] = extra
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "output", "lastwork-trace.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline=chr(10)) as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + chr(10))
+    except Exception:
+        pass
+
+
 @api.route("/last-work", methods=["POST"])
 def save_last_work():
     body = request.get_json(silent=True) or {}
@@ -466,28 +521,33 @@ def save_last_work():
     incoming_score = _last_work_score(incoming)
     existing = _load_json_file(last_work_path)
     existing_score = _last_work_score(existing)
+    _last_work_trace("arrived", workspace_id, existing, incoming)
     force = bool(body.get("force") or incoming.get("force"))
     repair = body.get("repair") is True
 
     # Empty reloads must not erase a richer last-work snapshot.
     if existing and not force and existing_score > incoming_score and incoming_score <= 2:
+        _last_work_trace("emptier", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "reason": "incoming snapshot is emptier than saved last work",
+            "_traceStage": "emptier",
             "score": existing_score,
             "incomingScore": incoming_score,
             "savedAt": existing.get("savedAt"),
         })
 
     if existing and _last_work_has_required_field_drop(existing, incoming):
+        _last_work_trace("required-field-drop", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "protectedNoOp": True,
             "reason": "incoming snapshot dropped protected required fields",
+            "_traceStage": "required-field-drop",
             "scopeId": authority_snapshot.scope_id,
             "revision": authority_snapshot.revision,
             "score": existing_score,
@@ -497,12 +557,14 @@ def save_last_work():
 
     derived_drop_reason = existing and _last_work_derived_state_drop_reason(existing, incoming)
     if derived_drop_reason:
+        _last_work_trace("derived-drop", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "protectedNoOp": True,
             "reason": f"incoming snapshot changed work identity or dropped protected work data: {derived_drop_reason}",
+            "_traceStage": "derived-drop",
             "scopeId": authority_snapshot.scope_id,
             "revision": authority_snapshot.revision,
             "score": existing_score,
@@ -511,12 +573,14 @@ def save_last_work():
         })
 
     if existing and not force and _snapshot_has_comp_analysis(existing) and not _snapshot_has_comp_analysis(incoming):
+        _last_work_trace("no-comp-analysis", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "protectedNoOp": True,
             "reason": "incoming snapshot has no competitor analysis result",
+            "_traceStage": "no-comp-analysis",
             "scopeId": authority_snapshot.scope_id,
             "revision": authority_snapshot.revision,
             "score": existing_score,
@@ -527,11 +591,13 @@ def save_last_work():
     existing_comp_at = _snapshot_comp_analysis_time(existing)
     incoming_comp_at = _snapshot_comp_analysis_time(incoming)
     if existing and not force and existing_comp_at and incoming_comp_at and existing_comp_at > incoming_comp_at + 1000:
+        _last_work_trace("older-comp-analysis", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "reason": "incoming competitor analysis is older than saved result",
+            "_traceStage": "older-comp-analysis",
             "score": existing_score,
             "incomingScore": incoming_score,
             "savedAt": existing.get("savedAt"),
@@ -540,12 +606,14 @@ def save_last_work():
         })
 
     if existing and not repair and _last_work_has_destructive_identity_drift(existing, incoming):
+        _last_work_trace("identity-drift", workspace_id, existing, incoming)
         return jsonify({
             "ok": True,
             "accepted": False,
             "keptExisting": True,
             "protectedNoOp": True,
             "reason": "incoming snapshot changed work identity or dropped protected work data",
+            "_traceStage": "identity-drift",
             "scopeId": authority_snapshot.scope_id,
             "revision": authority_snapshot.revision,
             "score": existing_score,
