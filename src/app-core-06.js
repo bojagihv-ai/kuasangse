@@ -15814,7 +15814,22 @@ async function compMarketTryVmScrapeDetails(market, ids) {
   // runtime 은 'vm' 상수라서 OR 에 넣으면 이 가드는 영원히 통과한다. 판정을 넣어 둔 의미가
   // 없어지고, watcher 가 죽어도 VM 으로 보내 한 시간을 버렸다 - 실측 2026-08-31.
   if (!(vmStatus.ready || vmStatus.enabled)) {
-    throw new Error(`VM 상세페이지 수집 연결 실패: ${vmStatus.message || compMarketVmStatusText(vmStatus) || '워커 준비 안 됨'}`);
+    // ★ 던지기만 하면 화면에는 아무 일도 안 일어난 것처럼 보인다.
+    //   실측 2026-08-31: VM 안의 watcher 가 40시간 넘게 죽어 있었는데
+    //   주인님 눈에는 "상세수집 버튼이 먹통" 으로만 보였다. 예외는 위에서 조용히 삼켜졌다.
+    //   그러니 던지기 **전에** 화면과 로그에 사실을 남긴다. 그리고 대안을 알려준다 —
+    //   본컴 상세수집은 VM 없이 되므로, 막혔다고 일이 멈출 이유가 없다.
+    const reason = String(
+      vmStatus.message || vmStatus.error || vmStatus.fallback_error || compMarketVmStatusText(vmStatus) || '워커 준비 안 됨',
+    ).trim();
+    const age = Number(vmStatus.heartbeatAgeSeconds || 0);
+    const ageText = age > 0 ? ` (마지막 응답 ${Math.round(age / 60)}분 전)` : '';
+    const guide = 'VM 안에서 후보 수집 워커를 다시 띄우거나, 옆의 "본컴 상세수집" 으로 대신 진행하세요.';
+    compMarketSetStatus(`VM 상세수집을 시작할 수 없습니다: ${reason}${ageText}`, 'detail-vm', 'error');
+    compMarketLog(`VM 상세수집 중단 · ${reason}${ageText} · ${guide}`, 'error');
+    compMarketSave();
+    render();
+    throw new Error(`VM 상세페이지 수집 연결 실패: ${reason}${ageText} · ${guide}`);
   }
   compMarketSetStatus(`VM 상세페이지 수집 시작: 선택 후보 ${ids.length}건`, 'detail-vm', 'info');
   compMarketSave();
