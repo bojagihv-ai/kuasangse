@@ -11,7 +11,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=39';
+} from './production-board-model.mjs?parallelBoard=40';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
 // 한 번에 수백 건이 와도 요청은 한 번만 나간다.
@@ -675,6 +675,15 @@ export function mountProductionBoard(runtime, {
     return `<!doctype html><meta charset="utf-8"><base target="_blank">${rewritten}`;
   }
 
+  /**
+   * 최종 문서 변형의 요약("섹션 14개 · 8월 28일 10:26")에서 섹션 수만 뽑는다.
+   * 숫자를 못 찾으면 null — 그때는 비교를 하지 않는다.
+   */
+  function candidateSectionCount(candidate) {
+    const matched = /섹션\s*(\d+)\s*개/.exec(String(candidate?.summary || ''));
+    return matched ? Number(matched[1]) : null;
+  }
+
   /** 그 변형의 본문을 보관함에서 받아 온다. 한 번 받으면 기억한다. */
   async function loadCandidateDocument(candidate) {
     const key = String(candidate.id || '');
@@ -805,7 +814,7 @@ export function mountProductionBoard(runtime, {
     return slot;
   }
 
-  function renderCandidateOption(row, cell, candidate, { index, total, picked, fallbackThumbUrl = '' }) {
+  function renderCandidateOption(row, cell, candidate, { index, total, picked, fallbackThumbUrl = '', bestSectionCount = null }) {
     const option = button('board-candidate', '', {
       action: 'pick',
       jobId: row.jobId,
@@ -879,6 +888,22 @@ export function mountProductionBoard(runtime, {
       mark.dataset.tone = 'picked';
       option.append(mark);
     }
+    // 최종 문서 변형은 담긴 섹션 수가 천차만별이다. 가장 빈 것이 골라져 있어도 화면이
+    // 아무 말을 안 해서, 거의 빈 상세페이지가 등록될 뻔했다 - 실측 2026-08-31:
+    // 섹션 1개(8월 22일)짜리가 선택된 채였고 옆에 섹션 14개(8월 28일)가 있었다.
+    const sectionCount = candidateSectionCount(candidate);
+    if (sectionCount !== null && bestSectionCount !== null && bestSectionCount > 0) {
+      if (sectionCount < bestSectionCount) {
+        const warn = element('span', 'board-candidate-meta',
+          `섹션 ${sectionCount}개 · 가장 많은 변형보다 ${bestSectionCount - sectionCount}개 적습니다`);
+        warn.dataset.tone = 'warn';
+        option.append(warn);
+      } else if (total > 1) {
+        const best = element('span', 'board-candidate-meta', `섹션 ${sectionCount}개 · 가장 많음`);
+        best.dataset.tone = 'ok';
+        option.append(best);
+      }
+    }
     // 카드 안에 이미 적은 글을 밑에 또 적으면 같은 문장이 두 번 나온다.
     // 그림이 있는 컷만 여기서 이름을 덧붙인다.
     else if (candidate.thumbnailUrl && candidate.label) {
@@ -936,6 +961,14 @@ export function mountProductionBoard(runtime, {
       element('strong', '', `${row.productName} · ${cell.stageLabel}`),
       element('span', 'factory-pill', `${cell.candidateCount}개 후보`),
     );
+    // 라벨만으로는 "최종" 이 무엇의 최종인지, "섹션 14개" 가 무슨 뜻인지 알 수 없다 -
+    // 실측 2026-08-31: 조작자가 "최종이라는게 뭐며 섹션 1개 2개 13개 14개가 뭘 말하는건지"
+    // 라고 물었다. 고르는 자리에서 바로 답해 준다.
+    const stageHint = BOARD_STAGES.find(stage => stage.key === cell.stageKey)?.hint;
+    if (stageHint) title.append(element('span', 'board-candidate-meta', stageHint));
+    // 고른 컷은 바로 적용되지 않는다. 그 사실을 안 적으면 "눌렀는데 아무 일도 없다" 가 된다.
+    title.append(element('span', 'board-candidate-meta',
+      '고르면 예약됩니다. 「다시 시도」를 눌러야 조립공장이 반영합니다.'));
     // 섹션 단계는 여러 섹션의 변형이 한 칸에 함께 온다. 한 줄로 쏟으면 52개가 원시
     // 식별자만 달고 늘어서서 사람이 무엇을 고르는지 알 수 없다. 섹션마다 나눠 놓는다.
     if (cell.stageKey === 'sections' && cell.candidates.some(candidate => candidate.sectionId)) {
@@ -1024,11 +1057,17 @@ export function mountProductionBoard(runtime, {
     title.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cell' }));
     strip.append(title);
     const options = element('div', 'board-candidate-options');
+    // 최종 문서 변형끼리 분량을 견줄 수 있게 가장 많은 섹션 수를 미리 구한다.
+    const sectionCounts = cell.candidates
+      .map(candidateSectionCount)
+      .filter(value => typeof value === 'number');
+    const bestSectionCount = sectionCounts.length ? Math.max(...sectionCounts) : null;
     for (const [index, candidate] of cell.candidates.entries()) {
       options.append(renderCandidateOption(row, cell, candidate, {
         index,
         total: cell.candidates.length,
         picked: candidate.id === cell.selectedId,
+        bestSectionCount,
       }));
     }
     options.append(renderComposeSlot(row, cell));

@@ -1,10 +1,17 @@
+// hint 는 고르는 자리에서 "이게 뭘 고르는 건가" 를 한 줄로 말해 준다. 라벨만 있으면
+// "최종" 이 무엇의 최종인지, "4/4" 가 무슨 뜻인지 알 길이 없다 - 실측 2026-08-31:
+// 조작자가 "최종이라는게 뭐며 섹션 1개 2개 13개 14개가 뭘 말하는건지" 라고 물었다.
 export const BOARD_STAGES = Object.freeze([
-  Object.freeze({ key: 'representative', label: '대표' }),
-  Object.freeze({ key: 'size', label: '사이즈' }),
-  Object.freeze({ key: 'option_color', label: '옵션·색상' }),
-  Object.freeze({ key: 'general', label: '일반' }),
-  Object.freeze({ key: 'sections', label: '섹션' }),
-  Object.freeze({ key: 'final_detail', label: '최종' }),
+  Object.freeze({ key: 'representative', label: '대표', hint: '목록에 걸리는 대표 이미지' }),
+  Object.freeze({ key: 'size', label: '사이즈', hint: '치수를 보여 주는 이미지' }),
+  Object.freeze({ key: 'option_color', label: '옵션·색상', hint: '색상 옵션 이미지' }),
+  Object.freeze({ key: 'general', label: '일반', hint: '본문에 쓰는 일반 이미지' }),
+  Object.freeze({ key: 'sections', label: '섹션', hint: '상세페이지를 이루는 각 문단' }),
+  Object.freeze({
+    key: 'final_detail',
+    label: '최종',
+    hint: 'Cafe24에 등록될 상세페이지 문서 전체. "섹션 N개" 는 그 문서에 담긴 문단 수입니다.',
+  }),
 ]);
 
 const STATUS_LABELS = Object.freeze({
