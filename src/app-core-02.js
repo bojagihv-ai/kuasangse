@@ -6045,6 +6045,50 @@ function getCurrentCompAnalysisTime() {
   return Number(state?.compPage?.analysisResult?.analyzedAt || 0) || 0;
 }
 
+// ── 저장 전(draft:) 작업의 복구용 사본 ────────────────────────────
+// 정상 저장(/api/last-work)은 편집권을 검증하고 draft 는 통과할 수 없다.
+// 이 사본은 그 검증을 거치지 않으므로 **읽기 전용 참고본**으로만 쓴다(자동 복원 금지).
+const DRAFT_RECOVERY_MIN_INTERVAL_MS = 20000;
+let draftRecoveryLastSentAt = 0;
+let draftRecoverySending = false;
+
+function saveDraftRecoverySnapshot(scopeId, reason = '') {
+  if (!String(scopeId || '').startsWith('draft:')) return false;
+  if (draftRecoverySending) return false;
+  const now = Date.now();
+  // 자동저장은 자주 돈다. 매번 보내면 디스크와 네트워크를 먹는다.
+  if (now - draftRecoveryLastSentAt < DRAFT_RECOVERY_MIN_INTERVAL_MS) return false;
+  let snapshot = null;
+  try {
+    snapshot = buildServerLastWorkSnapshot(reason || 'draft-recovery');
+  } catch (error) {
+    console.warn('draft recovery snapshot build failed:', error);
+    return false;
+  }
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  draftRecoverySending = true;
+  draftRecoveryLastSentAt = now;
+  const body = JSON.stringify({
+    scopeId,
+    reason: String(reason || ''),
+    productName: String(state?.productName || snapshot?.productName || ''),
+    snapshot,
+  });
+  fetch(`${kuasangseBackendBaseUrl()}/api/draft-recovery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body,
+  }).then(response => {
+    // 실패해도 사용자의 일을 막지 않는다. 이건 그물이지 저장이 아니다.
+    if (!response.ok) console.warn(`draft recovery save rejected: HTTP ${response.status}`);
+  }).catch(error => {
+    console.warn('draft recovery save failed:', error);
+  }).finally(() => {
+    draftRecoverySending = false;
+  });
+  return true;
+}
+
 function buildServerLastWorkSnapshot(reason = 'auto', options) {
   options = options || {};
   const documentScope = getCurrentDocumentWorkspaceScope();
@@ -6180,8 +6224,15 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       restoreBranchAuthority = restoreBranchAuthority
         || (scopeId !== activeBranchScope && activeBranchScope.startsWith('draft:'));
       if (!scopeId.startsWith('project:')) {
+        // 저장 버튼을 누르기 전(draft:) 작업은 정상 저장 경로를 탈 수 없다 -
+        // 서버의 편집권(lease) 검증이 project: 스코프에만 걸려 있어 통과 자체가 불가능하다.
+        // 그렇다고 여기서 그냥 돌아서면 사본이 브라우저 안에 딱 하나만 남는다.
+        // 실측 2026-08-31: 주인님이 DB/Cafe24 확정을 잃었을 때 되살릴 사본이 하나도 없었다.
+        // 그래서 편집권을 거치지 않는 **복구용 사본**을 따로 남긴다.
+        // 자동으로 복원하지 않는다 - 사람이 되살리기를 누를 때만 쓰는 참고본이다.
         serverLastWorkFailureCount = 0;
         serverLastWorkRetryAfter = 0;
+        saveDraftRecoverySnapshot(scopeId, reason);
         return false;
       }
       const authority = await ensureWorkspaceEditAuthority(scopeId);
