@@ -268,6 +268,14 @@ def _last_work_row_drop_path(existing_row, incoming_row):
         return _last_work_value_drop_path(existing_row, incoming_row)
     offloaded = _last_work_row_keeps_durable_asset(incoming_row)
     for key, value in existing_row.items():
+        # 밑줄로 시작하는 필드는 앱이 검색할 때마다 다시 만드는 기록용 값이다
+        # (_search_id, _session_id, _source_keyword, _source_sites, _search_runtime).
+        # 사람이 만든 작업이 아니므로 없어져도 잃은 것이 없다. 그런데 이것 하나가 빠졌다고
+        # 스냅샷 전체를 거절하면, 후보 수·이미지·상세 결과가 모두 그대로인데도 저장이 막힌다 -
+        # 실측 2026-08-31: results.content[coupang_9075021207]._session_id 때문에
+        # 「Cafe24 대상 떼기」 결과가 영영 저장되지 못했다.
+        if str(key).startswith("_"):
+            continue
         dropped = _last_work_value_drop_path(
             value,
             incoming_row.get(key),
@@ -360,6 +368,129 @@ def _last_work_analysis_invalidated_on_purpose(existing, incoming):
         _last_work_nonnegative_int(incoming_comp.get("analysisInvalidatedAt"))
         > _last_work_nonnegative_int(existing_comp.get("analysisInvalidatedAt"))
     )
+
+
+def _last_work_keep_derived_analysis(existing, incoming):
+    """분석 묶음이 비어 들어오면, 스냅샷을 통째로 거절하는 대신 지킬 값만 되살린다.
+
+    보호의 목적은 "분석을 잃지 않는 것" 이다. 그런데 지금까지는 그 하나 때문에 스냅샷 전체를
+    거절해서, 같은 저장에 실려 온 다른 작업(컷 선택·섹션·Cafe24 대상 떼기)까지 함께 막혔다.
+    실측 2026-08-31: 「Cafe24 대상 떼기」 결과가 이 이유로 몇 번을 눌러도 서버에 닿지 못했다.
+
+    지킬 것은 지키고 나머지는 받는다. "일부러 분리했다" 표시가 더 새로우면 손대지 않는다.
+    되살린 항목 이름을 돌려주어 무엇을 지켰는지 남길 수 있게 한다.
+    """
+    if not isinstance(existing, dict) or not isinstance(incoming, dict):
+        return []
+    if _last_work_analysis_invalidated_on_purpose(existing, incoming):
+        return []
+    existing_comp = _last_work_comp_page(existing)
+    incoming_assets = incoming.get("assets") if isinstance(incoming.get("assets"), dict) else None
+    if incoming_assets is None:
+        return []
+    incoming_comp = incoming_assets.get("compPage")
+    if not isinstance(incoming_comp, dict):
+        return []
+    kept = []
+    for key in ("analysisResult", "sectionPlan", "planEdits"):
+        merged = _last_work_fill_missing(existing_comp.get(key), incoming_comp.get(key))
+        if merged is not _LAST_WORK_UNCHANGED:
+            incoming_comp[key] = merged
+            kept.append(key)
+    if _last_work_fill_candidate_row_fields(existing_comp, incoming_comp):
+        kept.append("marketScrape.rows")
+    return kept
+
+
+def _last_work_fill_candidate_row_fields(existing_comp, incoming_comp):
+    """양쪽에 **다 있는** 후보 행에서, 들어온 쪽에 빠진 필드만 저장된 값으로 채운다.
+
+    후보 행에는 match_tier·match_score 같은 기계가 매긴 값이 붙는다. 다시 검색하면 그중
+    일부가 빠지는데, 그걸 "작업을 잃었다" 로 보고 스냅샷 전체를 거절하면 같은 저장에 실려 온
+    다른 작업까지 막힌다 - 실측 2026-08-31:
+    results.content[coupang_9075021207].match_tier 하나 때문에 「Cafe24 대상 떼기」 가 막혔다.
+
+    행의 개수나 사라진 행에는 손대지 않는다. 그건 여전히 보호 대상이다 —
+    재검색으로 후보가 통째로 바뀌는 경우는 searchId 판정이 따로 다룬다.
+    """
+    existing_market = existing_comp.get("marketScrape") if isinstance(existing_comp.get("marketScrape"), dict) else {}
+    incoming_market = incoming_comp.get("marketScrape") if isinstance(incoming_comp.get("marketScrape"), dict) else None
+    if not existing_market or not isinstance(incoming_market, dict):
+        return False
+    changed = False
+    for list_key in ("results", "localResults", "vmResults"):
+        existing_rows = existing_market.get(list_key)
+        incoming_rows = incoming_market.get(list_key)
+        if not isinstance(existing_rows, list) or not isinstance(incoming_rows, list):
+            continue
+        existing_by_key = {
+            _last_work_row_key(row, index): row
+            for index, row in enumerate(existing_rows)
+        }
+        for index, row in enumerate(incoming_rows):
+            if not isinstance(row, dict):
+                continue
+            stored = existing_by_key.get(_last_work_row_key(row, index))
+            if not isinstance(stored, dict):
+                continue
+            filled = _last_work_fill_missing(stored, row)
+            if filled is not _LAST_WORK_UNCHANGED:
+                incoming_rows[index] = filled
+                changed = True
+    return changed
+
+
+_LAST_WORK_UNCHANGED = object()
+
+
+def _last_work_is_empty_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict)):
+        return not value
+    return False
+
+
+def _last_work_fill_missing(existing_value, incoming_value):
+    """들어온 쪽에서 **빠진 자리만** 저장된 값으로 채운다. 있는 값은 절대 덮지 않는다.
+
+    분석 결과는 LLM 이 만든 큰 객체라, 다시 만들 때마다 하위 항목 하나가 빠지는 일이 흔하다.
+    그걸 "작업을 잃었다" 로 보고 스냅샷 전체를 거절하면, 같은 저장에 실려 온 다른 작업까지
+    함께 막힌다 - 실측 2026-08-31: analysisResult.cta_patterns 하나 때문에
+    「Cafe24 대상 떼기」 가 몇 번을 눌러도 서버에 닿지 못했다.
+
+    바뀐 것이 없으면 _LAST_WORK_UNCHANGED 를 돌려준다.
+    """
+    if _last_work_is_empty_value(existing_value):
+        return _LAST_WORK_UNCHANGED
+    if _last_work_is_empty_value(incoming_value):
+        return existing_value
+    if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+        changed = False
+        merged = dict(incoming_value)
+        for key, value in existing_value.items():
+            filled = _last_work_fill_missing(value, merged.get(key))
+            if filled is not _LAST_WORK_UNCHANGED:
+                merged[key] = filled
+                changed = True
+        return merged if changed else _LAST_WORK_UNCHANGED
+    if isinstance(existing_value, list) and isinstance(incoming_value, list):
+        # 겹치는 자리는 원소 안까지 들어가 빠진 것만 채우고, 줄어든 꼬리는 되살린다.
+        # 원소 안을 안 보면 criteria[9].issues 처럼 깊은 자리 하나 때문에 그대로 거절된다 -
+        # 실측 2026-08-31.
+        changed = len(existing_value) > len(incoming_value)
+        merged = list(incoming_value)
+        for index in range(min(len(existing_value), len(incoming_value))):
+            filled = _last_work_fill_missing(existing_value[index], merged[index])
+            if filled is not _LAST_WORK_UNCHANGED:
+                merged[index] = filled
+                changed = True
+        if len(existing_value) > len(incoming_value):
+            merged.extend(existing_value[len(incoming_value):])
+        return merged if changed else _LAST_WORK_UNCHANGED
+    return _LAST_WORK_UNCHANGED
 
 
 def _last_work_derived_state_drop_reason(existing, incoming):
@@ -471,13 +602,15 @@ def _last_work_derived_state_drop_reason(existing, incoming):
     for key in ("analysisResult", "sectionPlan", "planEdits"):
         if analysis_invalidated_on_purpose:
             continue
-        if _last_work_value_dropped(existing_comp.get(key), incoming_comp.get(key)):
-            # 어느 표시를 보고 막았는지 함께 남긴다. 이게 없으면 "왜 아직도 막히나" 를
-            # 알아내려고 매번 코드를 뒤져야 한다 — 실측 2026-08-30: 두 번 헛짚었다.
+        dropped_path = _last_work_value_drop_path(existing_comp.get(key), incoming_comp.get(key))
+        if dropped_path:
+            # 어느 표시를 보고 막았는지, 그리고 **객체 안 어느 자리**가 빠졌는지 함께 남긴다.
+            # 자리를 안 남기면 "analysisResult 가 사라졌다" 로만 보여서, 실제로는 하위 항목
+            # 하나가 빠진 경우에도 통째로 사라진 줄 알고 엉뚱한 곳을 고치게 된다 —
+            # 실측 2026-08-31: 양쪽 다 hasAnalysis=true 인데 같은 사유가 반복됐다.
             return (
-                f"compPage.{key}"
-                f" (분리표시 기존={existing_invalidated} 들어온={incoming_invalidated},"
-                f" 들어온 compPage 키={sorted(incoming_comp)[:8]})"
+                f"compPage.{key}{'' if dropped_path == '$' else '.' + dropped_path}"
+                f" (분리표시 기존={existing_invalidated} 들어온={incoming_invalidated})"
             )
     return ""
 
@@ -648,6 +781,10 @@ def save_last_work():
             "savedAt": existing.get("savedAt"),
         })
 
+    kept_derived = _last_work_keep_derived_analysis(existing, incoming)
+    if kept_derived:
+        _last_work_trace("derived-kept", workspace_id, existing, incoming,
+                         {"reason": "되살림: " + ", ".join(kept_derived)})
     derived_drop_reason = existing and _last_work_derived_state_drop_reason(existing, incoming)
     if derived_drop_reason:
         _last_work_trace("derived-drop", workspace_id, existing, incoming,
