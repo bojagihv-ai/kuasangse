@@ -110,36 +110,95 @@ def _watcher_is_responsive() -> bool:
     return _watcher_heartbeat_is_fresh()
 
 
-def watcher_readiness() -> dict:
-    """VM 게스트 watcher 가 살아 있는지 한 번의 파일 stat 으로 답한다.
+def _detail_job_dirs():
+    results = _BRIDGE_ROOT / "results"
+    try:
+        return sorted(
+            (path for path in results.iterdir()
+             if path.is_dir() and path.name.startswith("vm_detail_")),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
 
-    후보검색은 제출할 때 이 판정을 해서 5초 안에 실패를 알려 준다. 그런데 상세수집은
-    같은 확인 없이 VM 으로 보내고 job_timeout(3600초) 만큼 기다렸다 - 실측 2026-08-31:
-    같은 고장으로 후보는 5초, 상세는 한 시간이 걸렸다. 화면이 먼저 물어볼 수 있게 연다.
+
+_DETAIL_STALL_SECONDS: Final = 240.0
+_DETAIL_TERMINAL = frozenset({"completed", "success", "done", "error", "failed", "cancelled"})
+
+
+def detail_capture_readiness() -> dict:
+    """상세수집 VM 경로가 지금 쓸 만한지 답한다.
+
+    **후보검색용 하트비트와 상세수집은 서로 다른 경로다.** 실측 2026-08-31:
+    .host-watcher.heartbeat 가 41시간 낡아 있는 동안에도 vm_detail 작업 12건이 전부
+    completed/success 로 끝났다. 그래서 하트비트로 상세수집을 막으면 멀쩡한 VM 을 막는다.
+    (내가 실제로 그렇게 막았다 — 사용자가 "VM 잘 되는데 왜 안 된다고 하냐" 고 지적했다.)
+
+    그래서 막는 것은 "직전 요청이 눈에 보이게 멎어 있을 때" 뿐이다. 근거가 없으면 통과시킨다.
     """
+    for job_dir in _detail_job_dirs()[:3]:
+        status = _read_json(job_dir / "status.json") or {}
+        state = str(status.get("status") or "").lower()
+        vm_state = str(status.get("vm_status") or "").lower()
+        if state in _DETAIL_TERMINAL or vm_state in _DETAIL_TERMINAL:
+            return {
+                "ok": True,
+                "detailPathUsable": True,
+                "lastJob": job_dir.name,
+                "lastStatus": state or vm_state,
+                "message": "",
+            }
+        if state == "queued":
+            try:
+                age = time.time() - (job_dir / "status.json").stat().st_mtime
+            except OSError:
+                age = 0.0
+            if age > _DETAIL_STALL_SECONDS:
+                return {
+                    "ok": False,
+                    "detailPathUsable": False,
+                    "lastJob": job_dir.name,
+                    "lastStatus": "queued",
+                    "queuedAgeSeconds": round(age, 1),
+                    "reason": "vm_detail_capture_stalled",
+                    "message": (
+                        f"직전 VM 상세수집 요청이 {int(age)}초째 접수만 된 채 멈춰 있습니다. "
+                        "VM 안의 수집 워커를 확인해 주세요. 그동안은 본컴 경로로 진행합니다."
+                    ),
+                }
+            break
+    return {
+        "ok": True,
+        "detailPathUsable": True,
+        "lastJob": "",
+        "lastStatus": "",
+        "message": "",
+    }
+
+
+def watcher_readiness() -> dict:
+    """VM 경로 상태를 한 번의 파일 확인으로 답한다.
+
+    두 경로를 **따로** 답한다. 후보검색은 .host-watcher.heartbeat 로 판정하고,
+    상세수집은 직전 vm_detail 작업이 실제로 응답했는지로 판정한다. 이 둘을 섞으면
+    한쪽 고장으로 멀쩡한 다른 쪽을 막게 된다 - 실측 2026-08-31.
+
+    화면의 상세수집 게이트는 detailPathUsable 만 본다.
+    """
+    detail = detail_capture_readiness()
     path = _watcher_heartbeat_path()
     try:
-        age_seconds = time.time() - path.stat().st_mtime
+        age_seconds = round(time.time() - path.stat().st_mtime, 1)
+        candidate_alive = age_seconds <= _WATCHER_HEARTBEAT_MAX_AGE_SECONDS
     except OSError:
-        return {
-            "ok": False,
-            "watcherAlive": False,
-            "heartbeatAgeSeconds": None,
-            "maxAgeSeconds": _WATCHER_HEARTBEAT_MAX_AGE_SECONDS,
-            "reason": "vm_bridge_guest_watcher_unavailable",
-            "message": "VM 내부 watcher 하트비트를 찾지 못했습니다. VM 안에서 후보 수집 워커를 다시 띄워야 합니다.",
-        }
-    alive = age_seconds <= _WATCHER_HEARTBEAT_MAX_AGE_SECONDS
+        age_seconds = None
+        candidate_alive = False
     return {
-        "ok": alive,
-        "watcherAlive": alive,
-        "heartbeatAgeSeconds": round(age_seconds, 1),
+        **detail,
+        "candidateWatcherAlive": candidate_alive,
+        "heartbeatAgeSeconds": age_seconds,
         "maxAgeSeconds": _WATCHER_HEARTBEAT_MAX_AGE_SECONDS,
-        "reason": "" if alive else "vm_bridge_guest_watcher_unavailable",
-        "message": "" if alive else (
-            f"VM 내부 watcher 가 {int(age_seconds)}초 동안 응답하지 않았습니다. "
-            "VM 안에서 후보 수집 워커를 다시 띄워야 VM 경로를 쓸 수 있습니다."
-        ),
     }
 
 

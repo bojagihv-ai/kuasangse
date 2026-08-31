@@ -15677,8 +15677,12 @@ async function compMarketEnsureVmDetailCaptureReady(options = {}) {
   } catch (error) {
     compMarketLog(`VM watcher 상태를 확인하지 못했습니다: ${String(error?.message || error)}`, 'warn', marketOptions);
   }
-  const watcherKnown = !!watcher && typeof watcher.watcherAlive === 'boolean';
-  const watcherAlive = watcherKnown ? watcher.watcherAlive === true : true;
+  // 상세수집은 후보검색과 **다른 경로**다. 후보검색용 하트비트로 상세수집을 막으면
+  // 멀쩡한 VM 을 막는다 - 실측 2026-08-31: 하트비트가 41시간 낡은 동안에도 vm_detail
+  // 12건이 전부 성공했는데, 내가 그 하트비트로 상세수집을 막았다.
+  // detailPathUsable 은 "직전 상세수집 요청이 눈에 보이게 멎었는가" 만 본다.
+  const watcherKnown = !!watcher && typeof watcher.detailPathUsable === 'boolean';
+  const watcherAlive = watcherKnown ? watcher.detailPathUsable === true : true;
   const usable = healthOk && watcherAlive;
   const data = {
     ...health,

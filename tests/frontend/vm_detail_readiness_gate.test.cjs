@@ -29,9 +29,20 @@ const TRY_VM = block(
  * "준비됨" 이 되어 상세수집을 VM 으로 보내고 job_timeout(3600초) 을 기다린다.
  * 실측 2026-08-31: 같은 고장을 후보검색은 5초 만에 알아채는데 상세수집만 한 시간이 걸렸다.
  */
-test('준비 판정은 watcher 하트비트를 묻는다', () => {
-  assert.ok(READY.includes('/api/vm-bridge/readiness'), '판정이 watcher 상태를 묻지 않는다');
-  assert.ok(READY.includes('watcherAlive'), '판정 결과에 watcher 생사가 반영되지 않는다');
+test('준비 판정은 상세수집 경로 상태를 묻는다', () => {
+  assert.ok(READY.includes('/api/vm-bridge/readiness'), '판정이 VM 상태를 묻지 않는다');
+  assert.ok(READY.includes('detailPathUsable'), '상세수집 경로 판정을 읽지 않는다');
+});
+
+/**
+ * 후보검색용 하트비트로 상세수집을 막으면 멀쩡한 VM 을 막는다 - 실측 2026-08-31:
+ * 하트비트가 41시간 낡은 동안에도 vm_detail 12건이 전부 성공했다.
+ */
+test('후보검색용 하트비트로 상세수집을 막지 않는다', () => {
+  assert.ok(
+    !READY.includes('candidateWatcherAlive') && !READY.includes('watcher.watcherAlive'),
+    '상세수집 게이트가 후보검색 하트비트를 보고 있다',
+  );
 });
 
 /**
