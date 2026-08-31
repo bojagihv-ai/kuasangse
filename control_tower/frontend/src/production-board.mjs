@@ -1,4 +1,5 @@
 import {
+  advanceManualSelectionCursor,
   BOARD_STAGES,
   boardRowSignature,
   buildBatchSelectionRequest,
@@ -272,11 +273,9 @@ export function mountProductionBoard(runtime, {
   function renderToolbar(board) {
     const pickable = board.summary.pickableCells;
     const auto = button('board-action primary', 'AI 자동선택 일괄 적용', { action: 'auto' });
-    const first = button('board-action', '첫 후보로 일괄 예약', { action: 'first' });
     const resume = button('board-action', '선택 끝난 작업 일괄 재개', { action: 'resume' });
     const clear = button('board-action ghost', '예약 모두 지우기', { action: 'clear' });
     auto.disabled = busy || pickable === 0;
-    first.disabled = busy || pickable === 0;
     resume.disabled = busy || board.summary.resumable === 0;
     clear.disabled = busy || board.summary.reserved === 0;
     const toggle = element('label', 'board-toggle');
@@ -294,7 +293,7 @@ export function mountProductionBoard(runtime, {
           ? `${board.summary.resumable}개 작업이 다음 단계 진행을 기다립니다.`
           : '지금 선택을 기다리는 작업이 없습니다.',
     );
-    toolbar.replaceChildren(auto, first, resume, clear, toggle, hint);
+    toolbar.replaceChildren(auto, resume, clear, toggle, hint);
   }
 
   function renderHeaderRow() {
@@ -1638,20 +1637,31 @@ export function mountProductionBoard(runtime, {
   }
 
   async function submitBatch(body) {
+    const current = { ...openCell };
+    let receipt = null;
     busy = true;
     try {
       render();
-      const response = await apiRequest('/api/factory/jobs/selections', {
+      receipt = await apiRequest('/api/factory/jobs/selections', {
         method: 'POST',
         body: JSON.stringify({ ...body, autoResume }),
       });
-      const summary = summarizeBatchSelection(response);
+      const summary = summarizeBatchSelection(receipt);
       setStatus(summary.copy, summary.tone);
     } catch (error) {
       setStatus(`일괄 선택 실패 · ${String(error?.code || error?.message || error)}`, 'error');
     } finally {
       busy = false;
       await refresh();
+      if (body.mode === 'manual' && body.selections?.length === 1) {
+        openCell = advanceManualSelectionCursor({
+          board: lastBoard,
+          current,
+          selection: body.selections[0],
+          receipt,
+        });
+        render();
+      }
     }
   }
 
@@ -2194,13 +2204,12 @@ export function mountProductionBoard(runtime, {
           candidateId: target.dataset.candidateId,
         }],
       });
-      openCell = { jobId: '', stageKey: '' };
       return;
     }
-    if (action === 'auto' || action === 'first') {
+    if (action === 'auto') {
       const board = projectProductionBoard(jobs);
-      const body = buildBatchSelectionRequest(board, { mode: action === 'auto' ? 'auto' : 'manual' });
-      if (action === 'auto' ? !body.jobIds.length : !body.selections.length) {
+      const body = buildBatchSelectionRequest(board, { mode: 'auto' });
+      if (!body.jobIds.length) {
         setStatus('선택할 대기 작업이 없습니다.', 'warning');
         render();
         return;

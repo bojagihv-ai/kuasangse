@@ -141,7 +141,7 @@ test('보드 요약은 상태별 작업 수와 남은 선택 칸을 센다', asy
   });
 });
 
-test('일괄 선택 요청은 예약되지 않은 대기 칸만 담는다', async () => {
+test('명시한 후보의 수동 일괄 선택 요청은 예약되지 않은 대기 칸만 담는다', async () => {
   const { projectProductionBoard, buildBatchSelectionRequest } = await import(MODEL_URL);
   const board = projectProductionBoard([
     job({ jobId: 'w-1' }),
@@ -150,17 +150,84 @@ test('일괄 선택 요청은 예약되지 않은 대기 칸만 담는다', asyn
     job({ jobId: 'q-1', status: 'queued', progress: undefined }),
   ]);
 
-  const manual = buildBatchSelectionRequest(board);
+  const manual = buildBatchSelectionRequest(board, { candidateId: 'rep-b' });
   const auto = buildBatchSelectionRequest(board, { mode: 'auto' });
 
   assert.deepEqual(manual, {
     mode: 'manual',
     selections: [
-      { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-a' },
-      { jobId: 'w-2', stageKey: 'representative', candidateId: 'rep-a' },
+      { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' },
+      { jobId: 'w-2', stageKey: 'representative', candidateId: 'rep-b' },
     ],
   });
   assert.deepEqual(auto, { mode: 'auto', jobIds: ['w-1', 'w-2'] });
+});
+
+test('후보 ID가 없거나 현재 칸에 없으면 수동 일괄 선택 요청은 비어 있다', async () => {
+  const { projectProductionBoard, buildBatchSelectionRequest } = await import(MODEL_URL);
+  const board = projectProductionBoard([job({ jobId: 'w-1' }), job({ jobId: 'w-2' })]);
+
+  assert.deepEqual(buildBatchSelectionRequest(board), { mode: 'manual', selections: [] });
+  assert.deepEqual(buildBatchSelectionRequest(board, { candidateId: '   ' }), { mode: 'manual', selections: [] });
+  assert.deepEqual(buildBatchSelectionRequest(board, { candidateId: 'missing' }), { mode: 'manual', selections: [] });
+});
+
+test('수동 선택 receipt가 현재 projection과 맞을 때만 같은 공정의 다음 대기 제품을 본다', async () => {
+  const { advanceManualSelectionCursor, projectProductionBoard } = await import(MODEL_URL);
+  const current = { jobId: 'w-1', stageKey: 'representative' };
+  const selection = { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' };
+  const board = projectProductionBoard([
+    job({
+      jobId: 'w-1',
+      status: 'running',
+      stageKey: 'size',
+      progress: {
+        ...job().progress,
+        stageKey: 'size',
+        awaitingStageKeys: ['size'],
+        stages: [
+          stage('representative', { selectedId: 'rep-b', candidates: ['rep-a', 'rep-b'] }),
+          stage('size', { candidates: ['size-a'] }),
+        ],
+      },
+    }),
+    job({ jobId: 'w-2' }),
+  ]);
+  const receipt = {
+    schema: 'factory-batch-selection:v1',
+    mode: 'manual',
+    results: [{ ...selection, status: 'applied' }],
+  };
+
+  assert.deepEqual(
+    advanceManualSelectionCursor({ board, current, selection, receipt }),
+    { jobId: 'w-2', stageKey: 'representative' },
+  );
+});
+
+test('stale 또는 거절된 수동 선택 receipt는 현재 보는 제품을 유지한다', async () => {
+  const { advanceManualSelectionCursor, projectProductionBoard } = await import(MODEL_URL);
+  const current = { jobId: 'w-1', stageKey: 'representative' };
+  const selection = { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' };
+  const board = projectProductionBoard([job({ jobId: 'w-1' }), job({ jobId: 'w-2' })]);
+  const stale = {
+    schema: 'factory-batch-selection:v1',
+    mode: 'manual',
+    results: [{ ...selection, candidateId: 'rep-a', status: 'reserved' }],
+  };
+  const rejected = {
+    schema: 'factory-batch-selection:v1',
+    mode: 'manual',
+    results: [{ ...selection, status: 'error' }],
+  };
+
+  assert.deepEqual(advanceManualSelectionCursor({ board, current, selection, receipt: stale }), current);
+  assert.deepEqual(advanceManualSelectionCursor({ board, current, selection, receipt: rejected }), current);
+});
+
+test('생산 보드에는 첫 후보 수동 일괄 예약 action이 없다', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board.mjs'), 'utf8');
+  assert.doesNotMatch(source, /action:\s*'first'/);
 });
 
 test('일괄 선택 결과를 한 줄로 요약한다', async () => {

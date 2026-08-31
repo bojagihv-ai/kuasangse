@@ -16244,7 +16244,97 @@ function handleWorkfileActionClick(event) {
   }
 }
 
+// ── 저장 전 작업 복구본 되살리기 ──────────────────────────────
+// 사본은 편집권을 거치지 않고 저장된 참고본이라 자동 복원에 쓰지 않는다.
+// 목록을 보여 주고, 사람이 고른 한 건만 불러온다.
+let draftRecoveryDelegationInstalled = false;
+
+function draftRecoveryState() {
+  if (!state.draftRecovery) state.draftRecovery = { opened: false, loading: false, entries: [], error: '' };
+  return state.draftRecovery;
+}
+
+async function loadDraftRecoveryList() {
+  const view = draftRecoveryState();
+  const scopeId = String(getCurrentLastWorkWorkspaceScope?.() || '');
+  view.opened = true;
+  view.loading = true;
+  view.error = '';
+  render();
+  try {
+    const url = `${kuasangseBackendBaseUrl()}/api/draft-recovery?scopeId=${encodeURIComponent(scopeId)}`;
+    const response = await fetch(url, { cache: 'no-store' });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok !== true) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    view.entries = Array.isArray(payload.entries) ? payload.entries : [];
+  } catch (error) {
+    view.entries = [];
+    view.error = String(error?.message || error);
+  } finally {
+    view.loading = false;
+    render();
+  }
+}
+
+async function restoreDraftRecoveryEntry(savedAt) {
+  const view = draftRecoveryState();
+  const scopeId = String(getCurrentLastWorkWorkspaceScope?.() || '');
+  view.loading = true;
+  view.error = '';
+  render();
+  try {
+    const url = `${kuasangseBackendBaseUrl()}/api/draft-recovery/entry`
+      + `?scopeId=${encodeURIComponent(scopeId)}&savedAt=${encodeURIComponent(String(savedAt))}`;
+    const response = await fetch(url, { cache: 'no-store' });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok !== true || !payload.snapshot) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    // 되살리기는 지금 화면을 덮는다. 그래서 자동으로는 절대 하지 않고 여기서만 한다.
+    // 이 사본은 이 탭의 draft 범위에서 나온 것이므로 그 범위로 못박아 적용한다.
+    const applied = applyServerLastWorkSnapshot(payload.snapshot, {
+      expectedWorkspaceScopeId: scopeId,
+      replaceWorkspace: true,
+      persistReplica: true,
+    });
+    if (!applied) throw new Error('이 사본이 지금 작업 범위와 맞지 않아 적용하지 않았습니다.');
+    view.opened = false;
+    view.entries = [];
+    if (typeof factoryLog === 'function') {
+      factoryLog(`복구본으로 되살렸습니다: ${new Date(Number(savedAt) || 0).toLocaleString('ko-KR')}`, 'ok');
+    }
+  } catch (error) {
+    view.error = `되살리지 못했습니다: ${String(error?.message || error)}`;
+  } finally {
+    view.loading = false;
+    render();
+  }
+}
+
+function handleDraftRecoveryClick(event) {
+  const button = event.target?.closest?.('[data-draft-recovery-action]');
+  if (!button) return;
+  const action = String(button.getAttribute('data-draft-recovery-action') || '');
+  event.preventDefault();
+  event.stopImmediatePropagation?.();
+  if (action === 'list') { void loadDraftRecoveryList(); return; }
+  if (action === 'close') { draftRecoveryState().opened = false; render(); return; }
+  if (action === 'restore') {
+    const savedAt = String(button.getAttribute('data-saved-at') || '').trim();
+    if (savedAt) void restoreDraftRecoveryEntry(savedAt);
+  }
+}
+
+function ensureDraftRecoveryDelegation() {
+  if (draftRecoveryDelegationInstalled || typeof document === 'undefined') return;
+  document.addEventListener('click', handleDraftRecoveryClick, true);
+  draftRecoveryDelegationInstalled = true;
+}
+
 function ensureWorkfileActionDelegation() {
+  ensureDraftRecoveryDelegation();
   if (workfileActionDelegationInstalled || typeof document === 'undefined') return;
   document.addEventListener('click', handleWorkfileActionClick, true);
   workfileActionDelegationInstalled = true;
@@ -16362,6 +16452,7 @@ function renderShellMarkup(activeMenuHtml, activeMenu) {
       </main>
     </div>
     ${renderActiveWorkIdentityCard()}
+    ${typeof renderDraftRecoveryPanel === 'function' ? renderDraftRecoveryPanel() : ''}
     ${renderAgentChat()}
   `;
 }

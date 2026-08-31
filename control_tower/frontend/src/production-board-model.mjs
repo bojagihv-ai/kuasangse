@@ -596,11 +596,18 @@ export function describeParallelHeadroom(summaryValue) {
 /** 예약되지 않은 대기 칸만 모아 일괄 선택 요청 본문으로 만든다. */
 export function buildBatchSelectionRequest(board, { candidateId = '', mode = 'manual' } = {}) {
   const rows = list(record(board).rows);
+  const requestedCandidateId = text(candidateId);
   const selections = [];
   for (const row of rows) {
     for (const cell of list(record(row).cells)) {
       if (!cell.pickable || cell.reservedCandidateId) continue;
-      const chosen = candidateId || cell.candidates[0]?.id || '';
+      if (mode === 'auto') {
+        selections.push({ jobId: row.jobId, stageKey: cell.stageKey, candidateId: '' });
+        break;
+      }
+      const chosen = requestedCandidateId && cell.candidates.some(candidate => candidate.id === requestedCandidateId)
+        ? requestedCandidateId
+        : '';
       if (!chosen) continue;
       selections.push({ jobId: row.jobId, stageKey: cell.stageKey, candidateId: chosen });
       break;
@@ -609,6 +616,39 @@ export function buildBatchSelectionRequest(board, { candidateId = '', mode = 'ma
   return mode === 'auto'
     ? { mode: 'auto', jobIds: selections.map(entry => entry.jobId) }
     : { mode: 'manual', selections };
+}
+
+/** 현재 응답과 새 projection 모두 고른 후보를 확인한 뒤에만 다음 대기 칸을 연다. */
+export function advanceManualSelectionCursor({ board, current, selection, receipt } = {}) {
+  const cursor = record(current);
+  const request = record(selection);
+  const response = record(receipt);
+  const jobId = text(request.jobId);
+  const stageKey = text(request.stageKey);
+  const candidateId = text(request.candidateId);
+  const currentCell = { jobId: text(cursor.jobId), stageKey: text(cursor.stageKey) };
+  if (!jobId || !stageKey || !candidateId
+    || currentCell.jobId !== jobId || currentCell.stageKey !== stageKey
+    || text(response.schema) !== 'factory-batch-selection:v1' || text(response.mode) !== 'manual') return currentCell;
+  const matchedReceipt = list(response.results).map(record).some(result => (
+    text(result.jobId) === jobId
+    && text(result.stageKey) === stageKey
+    && text(result.candidateId) === candidateId
+    && (text(result.status) === 'applied' || text(result.status) === 'reserved')
+  ));
+  if (!matchedReceipt) return currentCell;
+  const rows = list(record(board).rows);
+  const rowIndex = rows.findIndex(row => text(record(row).jobId) === jobId);
+  const selectedCell = list(record(rows[rowIndex]).cells)
+    .map(record)
+    .find(cell => text(cell.stageKey) === stageKey);
+  if (!selectedCell || (text(selectedCell.selectedId) !== candidateId
+    && text(selectedCell.reservedCandidateId) !== candidateId)) return currentCell;
+  const next = rows.slice(rowIndex + 1)
+    .map(record)
+    .map(row => ({ row, cell: list(row.cells).map(record).find(cell => text(cell.stageKey) === stageKey) }))
+    .find(({ cell }) => cell?.pickable && !cell.reservedCandidateId);
+  return next ? { jobId: text(next.row.jobId), stageKey } : currentCell;
 }
 
 /** 일괄 선택 응답을 사람이 읽을 한 줄 요약으로 만든다. */

@@ -5,7 +5,7 @@ compPage.marketScrape.results.content[...].missing 이었다. 화면은 아무 �
 워커만 10초마다 "replica already contains a newer revision" 을 반복했다.
 보호 자체는 남겨야 한다 - 검색 세션이 그대로인데 후보가 사라지는 것은 여전히 사고다.
 """
-from backend.routes.api_archive import _last_work_derived_state_drop_reason
+from routes.api_archive import _last_work_derived_state_drop_reason
 
 
 def _snapshot(search_id, ids):

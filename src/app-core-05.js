@@ -11573,6 +11573,65 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
   </div>`;
 }
 
+/**
+ * 저장 버튼을 누르기 전 작업의 **되살리기** 칸.
+ *
+ * 2026-08-31 주인님이 하루에 두 번 작업을 잃었고 되살릴 사본이 없었다. 그래서 서버에
+ * 복구용 사본을 남기게 했다(backend/routes/api_draft_recovery.py). 사본은 쌓이는데
+ * 화면에서 고를 길이 없으면 그물을 쳐 놓고 걷지 않는 것과 같다.
+ *
+ * 이 사본은 편집권(lease)을 거치지 않고 저장된 참고본이라 **자동으로 복원하지 않는다**.
+ * 목록을 먼저 보여 주고, 사람이 하나를 고른 뒤에야 내용을 불러온다.
+ */
+function renderDraftRecoveryPanel() {
+  const scopeId = typeof getCurrentLastWorkWorkspaceScope === 'function'
+    ? String(getCurrentLastWorkWorkspaceScope() || '')
+    : '';
+  // 저장된 작업(project:)은 정상 저장·불러오기가 있다. 이 칸은 저장 전 작업만을 위한 것이다.
+  if (!scopeId.startsWith('draft:')) return '';
+  const view = state.draftRecovery || {};
+  // 앱 껍데기에 붙는 떠 있는 칸이다. 본문 흐름을 밀지 않게 오른쪽 아래에 고정한다.
+  const shell = value => `<aside class="draft-recovery-float" aria-label="저장 전 작업 복구본">${value}</aside>`;
+  if (!view.opened) {
+    return shell(`<button class="btn-sm" data-draft-recovery-action="list">저장 안 한 이 작업의 복구본</button>`);
+  }
+  if (view.loading) {
+    return shell('<div class="factory-small">복구본을 찾는 중입니다...</div>');
+  }
+  if (view.error) {
+    return `<div style="margin-top:10px">
+      <div class="factory-guide-note warn">복구본을 불러오지 못했습니다: ${escapeHtml(view.error)}</div>
+      <button class="btn-sm" data-draft-recovery-action="list" style="margin-top:6px">다시 시도</button>
+    </div>`;
+  }
+  const entries = Array.isArray(view.entries) ? view.entries : [];
+  if (!entries.length) {
+    return `<div style="margin-top:10px">
+      <div class="factory-small">이 작업의 복구본이 아직 없습니다. 자동저장이 한 번 돌면 생깁니다.</div>
+      <button class="btn-sm" data-draft-recovery-action="list" style="margin-top:6px">다시 확인</button>
+    </div>`;
+  }
+  const rows = entries.map(entry => {
+    const when = new Date(Number(entry.savedAt) || 0);
+    const stamp = Number.isFinite(when.getTime())
+      ? `${String(when.getMonth() + 1).padStart(2, '0')}/${String(when.getDate()).padStart(2, '0')} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`
+      : '시각 불명';
+    const name = String(entry.productName || '').trim() || '(제품명 없음)';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--border)">
+      <span class="factory-small"><b>${escapeHtml(stamp)}</b> · ${escapeHtml(name)}${entry.reason ? ` · ${escapeHtml(String(entry.reason))}` : ''}</span>
+      <button class="btn-sm" data-draft-recovery-action="restore" data-saved-at="${escAttr(String(entry.savedAt))}">이 사본으로 되살리기</button>
+    </div>`;
+  }).join('');
+  return `<div style="margin-top:10px;border:1px solid var(--border);border-radius:10px;padding:9px 10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <b class="factory-small">저장 전 작업 복구본 ${entries.length}건</b>
+      <button class="btn-sm" data-draft-recovery-action="close">닫기</button>
+    </div>
+    <div class="factory-small" style="margin-top:3px">되살리면 지금 화면의 내용이 이 사본으로 바뀝니다. 되돌리기 전에 지금 것을 먼저 저장해두세요.</div>
+    ${rows}
+  </div>`;
+}
+
 function renderWorkspacePanel() {
   const projectName = deriveProjectName();
   const projectOptions = state.projects.map(project => `

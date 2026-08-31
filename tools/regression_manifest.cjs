@@ -278,6 +278,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('DB-02', '1 제품/DB', 'DB/Cafe24 확정 선택 새로고침 유지', 'tools/verify_factory_candidate_confirmation_reload_cdp_v185.cjs'),
     nodeFile('DB-07', '1 제품/DB', '저장 전 작업의 DB/Cafe24 확정이 강제 새로고침을 견딤', 'tools/verify_unsaved_work_candidate_confirmation_survives_reload_v1.cjs'),
     nodeFile('DRAFT-NET-01', '공통/저장', '저장 전 작업도 서버에 복구용 사본을 남긴다', 'tools/verify_unsaved_draft_has_server_backup_v1.cjs'),
+    nodeFile('DRAFT-NET-02', '공통/저장', '복구본을 화면에서 골라 되살린다', 'tools/verify_draft_recovery_restore_ui_v1.cjs'),
     nodeFile('DB-08', '1 제품/DB', '신화사DB를 못 쓰는 상태를 후보 0건이라 말하지 않음', 'tests/frontend/sinhwa_service_unusable_is_visible.test.cjs', 'fast'),
     nodeFile('NAV-01', '공통/화면', '스크롤을 내려도 왼쪽 메뉴가 따라온다', 'tools/verify_sidebar_follows_scroll_v1.cjs'),
     nodeFile('CUTS-RATCHET-01', '2~6 생성 공정', '이미지컷 0 래칫이 풀린다(실측)', 'tools/verify_imagecut_zero_ratchet_released_v1.cjs'),

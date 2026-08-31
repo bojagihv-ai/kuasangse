@@ -11,7 +11,7 @@ analysisInvalidatedAt 이 더 새로울 때만 허용한다.
 
 from __future__ import annotations
 
-from backend.routes.api_archive import _last_work_derived_state_drop_reason
+from routes.api_archive import _last_work_derived_state_drop_reason
 
 
 def _snapshot(comp_page):

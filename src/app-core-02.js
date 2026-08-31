@@ -6045,6 +6045,44 @@ function getCurrentCompAnalysisTime() {
   return Number(state?.compPage?.analysisResult?.analyzedAt || 0) || 0;
 }
 
+/**
+ * 보관함(local-archive) 쓰기가 아직 날아가는 중인가.
+ *
+ * FACTORY_LOCAL_ARCHIVE_PENDING 은 뒤에 오는 파일에서 const 로 선언된다.
+ * let/const 는 선언 전 접근이면 typeof 조차 ReferenceError 를 던지므로(TDZ)
+ * 반드시 try/catch 로 감싼다 - 2026-08-30 에 이걸로 부팅 복원이 끊겨 생성물 10개를 잃었다.
+ */
+function factoryArchiveWritesInFlight() {
+  try { return FACTORY_LOCAL_ARCHIVE_PENDING.size > 0; } catch (_) { return false; }
+}
+
+const DEFERRED_BRANCH_RESTORE_INTERVAL_MS = 400;
+const DEFERRED_BRANCH_RESTORE_MAX_WAIT_MS = 20000;
+let deferredBranchAuthorityRestoreTimer = null;
+
+/** 보관함 쓰기가 끝나면 그때 이 탭의 브랜치 권한을 되돌린다. 건너뛰는 것이 아니라 미루는 것이다. */
+function scheduleDeferredBranchAuthorityRestore(branchScope, documentFence) {
+  if (deferredBranchAuthorityRestoreTimer) return;
+  const startedAt = Date.now();
+  const attempt = async () => {
+    deferredBranchAuthorityRestoreTimer = null;
+    const waitedTooLong = Date.now() - startedAt >= DEFERRED_BRANCH_RESTORE_MAX_WAIT_MS;
+    if (!waitedTooLong && factoryArchiveWritesInFlight()) {
+      deferredBranchAuthorityRestoreTimer = setTimeout(attempt, DEFERRED_BRANCH_RESTORE_INTERVAL_MS);
+      return;
+    }
+    // 그 사이 다른 작업으로 옮겨갔으면 되돌릴 것이 없다.
+    if (!workspaceDocumentFenceIsCurrent(documentFence)) return;
+    if (getCurrentLastWorkWorkspaceScope() !== branchScope) return;
+    try {
+      await ensureWorkspaceEditAuthority(branchScope, { force: true });
+    } catch (error) {
+      console.warn('Deferred tab branch authority restore failed:', error);
+    }
+  };
+  deferredBranchAuthorityRestoreTimer = setTimeout(attempt, DEFERRED_BRANCH_RESTORE_INTERVAL_MS);
+}
+
 // ── 저장 전(draft:) 작업의 복구용 사본 ────────────────────────────
 // 정상 저장(/api/last-work)은 편집권을 검증하고 draft 는 통과할 수 없다.
 // 이 사본은 그 검증을 거치지 않으므로 **읽기 전용 참고본**으로만 쓴다(자동 복원 금지).
@@ -6288,7 +6326,19 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       if (restoreBranchAuthority
         && workspaceDocumentFenceIsCurrent(documentFence)
         && getCurrentLastWorkWorkspaceScope() === activeBranchScope) {
-        await ensureWorkspaceEditAuthority(activeBranchScope, { force: true });
+        // 보관함 쓰기가 날아가는 중이면 편집권을 지금 되돌리지 않는다.
+        //
+        // 실측 2026-08-31 (백엔드 접속 로그): 788행 release 200 -> 789행 assets 409.
+        // 저장이 끝날 때마다 여기서 프로젝트 편집권을 놓고 브랜치 권한으로 돌아가는데,
+        // 생성 구간에는 저장이 잦아 8초에 15번 놨다 잡는다. 그 틈에 이미 떠난
+        // POST /api/local-archive/assets 가 닿으면 서버 lease 가 이미 없어 409 가 된다
+        // (화면 문구: "새 생성 실패: 컷 1 생성 실패: ... archive mutation rejected by server (409)").
+        // 되돌리기를 건너뛰는 게 아니라 **미룬다** - 쓰기가 끝나면 그때 되돌린다.
+        if (factoryArchiveWritesInFlight()) {
+          scheduleDeferredBranchAuthorityRestore(activeBranchScope, documentFence);
+        } else {
+          await ensureWorkspaceEditAuthority(activeBranchScope, { force: true });
+        }
       }
     } catch (error) {
       console.warn('Server last-work save could not restore this tab branch:', error);

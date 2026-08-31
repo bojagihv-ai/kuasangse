@@ -4,7 +4,7 @@
 results.content[coupang_9075021207]._session_id 가 빠졌다는 이유로 저장이 계속 거절돼
 「Cafe24 대상 떼기」 결과가 영영 서버에 닿지 못했다.
 """
-from backend.routes.api_archive import _last_work_derived_state_drop_reason
+from routes.api_archive import _last_work_derived_state_drop_reason
 
 
 def _snapshot(rows):

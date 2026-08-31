@@ -25,7 +25,10 @@ const parseArgs = () => {
 };
 const args = parseArgs();
 const fixturePath = resolve(root, String(args.fixture || 'control_tower/fixtures/two-product-mixed-manual/manifest.json'));
-const evidence = resolve(root, String(args.evidence || '.omo/evidence/batch-production-control-tower/task-15/final-f3'));
+const evidence = resolve(root, String(args.evidence || (args.fixture
+  ? '.omo/evidence/batch-production-control-tower/task-17/manual-qa'
+  : '.omo/evidence/batch-production-control-tower/task-15/final-f3')));
+const runtimeBuildId = String(JSON.parse(readFileSync(join(root, 'src', 'runtime-manifest.json'), 'utf8')).buildId || '');
 const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const driverPath = fileURLToPath(import.meta.url);
 const fail = message => { throw new Error(message); };
@@ -571,6 +574,241 @@ async function browserProof(frontPort, bffPort, remotePort) {
   }
 }
 
+async function browserManualSelectionProof(frontPort, bffPort, remotePort, target) {
+  const cdpPort = await pickPort();
+  const cdp = await ensureCdp(`http://127.0.0.1:${cdpPort}`);
+  const page = connectCdp(cdp.targets.find(item => item.type === 'page').webSocketDebuggerUrl);
+  await page.opened;
+  await page.send('Page.enable');
+  const selector = `[data-action="open"][data-job-id="${target.jobId}"][data-stage-key="${target.stageKey}"]`;
+  try {
+    await page.send('Page.navigate', { url: `http://127.0.0.1:${frontPort}/control-tower.html?apiBase=http://127.0.0.1:${bffPort}&apiHub=http://127.0.0.1:${remotePort}&fixtureCount=2` });
+    await waitFor(page, `document.querySelector('#production-board ${selector}')`, 20_000);
+    const before = await evaluate(page, `(() => {
+      const cell = document.querySelector('#production-board ${selector}');
+      return {
+        firstActionCount: document.querySelectorAll('#production-board [data-action="first"]').length,
+        viewedJobId: cell?.dataset.jobId || '',
+        viewedStageKey: cell?.dataset.stageKey || '',
+      };
+    })()`);
+    await evaluate(page, `document.querySelector('#production-board ${selector}').click()`);
+    await waitFor(page, `document.querySelector('#production-board [data-action="pick"][data-job-id="${target.jobId}"][data-stage-key="${target.stageKey}"][data-candidate-id="${target.candidateId}"]')`, 10_000);
+    await evaluate(page, `(() => {
+      window.__task17Fetch = window.fetch;
+      window.__task17 = { staleCalls: 0, successCalls: 0, successReceipt: null };
+      window.fetch = async (...args) => {
+        const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
+        if (!url.pathname.endsWith('/api/factory/jobs/selections')) return window.__task17Fetch(...args);
+        window.__task17.staleCalls += 1;
+        return new Response(JSON.stringify({
+          schema: 'factory-batch-selection:v1', mode: 'manual', applied: 0, reserved: 1, skipped: 0, failed: 0,
+          results: [{ jobId: '${target.jobId}', stageKey: '${target.stageKey}', candidateId: '${target.candidateId}', status: 'reserved' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      };
+    })()`);
+    await evaluate(page, `document.querySelector('#production-board [data-action="pick"][data-job-id="${target.jobId}"][data-stage-key="${target.stageKey}"][data-candidate-id="${target.candidateId}"]').click()`);
+    await waitFor(page, "window.__task17.staleCalls === 1 && document.querySelector('#production-board .status-message')?.dataset.tone === 'ok'", 10_000);
+    const stale = await evaluate(page, `(() => {
+      const cell = document.querySelector('#production-board ${selector}');
+      return { calls: window.__task17.staleCalls, viewedJobId: cell?.dataset.jobId || '', viewedStageKey: cell?.dataset.stageKey || '', open: cell?.dataset.open === 'true' };
+    })()`);
+    const staleImage = await page.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(join(evidence, 'stale-receipt-keeps-current.png'), Buffer.from(staleImage.data, 'base64'));
+    await evaluate(page, `(() => {
+      window.fetch = async (...args) => {
+        const url = new URL(args[0] instanceof Request ? args[0].url : args[0], location.href);
+        if (!url.pathname.endsWith('/api/factory/jobs/selections')) return window.__task17Fetch(...args);
+        window.__task17.successCalls += 1;
+        const response = await window.__task17Fetch(...args);
+        window.__task17.successReceipt = await response.clone().json();
+        return response;
+      };
+    })()`);
+    await evaluate(page, `(() => {
+      const pick = document.querySelector('#production-board [data-action="pick"][data-job-id="${target.jobId}"][data-stage-key="${target.stageKey}"][data-candidate-id="${target.candidateId}"]');
+      pick.click();
+      pick.click();
+    })()`);
+    await waitFor(page, `window.__task17.successCalls === 1 && document.querySelector('#production-board [data-job-id="${target.jobId}"] [data-stage-key="${target.stageKey}"][data-state="reserved"], #production-board [data-job-id="${target.jobId}"] [data-stage-key="${target.stageKey}"][data-state="selected"]')`, 10_000);
+    const success = await evaluate(page, `(() => {
+      const selected = document.querySelector('#production-board [data-job-id="${target.jobId}"] [data-stage-key="${target.stageKey}"][data-state="reserved"], #production-board [data-job-id="${target.jobId}"] [data-stage-key="${target.stageKey}"][data-state="selected"]');
+      const open = document.querySelector('#production-board [data-open="true"]');
+      window.fetch = window.__task17Fetch;
+      return {
+        calls: window.__task17.successCalls,
+        receipt: window.__task17.successReceipt,
+        projectedState: selected?.dataset.state || '',
+        viewedJobId: open?.dataset.jobId || '',
+        viewedStageKey: open?.dataset.stageKey || '',
+      };
+    })()`);
+    const selectedImage = await page.send('Page.captureScreenshot', { format: 'png' });
+    writeFileSync(join(evidence, 'explicit-selection-receipt.png'), Buffer.from(selectedImage.data, 'base64'));
+    return { before, stale, success };
+  } finally {
+    await page.close();
+    await cdp.cleanup();
+  }
+}
+
+async function runTask17() {
+  const manifest = checkFixture(fixture);
+  mkdirSync(evidence, { recursive: true });
+  const statePath = join(evidence, 'authority-state.json');
+  const eventLogPath = join(evidence, 'events.jsonl');
+  writeFileSync(statePath, `${JSON.stringify(initialAuthorityState(fixture), null, 2)}\n`);
+  writeFileSync(eventLogPath, '');
+  const authorityPort = await pickPort();
+  const front = frontendServer();
+  const frontPort = await listen(front);
+  const bffPort = await pickPort();
+  const taskOwnedPorts = [authorityPort, frontPort, bffPort];
+  let authority = startAuthority(authorityPort, statePath, eventLogPath);
+  let bff = startBff(bffPort, frontPort, authorityPort, 'task17');
+  const rawSelection = async (base, headers, body) => {
+    const response = await fetch(`${base}/api/factory/jobs/selections`, {
+      method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const productPayload = suffix => ({
+    contractType: 'manual-product-intake', contractVersion: '1.0.0', batchId: 'task17-manual-batch',
+    idempotencyKey: `task17-manual-${suffix}`, mode: 'manual', imageModel: 'gemini-3.1-flash-image',
+    source: { kind: 'manual' }, productName: `Task17 수동 제품 ${suffix}`, category: '주방',
+    requiredValues: { material: '스테인리스', originCountry: '대한민국', size: '20cm', salePrice: '12000', usage: '주방용', optionMode: 'provided' },
+    inputImages: [{ role: 'base', ordinal: 1, name: '정면', fileName: 'front.png', sha256: `task17-${suffix}`, dataUrl: 'data:image/png;base64,aGVsbG8=' }],
+  });
+  const holdProjection = (jobId, sequence) => ({
+    schema: 'factory-control-projection:v1', capabilityVersion: 'factory-control-command:v1', sequence, cursor: String(sequence), connected: true,
+    session: { workspaceId: `batch:${jobId}`, productId: `factory:${jobId}`, productKey: jobId, runId: `run:${jobId}`, inputFingerprint: `sha256:${jobId}`, revision: 10 },
+    inputs: [{ key: 'product', count: 1, missing: [], items: [] }],
+    stages: [{ key: 'representative', status: 'connected', selectedIds: [], candidates: [{ id: `task17-${jobId}-a` }, { id: `task17-${jobId}-b` }] }],
+    progress: { stageKey: 'representative', percent: 50, status: 'manual' }, registration: { status: 'blocked', blockers: ['final_detail_a_cut'], jobId },
+  });
+  const holdJob = async (base, headers, job, sequence) => {
+    const order = (await claim(base, headers, 'task17-worker')).order;
+    if (!order) fail('task17_claim_missing');
+    await lifecycle(base, headers, order, 'ack', 'task17-worker', 1);
+    const projection = holdProjection(job.jobId, sequence);
+    const receipt = {
+      schema: 'factory-product-run-receipt:v1', jobId: job.jobId, status: 'waiting_manual', stageKey: 'representative',
+      message: '대표이미지 결과를 선택해 주세요.', projection,
+      checkpoint: { schema: 'factory-product-checkpoint:v1', jobId: job.jobId, projectId: `batch:${job.jobId}`,
+        productId: projection.session.productId, productKey: projection.session.productKey, runId: projection.session.runId,
+        inputFingerprint: projection.session.inputFingerprint, revision: projection.session.revision,
+        status: 'waiting_manual', stageKey: 'representative', savedAt: 1 },
+    };
+    const completed = await lifecycle(base, headers, order, 'complete', 'task17-worker', 2, receipt);
+    return { order, completed };
+  };
+  try {
+    await waitHealth(bffPort);
+    const base = `http://127.0.0.1:${bffPort}`;
+    const headers = await sessionHeaders(base);
+    await api(base, '/api/factory/session/hello', {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        schema: 'factory-worker-session:v1', sessionId: 'task17-session', workerId: 'task17-worker', buildId: runtimeBuildId,
+        capabilityVersion: 'batch-control-worker:v1', factoryCapabilityVersion: 'factory-control-command:v1', startedAt: 1000, cursor: 1,
+        projection: holdProjection('task17-bootstrap', 1),
+      }),
+    });
+    const first = (await api(base, '/api/factory/jobs', { method: 'POST', headers, body: JSON.stringify(productPayload('a')) })).job;
+    const second = (await api(base, '/api/factory/jobs', { method: 'POST', headers, body: JSON.stringify(productPayload('b')) })).job;
+    const worker = { first: await holdJob(base, headers, first, 8), second: await holdJob(base, headers, second, 9) };
+    const before = await api(base, '/api/factory/jobs');
+    const targetJob = before.jobs.find(job => job.status === 'waiting_manual');
+    const targetStage = targetJob?.progress?.stages?.find(stage => stage.key === 'representative');
+    const target = {
+      jobId: String(targetJob?.jobId || ''),
+      stageKey: 'representative',
+      candidateId: String(targetStage?.candidates?.[0]?.id || targetStage?.candidates?.[0]?.candidateId || ''),
+    };
+    writeFileSync(join(evidence, 'pre-selection-state.json'), `${JSON.stringify({ worker, jobs: before.jobs, target }, null, 2)}\n`);
+    if (!target.jobId || !target.candidateId) fail('task17_manual_target_missing');
+    const checkpointBefore = JSON.stringify({
+      status: targetJob.status,
+      stageKey: targetJob.stageKey,
+      pendingSelection: targetJob.pendingSelection || null,
+      selectedId: targetStage?.selectedId || '',
+    });
+    const malformed = {
+      omitted: await rawSelection(base, headers, { mode: 'manual', selections: [] }),
+      unknown: await rawSelection(base, headers, { mode: 'manual', selections: [{ ...target, candidateId: 'missing-candidate' }] }),
+      mismatchedStage: await rawSelection(base, headers, { mode: 'manual', selections: [{ ...target, stageKey: 'size' }] }),
+    };
+    const afterMalformed = await api(base, '/api/factory/jobs');
+    const malformedTarget = afterMalformed.jobs.find(job => job.jobId === target.jobId);
+    const malformedStage = malformedTarget?.progress?.stages?.find(stage => stage.key === target.stageKey);
+    const checkpointAfterMalformed = JSON.stringify({
+      status: malformedTarget?.status || '',
+      stageKey: malformedTarget?.stageKey || '',
+      pendingSelection: malformedTarget?.pendingSelection || null,
+      selectedId: malformedStage?.selectedId || '',
+    });
+    const browser = await browserManualSelectionProof(frontPort, bffPort, authorityPort, target);
+    const after = await api(base, '/api/factory/jobs');
+    const selectedJob = after.jobs.find(job => job.jobId === target.jobId);
+    const selectedStage = selectedJob?.progress?.stages?.find(stage => stage.key === target.stageKey);
+    const projectedSelectedId = String(selectedJob?.pendingSelection?.candidateId || selectedStage?.selectedId || '');
+    const receipt = browser.success.receipt?.results?.find(result => result.jobId === target.jobId);
+    const authorityState = await api(`http://127.0.0.1:${authorityPort}`, '/__task15/state');
+    const result = {
+      schema: 'task17-explicit-manual-selection:v1',
+      fixture: manifest,
+      target,
+      worker,
+      malformed,
+      checkpointBefore,
+      checkpointAfterMalformed,
+      browser,
+      receipt,
+      projectedSelectedId,
+      externalWriteCalls: authorityState.state.writes,
+    };
+    writeFileSync(join(evidence, 'e2e.json'), `${JSON.stringify(result, null, 2)}\n`);
+    const malformedRejected = malformed.omitted.status === 422
+      && malformed.unknown.body.failed === 1
+      && malformed.mismatchedStage.body.skipped === 1
+      && checkpointBefore === checkpointAfterMalformed;
+    const browserPassed = browser.before.firstActionCount === 0
+      && browser.before.viewedJobId === target.jobId
+      && browser.stale.calls === 1
+      && browser.stale.open
+      && browser.stale.viewedJobId === target.jobId
+      && browser.stale.viewedStageKey === target.stageKey
+      && browser.success.calls === 1
+      && receipt?.status && ['applied', 'reserved'].includes(receipt.status)
+      && receipt.candidateId === target.candidateId
+      && projectedSelectedId === target.candidateId;
+    if (!malformedRejected || !browserPassed || result.externalWriteCalls !== 0) fail('task17_assertion_failed');
+    process.stdout.write(`${JSON.stringify({ ok: true, evidence })}\n`);
+  } finally {
+    await stopChild(bff.child);
+    await stopChild(authority.child);
+    await stop(front);
+    const portsReleased = await Promise.all(taskOwnedPorts.map(async port => {
+      try {
+        await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1_000) });
+        return false;
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        return true;
+      }
+    }));
+    writeFileSync(join(evidence, 'cleanup.json'), `${JSON.stringify({
+      ownedBffStopped: true,
+      ownedFrontendStopped: true,
+      ownedAuthorityStopped: true,
+      taskOwnedPorts,
+      portsReleased,
+      sharedPortsUntouched: [5050, 5062, 8081, 8082, 4321, 8200, 8787],
+    }, null, 2)}\n`);
+    if (!portsReleased.every(Boolean)) fail('owned_port_cleanup_failed');
+  }
+}
+
 async function run() {
   const manifest = checkFixture(fixture);
   mkdirSync(evidence, { recursive: true });
@@ -1048,6 +1286,10 @@ async function main() {
     const spec = JSON.parse(String(process.env.TASK15_WORKER_SPEC || '{}'));
     const result = await workerPhase(spec);
     process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if (args.fixture) {
+    await runTask17();
     return;
   }
   await run();

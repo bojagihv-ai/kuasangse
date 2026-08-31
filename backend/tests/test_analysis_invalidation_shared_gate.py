@@ -3,7 +3,7 @@
 파생 보호(_last_work_derived_state_drop_reason)만 표시를 보고 no-comp-analysis 관문이
 안 보면, 표시를 달아도 저장은 계속 거절된다 - 실측 2026-08-31.
 """
-from backend.routes.api_archive import _last_work_analysis_invalidated_on_purpose
+from routes.api_archive import _last_work_analysis_invalidated_on_purpose
 
 
 def _snapshot(comp_page):
