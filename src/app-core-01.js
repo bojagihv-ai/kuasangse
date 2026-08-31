@@ -2327,6 +2327,21 @@ async function openGptOAuthLogin(force = false) {
   }
 }
 
+/**
+ * fetch 가 **네트워크 단계에서** 죽었는지 가린다(= 서버에 닿지도 못함).
+ *
+ * 브라우저는 이 경우 TypeError 를 던지고 메시지는 엔진마다 다르다
+ * (Chrome 'Failed to fetch', Firefox 'NetworkError when attempting to fetch resource').
+ * HTTP 4xx/5xx 는 여기 해당하지 않는다 - 그건 res.ok 로 갈린다.
+ */
+function isNetworkLevelFetchFailure(error) {
+  if (!error) return false;
+  if (error.name === 'AbortError') return false;
+  const message = String(error.message || error);
+  return error instanceof TypeError
+    || /failed to fetch|networkerror|network request failed|load failed|ERR_CONNECTION/i.test(message);
+}
+
 function formatGptOAuthBridgeError(data, status = '') {
   const raw = [
     data?.error,
@@ -2638,6 +2653,16 @@ class GptOAuthAPI {
       data = await res.json().catch(() => ({ ok: false, error: `GPT OAuth bridge HTTP ${res.status}` }));
     } catch(e) {
       if (e?.name === 'AbortError') throw new Error(`GPT OAuth 호출이 ${Math.round(timeoutMs / 1000)}초를 초과했습니다. API Hub 상태를 확인한 뒤 다시 실행해주세요.`);
+      // 허브가 꺼져 있으면 fetch 가 TypeError('Failed to fetch') 로 죽는다. 그대로 올리면
+      // 화면에 "분석 실패: Failed to fetch" 라는 영어 한 줄만 남아, 무엇을 해야 하는지 알 수 없다.
+      // 실측 2026-08-31: 주인님 화면 맨 위에 "API Hub 연결 실패(127.0.0.1:4321)" 배너가 떠 있는
+      // 상태에서 분석을 눌렀고, 결과는 "분석 실패" 뿐이었다. 두 사건이 같은 원인인데 화면에서는
+      // 이어지지 않았다. 무엇이 꺼졌고 어떻게 켜는지까지 말한다.
+      if (isNetworkLevelFetchFailure(e)) {
+        throw new Error(`API Hub(${this.baseUrl})에 연결하지 못해 GPT OAuth 분석을 시작하지 못했습니다.`
+          + ' 모델이 실패한 것이 아니라 중계 서버가 꺼져 있는 상태입니다.'
+          + ' 바탕화면 API Hub 를 실행하거나 상세페이지 런처를 다시 켠 뒤 분석을 다시 눌러주세요.');
+      }
       throw e;
     } finally {
       clearTimeout(timer);
