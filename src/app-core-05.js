@@ -229,6 +229,21 @@ function factoryCafe24CandidateProductUrl(candidate = {}) {
 
 function factoryCandidateCollectionStatusView(factory = {}, type = '', candidateCount = 0) {
   const taskId = type === 'cafe24' ? 'cafe24' : 'sinhwa';
+  // 조회 자체가 막혀 있으면 그 사실이 먼저다.
+  // 실측 2026-08-31: 백엔드가 신화사 서비스 키 없이 떠 있으면 모든 DB 조회가
+  // service_key_missing 으로 막히는데, 화면은 "DB 후보 0건 · 아직 후보를 확인하지 않음" 만
+  // 보여줬다. 그러면 물건이 없는 것으로 읽힌다 - 실제로는 한 건도 물어보지 못한 것이다.
+  const dbFailureNote = String(factory?.product?.dbConfirmFailureNote || '').trim();
+  if (taskId === 'sinhwa' && dbFailureNote && !factory?.product?.confirmedDb) {
+    return { state: 'error', label: '확정 실패', detail: dbFailureNote };
+  }
+  if (taskId === 'sinhwa' && factory?.product?.sinhwaServiceKeyMissing === true && !candidateCount) {
+    return {
+      state: 'error',
+      label: '조회 불가 · 서비스 키 없음',
+      detail: '후보가 없는 것이 아니라 신화사DB 조회 자체가 막혀 있습니다. launcher.ps1 로 백엔드를 다시 실행하면 키가 함께 올라갑니다.',
+    };
+  }
   const progress = factory?.automation?.parallelProgress?.[taskId];
   const status = String(progress?.status || '').trim();
   const message = String(progress?.message || '').trim();

@@ -283,6 +283,22 @@ async function fetchSinhwaDbLocalStatus() {
   }, 6000);
 }
 
+/**
+ * 신화사 상세페이지 자산 API 를 **실제로 쓸 수 있는지** 묻는다.
+ *
+ * /api/sinhwa-db/status 는 "프로그램(8200)이 켜져 있나" 만 답한다. 그것만으로는 모자라다 -
+ * 실측 2026-08-31: 백엔드가 서비스 키 없이 뜨면 sinhwa-db/status 는 running:true, ok:true 를
+ * 그대로 돌려주는데, 정작 모든 조회는 service_key_missing 으로 막힌다. 그 결과 화면에는
+ * "DB 후보 0건 · 아직 후보를 확인하지 않음" 만 남아, 물건이 없는 것처럼 보였다.
+ * 켜져 있는 것과 쓸 수 있는 것은 다른 얘기다.
+ */
+async function fetchSinhwaPdpServiceStatus() {
+  return fetchJsonWithTimeout(`${kuasangseBackendBaseUrl()}/api/sinhwa-pdp/status`, {
+    headers: { 'Accept': 'application/json' },
+    cache: 'no-store',
+  }, 6000);
+}
+
 async function startSinhwaDbLocalProgram() {
   return fetchJsonWithTimeout(`${kuasangseBackendBaseUrl()}/api/sinhwa-db/start`, {
     method: 'POST',

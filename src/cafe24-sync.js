@@ -7290,6 +7290,7 @@ async function factoryApplyDbCandidateFromReview(index, options = {}) {
       preserveCafe24: true,
       preserveManualFields,
     });
+    current.product.dbConfirmFailureNote = '';
     current.product.confirmedDb = factoryStampReviewScopeOnConfirmed(cloneData(match), current);
     current.product.selectedDbCandidateKey = factorySinhwaCandidateKey(match) || key;
     current.product.dbCandidateResolution = 'selected';
@@ -7311,6 +7312,11 @@ async function factoryApplyDbCandidateFromReview(index, options = {}) {
     return true;
   } catch(e) {
     factory.product.candidateReviewStatus = `신화사DB 후보 적용 실패: ${e.message || e}`;
+    // candidateReviewStatus 는 DB와 Cafe24가 나눠 쓰는 칸 하나다. 나중에 쓴 쪽이 이긴다.
+    // 실측 2026-08-31: DB 확정이 실패한 직후 Cafe24 확정이 성공하면 이 칸이
+    // "Cafe24 확정: ... 상세 조회는 나중에 다시 시도할 수 있습니다" 로 덮여,
+    // DB가 안 됐다는 사실이 화면에서 통째로 사라졌다. 그래서 따로 붙들어 둔다.
+    factory.product.dbConfirmFailureNote = `신화사DB 후보 적용 실패: ${e.message || e}`;
     factorySetStageStatus('db', 'error', factory.product.candidateReviewStatus, factory);
     factoryLog(factory.product.candidateReviewStatus, 'error', factory);
     return false;
@@ -7743,11 +7749,30 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
   factoryReportCandidateParallelProgress(factory, 'sinhwa', 10, 'running', '신화사DB 연결 확인 중');
   factoryReportCandidateParallelProgress(factory, 'cafe24', 10, 'running', 'Cafe24 연결/OAuth 확인 중');
 
-  const [sinhwaStatusResult, cafe24StatusResult, cafe24OAuthStatusResult] = await Promise.allSettled([
+  const [sinhwaStatusResult, cafe24StatusResult, cafe24OAuthStatusResult, sinhwaPdpStatusResult] = await Promise.allSettled([
     typeof fetchSinhwaDbLocalStatus === 'function' ? fetchSinhwaDbLocalStatus() : Promise.resolve(null),
     typeof fetchCafe24ControlStatus === 'function' ? fetchCafe24ControlStatus() : Promise.resolve(null),
     typeof fetchCafe24OAuthStatus === 'function' ? fetchCafe24OAuthStatus(factory.product?.cafe24OAuthStatus?.mallId || CAFE24_CONTROL_API.defaultMallId) : Promise.resolve(null),
+    typeof fetchSinhwaPdpServiceStatus === 'function' ? fetchSinhwaPdpServiceStatus() : Promise.resolve(null),
   ]);
+  // 프로그램이 켜져 있는 것과 쓸 수 있는 것은 다른 얘기다.
+  // 실측 2026-08-31: 백엔드가 서비스 키 없이 뜨면 sinhwa-db/status 는 running:true 인데
+  // 모든 조회는 service_key_missing 으로 막힌다. 그때 화면은 "DB 후보 0건" 만 보여
+  // 물건이 없는 것처럼 읽혔다. 조회를 보내기 전에 못 쓴다는 사실을 먼저 말한다.
+  const sinhwaServiceUnusable = sinhwaPdpStatusResult.status === 'fulfilled'
+    && sinhwaPdpStatusResult.value
+    && sinhwaPdpStatusResult.value.configured === false;
+  if (sinhwaServiceUnusable) {
+    const unusableMessage = '신화사DB 조회 불가: 백엔드에 신화사 서비스 키가 설정되지 않았습니다.'
+      + ' 후보가 없는 것이 아니라 조회 자체가 막힌 상태입니다.'
+      + ' launcher.ps1 로 백엔드를 다시 실행하면 키가 함께 올라갑니다.';
+    factory.product.sinhwaServiceKeyMissing = true;
+    factory.product.candidateReviewStatus = unusableMessage;
+    factorySetStageStatus('db', 'error', unusableMessage, factory);
+    factoryLog(unusableMessage, 'error', factory);
+  } else {
+    factory.product.sinhwaServiceKeyMissing = false;
+  }
   const sinhwaPreflightOffline = sinhwaStatusResult.status === 'fulfilled'
     && sinhwaStatusResult.value?.ok !== false
     && sinhwaStatusResult.value?.running === false;
