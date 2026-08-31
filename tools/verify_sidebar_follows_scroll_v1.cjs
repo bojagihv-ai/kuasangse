@@ -7,8 +7,11 @@
 // 직계 자식인데, align-self:stretch 가 사이드바를 스크롤 전체 높이만큼 늘려버려
 // sticky 가 움직일 자리가 없었다. align-self:flex-start + height:100vh 로 바꿔야 한다.
 //
-// 좁은 화면(<=900px)에서는 아이콘만 남고 hover 툴팁이 사이드바 바깥에 그려지므로
-// overflow 로 잘리면 안 된다 - 그쪽은 overflow:visible 로 되돌려 두었다.
+// 사이드바에 내부 스크롤을 달아 해결하면 안 된다. TASK8-SCROLL-OWNER 계약
+// ("앱 전체는 오른쪽 단일 스크롤로 사이드바와 본문 끝까지 도달한다")과 전역 UI 원칙
+// (개별 박스 내부 스크롤 금지)을 어긴다 - 실제로 어겼다가 UI-CJK-01/MENU-NAV-01 에 걸렸다.
+// 그래서 내부 스크롤 없이 sticky 만 쓰고, 사이드바가 화면보다 길어 아랫부분에 손이 닿지 않는
+// 짧은 화면(<1100px)에서는 붙이지 않는다. 이 검사는 양쪽을 다 잰다.
 const fs = require('fs');
 const path = require('path');
 const {
@@ -37,8 +40,9 @@ async function main() {
   await cdp.send('Runtime.enable');
   await cdp.send('Network.enable');
   await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+  // 주인님 화면은 세로 1300px 급이다. 문턱(1100px) 위에서 실제로 붙는지 잰다.
   await cdp.send('Emulation.setDeviceMetricsOverride', {
-    width: 1600, height: 900, deviceScaleFactor: 1, mobile: false,
+    width: 1600, height: 1300, deviceScaleFactor: 1, mobile: false,
   });
   await cdp.send('Page.navigate', { url: `${APP_URL}?sidebarFollowsScroll=v1&t=${Date.now()}` });
   await waitFor(cdp, `!!document.querySelector('.sidebar') && !!document.querySelector('.app')`, 60000);
@@ -83,27 +87,47 @@ async function main() {
       firstNavTop: firstNav ? Math.round(firstNav.top) : null,
       lastNavBottom: lastNav ? Math.round(lastNav.bottom) : null,
       sidebarInnerScrollable: sidebar.scrollHeight - sidebar.clientHeight,
+      overflowY: style.overflowY,
     };
   })()`);
 
-  fs.writeFileSync(RESULT_PATH, JSON.stringify(measured, null, 2), 'utf8');
+  // 짧은 화면에서는 붙지 않아야 한다 - 붙으면 사이드바 아랫부분에 손이 닿지 않는다.
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1600, height: 800, deviceScaleFactor: 1, mobile: false,
+  });
+  await new Promise(resolve => setTimeout(resolve, 400));
+  const shortScreen = await evaluate(cdp, `(() => {
+    const sidebar = document.querySelector('.sidebar');
+    const style = getComputedStyle(sidebar);
+    return { position: style.position, overflowY: style.overflowY, innerHeight: window.innerHeight };
+  })()`);
+
+  fs.writeFileSync(RESULT_PATH, JSON.stringify({ tall: measured, short: shortScreen }, null, 2), 'utf8');
 
   const checks = [
     { ok: measured.position === 'sticky',
-      message: `사이드바가 sticky 가 아닙니다: position=${measured.position}` },
+      message: `세로 ${measured.viewportHeight}px 화면에서 사이드바가 sticky 가 아닙니다: position=${measured.position}` },
     { ok: measured.alignSelf !== 'stretch',
       message: `align-self:stretch 면 사이드바가 스크롤 전체 높이로 늘어나 sticky 가 움직일 자리가 없습니다: ${measured.alignSelf}` },
     { ok: measured.appliedScroll >= SCROLL_BY - 5,
       message: `전제 불성립 - 실제로 ${SCROLL_BY}px 스크롤되지 않았습니다(적용 ${measured.appliedScroll}, 스크롤 가능 ${measured.scrollable})` },
     { ok: measured.afterTop >= -1 && measured.afterTop <= 1,
       message: `스크롤 뒤 사이드바가 화면 위로 밀려났습니다: top ${measured.beforeTop} -> ${measured.afterTop} (0이어야 따라옵니다)` },
-    { ok: measured.firstNavTop !== null && measured.firstNavTop >= 0 && measured.firstNavTop < measured.viewportHeight,
-      message: `스크롤 뒤 첫 메뉴가 화면 밖입니다: firstNavTop=${measured.firstNavTop}, 화면높이=${measured.viewportHeight}` },
     { ok: measured.lastNavBottom !== null && measured.lastNavBottom <= measured.viewportHeight + 1,
-      message: `마지막 메뉴가 화면 아래로 잘려 누를 수 없습니다: lastNavBottom=${measured.lastNavBottom}, 화면높이=${measured.viewportHeight}, 사이드바 내부 스크롤 여유=${measured.sidebarInnerScrollable}` },
+      message: `마지막 메뉴가 화면 아래로 잘려 누를 수 없습니다: lastNavBottom=${measured.lastNavBottom}, 화면높이=${measured.viewportHeight}` },
+
+    // 내부 스크롤로 해결하지 않았는지 - 전역 UI 원칙과 TASK8-SCROLL-OWNER 계약.
+    { ok: measured.overflowY !== 'auto' && measured.overflowY !== 'scroll',
+      message: `사이드바에 내부 스크롤이 생겼습니다(overflow-y:${measured.overflowY}). 전체 단일 스크롤 원칙을 어깁니다.` },
+    { ok: measured.sidebarInnerScrollable <= 0,
+      message: `사이드바 안에 숨은 스크롤 여유가 ${measured.sidebarInnerScrollable}px 있습니다 - 그만큼은 손이 닿지 않습니다.` },
+
+    // 짧은 화면에서는 붙지 않아야 사이드바 끝까지 닿는다.
+    { ok: shortScreen.position !== 'sticky',
+      message: `세로 ${shortScreen.innerHeight}px 짧은 화면에서도 붙어 있습니다(position=${shortScreen.position}). 사이드바가 화면보다 길면 아랫부분에 손이 닿지 않습니다.` },
   ];
   assertChecks(checks);
-  console.log(`[PASS] 스크롤 ${measured.appliedScroll}px 뒤에도 왼쪽 메뉴가 제자리(top=${measured.afterTop}) - 증거 ${RESULT_PATH}`);
+  console.log(`[PASS] 세로 ${measured.viewportHeight}px: 스크롤 ${measured.appliedScroll}px 뒤에도 제자리(top=${measured.afterTop}, 내부스크롤 없음) · 세로 ${shortScreen.innerHeight}px: ${shortScreen.position} - 증거 ${RESULT_PATH}`);
   return cdp;
 }
 
