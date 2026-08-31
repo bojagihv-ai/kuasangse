@@ -11,7 +11,7 @@ import {
   projectProductionBoard,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=38';
+} from './production-board-model.mjs?parallelBoard=39';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
 // 한 번에 수백 건이 와도 요청은 한 번만 나간다.
@@ -1241,7 +1241,10 @@ export function mountProductionBoard(runtime, {
     // 되살리기는 Cafe24 등록 버튼과 조건이 달라야 한다. 등록이 막혀 blocked 가 된 순간
     // 이 버튼들이 같이 사라지면, 정작 필요할 때 없다 — 실측 2026-08-29에 그렇게 사라졌다.
     // 만들기가 끝난 뒤(완료·차단 어느 쪽이든)에는 늘 보이게 둔다.
-    if ((row.status === 'completed' || row.status === 'blocked') && !row.cafe24Registered) {
+    // 등록이 막혀 있으면 작업 상태가 무엇이든 푸는 길이 있어야 한다. 예전에는 완료/차단일 때만
+    // 보여서, "내 선택 대기" 인 동안에는 차단 사유를 읽고도 누를 곳이 없었다 - 실측 2026-08-31.
+    if ((row.status === 'completed' || row.status === 'blocked' || row.registrationBlocked)
+      && !row.cafe24Registered) {
       const detach = button('board-mini-action ghost', 'Cafe24 대상 떼기', {
         action: 'recover-clear-target',
         jobId: row.jobId,

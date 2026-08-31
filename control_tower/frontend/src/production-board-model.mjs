@@ -331,6 +331,12 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     const cafe24Registered = text(job.stageKey) === 'cafe24' && status === 'completed';
     const cafe24Values = record(job.cafe24Values);
     const cafe24Declined = messageInfo.code.startsWith('factory_cafe24_registration_declined');
+    // 등록이 막혀 있다는 사실은 진행 스냅샷에 있는데 보드까지 오지 않았다. 그래서 작업이
+    // "내 선택 대기" 인 동안에는 차단 사유가 보이는데도 그것을 푸는 버튼이 없었다 -
+    // 실측 2026-08-31: 섹션에 남의 상품명이 박힌 것을 보고도 「Cafe24 대상 떼기」 를 누를 수 없었다.
+    const registration = record(progress.registration);
+    const registrationBlockers = list(registration.blockers).map(text).filter(Boolean);
+    const registrationBlocked = text(registration.status) === 'blocked' || registrationBlockers.length > 0;
     // "5/6단계" 는 다음에 무엇을 해야 하는지 말해 주지 않는다. 행마다 다음 할 일
     // 한 줄을 만들어 사람이 세지 않고도 바로 움직일 수 있게 한다.
     const pickableCell = cells.find(cell => cell.pickable);
@@ -408,6 +414,8 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       reservedCandidateId,
       hasReservation: Boolean(reservedStageKey && reservedCandidateId),
       cafe24Registered,
+      registrationBlocked,
+      registrationBlockers,
       // 분류 입력이 생기기 전에 투입된 작업은 등록 대상 값이 비어 있다. 그대로 등록을
       // 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이 어디를
       // 고쳐야 하는지 알 수 없다.
