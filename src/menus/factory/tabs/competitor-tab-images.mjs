@@ -58,6 +58,13 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
   const previousImages = detailImages.previousImages;
   const selectableImages = currentImages.length ? currentImages : previousImages;
   const historicalImages = currentImages.length ? previousImages : [];
+  // ★ 이번 선택 후보로 수집한 이미지가 없으면 **이전 수집분**이 그 자리에 앉는다.
+  //   주인님 2026-08-31: 11번가 후보를 새로 골랐는데 아래에는 예전 쿠팡 상품 이미지가 떠서
+  //   "결과 반영이 잘 안 되는 것 같다" 고 하셨다. 실제로 반영이 안 된 게 아니라,
+  //   **이 후보로는 아직 아무것도 수집하지 않았는데** 화면이 그 사실을 말하지 않은 것이다.
+  //   이미지는 detailOperationId(상세수집 작업 번호)로 갈린다(competitor-tab-model.mjs).
+  //   고를 수 있게 두는 것은 그대로 두되, 어디서 온 것인지는 분명히 말한다.
+  const usingPreviousAsFallback = !currentImages.length && previousImages.length > 0;
   const displayedImages = market.showPreviousDetailImages
     ? [...selectableImages, ...historicalImages]
     : selectableImages;
@@ -76,9 +83,18 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
   const resultScore = analysisResult ? analysisResult.page_score?.total ?? analysisResult.score ?? '' : '';
   const resultGrade = analysisResult ? analysisResult.page_score?.grade || '' : '';
   const resultSections = analysisResult && Array.isArray(analysisResult.sections_found) ? analysisResult.sections_found.length : 0;
-  const statusTitle = analyzing ? '현재 선택 이미지 분석 중입니다' : stale ? '현재 선택 이미지 기준 분석이 필요합니다' : analysisResult ? '분석 결과가 준비됐습니다' : selectedCount ? '분석할 이미지가 선택됐습니다' : '분석할 이미지를 선택해주세요';
-  const statusBody = analyzing ? (compPage.analyzeMsg || market.status || `선택 이미지 ${selectedCount}장을 분석 중입니다.`) : stale ? `이전 분석 결과는 현재 선택 이미지 ${selectedCount}장과 맞지 않아 기본 후보에서 분리했습니다.` : analysisResult ? `${resultTitle}${resultScore !== '' ? ` · ${resultScore}${resultGrade ? `점 ${resultGrade}` : '점'}` : ''} · 섹션 ${resultSections}개` : (compPage.analyzeMsg || market.status || (selectedCount ? `선택 ${selectedCount}장을 분석할 수 있습니다.` : '아래 이미지에서 분석 선택을 눌러주세요.'));
-  const statusDetail = analyzing ? (compPage.analyzeDetail || '이미지를 변환하거나 GPT 분석 결과를 기다리는 중입니다.') : stale ? '선택 이미지 분석을 다시 실행해야 리포트 열기와 섹션 플랜 생성으로 넘어갈 수 있습니다.' : analysisResult ? '아래 버튼으로 바로 리포트를 열 수 있습니다. 필요하면 같은 자리에서 다시 분석할 수도 있습니다.' : (compPage.analyzeDetail || '선택 후 버튼을 누르면 이 박스에서 진행상황과 결과가 바로 바뀝니다.');
+  const statusTitle = analyzing ? '현재 선택 이미지 분석 중입니다'
+    : stale ? '현재 선택 이미지 기준 분석이 필요합니다'
+    : analysisResult ? '분석 결과가 준비됐습니다'
+    : usingPreviousAsFallback ? '이 후보로 수집한 이미지가 아직 없습니다'
+    : selectedCount ? '분석할 이미지가 선택됐습니다'
+    : '분석할 이미지를 선택해주세요';
+  const statusBody = analyzing ? (compPage.analyzeMsg || market.status || `선택 이미지 ${selectedCount}장을 분석 중입니다.`) : stale ? `이전 분석 결과는 현재 선택 이미지 ${selectedCount}장과 맞지 않아 기본 후보에서 분리했습니다.` : analysisResult ? `${resultTitle}${resultScore !== '' ? ` · ${resultScore}${resultGrade ? `점 ${resultGrade}` : '점'}` : ''} · 섹션 ${resultSections}개` : usingPreviousAsFallback
+      ? `아래 ${previousImages.length}장은 **이전에 고른 후보**로 수집한 이미지입니다. 지금 고른 후보의 이미지가 아닙니다.`
+      : (compPage.analyzeMsg || market.status || (selectedCount ? `선택 ${selectedCount}장을 분석할 수 있습니다.` : '아래 이미지에서 분석 선택을 눌러주세요.'));
+  const statusDetail = analyzing ? (compPage.analyzeDetail || '이미지를 변환하거나 GPT 분석 결과를 기다리는 중입니다.') : stale ? '선택 이미지 분석을 다시 실행해야 리포트 열기와 섹션 플랜 생성으로 넘어갈 수 있습니다.' : analysisResult ? '아래 버튼으로 바로 리포트를 열 수 있습니다. 필요하면 같은 자리에서 다시 분석할 수도 있습니다.' : usingPreviousAsFallback
+      ? '지금 고른 후보의 상세페이지를 쓰려면 아래 후보 카드에서 상세수집을 먼저 실행해주세요. 그대로 분석하면 예전 후보를 분석하게 됩니다.'
+      : (compPage.analyzeDetail || '선택 후 버튼을 누르면 이 박스에서 진행상황과 결과가 바로 바뀝니다.');
   const statusBorder = analysisResult ? 'rgba(34,197,94,.55)' : stale || !selectedCount ? 'rgba(245,158,11,.55)' : 'rgba(99,102,241,.5)';
   const statusBg = analysisResult ? 'rgba(16,185,129,.12)' : stale || !selectedCount ? 'rgba(245,158,11,.10)' : 'rgba(99,102,241,.10)';
   const buttonLabel = analyzing ? '분석 진행 중...' : market.loading ? '분석 준비 중...' : analysisResult ? '선택 이미지 다시 분석' : stale ? '현재 선택 이미지 다시 분석' : '선택 이미지 분석';
@@ -106,6 +122,7 @@ export function renderScrapedImagePicker(model, helpers, includePreviewModal) {
     ${analyzing ? `<div style="border:1px solid rgba(99,102,241,.30);background:rgba(0,0,0,.16);border-radius:10px;padding:9px 10px;margin:-2px 0 10px"><div data-comp-market-analysis-logs style="display:flex;flex-direction:column;gap:6px;max-height:156px;overflow:auto">${renderCompetitorAnalyzeLogItems(Array.isArray(compPage.analyzeLogs) ? compPage.analyzeLogs : [])}</div></div>` : ''}
     ${renderPreviewModal(previewImage, market, helpers)}
     ${!displayedImages.length ? '<div class="factory-guide-note warn" style="margin-bottom:10px;overflow-wrap:anywhere">현재 선택 후보의 상세이미지가 아직 없습니다. 최근 VM 상세이미지 불러오기를 실행해주세요.</div>' : ''}
+    ${usingPreviousAsFallback ? `<div class="factory-guide-note warn" data-comp-market-previous-fallback="1" style="margin-bottom:10px;overflow-wrap:anywhere">지금 고른 후보로 수집한 상세이미지가 <b>0장</b>입니다. 아래 ${previousImages.length}장은 <b>이전 후보</b>의 수집분이라 상품과 사이트가 다를 수 있습니다. 이 후보의 이미지를 쓰려면 후보 카드에서 상세수집을 실행해주세요.</div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(132px,100%),1fr));gap:8px;min-width:0;max-width:100%">${previewRows.map((image, index) => renderImageCard(image, index, { selectable, selected, helpers })).join('')}</div>
   </div>`;
 }
