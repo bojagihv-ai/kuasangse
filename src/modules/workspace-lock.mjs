@@ -74,27 +74,6 @@ export function createWorkspaceLockCoordinator({
     return running;
   }
 
-  /**
-   * 편집권 반납은 **진행 중인 쓰기 뒤에** 서야 한다.
-   *
-   * runMutation 은 쓰기끼리만 줄을 세웠고 release 는 그 줄에 서지 않았다. 그래서
-   * 이미지 자산 POST 가 날아가는 중에 반납이 먼저 도착하면, 뒤늦게 닿은 쓰기가
-   * 무효해진 lease 로 거절된다. 서버는 STALE_REVISION/LEASE_EXPIRED 로 409를 준다
-   * (backend/services/workspace_lock_service.py).
-   *
-   * 이것이 GENERATE-01 이 절반쯤 실패하던 흐름이다 - archive-adapter.mjs 의 주석이
-   * 이미 그 순서를 적어 두었다: "release 200 -> POST assets 409".
-   * 그때는 409를 정직하게 드러내는 것까지만 고쳤고 경합 자체는 남아 있었다.
-   *
-   * 창을 닫는 순간의 반납(keepalive)은 기다릴 수 없으므로 예외로 둔다.
-   */
-  function release(options = {}) {
-    if (options?.keepalive === true) return transitions.release(options);
-    const running = mutationQueue.then(() => transitions.release(options));
-    mutationQueue = running.catch(() => undefined);
-    return running;
-  }
-
   function subscribe(listener) {
     if (typeof listener !== 'function') throw new TypeError('workspace lock listener is required');
     listeners.add(listener);
@@ -108,7 +87,7 @@ export function createWorkspaceLockCoordinator({
     observeRevision: lifecycle.observeRevision,
     openReadOnly: transitions.openReadOnly,
     refresh: lifecycle.refresh,
-    release,
+    release: transitions.release,
     snapshot: () => current,
     runMutation,
     subscribe,
