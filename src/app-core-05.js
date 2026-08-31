@@ -227,6 +227,27 @@ function factoryCafe24CandidateProductUrl(candidate = {}) {
   return `https://${mallHost}/product/detail.html?product_no=${encodeURIComponent(productNo)}`;
 }
 
+/**
+ * 이번 실행에서 **건너뛴** 스테이지인지 알려 준다.
+ *
+ * 2026-08-31 주인님: "이미지컷이 원래없었나? 보통은 처음에 맨처음 생성돌릴떄 이미지컷도 같이 생성하지않어?"
+ * 같이 생성하는 게 맞다 - 시작 버튼은 factoryRunHeroAndCutsForOneClick 으로 대표이미지와
+ * 이미지컷을 한 태스크로 돌린다(app-core-06.js:5758). 빠진 적이 없다.
+ *
+ * 그런데 실행 수량이 0이면 생성 호출 자체를 안 하고 스테이지에 사유만 적어 둔다
+ * (app-core-06.js:5242 '이번 실행 수량이 0이라 이미지컷 생성은 건너뛰고 …').
+ * 정작 이미지컷 패널은 그 사유를 안 읽고 "아직 결과가 없습니다. 시작 버튼 또는 재생성
+ * 버튼으로 …" 라고만 했다. 그러면 아직 안 돌린 것처럼 보여서, 시작을 눌렀는데도
+ * 안 나온 사람은 무엇이 잘못됐는지 알 길이 없다.
+ */
+function factoryStageSkipNotice(stage = {}) {
+  const message = String(stage?.message || '').trim();
+  if (!message) return '';
+  if (String(stage?.status || '') !== 'idle') return '';
+  if (!/건너뛰|수량이 0/.test(message)) return '';
+  return `${message} 이번 실행에서 만들지 않은 것이지, 생성이 실패한 것은 아닙니다.`;
+}
+
 function factoryCandidateCollectionStatusView(factory = {}, type = '', candidateCount = 0) {
   const taskId = type === 'cafe24' ? 'cafe24' : 'sinhwa';
   // 조회 자체가 막혀 있으면 그 사실이 먼저다.
@@ -11505,7 +11526,10 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
           <div class="factory-stage-result-meta">필요하면 재생성/크게보기로 확인</div>
         </div>
       </div>` : ''}
-    </div>` : `<div class="factory-stage-results empty"><div class="factory-small">${allAssets.length ? '이미지 원본이 남아 있는 결과가 없습니다. 재생성을 눌러 다시 만들거나 직접 이미지를 넣어주세요.' : '아직 결과가 없습니다. 시작 버튼 또는 재생성 버튼으로 기존 생성 엔진을 호출하세요.'}</div></div>`}
+    </div>` : `<div class="factory-stage-results empty"><div class="factory-small">${allAssets.length
+      ? '이미지 원본이 남아 있는 결과가 없습니다. 재생성을 눌러 다시 만들거나 직접 이미지를 넣어주세요.'
+      : (factoryStageSkipNotice(stage)
+        || '아직 결과가 없습니다. 시작 버튼 또는 재생성 버튼으로 기존 생성 엔진을 호출하세요.')}</div></div>`}
   </div>`;
 }
 

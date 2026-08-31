@@ -279,6 +279,8 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('DB-07', '1 제품/DB', '저장 전 작업의 DB/Cafe24 확정이 강제 새로고침을 견딤', 'tools/verify_unsaved_work_candidate_confirmation_survives_reload_v1.cjs'),
     nodeFile('DB-08', '1 제품/DB', '신화사DB를 못 쓰는 상태를 후보 0건이라 말하지 않음', 'tests/frontend/sinhwa_service_unusable_is_visible.test.cjs', 'fast'),
     nodeFile('NAV-01', '공통/화면', '스크롤을 내려도 왼쪽 메뉴가 따라온다', 'tools/verify_sidebar_follows_scroll_v1.cjs'),
+    nodeFile('CUTS-RATCHET-01', '2~6 생성 공정', '이미지컷 0 래칫이 풀린다(실측)', 'tools/verify_imagecut_zero_ratchet_released_v1.cjs'),
+    nodeFile('CUTS-RATCHET-02', '2~6 생성 공정', '시작이 이미지컷을 포함하고 건너뜀을 말한다', 'tests/frontend/imagecut_zero_ratchet.test.cjs', 'fast'),
     nodeFile('DB-03', '1 제품/DB', '초안 첫 저장·작업파일 저장 뒤 후보 선택 유지', 'tools/verify_factory_candidate_workspace_transition_v220.cjs'),
     nodeFile('DB-04', '1 제품/DB', '기존 저장본 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_restore_recovery_v221.cjs'),
     nodeFile('DB-05', '1 제품/DB', '브라우저 시작 복원 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_startup_restore_v223.cjs'),

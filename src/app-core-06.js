@@ -3551,7 +3551,13 @@ function factorySyncCutPromptsForOneClick(limit = null, factory) {
     ? fullPromptRows.slice(0, Math.max(0, Number(limit) || 0))
     : fullPromptRows;
   if (Number.isFinite(Number(limit)) && Number(limit) <= 0) {
-    factory.stages.cuts.targetCount = 0;
+    // 여기에 0을 적어 두면 안 된다. 이 0은 "이번 실행에서만 건너뛴다" 는 뜻인데,
+    // stages.cuts.targetCount 는 다음 실행의 상한으로도 쓰인다(5176행 cutMax).
+    // 한 번 0이 박히면 시작탭에 2나 4를 넣어도 cutMax 가 0으로 계산되어
+    // 이미지컷이 영영 안 돈다 - 래칫이다. 게다가 화면은 그 0을 4로 보여준다
+    // (app-core-05.js:11388 `Number(stage.targetCount) || 4`) 그래서 눈으로 알 수 없다.
+    // 조립공장 입력칸은 최소 1로 잠겨 있어(app-core-05.js:18185 Math.max(1, ...))
+    // 사람이 0을 넣을 길이 없다 = 0은 오직 여기서만 생기는 찌꺼기다.
     return 0;
   }
   if (!promptRows.length) return factoryImageCutPresetListForStage('cuts').length;
@@ -5961,6 +5967,10 @@ function factoryImageCutPresetListForStage(stageId, factory = factoryRuntimeRead
       ? (stageLimit !== undefined ? stageLimit : factory.automation?.startRunCounts?.[stageId])
       : stage.targetCount;
     if (raw === undefined || raw === null || raw === '') return list;
+    // 이미 0이 박힌 채 저장된 작업을 풀어 준다. 시작 실행 중(active)이 아닐 때의 0은
+    // 사람이 고른 값일 수 없고(입력칸 최소 1) 지난 실행의 찌꺼기뿐이다.
+    // 그걸 상한으로 쓰면 이번 실행 수량이 몇이든 0이 되어 영영 안 돈다.
+    if (!active && Number(raw) === 0) return list;
     const limit = Math.max(0, Math.min(list.length, Math.round(Number(raw) || 0)));
     return list.slice(0, limit);
   };
