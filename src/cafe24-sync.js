@@ -5809,9 +5809,52 @@ function factoryAddSearchTermVariants(list, value) {
     factoryAddSearchTerm(list, '크리스탈');
     factoryAddSearchTerm(list, '보자기');
   }
-  ['보자기', '주머니', '파우치', '수저집', '지갑', '필통', '선물포장'].forEach(keyword => {
+  FACTORY_GENERIC_CATEGORY_NOUNS.forEach(keyword => {
     if (compact.includes(keyword)) factoryAddSearchTerm(list, keyword);
   });
+}
+
+// 제품명에 들어 있으면 맨 명사만 따로 검색어로 밀어 넣는 카테고리 일반명사. 이 명사는
+// "무엇인가" 만 말할 뿐 "어느 상품인가" 는 말하지 않는다. 자동 확정 가드가 같은 목록을 봐야
+// 검색어 생성과 어긋나지 않는다.
+const FACTORY_GENERIC_CATEGORY_NOUNS = Object.freeze([
+  '보자기', '주머니', '파우치', '수저집', '지갑', '필통', '선물포장',
+]);
+
+function factoryNormalizeNameForMatch(value) {
+  return String(value || '').toLowerCase().replace(/[()\[\]{}_\-·,./|]/g, '');
+}
+
+/**
+ * 제품명에서 "어느 상품인지" 를 가르는 부분만 남긴다.
+ * "전통 수저집" -> ["전통"] ("수저집" 은 카테고리 일반명사라 빠진다)
+ */
+function factoryDistinguishingNameParts(productName) {
+  let rest = factoryNormalizeNameForMatch(productName);
+  if (!rest) return [];
+  for (const noun of FACTORY_GENERIC_CATEGORY_NOUNS) {
+    rest = rest.split(factoryNormalizeNameForMatch(noun)).join(' ');
+  }
+  return rest.split(/\s+/).map(part => part.trim()).filter(part => part.length >= 2);
+}
+
+/**
+ * 후보 이름이 내 제품명의 고유 부분을 하나라도 담고 있는가.
+ *
+ * 실측 2026-08-31: 조작자가 직접 넣은 신규 제품 "전통 수저집" 이, 이름에 "수저집" 이 들어간다는
+ * 이유만으로 기존 Cafe24 상품 394번 "칠색단 수저집(대) 빨강에노란띠" 에 자동으로 묶였다.
+ * 점수 158 중 62점이 일반명사 "수저집" 의 부분문자열 일치에서 나왔고 정작 "전통" 은 0점이었다.
+ * 그 뒤 섹션 15개가 남의 상품명으로 만들어져 등록이 통째로 막혔다.
+ *
+ * 고유 부분이 아예 없는 제품명(예: 이름이 "수저집" 뿐)에는 이 판단을 적용하지 않는다 —
+ * 새로 막지는 않는다.
+ */
+function factoryCandidateSharesProductIdentity(productName, candidateName) {
+  const parts = factoryDistinguishingNameParts(productName);
+  if (!parts.length) return true;
+  const key = factoryNormalizeNameForMatch(candidateName);
+  if (!key) return true;
+  return parts.some(part => key.includes(part));
 }
 
 function factoryCandidateSearchTerms(factory = factoryRuntimeReadFactory()) {
@@ -7857,23 +7900,45 @@ async function factoryCollectProductCandidatesForReview(options = {}) {
   const retainedCafe24Selection = restoredSelection && !!previousSelection.selectedCafe24CandidateKey;
 
   if (current.product.candidateAutoApply) {
-    if (dbCount && !retainedDbSelection) {
+    // 자동 확정은 1순위를 그대로 집는다. 그런데 카테고리 일반명사 하나만 겹쳐도 1순위가 되므로,
+    // 내 제품명의 고유 부분이 후보 이름에 하나도 없으면 그건 "같은 상품" 이라는 근거가 없다.
+    // 그대로 확정하면 그 뒤 섹션이 남의 상품명으로 만들어져 등록까지 막힌다 - 실측 2026-08-31.
+    // 근거가 없을 때는 자동으로 정하지 않고 사람에게 넘긴다.
+    const autoProductName = String(current.product.productName || current.product.name || '');
+    const topDb = current.product.pendingDbCandidates?.[0] || null;
+    const topCafe = current.product.pendingCafe24Candidates?.[0] || null;
+    const dbShares = !topDb || factoryCandidateSharesProductIdentity(
+      autoProductName, topDb.product_name || topDb.jname || topDb.jname2 || '',
+    );
+    const cafeShares = !topCafe || factoryCandidateSharesProductIdentity(
+      autoProductName, topCafe.product_name || '',
+    );
+    const skipped = [];
+    if (dbCount && !retainedDbSelection && dbShares) {
       await factoryApplyDbCandidateFromReview(0, {
         render: false,
         factory: current,
         preserveManualFields: options.preserveManualFields === true,
       });
       ensureCollectionScope();
+    } else if (dbCount && !retainedDbSelection && !dbShares) {
+      skipped.push(`신화사DB 1순위 "${topDb.product_name || topDb.jname || ''}"`);
     }
-    if (cafeCount && !retainedCafe24Selection) {
+    if (cafeCount && !retainedCafe24Selection && cafeShares) {
       await factoryApplyCafe24CandidateFromReview(0, {
         render: false,
         factory: current,
         preserveManualFields: options.preserveManualFields === true,
       });
       ensureCollectionScope();
+    } else if (cafeCount && !retainedCafe24Selection && !cafeShares) {
+      skipped.push(`Cafe24 1순위 "${topCafe.product_name || ''}"`);
     }
-    current.product.candidateReviewStatus = `최상위 후보 자동 확정 완료: 신화사DB ${retainedDbSelection ? '기존 확정 유지' : (dbCount ? '적용' : '없음')} · Cafe24 ${retainedCafe24Selection ? '기존 확정 유지' : (cafeCount ? '적용' : '없음')}`;
+    current.product.candidateReviewStatus = `최상위 후보 자동 확정 완료: 신화사DB ${retainedDbSelection ? '기존 확정 유지' : (dbCount ? (dbShares ? '적용' : '자동 확정 보류') : '없음')} · Cafe24 ${retainedCafe24Selection ? '기존 확정 유지' : (cafeCount ? (cafeShares ? '적용' : '자동 확정 보류') : '없음')}`;
+    if (skipped.length) {
+      current.product.candidateReviewStatus += ` · "${autoProductName}" 과(와) 이름이 겹치는 부분이 카테고리 명사뿐이라 ${skipped.join(', ')} 은(는) 자동으로 정하지 않았습니다. 직접 골라 주세요.`;
+      factoryLog(`Cafe24/신화사 1순위 자동 확정 보류: "${autoProductName}" 의 고유 이름이 후보에 없습니다 · ${skipped.join(', ')}`, 'warn', current);
+    }
   } else {
     factoryUpdateCandidateReviewStageStatus(current);
     if (restoredSelection) {
