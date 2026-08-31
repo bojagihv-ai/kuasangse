@@ -553,9 +553,31 @@ function factoryGoalRunNeedsAttention(goal = {}, stageText = '') {
   return !goal.running && /확인 필요|후보 0건|후보 선택 대기|이전 이미지 생성이 화면 복원 중|신화사 자산관(?: 자동)? 동기화.*(?:실패|보류)/.test(text);
 }
 
+/**
+ * 한 단계가 실패했지만 **그 문장 스스로 작업은 이어졌다고 말하는** 경우.
+ *
+ * 2026-08-31 주인님: "진행되는 와중에 진행상황이 뻘겋게되면서 실패라고 나왔거든?
+ *                    그러다 마저 진행되면서 다시 뻘건테두리가 없어졌는데 왜이러는거지?"
+ *
+ * 판정이 문장에 '실패' 라는 글자가 있는지로만 갈려서, 회복된 하위 단계 한 줄이
+ * 전체 실행을 실패로 칠했다. 실측(이 함수를 그대로 실행해 확인):
+ *   "현재 원본 색상 검수 실패 · 현재 작업 후보로 유지했습니다."          -> 실패로 표시
+ *   "현재 제품 이미지 AI 분석 실패: ... 후보 수집은 계속 시도합니다."     -> 실패로 표시
+ * 두 문장 다 "작업은 살아 있다" 고 스스로 말하고 있는데도 그렇다.
+ *
+ * '보존' 같은 넓은 말은 일부러 넣지 않는다 -
+ * "새 생성 실패: ... · 기존 후보 1개 보존" 은 진짜 실패이기 때문이다.
+ */
+function factoryGoalRunRecoveredStepOnly(text = '') {
+  const value = String(text || '');
+  if (!/실패|오류/.test(value)) return false;
+  return /현재 작업 후보로 유지했습니다|계속 시도합니다|이어서 시도합니다|이어서 진행합니다/.test(value);
+}
+
 function factoryGoalRunHasFailure(goal = {}, stageText = '') {
   const text = `${String(stageText || goal.currentStage || '')} ${String(goal.failureReason || '')}`;
-  const explicitFailure = /실패|error|오류|중단|fetch failed|조회 실패/i.test(text);
+  const explicitFailure = /실패|error|오류|중단|fetch failed|조회 실패/i.test(text)
+    && !factoryGoalRunRecoveredStepOnly(text);
   const recoveryWarningOnly = /이전 이미지 생성이 화면 복원 중 끊겨 진행 표시를 해제했습니다/.test(String(goal.failureReason || ''))
     && !/실패|error|오류|중단|fetch failed|조회 실패/i.test(text.replace(/이전 이미지 생성이 화면 복원 중 끊겨 진행 표시를 해제했습니다/g, ''));
   const backgroundServiceWarningOnly = /Cafe24 OAuth 자동 점검 (?:실패|보류)|신화사 자산관(?: 자동)? 동기화.*(?:실패|보류)/.test(text);
@@ -10657,9 +10679,14 @@ function renderFactoryAutomationRunStatus(factory, options = {}) {
   const errorCount = logs.filter(log => log.type === 'error').length;
   const running = !!goal.running;
   const stage = goal.currentStage || (logs[0]?.message || '대기');
+  // 판정에는 로그 한 줄을 쓰지 않는다. stage 는 화면에 보여줄 문구일 뿐이고,
+  // goal.currentStage 가 비면 위에서 **최근 로그 한 줄**이 대신 들어온다.
+  // 그 줄이 하필 오류였던 순간 전체 패널이 빨개졌다가, 다음 로그가 오면 풀렸다.
+  // 실행이 실패했는지는 실행 자신(goal)만 답할 수 있다 - 2026-08-31 주인님 관찰.
+  const verdictStage = String(goal.currentStage || '');
   const progress = factoryGoalRunDisplayProgress(goal, stage);
-  const failed = factoryGoalRunHasFailure(goal, stage);
-  const needsAttention = !failed && factoryGoalRunNeedsAttention(goal, stage);
+  const failed = factoryGoalRunHasFailure(goal, verdictStage);
+  const needsAttention = !failed && factoryGoalRunNeedsAttention(goal, verdictStage);
   const market = typeof ensureCompMarketScrapeState === 'function' ? ensureCompMarketScrapeState() : {};
   const border = running ? 'rgba(99,102,241,.48)' : (failed ? 'rgba(239,68,68,.72)' : (needsAttention ? 'rgba(245,158,11,.62)' : 'rgba(255,255,255,.10)'));
   const bg = running ? 'rgba(99,102,241,.10)' : (failed ? 'rgba(127,29,29,.20)' : (needsAttention ? 'rgba(245,158,11,.10)' : 'rgba(255,255,255,.025)'));
