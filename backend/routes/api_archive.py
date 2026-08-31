@@ -412,7 +412,12 @@ def _last_work_derived_state_drop_reason(existing, incoming):
     # 일부러 보존한다(src/app-core-06.js:4755-4763 preservedMarket). 그 둘까지 탈출구에 넣으면
     # 앱이 지키려는 것을 서버 보호가 꺼 버린다 - 실측: 결과 70건+이미지 40장이 새 searchId 를 단
     # 부분 스냅샷 하나에 사유 없이 사라졌다.
-    RESCRAPE_REPLACES = frozenset({"results"})
+    # 검색 산출물(results/localResults/vmResults/groupedResults)은 새 검색이 통째로 갈아 낀다.
+    # 상세 캡처 산출물(scrapedImages/detailResults)은 그렇지 않다 - 실측 2026-08-31의 재검색에서
+    # results 20건은 내용이 전부 바뀌었는데 scrapedImages 1장과 detailResults 4건은 그대로였다.
+    # 그 선을 그대로 규칙으로 삼는다. scrapedImages 를 탈출구에 넣으면 부분 스냅샷 하나에
+    # 상세 캡처 이미지가 사유 없이 사라진다(적대적 검증이 실행으로 확인).
+    RESCRAPE_REPLACES = frozenset({"results", "localResults", "vmResults"})
     for key in ("results", "vmResults", "localResults", "scrapedImages"):
         if rescraped_on_purpose and key in RESCRAPE_REPLACES:
             continue

@@ -112,3 +112,43 @@ test('조립공장 사본이 비어도 저장된 값이 살아남는다', () => 
   });
   assert.deepEqual(compPage.analysisResult, ANALYSIS);
 });
+
+
+/**
+ * 보호가 한 곳만 있으면 소용없다. saveCurrentProject 가 storedCompPage 를 만들 때도
+ * 펼치기를 쓰므로, 거기서 로컬 사본의 null 이 서버 값을 덮으면 buildWorkspacePayload 는
+ * 이미 비어 있는 것을 받는다 - 실측 2026-08-31: 마지막 저장이 26회 연속 거절됐다.
+ */
+test('저장된 사본을 합칠 때도 분석 결과를 덮어쓰지 않는다', () => {
+  const source = read('src/app-core-03.js');
+  const start = source.indexOf('const storedCompPage = serverCompPage && existingSameFactoryWork');
+  assert.ok(start >= 0, 'storedCompPage 병합 자리를 찾지 못함');
+  const chunk = source.slice(start, start + 1600);
+  assert.ok(
+    chunk.includes('mergeSameWorkDerivedValue'),
+    'serverCompPage 의 분석 결과가 로컬 null 에 덮이는 것을 막지 않는다',
+  );
+  assert.ok(chunk.includes('analysisInvalidatedAt'), '일부러 분리한 경우를 구분하지 않는다');
+});
+
+/**
+ * compPage 를 합치는 자리는 두 곳이다: saveCurrentProject 의 storedCompPage 와
+ * buildWorkspacePayload 의 compPageSources.reduce. 새 자리가 생기면 같은 버그가 다시 나므로
+ * 둘 다 보호를 갖고 있는지 소스에서 확인한다.
+ */
+test('합치는 자리 두 곳 모두에 보호가 있다', () => {
+  const source = read('src/app-core-03.js');
+  assert.equal(
+    source.split('...serverCompPage').length - 1,
+    1,
+    'serverCompPage 를 펼치는 자리가 늘었다 — 새 자리에도 같은 보호가 필요하다',
+  );
+  const reduceAt = source.indexOf('const compPageSnapshot = compPageSources.reduce');
+  assert.ok(reduceAt >= 0, 'compPageSources.reduce 를 찾지 못함');
+  const reduceChunk = source.slice(reduceAt, reduceAt + 1200);
+  assert.ok(
+    reduceChunk.includes('mergeSameWorkDerivedValue'),
+    'buildWorkspacePayload 의 합치기에 보호가 없다',
+  );
+  assert.ok(reduceChunk.includes('analysisInvalidatedAt'), '일부러 분리한 경우를 구분하지 않는다');
+});

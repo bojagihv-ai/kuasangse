@@ -15657,9 +15657,23 @@ async function compMarketEnsureVmDetailCaptureReady(options = {}) {
   // "VM 준비됨" 으로 판정하고 상세수집을 VM 으로 보내 3600초를 기다렸다 - 실측 2026-08-31:
   // 같은 고장을 후보검색은 5초 만에 알아채는데 상세수집만 한 시간이 걸렸다.
   // 판정 경로가 없는(옛) 백엔드에서는 예전처럼 통과시킨다. 새로 막지는 않는다.
+  // compMarketFetchVmCandidateBridge 는 ok:false 를 예외로 바꾼다. 그 헬퍼로 이 판정을 물으면
+  // "쓸 수 없다" 는 답이 곧바로 예외가 되어 아래 fail-open 에 삼켜진다 - 실측 2026-08-31:
+  // 그 때문에 판정을 넣고도 VM 으로 계속 보냈다. 판정은 답을 그대로 읽어야 한다.
   let watcher = null;
   try {
-    watcher = await compMarketFetchVmCandidateBridge('/api/vm-bridge/readiness', {}, 8000);
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+    try {
+      const response = await fetch(`${compMarketVmCandidateBridgeBaseUrl()}/api/vm-bridge/readiness`, {
+        headers: { Accept: 'application/json' },
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      // 라우트가 없는(옛) 백엔드면 판정을 모르는 것으로 두고 예전처럼 통과시킨다.
+      if (response.ok) watcher = await response.json();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch (error) {
     compMarketLog(`VM watcher 상태를 확인하지 못했습니다: ${String(error?.message || error)}`, 'warn', marketOptions);
   }

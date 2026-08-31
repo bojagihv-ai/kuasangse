@@ -94,22 +94,41 @@ def test_재검색이어도_상세캡처_이미지는_지킨다():
     assert reason.startswith("compPage.marketScrape.scrapedImages"), reason
 
 
-def test_재검색이어도_본컴_결과는_지킨다():
-    existing = _market("search_old", ["c0", "c1"], localResults=[{"id": "c0"}, {"id": "c1"}])
-    incoming = _market("search_new", ["c9"], localResults=[])
+# 처음에는 localResults/vmResults 도 재검색이 보존한다고 적었는데, 실측이 그것을 뒤집었다.
+# 2026-08-31 재검색 추적: localResults 20건의 내용이 전부 새 후보로 바뀌었고
+# (compPage.marketScrape.localResults.content[gmarket_2711214817].missing 24회 거절),
+# 같은 순간 scrapedImages 1장과 detailResults 4건은 그대로였다. 코드 읽기보다 실측을 따른다.
+
+def test_같은_검색에서_본컴_결과가_사라지면_막는다():
+    existing = _market("search_same", ["c0", "c1"], localResults=[{"id": "c0"}, {"id": "c1"}])
+    incoming = _market("search_same", ["c0", "c1"], localResults=[{"id": "c0"}])
     reason = _last_work_derived_state_drop_reason(existing, incoming)
     assert reason.startswith("compPage.marketScrape.localResults"), reason
 
 
-def test_재검색이어도_VM_결과는_지킨다():
-    existing = _market("search_old", ["c0"], vmResults=[{"id": "c0"}])
-    incoming = _market("search_new", ["c9"], vmResults=[])
+def test_같은_검색에서_VM_결과가_사라지면_막는다():
+    existing = _market("search_same", ["c0"], vmResults=[{"id": "c0"}])
+    incoming = _market("search_same", ["c0"], vmResults=[])
     reason = _last_work_derived_state_drop_reason(existing, incoming)
     assert reason.startswith("compPage.marketScrape.vmResults"), reason
 
 
-def test_보존하는_값이_그대로면_재검색은_통과한다():
-    kept = {"scrapedImages": [{"id": "img1"}], "localResults": [{"id": "c0"}], "vmResults": []}
-    existing = _market("search_old", ["c0", "c1"], **kept)
-    incoming = _market("search_new", ["c9"], **kept)
+def test_캡처_산출물이_그대로면_재검색은_통과한다():
+    existing = _market("search_old", ["c0", "c1"], scrapedImages=[{"id": "img1"}], localResults=[{"id": "old"}])
+    incoming = _market("search_new", ["c9"], scrapedImages=[{"id": "img1"}], localResults=[{"id": "new"}])
     assert _last_work_derived_state_drop_reason(existing, incoming) == ""
+
+
+def test_재검색은_본컴_VM_결과도_갈아_낀다():
+    # 실측: 재검색하면 localResults 20건의 내용이 전부 바뀐다(같은 길이, 다른 후보).
+    existing = _market("search_old", ["c0"], localResults=[{"id": "gmarket_old"}], vmResults=[{"id": "vm_old"}])
+    incoming = _market("search_new", ["c9"], localResults=[{"id": "gmarket_new"}], vmResults=[{"id": "vm_new"}])
+    assert _last_work_derived_state_drop_reason(existing, incoming) == ""
+
+
+def test_검색_산출물은_갈아_껴도_캡처_산출물은_지킨다():
+    # 이 둘의 구분이 규칙의 핵심이다.
+    existing = _market("search_old", ["c0"], localResults=[{"id": "old"}], scrapedImages=[{"id": "img1"}])
+    incoming = _market("search_new", ["c9"], localResults=[{"id": "new"}], scrapedImages=[])
+    reason = _last_work_derived_state_drop_reason(existing, incoming)
+    assert reason.startswith("compPage.marketScrape.scrapedImages"), reason

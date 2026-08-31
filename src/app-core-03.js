@@ -4691,13 +4691,27 @@ async function saveCurrentProject(options = {}) {
         mergeOptionSorterStoredImages(existingOptionSorter, state.optionSorter || {}),
       );
     }
-    const storedCompPage = serverCompPage && existingSameFactoryWork ? {
-      ...serverCompPage,
-      ...existingCompPage,
-      ...(serverCompPage.marketScrape || existingCompPage.marketScrape
-        ? { marketScrape: mergeCompMarketStoredState(serverCompPage.marketScrape || {}, existingCompPage.marketScrape || {}) }
-        : {}),
-    } : (serverCompPage || (existingSameFactoryWork ? existingCompPage : null));
+    // 여기도 펼치기라서 로컬 사본의 null 이 서버가 들고 있던 분석을 덮는다. buildWorkspacePayload 에
+    // 보호를 넣어도 그 함수에 넘어가기 전에 이미 지워져 있으면 소용이 없다 - 실측 2026-08-31:
+    // 마지막 저장이 "dropped protected work data: compPage.analysisResult" 로 26회 연속 거절됐다.
+    // marketScrape 가 받는 보호를 분석 묶음에도 준다. "일부러 분리했다" 표시가 더 새로우면 그대로 비운다.
+    const storedCompPage = serverCompPage && existingSameFactoryWork ? (() => {
+      const merged = {
+        ...serverCompPage,
+        ...existingCompPage,
+        ...(serverCompPage.marketScrape || existingCompPage.marketScrape
+          ? { marketScrape: mergeCompMarketStoredState(serverCompPage.marketScrape || {}, existingCompPage.marketScrape || {}) }
+          : {}),
+      };
+      const serverMark = Number(serverCompPage.analysisInvalidatedAt || 0);
+      const existingMark = Number((existingCompPage || {}).analysisInvalidatedAt || 0);
+      if (!(existingMark > serverMark)) {
+        for (const key of ['analysisResult', 'sectionPlan', 'planEdits']) {
+          merged[key] = mergeSameWorkDerivedValue(serverCompPage[key], (existingCompPage || {})[key]);
+        }
+      }
+      return merged;
+    })() : (serverCompPage || (existingSameFactoryWork ? existingCompPage : null));
     const backupPayload = compactProductImageBackupPayload();
     const backupRecord = backupPayload?.primary?.base64 ? {
       ...backupPayload,
