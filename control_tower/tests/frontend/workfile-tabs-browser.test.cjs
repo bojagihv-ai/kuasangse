@@ -34,6 +34,20 @@ function waitForHttp(url, timeoutMs = 10_000) {
   });
 }
 
+// 2026-09-02(8f4569a)부터 작업 큐·작업대(#product-list, #operator-assembly-steps)가 '작업 큐' 패널로
+// 옮겨졌다. 개요 패널이 기본이라 그대로 두면 큐 요소가 hidden 이라 클릭이 안 된다.
+async function openQueuePanel(page) {
+  const tab = page.locator('#menu-tab-queue');
+  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click();
+  await page.waitForSelector('#menu-panel-queue:not([hidden])');
+}
+
+async function openOverviewPanel(page) {
+  const tab = page.locator('#menu-tab-overview');
+  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click();
+  await page.waitForSelector('#menu-panel-overview:not([hidden])');
+}
+
 test('Stage 1 save status stays visible in the active in-place workbench', { timeout: 60_000 }, async t => {
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const apiPort = 19362;
@@ -67,6 +81,7 @@ test('Stage 1 save status stays visible in the active in-place workbench', { tim
   });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=browser`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  await openQueuePanel(page);
   await page.waitForSelector('#product-list .operator-job-row:nth-child(1)');
   await page.locator('#product-list .operator-job-row').nth(0).focus();
   await page.locator('#product-list .operator-job-row').nth(0).press('Enter');
@@ -214,6 +229,7 @@ test('final_detail 후보는 정확히 매칭된 work-bundle 이미지로 미리
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=final-detail-preview`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  await openQueuePanel(page);
   await page.locator('#product-list .operator-job-row').first().press('Enter');
   await page.locator('#operator-assembly-steps [data-assembly-step="sections"]').press('Enter');
 
@@ -283,6 +299,7 @@ test('legacy final_detail 후보가 자산 identity 없이 남아도 같은 작�
   await page.route('**/api/factory/events**', route => route.abort());
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=final-detail-storyboard`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  await openQueuePanel(page);
   await page.locator('#product-list .operator-job-row').first().press('Enter');
   await page.locator('#operator-assembly-steps [data-assembly-step="sections"]').press('Enter');
 
@@ -363,6 +380,7 @@ test('Task 20 필수값 붙여넣기 미리보기는 저장 없이 빈 칸만 �
     `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=task20`,
     { waitUntil: 'networkidle' },
   );
+  await openQueuePanel(page);
   await page.locator('#product-list .operator-job-row').first().press('Enter');
   await page.locator('#operator-assembly-steps [data-assembly-step="required"]').press('Enter');
   const stageBody = page.locator('#operator-assembly-body');
@@ -582,6 +600,7 @@ async function openStage1Qa(t) {
     `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=task19-adversarial`,
     { waitUntil: 'networkidle' },
   );
+  await openQueuePanel(page);
   const rows = page.locator('#product-list .operator-job-row');
   await rows.nth(0).focus();
   await rows.nth(0).press('Enter');
@@ -729,6 +748,7 @@ test('정상 fixture history의 Stage6 결과 썸네일은 모두 로드된다',
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=stage6-history`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  await openQueuePanel(page);
   await page.locator('#product-list .operator-job-row').first().focus();
   await page.locator('#product-list .operator-job-row').first().press('Enter');
   await page.locator('#operator-assembly-steps [data-assembly-step="sections"]').press('Enter');
@@ -762,7 +782,8 @@ test('정상 fixture history의 Stage6 결과 썸네일은 모두 로드된다',
         src: image.getAttribute('src'), complete: image.complete, naturalWidth: image.naturalWidth,
       })),
       brokenCount: surface.querySelectorAll('[data-broken="true"]').length,
-      finalDetail: [...surface.querySelectorAll('img[src*="final_detail-3.svg"]')].map(image => ({
+      // 썸네일 주소가 fixture 파일명(final_detail-3.svg)에서 허브 자산 주소(asset:final_detail:3/thumbnail)로 바뀌었다. 둘 다 받는다.
+      finalDetail: [...surface.querySelectorAll('img[src*="final_detail-3.svg"], img[src*="final_detail%3A3/thumbnail"], img[src*="final_detail:3/thumbnail"]')].map(image => ({
         complete: image.complete, naturalWidth: image.naturalWidth,
       })),
     };
@@ -771,8 +792,9 @@ test('정상 fixture history의 Stage6 결과 썸네일은 모두 로드된다',
   assert.doesNotMatch(readback.text, /불러오지 못했습니다/u);
   assert.ok(readback.images.every(image => image.complete && image.naturalWidth > 0), JSON.stringify(readback));
   assert.equal(readback.brokenCount, 0, JSON.stringify(readback));
-  assert.equal(readback.finalDetail.length, 1, JSON.stringify(readback));
-  assert.ok(readback.finalDetail[0].complete && readback.finalDetail[0].naturalWidth > 0, JSON.stringify(readback));
+  // 최종 상세 썸네일은 결과 띠와 읽기 전용 미리보기에 함께 나올 수 있다. 하나 이상이고 전부 로드돼야 한다.
+  assert.ok(readback.finalDetail.length >= 1, JSON.stringify(readback));
+  assert.ok(readback.finalDetail.every(image => image.complete && image.naturalWidth > 0), JSON.stringify(readback));
   await page.screenshot({ path: path.join(EVIDENCE, 'normal-stage6-result-strip.png') });
   fs.writeFileSync(path.join(EVIDENCE, 'normal-stage6-result-strip.json'), JSON.stringify({
     url,
@@ -825,6 +847,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   const tabs = page.locator('#workfile-job-tabs .workfile-job-tab');
   assert.equal(await tabs.count(), 3);
   assert.equal(await page.locator('#operator-queue-total').innerText(), '3건');
+  await openQueuePanel(page);
   await page.waitForSelector('#product-list .operator-job-row:nth-child(3)', { state: 'attached' });
   assert.equal(await page.locator('#product-list .operator-job-row').count(), 3);
   const workbenchSteps = page.locator('#operator-assembly-steps [data-assembly-step]');
@@ -839,12 +862,12 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
     '06섹션 생성선택 필요 · 8',
     '07전송완료',
   ]);
-  assert.equal(await page.locator('#menu-tab-overview').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#menu-tab-queue').getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('#operator-assembly-body').getAttribute('data-step-key'), 'sections');
   let competitorReadback = null;
   for (let index = 0; index < 7; index += 1) {
     await workbenchSteps.nth(index).click();
-    assert.equal(await page.locator('#menu-tab-overview').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#menu-tab-queue').getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('#product-list .operator-job-row').count(), 3);
     assert.equal(await page.locator('#operator-assembly-body').getAttribute('data-step-key'), [
       'start', 'db', 'required', 'competitors', 'cuts', 'sections', 'send',
@@ -865,6 +888,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   }
   assert.deepEqual(competitorReadback, { cards: 2, selected: 1, analyzed: 1, imagesLoaded: true });
   assert.deepEqual(mutationRequests, []);
+  await openOverviewPanel(page);
   assert.match(await page.locator('#workfile-job-tabpanel').innerText(), /연결이 필요/u);
   const unlinkedActions = {
     reselectEnabled: await page.locator('#workfile-job-tabpanel [data-action="reselect-workfile"]').isEnabled(),
@@ -914,7 +938,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   assert.equal(await tabs.nth(2).getAttribute('aria-selected'), 'true');
   await tabs.nth(2).press('Home');
   assert.equal(await tabs.nth(0).getAttribute('aria-selected'), 'true');
-  await page.locator('#menu-tab-overview').click();
+  await page.locator('#menu-tab-queue').click();
   const filterReadback = {};
   for (const [filter, count] of [['all', 3], ['selection', 1], ['blocked', 1], ['running', 0], ['completed', 1]]) {
     const button = page.locator(`[data-queue-filter="${filter}"]`);
@@ -1014,7 +1038,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   await queueRows.nth(0).focus();
   await queueRows.nth(0).press('Enter');
   assert.equal(await page.locator('#operator-assembly-body').getAttribute('data-step-key'), 'sections');
-  assert.equal(await page.locator('#menu-tab-overview').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#menu-tab-queue').getAttribute('aria-selected'), 'true');
   await page.locator('#operator-assembly-steps [data-assembly-step="start"]').click();
   assert.equal(await page.locator('#operator-assembly-body .board-intake-panel').count(), 1);
   const stageBody = page.locator('#operator-assembly-body');
@@ -1072,6 +1096,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   });
   await queueRows.nth(1).focus();
   await queueRows.nth(1).press('Enter');
+  await openOverviewPanel(page);
   await tabs.nth(0).click();
   const viewOnlyMutationRequests = mutationRequests.filter(request => request.path !== '/api/factory/jobs/factory-job-qa-2994/values');
   assert.deepEqual(viewOnlyMutationRequests, []);
@@ -1152,6 +1177,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
     await page.locator('#menu-tab-overview').click();
     await page.evaluate(() => { document.querySelector('main.page').scrollTop = 0; });
     await page.screenshot({ path: path.join(EVIDENCE, `${viewport.name}-top.png`) });
+    await openQueuePanel(page); // 그리드·큐 제목·현재 작업 요약은 작업 큐 패널 안에 있다. 숨긴 채 재면 값이 해석되지 않는다.
     const viewportResult = await page.evaluate(({ width, height, name, menuReachable, menuControlCounts, unreachableControlCounts }) => {
       const root = document.querySelector('main.page');
       const consoleGrid = document.querySelector('.operator-console-grid');
@@ -1180,6 +1206,7 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
           && currentWork.bottom > 0 && currentWork.top < height,
       };
     }, { ...viewport, menuReachable, menuControlCounts, unreachableControlCounts });
+    await openQueuePanel(page); // #overview-stage-summary(현재 작업 요약)는 이제 작업 큐 패널 안에 있다
     await page.locator('#overview-stage-summary').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(EVIDENCE, `${viewport.name}-workbench.png`) });
     await page.evaluate(() => {
@@ -1404,6 +1431,7 @@ test('30개 긴 이름 큐가 필터와 단일 루트 스크롤을 유지한다'
     `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=bulk30`,
     { waitUntil: 'networkidle' },
   );
+  await openQueuePanel(page);
   await page.waitForFunction(() => document.querySelectorAll('#product-list .operator-job-row').length === 30);
   const filterCounts = {};
   for (const [filter, expected] of [['all', 30], ['selection', 1], ['blocked', 1], ['running', 21], ['completed', 7]]) {
@@ -1464,6 +1492,7 @@ test('200개 durable job과 후보 24개 상한을 실제 DOM에서 유지한다
     `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=bulk200`,
     { waitUntil: 'networkidle' },
   );
+  await openQueuePanel(page);
   await page.waitForFunction(() => document.querySelectorAll('#product-list .operator-job-row').length === 200);
   const renderMs = Date.now() - startedAt;
   assert.equal(await page.locator('#operator-queue-total').innerText(), '200건');
@@ -1508,6 +1537,7 @@ test('숨은 생산관제 탭은 SSE를 닫고 다시 보이면 작업 큐와 �
     `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=sse-visibility`,
     { waitUntil: 'networkidle' },
   );
+  await openQueuePanel(page);
   await page.waitForFunction(() => document.querySelectorAll('#product-list .operator-job-row').length === 4);
   const waitForClients = async expected => {
     let observed = -1;
