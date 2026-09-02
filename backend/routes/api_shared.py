@@ -24,8 +24,15 @@ from werkzeug.utils import secure_filename
 import requests
 import google.auth
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from functools import wraps
 from services.pipeline import pipeline
 from services.section_definitions import get_all_sections
+from services.public_network import (  # noqa: F401 - 라우트 모듈들이 globals() 로 받아 쓴다
+    PublicAddressPolicyError,
+    assert_public_hostname,
+    resolve_public_addresses,
+    review_public_addresses,
+)
 from config import Config
 
 _JEPUM_DETAIL_ROOT = r"C:\JepumScraper\data\detail_pages"
@@ -90,6 +97,30 @@ def _local_action_request_allowed():
     except ValueError:
         return False
 
+
+def _require_local_action(view):
+    """프로세스를 띄우거나 폴더·브라우저를 여는 라우트에 붙인다 — 남의 사이트 탭이 못 누르게.
+
+    왜 (묶음 G6 #21, 2026-09-02): 같은 검사가 cafe24-control/start·sinhwa-db/start·
+    workfile-reports/folder/open 세 곳에만 손으로 들어가 있었고, JepumScraper 시작·탐색기 열기·
+    로컬 보관 폴더 열기·Chrome 띄우기는 아무 사이트에서나 `fetch()` 한 줄로 눌렀다
+    (GET 도 받는 open-detail-folder 는 <img src> 로도). 백엔드는 127.0.0.1 에만 듣지만
+    브라우저가 대신 눌러 주면 그 벽은 없다.
+    판정 자체는 _local_action_request_allowed 그대로다(Sec-Fetch-Site: cross-site 거절,
+    Origin 이 있으면 로컬 앱 포트만). 데코레이터는 호출 시점에 찾아 쓰므로 검사에서
+    api_shared._local_action_request_allowed 를 바꿔치기해도 따라간다.
+    """
+    @wraps(view)
+    def guarded(*args, **kwargs):
+        if not _local_action_request_allowed():
+            return jsonify({
+                "ok": False,
+                "code": "LOCAL_ACTION_ORIGIN_REQUIRED",
+                "error": "이 동작은 로컬 앱 화면에서만 실행할 수 있습니다. 다른 사이트에서 보낸 요청은 거절했습니다.",
+            }), 403
+        return view(*args, **kwargs)
+    return guarded
+
 # ── Vertex Config (공용 중앙 설정) ─────────────────────────────────
 _VERTEX_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'vertex-config.json')
 _SACHYOSANGSE_VERTEX_CONFIG_PATH = r'C:\Users\kua\Documents\Playground\sachyosangse\apps\api\.local\vertex-config.json'
@@ -118,16 +149,33 @@ def _load_vertex_config():
             'location': Config.GOOGLE_CLOUD_LOCATION or 'us-central1',
         }
 
+class VertexConfigSaveError(OSError):
+    """어느 파일이 왜 안 써졌는지 들고 올라간다 — 화면이 그대로 보여 준다."""
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        detail = "; ".join(f"{path}: {reason}" for path, reason in self.failures)
+        super().__init__(f"Vertex 설정 파일을 저장하지 못했습니다 — {detail}")
+
+
 def _save_vertex_config(project: str, location: str):
-    """두 곳 동시 저장 (kuasangse + sachyosangse)."""
+    """두 곳 동시 저장 (kuasangse + sachyosangse). 실패는 삼키지 않고 올린다.
+
+    왜 (묶음 G6 #22, 2026-09-02): 예전엔 open('w') 로 파일을 먼저 비운 뒤 json.dump 가
+    실패해도 except: pass 라서 (1) 원본이 0바이트로 날아가고 (2) 화면은 ok:true 를 받았다.
+    다음 요청부터 _load_vertex_config 가 빈 파일을 못 읽어 .env 기본값으로 조용히 되돌아간다.
+    _atomic_write_json 은 임시 파일에 다 쓴 뒤 os.replace 로 바꿔 끼우므로 실패해도 원본은
+    그대로다. 한 곳이라도 실패하면 VertexConfigSaveError 로 올려 라우트가 500 과 원인을 준다.
+    """
     data = {'project': project, 'location': location}
+    failures = []
     for path in [_VERTEX_CONFIG_PATH, _SACHYOSANGSE_VERTEX_CONFIG_PATH]:
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            _atomic_write_json(path, data, indent=2)
+        except OSError as exc:
+            failures.append((path, f"{exc.__class__.__name__}: {exc}"))
+    if failures:
+        raise VertexConfigSaveError(failures)
 
 def _mask_secret(value: str, head: int = 6, tail: int = 4) -> str:
     text = str(value or "").strip()
@@ -191,21 +239,29 @@ api = Blueprint("api", __name__)
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
 
-def _atomic_write_json(path, data):
+def _atomic_write_json(path, data, indent=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    for attempt in range(6):
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(6):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        # 바꿔 끼우기에 실패한 임시 파일을 남기지 않는다(원본은 손대지 않았다).
         try:
-            os.replace(tmp_path, path)
-            return
-        except PermissionError:
-            if attempt == 5:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _load_json_file(path):
