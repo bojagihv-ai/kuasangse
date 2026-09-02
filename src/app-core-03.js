@@ -6735,8 +6735,19 @@ async function exportCurrentProjectFile(options = {}) {
   const downloadOnly = options.downloadOnly === true;
   const sourceFactory = factoryRuntimeReadCommittedFactory();
   const sourceWorkspaceId = factoryWorkspaceIdentityFromSource(sourceFactory).id;
-  if (saveAs && state.currentProjectId) await startNewProjectDraft();
-  const activeBranchScope = getCurrentLastWorkWorkspaceScope();
+  // 분리(startNewProjectDraft)는 파일 고르기 창이 **성공한 뒤**에 한다.
+  //
+  // 2026-09-02 주인님: "사라지는 건 오직 '새 작업' 을 눌렀을 때뿐"
+  // 예전에는 창을 띄우기 전에 먼저 분리해서, Chrome 에서 창을 취소하면 이미 저장 ID 가 비고
+  // 초안 scope 가 돌아가고 편집권이 옮겨가고 되살리기 사본(state.snapshots)이 비워진 뒤였다.
+  // 취소했는데 '… 복사본' 초안으로 갈라져, 그 뒤 F5 를 누르면 원래 작업파일이 아니라
+  // 갈라진 초안이 되살아났다. catch 의 되돌리기는 창이 성공한 뒤에만 도는 자리라 소용없었다.
+  const needsSaveAsSplit = saveAs && !!state.currentProjectId;
+  // 분리 전에는 이름을 미리 계산만 한다. state 를 건드리면 취소해도 되돌릴 것이 생긴다.
+  const saveAsCopyName = needsSaveAsSplit
+    ? `${deriveProjectName() || '상세페이지 작업'} 복사본`.slice(0, 80)
+    : '';
+  let activeBranchScope = getCurrentLastWorkWorkspaceScope();
   let savedSuccessfully = false;
   const previousProjectName = state.currentProjectName;
   let adoptedProjectFileIdentity = null;
@@ -6746,7 +6757,8 @@ async function exportCurrentProjectFile(options = {}) {
   render();
   try {
     if (typeof factoryUpdateFromInputs === 'function') factoryUpdateFromInputs();
-    const requestedName = (saveAs ? state.currentProjectName : options.name) || state.currentProjectName || deriveProjectName();
+    const requestedName = (saveAs ? (saveAsCopyName || state.currentProjectName) : options.name)
+      || state.currentProjectName || deriveProjectName();
     const fileName = `${factorySanitizeProjectFileName(requestedName)}.kuasangse`;
     const fileHandle = downloadOnly
       ? null
@@ -6754,6 +6766,11 @@ async function exportCurrentProjectFile(options = {}) {
         reuseCurrentFile: !saveAs,
       });
     const projectName = factoryProjectNameFromFileName(fileHandle?.name || fileName, requestedName);
+    // 여기까지 왔다는 것은 사용자가 파일을 골랐다는 뜻이다. 이제 분리해도 된다.
+    if (needsSaveAsSplit) {
+      await startNewProjectDraft({ name: projectName });
+      activeBranchScope = getCurrentLastWorkWorkspaceScope();
+    }
     adoptedProjectFileIdentity = factoryEnsureCurrentProjectIdentityForFile(projectName, {
       previousWorkspaceId: saveAs ? sourceWorkspaceId : undefined,
     });
