@@ -11598,13 +11598,17 @@ function renderDraftRecoveryPanel() {
   const scopeId = typeof getCurrentLastWorkWorkspaceScope === 'function'
     ? String(getCurrentLastWorkWorkspaceScope() || '')
     : '';
-  // 저장된 작업(project:)은 정상 저장·불러오기가 있다. 이 칸은 저장 전 작업만을 위한 것이다.
-  if (!scopeId.startsWith('draft:')) return '';
+  // 저장 전(draft:) 작업에는 항상 보여 준다 - 정상 저장 경로가 아예 없기 때문이다.
+  // 저장된 작업(project:)에는 평소엔 숨기고, **서버가 저장을 거절해 사본이 쌓이는 동안에만** 보여 준다.
+  // 그때가 사본이 유일한 그물인 순간이다(실측 2026-09-02: 낙지발노리개 54건 연속 거절).
+  const refused = String(state.storageWarningDismissKey || '') === 'protected-save-refused';
+  const savedWorkNeedsNet = scopeId.startsWith('project:') && (refused || !!state.draftRecovery?.opened);
+  if (!scopeId.startsWith('draft:') && !savedWorkNeedsNet) return '';
   const view = state.draftRecovery || {};
   // 앱 껍데기에 붙는 떠 있는 칸이다. 본문 흐름을 밀지 않게 오른쪽 아래에 고정한다.
   const shell = value => `<aside class="draft-recovery-float" aria-label="저장 전 작업 복구본">${value}</aside>`;
   if (!view.opened) {
-    return shell(`<button class="btn-sm" data-draft-recovery-action="list">저장 안 한 이 작업의 복구본</button>`);
+    return shell(`<button class="btn-sm" data-draft-recovery-action="list">${refused ? '저장이 보류된 이 작업의 복구본' : '저장 안 한 이 작업의 복구본'}</button>`);
   }
   if (view.loading) {
     return shell('<div class="factory-small">복구본을 찾는 중입니다...</div>');

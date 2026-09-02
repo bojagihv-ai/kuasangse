@@ -493,14 +493,41 @@ def _last_work_fill_missing(existing_value, incoming_value):
     return _LAST_WORK_UNCHANGED
 
 
+def _last_work_option_source_deletion_budget(existing_options, incoming_options):
+    """이번 저장에서 **새로 지운다고 표시한** 옵션 원본이 몇 개인가.
+
+    프런트는 옵션 이미지 ✕ 를 누르면 지운 보관 ID 를 optionSourceDeletedArchiveIds 에 쌓는다
+    (src/menus/optionsorter-image-bindings.mjs, src/app-core-02.js 에서 기존 목록과 병합).
+    그 목록이 이번에 **늘어난 만큼**만 줄어듦을 허용한다 — 지난번 표식이 남아 있다고
+    이번에 또 지울 권한이 생기면 안 되기 때문이다.
+
+    왜 필요한가 (실측 2026-09-02): 이 탈출구가 없어서 옵션 이미지를 하나 지우는 순간
+    'optionSorter.images.length' 로 거절이 시작되고, 그 뒤 그 작업의 모든 저장이 같은 사유로
+    막혔다. 낙지발노리개 작업은 08-31 21:37 ~ 09-01 15:20 사이 54건이 연속 거절돼
+    서버 사본이 08-21 에 멈춰 있었다. marketScrape(searchId) · selectedIds(detailSelectionVersion) ·
+    analysisResult(analysisInvalidatedAt) 는 이미 같은 종류의 탈출구를 갖고 있고 optionSorter 에만 없었다.
+    """
+    key = "optionSourceDeletedArchiveIds"
+    existing_deleted = _list_len(existing_options.get(key))
+    incoming_deleted = _list_len(incoming_options.get(key))
+    return max(0, incoming_deleted - existing_deleted)
+
+
 def _last_work_derived_state_drop_reason(existing, incoming):
     existing_assets = existing.get("assets") if isinstance(existing.get("assets"), dict) else {}
     incoming_assets = incoming.get("assets") if isinstance(incoming.get("assets"), dict) else {}
     existing_options = existing_assets.get("optionSorter") if isinstance(existing_assets.get("optionSorter"), dict) else {}
     incoming_options = incoming_assets.get("optionSorter") if isinstance(incoming_assets.get("optionSorter"), dict) else {}
+    deleted_on_purpose = _last_work_option_source_deletion_budget(existing_options, incoming_options)
     for key in ("images", "pool", "optionResults", "slots"):
-        if _list_len(existing_options.get(key)) > _list_len(incoming_options.get(key)):
-            return f"optionSorter.{key}.length"
+        shrink = _list_len(existing_options.get(key)) - _list_len(incoming_options.get(key))
+        if shrink <= 0:
+            continue
+        # 사람이 일부러 지운 원본 이미지는 '보호할 데이터가 사라졌다' 가 아니다.
+        # 삭제 표식은 원본 이미지(images)에 대한 것이라 나머지 목록의 보호는 그대로 둔다.
+        if key == "images" and shrink <= deleted_on_purpose:
+            continue
+        return f"optionSorter.{key}.length"
     for key in ("slots", "optionResults"):
         sparse_reason = _last_work_rows_sparse_drop_reason(
             existing_options.get(key),

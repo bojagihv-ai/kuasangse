@@ -40,8 +40,17 @@ def _scope_dir(scope_id: str) -> str:
     return path
 
 
-def _is_draft_scope(value: str) -> bool:
-    return str(value or "").strip().lower().startswith("draft:")
+def _is_recoverable_scope(value: str) -> bool:
+    """이 저장소가 받아 주는 범위.
+
+    저장 전(draft:) 작업이 본래 대상이다. 저장된 작업(project:)도 받는데, 그건 정상 저장
+    경로(/api/last-work)가 보호 사유로 **거절했을 때** 프런트가 남기는 사본이기 때문이다
+    (실측 2026-09-02: 낙지발노리개 작업 54건 연속 거절, 서버 사본이 08-21 에 멈춤).
+    이 저장소는 편집권을 거치지 않지만 **자동 복원에 쓰이지 않는다** - 사람이 되살리기를
+    누를 때만 읽는다. 그래서 정상 저장의 뒷문이 되지 않는다.
+    """
+    scope = str(value or "").strip().lower()
+    return scope.startswith("draft:") or scope.startswith("project:")
 
 
 def _entries(scope_id: str):
@@ -75,10 +84,10 @@ def save_draft_recovery():
     body = request.get_json(silent=True) or {}
     scope_id = str(body.get("scopeId") or "").strip()
     snapshot = body.get("snapshot")
-    if not _is_draft_scope(scope_id):
+    if not _is_recoverable_scope(scope_id):
         # project: 는 정상 저장 경로(/api/last-work)가 편집권까지 검증해 받는다.
         # 여기로 들어오면 그 검증을 우회하는 셈이라 받지 않는다.
-        return jsonify({"ok": False, "error": "draft: 스코프만 받습니다."}), 400
+        return jsonify({"ok": False, "error": "draft: 또는 project: 스코프만 받습니다."}), 400
     if not isinstance(snapshot, dict):
         return jsonify({"ok": False, "error": "snapshot must be an object"}), 400
     payload = {
@@ -105,8 +114,8 @@ def save_draft_recovery():
 def list_draft_recovery():
     """되살릴 수 있는 사본 목록. 본문은 주지 않는다 - 사람이 하나를 고른 뒤에 읽는다."""
     scope_id = str(request.args.get("scopeId") or "").strip()
-    if not _is_draft_scope(scope_id):
-        return jsonify({"ok": False, "error": "draft: 스코프만 받습니다."}), 400
+    if not _is_recoverable_scope(scope_id):
+        return jsonify({"ok": False, "error": "draft: 또는 project: 스코프만 받습니다."}), 400
     rows = []
     for row in _entries(scope_id):
         item = {"savedAt": row["savedAt"]}
@@ -127,8 +136,8 @@ def read_draft_recovery_entry():
     """사람이 고른 사본 하나를 읽는다. 자동 복원 경로에서는 호출하지 않는다."""
     scope_id = str(request.args.get("scopeId") or "").strip()
     saved_at = str(request.args.get("savedAt") or "").strip()
-    if not _is_draft_scope(scope_id):
-        return jsonify({"ok": False, "error": "draft: 스코프만 받습니다."}), 400
+    if not _is_recoverable_scope(scope_id):
+        return jsonify({"ok": False, "error": "draft: 또는 project: 스코프만 받습니다."}), 400
     if not saved_at.isdigit():
         return jsonify({"ok": False, "error": "savedAt 이 필요합니다."}), 400
     path = os.path.join(_DRAFT_RECOVERY_DIR, _scope_digest(scope_id), f"{saved_at}.json")

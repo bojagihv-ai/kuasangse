@@ -6090,8 +6090,28 @@ const DRAFT_RECOVERY_MIN_INTERVAL_MS = 20000;
 let draftRecoveryLastSentAt = 0;
 let draftRecoverySending = false;
 
-function saveDraftRecoverySnapshot(scopeId, reason = '') {
-  if (!String(scopeId || '').startsWith('draft:')) return false;
+/**
+ * **서버가 거절한 작업**의 되살릴 사본.
+ *
+ * 저장 전(draft:) 작업에는 그물이 있는데(saveDraftRecoverySnapshot) 정작 저장된 작업(project:)에는
+ * 없었다. 그런데 서버가 보호 사유로 거절하기 시작하면 그 작업이야말로 사본이 필요하다 —
+ * 실측 2026-09-02: 낙지발노리개 작업은 54건 연속 거절돼 서버 사본이 08-21 에 멈춰 있었고,
+ * 그 18시간 동안의 작업은 브라우저 탭 하나에만 있었다.
+ *
+ * 이 사본은 편집권을 거치지 않으므로 **자동 복원에 절대 쓰지 않는다** - 사람이 되살리기를
+ * 누를 때만 읽는 참고본이다. 그래서 정상 저장 경로를 대체하지 않는다.
+ */
+function saveRejectedWorkRecoverySnapshot(reason = '') {
+  const scopeId = String(getCurrentDocumentWorkspaceScope() || getCurrentLastWorkWorkspaceScope() || '');
+  if (!scopeId) return false;
+  return saveDraftRecoverySnapshot(scopeId, reason || 'server-refused', { allowSavedWork: true });
+}
+
+function saveDraftRecoverySnapshot(scopeId, reason = '', options = {}) {
+  const scope = String(scopeId || '');
+  // 평소에는 저장 전(draft:) 작업만 여기에 남긴다. 저장된 작업은 정상 저장 경로가 있기 때문이다.
+  // 예외는 하나 - 서버가 그 정상 경로를 거절했을 때(allowSavedWork). 그때는 사본이 유일한 그물이다.
+  if (!scope.startsWith('draft:') && !(options.allowSavedWork === true && scope.startsWith('project:'))) return false;
   if (draftRecoverySending) return false;
   const now = Date.now();
   // 자동저장은 자주 돈다. 매번 보내면 디스크와 네트워크를 먹는다.
@@ -6107,7 +6127,7 @@ function saveDraftRecoverySnapshot(scopeId, reason = '') {
   draftRecoverySending = true;
   draftRecoveryLastSentAt = now;
   const body = JSON.stringify({
-    scopeId,
+    scopeId: scope,
     reason: String(reason || ''),
     productName: String(state?.productName || snapshot?.productName || ''),
     snapshot,
@@ -6306,7 +6326,12 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       if (result.partial) throw new Error(result.failures?.[0]?.message || '서버 복제본 저장 실패');
       serverLastWorkFailureCount = 0;
       serverLastWorkRetryAfter = 0;
-      if (result.protectedNoOp) continue;
+      if (result.protectedNoOp) {
+        // 조용히 넘어가면 서버 사본이 낡아 가는 것을 아무도 모른다.
+        warnProtectedSaveRefused(result.reason);
+        saveRejectedWorkRecoverySnapshot(result.reason);
+        continue;
+      }
       if (result.clean) {
         serverLastWorkLastSavedAt = Number(snapshot.savedAt) || Date.now();
       }
@@ -10127,6 +10152,43 @@ const SESSION_PERSISTENCE_FAILURE_WARNINGS = new Set([
   '세션 저장 공간이 부족합니다. 큰 이미지는 IndexedDB에 저장을 시도 중이지만, 현재 작업 저장도 함께 눌러두는 편이 안전합니다.',
 ]);
 
+/**
+ * 서버가 저장을 보류한 사유를 사람 말로 옮긴다.
+ *
+ * 서버가 돌려주는 것은 'incoming snapshot changed work identity or dropped protected work data:
+ * optionSorter.images.length' 같은 영어 한 줄이다. 사장님은 이 말을 읽을 수 없고,
+ * 무엇을 해야 하는지도 알 수 없다.
+ */
+function describeProtectedSaveRefusal(reason = '') {
+  const raw = String(reason || '').trim();
+  if (/optionSorter\.images/.test(raw)) {
+    return '옵션 원본 이미지가 서버 저장본보다 줄어 서버가 저장을 보류했습니다.'
+      + ' 이미지를 지우셨다면 옵션분류기에서 다시 지워 주시면 표시가 남아 저장됩니다.';
+  }
+  if (/optionSorter\./.test(raw)) return '옵션분류기 자료가 서버 저장본보다 줄어 서버가 저장을 보류했습니다.';
+  if (/work identity/i.test(raw)) return '다른 작업의 내용이 섞여 보여 서버가 저장을 보류했습니다.';
+  if (/required/i.test(raw)) return '필수값이 서버 저장본보다 비어 보여 서버가 저장을 보류했습니다.';
+  if (/analysis/i.test(raw)) return '경쟁사 분석 결과가 서버 저장본보다 비어 보여 서버가 저장을 보류했습니다.';
+  return '서버가 이번 저장을 보류했습니다.';
+}
+
+/**
+ * 서버가 저장을 보류했다는 사실을 **화면에 남긴다**.
+ *
+ * 2026-09-02 주인님: "컷들을 생성하고 필수값을 선정하고 vm을 선정하고 하던게 날아가지않는것"
+ *
+ * 예전에는 이 자리에서 경고를 오히려 지우고 '저장됨' 을 돌려줬다. 그래서 서버가 거절하는
+ * 동안에도 화면은 멀쩡했고, 탭을 닫으면 서버의 옛 사본으로 돌아갔다.
+ * 실측: 낙지발노리개 작업 54건이 연속 거절되는 18시간 동안 아무 표시도 없었다.
+ */
+function warnProtectedSaveRefused(reason = '', options = {}) {
+  const message = `${describeProtectedSaveRefusal(reason)} 지금 화면의 내용은 이 탭에만 있습니다.`
+    + ' 탭을 닫기 전에 저장이 되도록 위 안내를 먼저 처리해주세요.';
+  const changed = setStorageWarningOnce(message, 'protected-save-refused');
+  if (changed && options.render !== false && !state.projectBusy && typeof render === 'function') render();
+  return changed;
+}
+
 function clearResolvedSessionPersistenceWarning() {
   if (!SESSION_PERSISTENCE_FAILURE_WARNINGS.has(String(state.storageWarning || ''))) return false;
   state.storageWarning = '';
@@ -10349,8 +10411,11 @@ function savePersistentState(options = {}) {
         throw new Error(commitResult.failures?.[0]?.message || '세션 저장 경계 실패');
       }
       if (commitResult.protectedNoOp) {
-        const warningCleared = clearResolvedSessionPersistenceWarning();
-        if (warningCleared && options.deferWarningRender !== true && !state.projectBusy && typeof render === 'function') render();
+        // 서버가 보류한 것을 성공으로 치면 안 된다. 예전에는 여기서 경고를 지우기까지 했다.
+        // 리비전은 올리지 않는다(서버가 안 받은 것을 올리면 이후 저장이 전부 어긋난다) —
+        // 대신 사람에게 말하고, 되살릴 사본을 남긴다.
+        warnProtectedSaveRefused(commitResult.reason, { render: options.deferWarningRender !== true });
+        saveRejectedWorkRecoverySnapshot(commitResult.reason);
         return true;
       }
       if (!commitResult.clean) {
