@@ -271,10 +271,101 @@ def _cafe24_control_port_open(timeout=0.8):
         return False
 
 
+def _parse_cafe24_setup_status(body):
+    """Control Tower 의 setup/status 본문을 읽어 **쓸 수 있는가** 를 답한다.
+
+    켜져 있는 것과 쓸 수 있는 것은 다르다 - 전수 진단 #16.
+    예전에는 HTTP 200 이면 running=True 로 끝냈다. 그래서 OAuth 가 끊겼거나 토큰이 만료돼도
+    준비 카드는 '준비 완료' 를 찍고, 수집은 첫 요청에서 401 로 죽었다.
+
+    본문 형태(실측 2026-09-02, /api/setup/status?include_secrets=0):
+      {"ok":true,"data":{"missing_scopes":[...],
+                         "checks":[{"id":"mall-connection","status":"pass"},
+                                   {"id":"scopes",...},{"id":"token-keeper",...}]}}
+    checks[].status 는 pass | warn | fail | info.
+
+    읽을 수 없는 본문(옛 판 Control Tower, 깨진 응답)에는 usable=None 을 돌려준다.
+    모르는 것을 '쓸 수 없다' 로 단정해 막으면, 멀쩡한 환경에서 수집을 못 하게 된다.
+    """
+    unknown = {
+        "usable": None,
+        "oauthState": "unknown",
+        "missingScopes": [],
+        "tokenMessage": "",
+        "problem": "",
+    }
+    if not isinstance(body, dict):
+        return unknown
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return unknown
+    checks = data.get("checks")
+    if not isinstance(checks, list):
+        return unknown
+    by_id = {}
+    for check in checks:
+        if isinstance(check, dict) and check.get("id"):
+            by_id[str(check["id"])] = check
+    mall = by_id.get("mall-connection")
+    scopes = by_id.get("scopes")
+    token = by_id.get("token-keeper")
+    if mall is None and scopes is None and token is None:
+        return unknown
+
+    def status_of(check):
+        return str((check or {}).get("status") or "").strip().lower()
+
+    missing = [str(item) for item in (data.get("missing_scopes") or []) if str(item).strip()]
+    token_message = str((token or {}).get("message") or "")
+
+    if status_of(mall) == "fail":
+        return {
+            "usable": False,
+            "oauthState": "disconnected",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": "Cafe24 OAuth 연결이 끊겼습니다. Control Tower 에서 다시 연결해주세요.",
+        }
+    if status_of(token) == "fail":
+        return {
+            "usable": False,
+            "oauthState": "reauth_required",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": "Cafe24 토큰이 만료됐습니다. Control Tower 에서 다시 로그인해주세요.",
+        }
+    if missing or status_of(scopes) in {"fail", "warn"}:
+        named = ", ".join(missing) if missing else "일부 권한"
+        return {
+            "usable": False,
+            "oauthState": "scopes_missing",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": f"Cafe24 권한이 모자랍니다({named}). Control Tower 에서 권한을 다시 승인해주세요.",
+        }
+    if status_of(token) == "warn":
+        # 곧 만료되지만 지금은 쓸 수 있다. 막지 않고 알리기만 한다.
+        return {
+            "usable": True,
+            "oauthState": "expiring",
+            "missingScopes": [],
+            "tokenMessage": token_message,
+            "problem": "",
+        }
+    return {
+        "usable": True,
+        "oauthState": "connected",
+        "missingScopes": [],
+        "tokenMessage": token_message,
+        "problem": "",
+    }
+
+
 def _cafe24_control_status_payload():
     port_open = _cafe24_control_port_open()
     health_ok = False
     health_detail = ""
+    verdict = {"usable": None, "oauthState": "unknown", "missingScopes": [], "tokenMessage": "", "problem": ""}
     if port_open:
         try:
             response = requests.get(
@@ -284,6 +375,11 @@ def _cafe24_control_status_payload():
             )
             health_ok = response.ok
             health_detail = f"HTTP {response.status_code}"
+            # 본문을 버리지 않는다. 토큰·연결·권한 검사표가 여기 들어 있다.
+            try:
+                verdict = _parse_cafe24_setup_status(response.json())
+            except Exception:
+                verdict = {"usable": None, "oauthState": "unknown", "missingScopes": [], "tokenMessage": "", "problem": ""}
         except requests.RequestException as exc:
             health_detail = exc.__class__.__name__
     running = port_open and health_ok
@@ -298,10 +394,19 @@ def _cafe24_control_status_payload():
         "port": _CAFE24_CONTROL_PORT,
         "root": str(_CAFE24_CONTROL_ROOT),
         "scriptExists": _CAFE24_CONTROL_SCRIPT.is_file(),
+        # 꺼져 있으면 쓸 수 없는 것이 확실하다(False). 켜져 있는데 본문을 못 읽으면 모르는 것(None) -
+        # 모르는 것을 '쓸 수 없다' 로 단정해 막으면 멀쩡한 환경에서 수집을 못 하게 된다.
+        "usable": (verdict["usable"] if verdict["usable"] is None else bool(verdict["usable"])) if running else False,
+        # 꺼져 있으면 OAuth 가 어떤 상태인지는 정말 모른다. usable 은 False 로 확실하지만
+        # oauthState 까지 단정하지 않는다 - '재로그인 필요' 같은 틀린 안내를 하게 된다.
+        "oauthState": verdict["oauthState"] if running else "unknown",
+        "missingScopes": verdict["missingScopes"],
+        "tokenMessage": verdict["tokenMessage"],
         "message": (
-            "Cafe24 Control Tower가 실행 중입니다. API Hub 후보 수집을 계속합니다."
-            if running
-            else "Cafe24 Control Tower가 꺼져 있습니다."
+            "Cafe24 Control Tower가 꺼져 있습니다."
+            if not running
+            else verdict["problem"]
+            or "Cafe24 Control Tower가 실행 중입니다. API Hub 후보 수집을 계속합니다."
         ),
     }
 
@@ -401,6 +506,17 @@ def _jepum_scraper_python_executable():
     return None
 
 
+def _jepum_watcher_verdict():
+    """VM 안 후보 수집 watcher 가 살아 있는가.
+
+    호스트 스크래퍼 포트가 열려 있는 것과, 실제로 후보검색을 처리하는 VM 안 watcher 가
+    살아 있는 것은 다르다 - 전수 진단 #5. watcher 만 죽은 고장이 흔하다
+    (2026-08-31 에 41시간, 09-02 전수 진단 중에도 26분).
+    """
+    from services.vm_candidate_bridge import watcher_readiness
+    return watcher_readiness()
+
+
 def _jepum_scraper_status_payload():
     # 어느 포트를 볼지부터 찾는다. 외운 번호를 믿다가 두 번 사고가 났다.
     port = _jepum_scraper_port()
@@ -430,6 +546,33 @@ def _jepum_scraper_status_payload():
     running = port_open and health_ok
     port_conflict = port_open and not health_ok
     python_path = _jepum_scraper_python_executable()
+    # 켜져 있는 것(running)과 쓸 수 있는 것(usable)을 가른다.
+    # watcher 를 못 물어봤으면 모르는 것(None)으로 둔다 - 모르는 것을 '쓸 수 없다' 로
+    # 단정해 막으면 멀쩡한 환경에서 수집을 못 하게 된다.
+    watcher_alive = None
+    heartbeat_age = None
+    try:
+        verdict = _jepum_watcher_verdict()
+        if isinstance(verdict, dict):
+            watcher_alive = verdict.get("candidateWatcherAlive")
+            heartbeat_age = verdict.get("heartbeatAgeSeconds")
+    except Exception:
+        watcher_alive = None
+        heartbeat_age = None
+    if not running:
+        usable = False
+    elif watcher_alive is None:
+        usable = None
+    else:
+        usable = bool(watcher_alive)
+    if running and watcher_alive is False:
+        minutes = int(round((heartbeat_age or 0) / 60))
+        watcher_note = (
+            f"JepumScraper는 포트 {port} 에서 실행 중이지만, VM 안 후보 수집 watcher 가 응답하지 않습니다"
+            f"(마지막 응답 {minutes}분 전). VM 안에서 후보 수집 watcher 를 다시 실행해주세요."
+        )
+    else:
+        watcher_note = ""
     return {
         "ok": True,
         "running": running,
@@ -443,8 +586,12 @@ def _jepum_scraper_status_payload():
         "pythonExists": bool(python_path),
         # 어느 포트를 봤는지 말한다. 이 한 줄이 없어서 "꺼져 있습니다" 만 보고
         # 멀쩡히 돌고 있는 서비스를 한참 찾아다녔다.
+        "usable": usable,
+        "candidateWatcherAlive": watcher_alive,
+        "heartbeatAgeSeconds": heartbeat_age,
         "message": (
-            f"JepumScraper가 실행 중입니다. (포트 {port})"
+            watcher_note
+            or f"JepumScraper가 실행 중입니다. (포트 {port})"
             if running
             else f"JepumScraper가 포트 {port} 에 없습니다. "
                  "스크래퍼가 다른 포트에 떠 있으면 JEPUM_SCRAPER_PORT 로 알려 주세요."

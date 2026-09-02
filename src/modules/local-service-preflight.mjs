@@ -74,6 +74,22 @@ export async function ensureRequiredLocalServices(factory, runtime, options = {}
       : '전체 수집 경로를 준비하고 있습니다. 신화사DB, Cafe24, VM 후보 수집기 상태를 확인합니다.',
     { sourceMode },
   );
+  // 세 서비스 상태는 전부 **이 백엔드를 거쳐** 묻는다. 백엔드가 꺼져 있으면 셋 다 실패하는데,
+  // 예전에는 그것을 '신화사DB·Cafe24·VM 수집기가 꺼져 있다' 로 읽고 그 셋을 켜겠냐고 물었다.
+  // 승낙해도 실행 요청 역시 같은 백엔드로 가므로 'fetch failed' 한 줄로 끝났고,
+  // 정작 켜야 할 것(런처)은 어디에도 나오지 않았다 - 전수 진단 #14.
+  try {
+    await requestLocalService(runtime, base, '/api/sections', 'GET', 4500);
+  } catch (error) {
+    const message = `상세페이지 백엔드(${base})에 연결할 수 없습니다.`
+      + ' 신화사DB·Cafe24·VM 수집기가 꺼진 것이 아니라, 그 상태를 물어보는 백엔드가 꺼져 있는 것입니다.'
+      + ' 바탕화면 상세페이지 런처(launcher.ps1)를 다시 실행한 뒤 다시 시도해주세요.';
+    logFactory(runtime, factory, message, 'error');
+    // 켤 수 없는 것을 켜겠냐고 묻지 않는다. 물으면 승낙하고 또 같은 실패를 보게 된다.
+    setPreflightState(runtime, factory, 'failed', message, { sourceMode });
+    return false;
+  }
+
   const checked = await Promise.all(services.map(async service => {
     try {
       const status = await requestLocalService(runtime, base, service.statusPath, 'GET', 4500);
@@ -96,6 +112,21 @@ export async function ensureRequiredLocalServices(factory, runtime, options = {}
     const conflictHelp = '해당 포트를 사용 중인 다른 프로그램을 종료하거나 포트를 변경한 뒤 다시 실행해주세요.';
     setPreflightState(runtime, factory, 'failed', `필수 프로그램 포트 충돌: ${detail}
 ${conflictHelp}`, { sourceMode });
+    return false;
+  }
+
+  // 켜져 있는 것과 쓸 수 있는 것은 다르다 - 전수 진단 #5·#16.
+  // 백엔드가 usable:false 를 주면(예: 호스트 스크래퍼는 떠 있는데 VM 안 watcher 가 죽었거나,
+  // Cafe24 Control Tower 는 떠 있는데 OAuth 토큰이 만료됐거나) 실행을 켜라고 물어도 소용없다.
+  // 그건 이미 켜져 있기 때문이다. 무엇이 막혔는지 그대로 보여 주고 멈춘다.
+  // usable 이 null 이면 모르는 것이므로 막지 않는다.
+  const unusable = checked.filter(item => item.status?.running === true && item.status?.usable === false);
+  if (unusable.length) {
+    const detail = unusable
+      .map(item => responseMessage(item.status, `${item.service.label}를 지금 쓸 수 없습니다.`))
+      .join('\n');
+    logFactory(runtime, factory, `필수 프로그램을 쓸 수 없음: ${detail}`, 'error');
+    setPreflightState(runtime, factory, 'failed', detail, { sourceMode });
     return false;
   }
 
