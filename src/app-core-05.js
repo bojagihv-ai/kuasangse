@@ -17263,6 +17263,8 @@ function bindEvents() {
   if (agentSendBtn) agentSendBtn.onclick = doSend;
   if (agentInputEl) {
     agentInputEl.onkeydown = e => {
+      // 한글 조합 중 Enter(keyCode 229) 는 IME 가 글자를 확정하는 키다. 여기서 보내면 마지막 글자가 빠진다.
+      if (isImeComposingKeyEvent(e)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
     };
     // 자동 높이 조절
@@ -17328,7 +17330,10 @@ function bindEvents() {
   const addDirectiveBtn = document.getElementById('addDirectiveBtn');
   if (directiveInput) {
     directiveInput.oninput = e => { state.imageDirectiveInput = e.target.value; scheduleLastWorkSave(); };
-    directiveInput.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addImageDirective(state.imageDirectiveInput); } };
+    directiveInput.onkeydown = e => {
+      if (isImeComposingKeyEvent(e)) return; // 한글 조합 중 Enter 는 IME 몫 — 지시사항을 두 번 넣거나 마지막 글자를 빠뜨린다.
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addImageDirective(state.imageDirectiveInput); }
+    };
   }
   if (addDirectiveBtn) addDirectiveBtn.onclick = () => addImageDirective(state.imageDirectiveInput);
 
@@ -19403,7 +19408,7 @@ function bindFactoryOpenMarketEvents() {
 
   document.querySelectorAll('[data-factory-final-basic-field]').forEach(input => {
     input.onkeydown = event => {
-      if (event.key !== 'Enter') return;
+      if (event.key !== 'Enter' || isImeComposingKeyEvent(event)) return; // 한글 조합 중 Enter 는 값을 확정하지 않는다.
       event.preventDefault();
       factoryApplyFinalRegistrationBasicInfoInputs({
         container: input.closest('[data-factory-final-basic-info-panel]'),

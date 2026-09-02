@@ -300,6 +300,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('FIELD-01', '1 제품/DB', '사용용도 확정값 Ctrl+F5 유지', 'tools/verify_factory_usage_ctrl_f5_persistence_v218.cjs'),
     nodeFile('FIELD-02', '3 필수값', '선택한 값만 신화사DB/Cafe24 명시 전송', 'tools/verify_factory_selected_field_transfer_v219.cjs'),
     nodeFile('FIELD-03', '1 시작 입력', '한글 IME 상품명 저장·F5 전체 복원', 'tools/verify_factory_product_name_ime_reload_v373.cjs'),
+    nodeFile('IME-ENTER-01', '공통/입력', '한글 조합 중 Enter 미전송·확정 뒤 전송 (제품명·에이전트·이미지 지시, 실제 IME)', 'tools/verify_ime_composition_enter_cdp_v1.cjs'),
     nodeFile('FIELD-04', '3 필수값', '손으로 넣은 사이즈/가로/세로가 신원 정리에도 살아남음', 'tools/verify_factory_manual_size_survives_v001.cjs'),
     nodeFile('IMG-01', '2 대표이미지', '기본 이미지 새로고침 복원', 'tools/verify_factory_input_image_reload_v165.cjs'),
     nodeFile('IMG-03', '1 시작 이미지 교체', '보이는 버튼·대용량 캐시 충돌·새로고침 복원', 'tools/verify_factory_product_image_replacement_cdp_v1.cjs'),
