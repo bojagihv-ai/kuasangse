@@ -285,6 +285,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('CUTS-RATCHET-02', '2~6 생성 공정', '시작이 이미지컷을 포함하고 건너뜀을 말한다', 'tests/frontend/imagecut_zero_ratchet.test.cjs', 'fast'),
     nodeFile('LLM-HUB-01', '공통/외부연동', 'API Hub 미기동을 사람 말로 알린다', 'tests/frontend/gpt_oauth_hub_down_is_readable.test.cjs', 'fast'),
     nodeFile('RUN-STATUS-01', '공통/화면', '회복된 단계가 전체 실행을 실패로 칠하지 않는다', 'tests/frontend/run_status_no_false_failure_flicker.test.cjs', 'fast'),
+    nodeFile('RUN-STATUS-02', '공통/화면', '세 렌더러의 실패·진행률 판정이 서로 같고 실행 자신만 본다', 'tests/frontend/run_status_verdict_consistency.test.cjs', 'fast'),
     nodeFile('DB-03', '1 제품/DB', '초안 첫 저장·작업파일 저장 뒤 후보 선택 유지', 'tools/verify_factory_candidate_workspace_transition_v220.cjs'),
     nodeFile('DB-04', '1 제품/DB', '기존 저장본 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_restore_recovery_v221.cjs'),
     nodeFile('DB-05', '1 제품/DB', '브라우저 시작 복원 draft 후보 복구와 다른 작업 후보 차단', 'tools/verify_factory_candidate_startup_restore_v223.cjs'),

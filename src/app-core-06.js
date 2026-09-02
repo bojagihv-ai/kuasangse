@@ -3720,8 +3720,12 @@ function factoryPatchGoalRunStatusInPlace(factory = factoryRuntimeReadFactory())
     ? factoryGoalRunDisplayProgress(goal, stage)
     : factoryGoalProgressClamp(goal.progress);
   const isImageAnalysis = factory.automation?.activeTaskId === 'product-analysis' || /이미지.*분석|제품 이미지/.test(String(stage || ''));
-  const hasIssue = (typeof factoryGoalRunHasFailure === 'function' && factoryGoalRunHasFailure(goal, stage)) || dbStage.status === 'error';
-  const needsAttention = !hasIssue && typeof factoryGoalRunNeedsAttention === 'function' && factoryGoalRunNeedsAttention(goal, stage);
+  // 판정에는 실행 자신(goal.currentStage)만 쓴다. 위의 stage 는 화면 문구라
+  // 진행 단계가 비면 DB 단계 메시지나 최근 로그 한 줄이 들어온다 — 그 줄이 오류면
+  // 아무 실행도 실패하지 않았는데 이 카드가 빨개진다(오전에 고친 RUN-STATUS-01 과 같은 뿌리).
+  const verdictStage = String(goal.currentStage || '');
+  const hasIssue = (typeof factoryGoalRunHasFailure === 'function' && factoryGoalRunHasFailure(goal, verdictStage)) || dbStage.status === 'error';
+  const needsAttention = !hasIssue && typeof factoryGoalRunNeedsAttention === 'function' && factoryGoalRunNeedsAttention(goal, verdictStage);
   const toneColor = running ? 'var(--primary-h)' : (hasIssue ? 'var(--danger)' : (needsAttention ? 'var(--warn)' : 'var(--text-m)'));
   const borderColor = running ? 'rgba(99,102,241,.42)' : (hasIssue ? 'rgba(239,68,68,.72)' : (needsAttention ? 'rgba(245,158,11,.62)' : 'rgba(255,255,255,.10)'));
   const bg = running ? 'rgba(99,102,241,.10)' : (hasIssue ? 'rgba(127,29,29,.20)' : (needsAttention ? 'rgba(245,158,11,.10)' : 'rgba(255,255,255,.025)'));
@@ -4691,6 +4695,11 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
           ...options,
           factory: draft,
           operationToken,
+          // factory 없이 불렸다 = 사용자가 이것만 눌렀다. 큰 흐름의 한 단계가 아니라 여기가 끝이다.
+          // 그래서 '확보' 단계에서 52 가 아니라 100 을 말한다. 예전에는 표시 쪽이 문구를 보고
+          // 100 을 만들어 줬는데(실측 2026-09-02: 52% 인데 바가 가득 참) 그걸 뺐으니
+          // 실행이 스스로 말해야 한다.
+          standalone: true,
         }),
       ),
     );
@@ -4886,7 +4895,9 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
       try { if (typeof compMarketPersistCandidateSnapshot === 'function') compMarketPersistCandidateSnapshot(timeoutUpdated); } catch(_) {}
       factoryShowVmCandidateSelectionTab(factory);
       factoryLog(`VM 후보 ${competitorCount || partialRows.rows.length}건을 확보했습니다. 수집 작업이 늦게 끝나도 후보 카드는 현재 작업에 먼저 표시합니다.`, 'ok', factory);
-      factorySetGoalRunProgress(52, 'VM 경쟁사 후보 확보', '후보 카드를 표시했습니다. 상세페이지 수집 후보를 선택해주세요.', 'ok', { render: false, factory });
+      // 큰 흐름의 한 단계면 52% 지만, 이것만 단독으로 돌린 경우엔 여기가 끝이다.
+      // 표시가 문구를 보고 100 을 만들어 주던 것을 뺐으니 실행이 스스로 말해야 한다.
+      factorySetGoalRunProgress(options.standalone ? 100 : 52, 'VM 경쟁사 후보 확보', '후보 카드를 표시했습니다. 상세페이지 수집 후보를 선택해주세요.', 'ok', { render: false, factory });
       saveLastWorkNow();
       render();
       return { ok: true, label: '경쟁사 후보 수집', partial: true, timedOut: true };
@@ -5159,7 +5170,7 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
   factoryLog(detailCount
     ? `경쟁사 수집 완료: 후보 ${competitorCount}건, 상세페이지 이미지 ${detailCount}장. 경쟁사 분석 탭에서 분석할 이미지를 선택하세요.`
     : `경쟁사 후보 ${competitorCount}건 수집 완료. 자동 상세 스크래핑은 실행하지 않았습니다. 상세페이지 수집 후보를 선택한 뒤 VM 상세수집/분석을 진행하세요.`, detailCount ? 'ok' : 'warn', factory);
-  factorySetGoalRunProgress(52, detailCount ? '경쟁사 상세이미지 확보' : '경쟁사 후보 확보', '', detailCount ? 'ok' : 'warn', {
+  factorySetGoalRunProgress(options.standalone ? 100 : 52, detailCount ? '경쟁사 상세이미지 확보' : '경쟁사 후보 확보', '', detailCount ? 'ok' : 'warn', {
     failureReason: '',
     render: false,
     factory,
