@@ -340,6 +340,8 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('FULL-03', '4 경쟁사', '마켓별 후보 누적', 'tools/test_comp_market_accumulation_v179.cjs', 'full'),
     nodeFile('FULL-04', '4 경쟁사', '마켓 상태 정합성', 'tools/test_comp_market_status_reconciliation_v183.cjs', 'full'),
     nodeFile('FULL-05', '4 경쟁사', '마켓 상태 UI 정합성', 'tools/verify_comp_market_status_reconciliation_cdp_v183.cjs', 'full'),
+    // F5 최종검증(2026-09-02): verify:factory 체인에는 있는데 매니페스트에 없어 격리 실행 경로가 없던 항목.
+    nodeFile('FULL-13', '7 저장/내보내기', '영속 세션 부트스트랩 복원', 'tools/verify_persistent_session_bootstrap_cdp_v172.cjs', 'full'),
     nodeFile('FULL-06', '7 저장/내보내기', '작업파일 불러오기 성능', 'tools/measure_workfile_import_perf_cdp_v122.cjs', 'full'),
     nodeFile('FULL-07', '4 색상옵션', '옵션 이미지 추가 UI', 'tools/verify_option_sorter_add_image_cdp_v126.cjs', 'full'),
     nodeFile('FULL-08', '4 색상옵션', '옵션분류기 전체 작업 흐름', 'tools/verify_option_sorter_workflow_cdp_v127.cjs', 'full'),

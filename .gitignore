@@ -43,6 +43,7 @@ test-results/
 .evidence/
 .omo/
 .playwright-cli/
+.playwright-mcp/
 NUL
 *.log
 
