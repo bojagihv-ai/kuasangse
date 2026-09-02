@@ -265,6 +265,25 @@ test('브라우저 검사가 아닌 단계는 같은 오류 문구가 있어도 
   assert.equal(retryable, false);
 });
 
+test('파일 이름에 cdp 가 없어도 실제로 브라우저를 띄우면 브라우저 단계로 센다', () => {
+  // 전수 진단 #24: 판별을 파일 **이름**으로 하는 바람에, 실제로 격리 Chrome 을 띄우는
+  // 검사 30개(SAVE-26·FIELD-01~04·DB-03~07·NAV-01 등)가 인프라 재시도를 못 받았다.
+  // 백엔드 기동이 늦어 한 번 튕긴 것이 '앱이 깨졌다' 로 보고돼 조사 시간을 먹는다.
+  const realBrowserButPlainName = { args: ['tools/verify_factory_assets_survive_hard_reload_v1.cjs'] };
+  const result = { passed: false, tail: 'ECONNREFUSED' };
+  assert.equal(isRetryableInfrastructureFailure(realBrowserButPlainName, result), true,
+    'ensureCdp/connectCdp 를 실제로 부르는 검사는 이름과 무관하게 브라우저 단계다');
+});
+
+test('브라우저 판별 정규식에 제어문자가 섞여 있지 않다', () => {
+  // 2026-09-02: 이 판별기를 고치다 정규식의  가 진짜 백스페이스 바이트(0x08)로 들어가
+  // /(?:ensureCdp|connectCdp)/ 가 되어 **영원히 거짓**이 된 적이 있다.
+  // 눈으로도 diff 로도 안 보이는 고장이라 기계가 본다.
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'tools', 'run_daily_regression.cjs'), 'utf8');
+  const control = source.match(/[ --]/g) || [];
+  assert.deepEqual(control, [], `회귀 실행기에 제어문자 ${control.length}개가 섞여 있습니다`);
+});
+
 test('CDP 응답 대기표를 전송 전에 등록해 즉시 응답도 유실하지 않는다', async t => {
   // Given: send 호출 안에서 바로 응답하는 결정적 WebSocket을 준비한다.
   const originalWebSocket = global.WebSocket;
