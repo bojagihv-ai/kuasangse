@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import ipaddress
 import uuid
 from importlib import metadata
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
+
+from services.public_network import (
+    PublicAddressPolicyError,
+    assert_public_hostname,
+    resolve_public_addresses,
+)
 
 
 class ScraplingUnavailable(RuntimeError):
@@ -66,6 +71,13 @@ def health() -> dict[str, Any]:
 
 
 def _public_http_url(value: Any) -> str:
+    """수집 대상 URL 이 정말 바깥 주소인지 — 문자열이 아니라 실제로 가리키는 IP 로 판정한다.
+
+    왜 (묶음 G6 #19, 2026-09-02): 예전엔 ipaddress 파싱이 되는 문자열만 걸렀다. 그래서
+    `127.0.0.1.nip.io`·`localtest.me` (DNS 가 127.0.0.1 로 답함), `0x7f000001`·`127.1`
+    (파싱은 실패하지만 접속 라이브러리는 127.0.0.1 로 읽음) 이 "외부" 로 통과했다.
+    image-proxy 와 같은 services.public_network 잣대를 쓴다.
+    """
     raw = str(value or "").strip()
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -73,13 +85,23 @@ def _public_http_url(value: Any) -> str:
     hostname = parsed.hostname.lower().rstrip(".")
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ScraplingRequestError("로컬 주소는 Scrapling 수집 대상으로 사용할 수 없습니다.")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        ip = None
-    if ip and not ip.is_global:
-        raise ScraplingRequestError("사설·루프백 주소는 Scrapling 수집 대상으로 사용할 수 없습니다.")
+        assert_public_hostname(hostname, port, resolver=_resolve_addresses)
+    except PublicAddressPolicyError as exc:
+        if exc.code == "image_address_unresolved":
+            raise ScraplingRequestError(
+                f"상품 URL 의 주소({hostname})를 찾지 못했습니다. 주소를 확인한 뒤 다시 시도해주세요."
+            ) from exc
+        raise ScraplingRequestError(
+            "사설·루프백 주소(또는 그리로 향하는 도메인)는 Scrapling 수집 대상으로 사용할 수 없습니다."
+        ) from exc
     return raw
+
+
+def _resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    """검사에서 DNS 를 가짜로 바꿔 끼우는 자리."""
+    return resolve_public_addresses(hostname, port)
 
 
 def _selector_values(page: Any, selector: str) -> list[str]:

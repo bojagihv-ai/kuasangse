@@ -187,6 +187,7 @@ def marketplus_browser_status():
 
 
 @api.route("/marketplus/open-admin", methods=["POST"])
+@_require_local_action
 def marketplus_open_admin():
     """Open Cafe24/MarketPlus admin in the user's debug Chrome.
 
@@ -263,6 +264,7 @@ def marketplus_open_admin():
 
 
 @api.route("/marketplus/open-normal-browser", methods=["POST"])
+@_require_local_action
 def marketplus_open_normal_browser():
     """Open Cafe24/MarketPlus in the user's normal browser profile.
 
@@ -903,6 +905,7 @@ def marketplus_open_marketplus_menu():
 
 
 @api.route("/marketplus/launch-debug-chrome", methods=["POST"])
+@_require_local_action
 def marketplus_launch_debug_chrome():
     """Launch a dedicated Chrome profile with remote debugging enabled.
 

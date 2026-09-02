@@ -46,33 +46,16 @@ class _PinnedImageProxyResponse:
 
 
 def _image_proxy_resolve_addresses(hostname: str, port: int) -> tuple[str, ...]:
-    addresses = socket.getaddrinfo(
-        hostname,
-        port,
-        family=socket.AF_UNSPEC,
-        type=socket.SOCK_STREAM,
-    )
-    return tuple(sorted({str(address[4][0]).split("%", 1)[0] for address in addresses}))
+    # 판정 규칙은 services/public_network 에 있다(Scrapling·자료함과 같은 잣대, 2026-09-02).
+    # 이름은 test_image_proxy_policy 가 monkeypatch 하는 자리라 그대로 둔다.
+    return resolve_public_addresses(hostname, port)
 
 
 def _image_proxy_review_addresses(addresses) -> tuple[str, ...]:
-    reviewed = []
-    for address in addresses:
-        parsed = ipaddress.ip_address(address)
-        if (
-            not parsed.is_global
-            or parsed.is_private
-            or parsed.is_loopback
-            or parsed.is_link_local
-            or parsed.is_multicast
-            or parsed.is_reserved
-            or parsed.is_unspecified
-        ):
-            raise _ImageProxyPolicyError("non_public_image_address")
-        reviewed.append(parsed.compressed)
-    if not reviewed:
-        raise _ImageProxyPolicyError("image_address_missing")
-    return tuple(sorted(set(reviewed)))
+    try:
+        return review_public_addresses(addresses)
+    except PublicAddressPolicyError as exc:
+        raise _ImageProxyPolicyError(exc.code) from exc
 
 
 def _image_proxy_request_hop(url: str, hostname: str, ip_address: str):
@@ -549,7 +532,19 @@ def update_vertex_config():
     location = str(body.get('location') or '').strip() or 'us-central1'
     if not project:
         return jsonify({"error": "project is required"}), 400
-    _save_vertex_config(project, location)
+    try:
+        _save_vertex_config(project, location)
+    except OSError as exc:
+        # 예전엔 실패를 삼키고 ok:true 였다(묶음 G6 #22). 원본은 보존됐으니 무엇을 하면 되는지 알려 준다.
+        return jsonify({
+            "ok": False,
+            "code": "VERTEX_CONFIG_SAVE_FAILED",
+            "error": f"{exc} — 파일을 열고 있는 프로그램을 닫거나 폴더 권한을 확인한 뒤 다시 저장해주세요. 이전 설정은 그대로 남아 있습니다.",
+            "failures": [
+                {"path": path, "reason": reason}
+                for path, reason in getattr(exc, "failures", [])
+            ],
+        }), 500
     return jsonify({"ok": True, "project": project, "location": location})
 
 
@@ -786,6 +781,7 @@ def jepum_scraper_status():
 
 
 @api.route("/jepum-scraper/start", methods=["POST"])
+@_require_local_action
 def jepum_scraper_start():
     with _JEPUM_START_LOCK:
         status = _jepum_scraper_status_payload()
@@ -943,6 +939,7 @@ def sinhwa_db_start():
 
 
 @api.route("/jepum-scraper/open-detail-folder", methods=["POST", "GET"])
+@_require_local_action
 def jepum_scraper_open_detail_folder():
     """Open the JepumScraper detail page image root folder in Windows Explorer."""
     if not os.path.isdir(_JEPUM_DETAIL_ROOT):
