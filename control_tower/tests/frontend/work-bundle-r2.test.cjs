@@ -288,6 +288,75 @@ test('rendered work-bundle cards expose the stable asset key for exact DOM inven
   }
 });
 
+test('work-bundle card exposes an explicit error when its thumbnail URL is empty or malformed', async () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: tagName => new FakeElement(tagName) };
+  try {
+    const { createWorkBundleAssetCard } = await workbench();
+    const card = createWorkBundleAssetCard({
+      id: 'empty-thumbnail-asset',
+      assetKey: 'output:section:empty-thumbnail',
+      role: 'section',
+      factoryStageKey: 'sections',
+      displayName: '주소 없는 섹션 이미지',
+      thumbnailReference: '/api/local-archive/empty/thumbnail',
+    }, () => '   ');
+    const frame = card.children[0];
+    const errorState = frame.children[0];
+
+    assert.equal(errorState.tagName, 'P');
+    assert.equal(errorState.textContent, '이미지 주소 없음');
+    assert.equal(errorState.dataset.broken, 'true');
+    assert.equal(frame.dataset.action, undefined);
+
+    const malformed = createWorkBundleAssetCard({
+      id: 'malformed-thumbnail-asset',
+      assetKey: 'output:section:malformed-thumbnail',
+      role: 'section',
+      factoryStageKey: 'sections',
+      thumbnailReference: 'malformed://thumbnail',
+    }, () => { throw new TypeError('malformed thumbnail URL'); });
+    assert.equal(malformed.children[0].children[0].textContent, '이미지 주소 없음');
+    assert.equal(malformed.children[0].children[0].dataset.broken, 'true');
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test('final_detail normalization preserves canonical asset and URL identity', async () => {
+  const { normalizeWorkBundle, groupWorkBundleSectionAssets } = await workbench();
+  const bundle = normalizeWorkBundle({
+    id: 'history-bundle',
+    assets: [{
+      id: 'final-detail-header-v3',
+      assetKey: 'output:stitched-detail:header:v3',
+      phase: 'output',
+      role: 'stitched-detail',
+      factoryStageKey: 'final_detail',
+      displayName: '헤더 최종 선택',
+      thumbnailReference: '/api/local-archive/final-detail-header-v3/thumbnail',
+      contentReference: '/api/local-archive/final-detail-header-v3/content',
+    }],
+  });
+  const [asset] = bundle.assets;
+  const [group] = groupWorkBundleSectionAssets(bundle.assets);
+
+  assert.equal(group.latest, asset);
+  assert.deepEqual({
+    id: asset.id,
+    assetKey: asset.assetKey,
+    factoryStageKey: asset.factoryStageKey,
+    thumbnailReference: asset.thumbnailReference,
+    contentReference: asset.contentReference,
+  }, {
+    id: 'final-detail-header-v3',
+    assetKey: 'output:stitched-detail:header:v3',
+    factoryStageKey: 'final_detail',
+    thumbnailReference: '/api/local-archive/final-detail-header-v3/thumbnail',
+    contentReference: '/api/local-archive/final-detail-header-v3/content',
+  });
+});
+
 test('current work-bundle roles keep Korean labels in the production-control surface', () => {
   const source = fs.readFileSync(MODULE, 'utf8');
 
@@ -305,7 +374,7 @@ test('production control cache-revised module reference resolves to the workbenc
   assert.ok(reference);
   const [relativePath, revision] = reference.split('?');
   assert.ok(revision);
-  assert.equal(new URLSearchParams(revision).get('workBundleCompleteness'), '6');
+  assert.equal(new URLSearchParams(revision).get('workBundleCompleteness'), '7');
 
   const moduleUrl = pathToFileURL(path.resolve(path.dirname(CONTROL_TOWER_HTML), relativePath));
   moduleUrl.search = `${revision}&test=${Date.now()}`;

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final, Protocol, TypeAlias, assert_never
 from urllib.parse import unquote_to_bytes
 from uuid import uuid4
+from xml.etree import ElementTree
 
 from flask import Flask, Response, jsonify, request, stream_with_context
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -87,6 +88,7 @@ FACTORY_HISTORY_ARCHIVE_STAGE_MAP: Final = {
     "final_detail": ("stitched-detail", "final_detail"),
 }
 HISTORY_THUMBNAIL_SIZE: Final = (480, 360)
+MAX_LOCAL_ARCHIVE_IMAGE_BYTES: Final = 64 * 1024 * 1024
 _HISTORY_THUMBNAIL_CACHE: dict[str, tuple[str, bytes]] = {}
 HISTORY_THUMBNAIL_PLACEHOLDER: Final = (
     b'<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360" viewBox="0 0 480 360">'
@@ -119,6 +121,25 @@ def _history_thumbnail(content: bytes, mime_type: str) -> tuple[str, bytes]:
         _HISTORY_THUMBNAIL_CACHE.pop(next(iter(_HISTORY_THUMBNAIL_CACHE)))
     _HISTORY_THUMBNAIL_CACHE[cache_key] = result
     return result
+
+
+def _local_archive_image_mime(content: bytes) -> str | None:
+    try:
+        with Image.open(BytesIO(content)) as source:
+            image_format = source.format
+            source.verify()
+    except (OSError, UnidentifiedImageError, ValueError):
+        try:
+            root = ElementTree.fromstring(content)
+        except ElementTree.ParseError:
+            return None
+        return "image/svg+xml" if root.tag.rsplit("}", 1)[-1].lower() == "svg" else None
+    return {
+        "GIF": "image/gif",
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }.get(image_format or "")
 
 
 def _history_safe_name(value: object, fallback: str = "asset", max_len: int = 120) -> str:
@@ -332,7 +353,11 @@ def _factory_history_snapshot(
                     "sectionId": str(record.get("sectionId") or ""),
                     "selectionEvidence": "14_OUTPUT_최종선택 파일·해시 일치" if linked_to_final else "",
                 },
-                "storedAssetId": asset_key,
+                "storedAssetId": (
+                    str(record.get("assetId") or "").strip() or asset_key
+                    if stage_key == "final_detail"
+                    else asset_key
+                ),
                 "contentReference": f"/api/factory/jobs/{job_id}/history/assets/{asset_key}/image",
                 "thumbnailReference": f"/api/factory/jobs/{job_id}/history/assets/{asset_key}/thumbnail",
                 "factoryStageKey": stage_key,
@@ -1568,6 +1593,32 @@ def register_routes(
         except (ValueError, OSError):
             return None
         return candidate if candidate.is_file() else None
+
+    @app.get("/api/local-archive/assets/<archive_id>/image")
+    def factory_archive_image(archive_id: str) -> Response | tuple[Response, int]:
+        safe_id = str(archive_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", safe_id):
+            return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+        record, _note = _factory_archive_record(safe_id)
+        image_path = _factory_archive_file(record, "imagePath") if record is not None else None
+        if image_path is None:
+            return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+        try:
+            if image_path.stat().st_size > MAX_LOCAL_ARCHIVE_IMAGE_BYTES:
+                return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+            with image_path.open("rb") as image_file:
+                content = image_file.read(MAX_LOCAL_ARCHIVE_IMAGE_BYTES + 1)
+        except OSError:
+            return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+        if len(content) > MAX_LOCAL_ARCHIVE_IMAGE_BYTES:
+            return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+        mime = _local_archive_image_mime(content)
+        if mime is None:
+            return _error("factory_archive_image_missing", 404, retryable=False, correlation_id=_correlation_id())
+        response = Response(content, mimetype=mime)
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.get("/api/factory/archive-document/<archive_id>")
     def factory_archive_document(archive_id: str) -> Response | tuple[Response, int]:

@@ -6,8 +6,12 @@ const { URL } = require('node:url');
 
 const API_PORT = Number(process.env.CONTROL_TOWER_QA_API_PORT || 19062);
 const FRONTEND_PORT = Number(process.env.CONTROL_TOWER_QA_FRONTEND_PORT || 19082);
-const JOB_COUNT = Math.min(200, Math.max(2, Number(process.env.CONTROL_TOWER_QA_JOB_COUNT || 2)));
+const JOB_COUNT = Math.min(200, Math.max(0, Number(process.env.CONTROL_TOWER_QA_JOB_COUNT || 3)));
 const ACTIVE_PRODUCT_B = process.env.CONTROL_TOWER_QA_ACTIVE_PRODUCT === 'B';
+const BROKEN_THUMBNAIL = process.env.CONTROL_TOWER_QA_BROKEN_THUMBNAIL === '1';
+const TASK19_MIXED = process.env.CONTROL_TOWER_QA_TASK19 === '1';
+const TASK19_STAGE7 = process.env.CONTROL_TOWER_QA_TASK19_STAGE7 === '1';
+const TASK21_RECEIPT = process.env.CONTROL_TOWER_QA_TASK21_RECEIPT === '1';
 const FRONTEND = path.resolve(__dirname, '../../frontend');
 const requests = [];
 const sseClients = new Set();
@@ -21,9 +25,17 @@ let revision = 9;
 let approvalIssued = false;
 let productBRebound = false;
 let productBResumed = false;
+let productBRevision = 20;
 const workBundleId = '965fe15f-88de-4b61-9421-e1ee29eeb58f';
 const automationDecisions = [];
 const policySnapshots = [];
+const valueSaveAttempts = [];
+let failNextValues = false;
+const stage1Intake = {
+  sourceKind: 'sinhwa-db',
+  productName: '방울수저집',
+  detailHint: '전통 방울 장식과 수저 보관 용도를 자연스럽게 설명',
+};
 const disconnectedFactoryFixture = process.env.CONTROL_TOWER_QA_FACTORY_STATE === 'disconnected';
 let requestedFixtureCount = 0;
 const decisionIds = [
@@ -106,7 +118,7 @@ const workBundle = () => ({
       displayName: `${stageValue.key} 계약 후보 ${index + 1}`,
       sourceChecksum: candidate.digest,
       selectionState: stageValue.selectedId === candidate.id ? 'selected' : 'candidate',
-      thumbnailReference: stageValue.key === 'final_detail' && index === 2
+      thumbnailReference: BROKEN_THUMBNAIL && stageValue.key === 'final_detail' && index === 2
         ? '/api/assets/missing/final-detail-3.svg'
         : `/api/pdp/work-bundles/${workBundleId}/assets/${encodeURIComponent(candidate.assetId)}/thumbnail`,
       version: 1,
@@ -173,6 +185,33 @@ const projectionA = fixtureCount => ({
       missing: [],
       items: [{ goalMode: 'auto', stageOverrides: { representative: 'manual' } }],
     },
+    {
+      key: 'competitors',
+      count: 2,
+      missing: [],
+      items: [
+        {
+          id: 'competitor-coupang-1',
+          name: '쿠팡 상세수집 후보',
+          market: '쿠팡',
+          price: '18,900원',
+          thumbnailUrl: '/api/assets/thumbnail/competitor-coupang-1.svg',
+          selected: true,
+          detailImageCount: 8,
+          analysisReady: true,
+        },
+        {
+          id: 'competitor-smartstore-1',
+          name: '스마트스토어 비교 후보',
+          market: '스마트스토어',
+          price: '19,500원',
+          thumbnailUrl: '/api/assets/thumbnail/competitor-smartstore-1.svg',
+          selected: false,
+          detailImageCount: 4,
+          analysisReady: false,
+        },
+      ],
+    },
   ],
   stages,
   progress: {
@@ -185,7 +224,7 @@ const projectionA = fixtureCount => ({
     message: 'A컷 확정 event를 기다리며 다음 단계 실행 중',
   },
   registration: {
-    status: 'approval_required',
+    status: TASK19_STAGE7 ? 'staged_verified' : 'approval_required',
     blockers: [],
     jobId: 'factory-job-qa-2994',
     batchId: 'batch-qa-13',
@@ -199,12 +238,23 @@ const projectionA = fixtureCount => ({
     market_sync: 'F',
     idempotencyKey: `cafe24-stage:qa:방울수저집:sha256:qa-html`,
     approvalTokenState: approvalIssued ? 'issued' : 'missing',
-    remoteReadbackDigest: '',
-    publicationReceipt: null,
+    remoteReadbackDigest: TASK21_RECEIPT ? 'sha256:qa-task21-readback' : '',
+    publicationReceipt: TASK21_RECEIPT ? {
+      schema: 'factory-cafe24-terminal-publication-receipt:v1',
+      receiptId: 'qa-task21-publication-receipt', status: 'staged_verified',
+      jobId: 'factory-job-qa-2994', productId: 'cafe24:2994',
+      sourceWorkfileName: '방울수저집.kuasangse', remoteReadbackDigest: 'sha256:qa-task21-readback',
+      remoteReadback: {
+        productNo: '2994', productName: '방울수저집', registrationMode: 'update', mallId: 'bojagi1928',
+        representativeImageCount: 1, detailImageCount: 4, variantCount: 2, updatedAt: '2026-09-01T00:00:00.000Z',
+      },
+    } : null,
   },
   receipts: [],
   products: fixtureCount ? products(fixtureCount) : [],
 });
+
+let productBStages = [stage('option_color', '', 2), stage('final_detail', '', 2)];
 
 const projectionB = fixtureCount => ({
   schema: 'factory-control-projection:v1',
@@ -221,11 +271,11 @@ const projectionB = fixtureCount => ({
     productKey: '미니 데스크 오거나이저 B',
     runId: productBRebound ? 'run-b-87' : 'run-b-old',
     inputFingerprint: 'sha256:other-input',
-    revision: productBRebound ? 87 : 20,
+    revision: TASK19_MIXED ? productBRevision : productBRebound ? 87 : 20,
     workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
   },
   inputs: [{ key: 'requirements', count: 3, missing: ['recommended_use'], items: [] }],
-  stages: [stage('option_color', '', 2), stage('final_detail', '', 2)],
+  stages: productBStages,
   progress: {
     stageKey: 'option_color',
     stageLabel: '옵션·색상',
@@ -253,7 +303,25 @@ const projectionB = fixtureCount => ({
   products: fixtureCount ? products(fixtureCount) : [],
 });
 
-const projection = fixtureCount => ACTIVE_PRODUCT_B ? projectionB(fixtureCount) : projectionA(fixtureCount);
+const projection = fixtureCount => {
+  const base = ACTIVE_PRODUCT_B ? projectionB(fixtureCount) : projectionA(fixtureCount);
+  const current = TASK19_MIXED ? {
+    ...base,
+    inputs: base.inputs.map(input => input.key === 'requirements' ? { ...input, missing: ['소재'] } : input),
+    progress: { ...base.progress, stageKey: 'required_values', stageLabel: '필수값', status: 'blocked', message: '소재 입력 필요' },
+    registration: { ...base.registration, status: 'blocked', blockers: ['required_values_missing'] },
+  } : base;
+  if (JOB_COUNT !== 0) return current;
+  return {
+    ...current,
+    session: { ...current.session, productId: '', productKey: '', workfileName: '' },
+    inputs: [],
+    stages: [],
+    progress: { stageKey: '', stageLabel: '', percent: 0, elapsedMs: 0, mode: 'auto', status: 'idle', message: '' },
+    registration: { status: 'idle', blockers: [], jobId: '', productId: '', productKey: '' },
+    products: [],
+  };
+};
 
 const json = (response, status, payload, extra = {}) => {
   response.writeHead(status, {
@@ -455,25 +523,31 @@ const api = http.createServer(async (request, response) => {
     return json(response, 200, projection(fixtureCount));
   }
   if (url.pathname === '/api/factory/jobs' && request.method === 'GET') {
-    const jobs = [
-      {
+    const jobs = [];
+    if (JOB_COUNT >= 1) jobs.push({
         schema: 'factory-product-job:v1',
         jobId: 'factory-job-qa-2994',
         batchId: 'batch-qa-13',
-        sourceKind: 'sinhwa-db',
-        productName: '방울수저집',
+        ...stage1Intake,
         workfileName: '방울수저집.kuasangse',
         jcode: '2994',
         mode: 'manual',
-        status: 'waiting_manual',
-        stageKey: 'sections',
-        message: '섹션 A컷 선택 대기',
-        decisionStatus: 'waiting_manual',
+        status: TASK19_MIXED ? 'blocked' : 'waiting_manual',
+        stageKey: TASK19_MIXED ? 'required_values' : 'sections',
+        message: TASK19_MIXED ? '소재 입력 필요' : '섹션 A컷 선택 대기',
+        decisionStatus: TASK19_MIXED ? 'blocked' : 'waiting_manual',
         imageCount: 7,
+        inputImageSummary: [
+          { role: 'base', fileName: '방울수저집-기본.jpg', name: '방울수저집 기본' },
+          { role: 'color-option', fileName: '방울수저집-남색.jpg', name: '방울수저집 남색', colorName: '남색' },
+        ],
+        requiredValues: { productName: '방울수저집', material: '면', origin: '대한민국', size: '20x15cm', salePrice: '12000', stock: '99', usage: '수저 보관', optionMode: 'provided' },
+        missingRequiredValues: TASK19_MIXED ? ['material'] : [],
+        progress: { stageKey: TASK19_MIXED ? 'required_values' : 'sections', stages },
         attempts: 1,
         checkpointAvailable: true,
-      },
-      {
+      });
+    if (JOB_COUNT >= 2) jobs.push({
         schema: 'factory-product-job:v1',
         jobId: 'job-qa-3102',
         batchId: 'batch-qa-13',
@@ -482,8 +556,8 @@ const api = http.createServer(async (request, response) => {
         workfileName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817.kuasangse',
         jcode: '3102',
         mode: 'auto',
-        status: productBResumed ? 'running' : 'blocked',
-        stageKey: productBResumed ? 'final_detail' : 'option_color',
+        status: TASK19_MIXED ? 'waiting_manual' : productBResumed ? 'running' : 'blocked',
+        stageKey: TASK19_MIXED ? 'option_color' : productBResumed ? 'final_detail' : 'option_color',
         message: productBResumed
           ? '승인된 작업파일로 생산 재개됨'
           : productBRebound
@@ -491,25 +565,57 @@ const api = http.createServer(async (request, response) => {
             : '승인된 작업파일 연결 필요',
         decisionStatus: productBResumed ? 'running' : productBRebound ? 'resume_required' : 'blocked',
         imageCount: 11,
+        requiredValues: { productName: '미니 데스크 오거나이저 B', material: '폴리에스터', origin: '대한민국', size: '30x20cm', salePrice: '19000', stock: '99', usage: '데스크 정리', optionMode: 'provided' },
+        missingRequiredValues: [],
+        progress: { stageKey: productBResumed ? 'final_detail' : 'option_color', stages: productBStages },
         attempts: 2,
         checkpointAvailable: true,
-      },
-    ];
+      });
     for (let index = 3; index <= JOB_COUNT; index += 1) {
       jobs.push({
         schema: 'factory-product-job:v1',
         jobId: `job-qa-${index}`,
         batchId: 'batch-qa-13',
         sourceKind: index % 2 ? 'sinhwa-db' : 'direct',
-        productName: `대량 생산 제품 ${String(index).padStart(3, '0')}`,
+        productName: index === 3
+          ? '매우 긴 한글 제품명 검증용 전통 수공예 프리미엄 보자기 포장 세트 삼십 자 이상'
+          : `대량 생산 제품 ${String(index).padStart(3, '0')}`,
         workfileName: `대량 생산 제품 ${String(index).padStart(3, '0')}.kuasangse`,
         jcode: String(3000 + index),
         mode: index % 3 ? 'auto' : 'manual',
-        status: index % 5 ? 'queued' : 'completed',
-        stageKey: index % 5 ? 'representative' : 'final_detail',
-        message: index % 5 ? '생산 대기' : '생산 완료',
-        decisionStatus: index % 5 ? 'queued' : 'completed',
+        status: index === 3 || index % 5 === 0 ? 'completed' : 'queued',
+        stageKey: index === 3 || index % 5 === 0 ? 'final_detail' : 'representative',
+        message: index === 3
+          ? '생산 완료 · https://example.invalid/very-long-unbroken-product-reference/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+          : index % 5 ? '생산 대기' : '생산 완료',
+        decisionStatus: index === 3 || index % 5 === 0 ? 'completed' : 'queued',
         imageCount: index % 12,
+        requiredValues: { productName: `대량 생산 제품 ${index}`, stock: '99', optionMode: 'none' },
+        missingRequiredValues: [],
+        progress: { stageKey: index === 3 ? 'final_detail' : 'representative', stages: index === 3 ? stages.map(item => ({ ...item, selectedId: item.candidates[0]?.id || '' })) : [] },
+        registration: index === 3 ? {
+          status: TASK19_STAGE7 ? 'staged_verified' : 'approval_required',
+          blockers: [],
+          jobId: `job-qa-${index}`,
+          productId: `cafe24:${3000 + index}`,
+          productKey: index === 3
+            ? '매우 긴 한글 제품명 검증용 전통 수공예 프리미엄 보자기 포장 세트 삼십 자 이상'
+            : `대량 생산 제품 ${index}`,
+          categoryId: '71',
+          htmlDigest: 'sha256:historical-html',
+          imageDigests: ['sha256:historical-hero'],
+          optionName: '색상',
+          optionValues: ['보자기'],
+          optionCount: 1,
+          variantCount: 1,
+          inventoryQuantity: '99',
+          stock: 99,
+          selling: 'F',
+          display: 'F',
+          market_sync: 'F',
+          remoteReadbackDigest: '',
+        } : undefined,
+        cafe24Values: index === 3 ? { registrationMode: 'create', categoryId: '71', supplyPrice: '18000', display: 'F' } : {},
         attempts: 0,
         checkpointAvailable: index % 5 === 0,
       });
@@ -518,6 +624,18 @@ const api = http.createServer(async (request, response) => {
       jobs,
       total: jobs.length,
     });
+  }
+  const historyMatch = url.pathname.match(/^\/api\/factory\/jobs\/([^/]+)\/history$/u);
+  if (historyMatch && request.method === 'GET') {
+    let jobId;
+    try {
+      jobId = decodeURIComponent(historyMatch[1]);
+    } catch {
+      return json(response, 200, { workBundle: { id: '', bundleKey: '', workfileName: '', version: 0, assets: [] }, history: [] });
+    }
+    return json(response, 200, jobId === 'factory-job-qa-2994'
+      ? { workBundle: workBundle(), history: [] }
+      : { workBundle: { id: '', bundleKey: '', workfileName: '', version: 0, assets: [] }, history: [] });
   }
   if (url.pathname === '/api/pdp/work-bundles' && request.method === 'GET') {
     const bundle = workBundle();
@@ -540,7 +658,7 @@ const api = http.createServer(async (request, response) => {
     url.pathname.startsWith(`/api/pdp/work-bundles/${workBundleId}/assets/`)
     && url.pathname.endsWith('/thumbnail')
   ) {
-    if (decodeURIComponent(url.pathname).includes('asset:final_detail:3')) {
+    if (BROKEN_THUMBNAIL && decodeURIComponent(url.pathname).includes('asset:final_detail:3')) {
       return json(response, 404, { error: { code: 'qa_broken_thumbnail' } });
     }
     return thumbnail(response, decodeURIComponent(url.pathname.split('/').at(-2)));
@@ -561,6 +679,26 @@ const api = http.createServer(async (request, response) => {
   }
   if (url.pathname === '/api/factory/refresh' && request.method === 'POST') {
     return json(response, 202, { accepted: true, order: { command: { kind: 'factory-control', name: 'getFactoryProjection' } } });
+  }
+  if (url.pathname === '/__qa/fail-next-values' && request.method === 'POST') {
+    failNextValues = true;
+    return json(response, 200, { armed: true });
+  }
+  if (url.pathname === '/api/factory/jobs/factory-job-qa-2994/values' && request.method === 'POST') {
+    const payload = await body(request);
+    if (failNextValues) {
+      failNextValues = false;
+      valueSaveAttempts.push({ status: 500, payload });
+      return json(response, 500, { error: { code: 'qa_values_save_failed' } });
+    }
+    for (const key of ['productName', 'detailHint', 'sourceKind']) {
+      if (typeof payload[key] === 'string' && payload[key].trim()) stage1Intake[key] = payload[key].trim();
+    }
+    valueSaveAttempts.push({ status: 200, payload });
+    return json(response, 200, {
+      accepted: true,
+      job: { jobId: 'factory-job-qa-2994', ...stage1Intake, values: payload },
+    });
   }
   if (url.pathname === '/api/factory/jobs/job-qa-3102/workfile-rebind' && request.method === 'POST') {
     const payload = await body(request);
@@ -646,6 +784,32 @@ const api = http.createServer(async (request, response) => {
       accepted: true,
       status: 'queued',
       job: { jobId: 'job-qa-3102', status: 'blocked', stageKey: 'option_color', checkpointAvailable: true },
+    });
+  }
+  if (url.pathname === '/api/factory/jobs/selections' && request.method === 'POST') {
+    const payload = await body(request);
+    const selection = payload.mode === 'manual' && payload.selections?.length === 1 ? payload.selections[0] : null;
+    const targetStage = productBStages.find(item => item.key === selection?.stageKey);
+    const targetCandidate = targetStage?.candidates.find(candidate => candidate.id === selection?.candidateId);
+    if (!TASK19_MIXED || selection?.jobId !== 'job-qa-3102' || !targetCandidate) {
+      return json(response, 422, { error: { code: 'factory_a_cut_candidate_missing' } });
+    }
+    productBRevision += 1;
+    productBStages = productBStages.map(item => item.key === selection.stageKey
+      ? { ...item, selectedId: selection.candidateId, status: 'completed', updatedAt: new Date().toISOString() }
+      : item);
+    const receipt = {
+      schema: 'factory-a-cut-receipt:v1',
+      receiptId: `factory-a-cut:qa:${selection.stageKey}:${productBRevision}`,
+      jobId: selection.jobId,
+      stageKey: selection.stageKey,
+      candidateId: selection.candidateId,
+      revision: productBRevision,
+    };
+    selectionCommands.push({ ...payload, receipt });
+    return json(response, 200, {
+      status: 'applied',
+      results: [{ ...receipt, status: 'applied' }],
     });
   }
   if (url.pathname === '/api/factory/jobs/factory-job-qa-2994/resume' && request.method === 'POST') {
@@ -748,7 +912,7 @@ const api = http.createServer(async (request, response) => {
       },
     });
   }
-  if (url.pathname === '/api/assets/thumbnail/final_detail-3.svg') {
+  if (BROKEN_THUMBNAIL && url.pathname === '/api/assets/thumbnail/final_detail-3.svg') {
     return json(response, 404, { error: { code: 'qa_broken_thumbnail' } });
   }
   if (url.pathname.startsWith('/api/assets/thumbnail/')) return thumbnail(response, path.basename(url.pathname, '.svg'));
@@ -841,11 +1005,14 @@ const api = http.createServer(async (request, response) => {
       thumbnailRequests: requests.filter(item => item.path.includes('/thumbnail/')).length,
       activeSseClients: sseClients.size,
       revision,
+      productBRevision,
       selectedRepresentativeId: stages.find(item => item.key === 'representative').selectedId,
       automationDecisionCount: automationDecisions.length,
       automationDecisions,
       policySnapshotCount: policySnapshots.length,
       policySnapshots,
+      failNextValues,
+      valueSaveAttempts,
     });
   }
   return json(response, 404, { error: { code: 'not_found' } });

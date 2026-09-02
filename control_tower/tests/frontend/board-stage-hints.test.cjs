@@ -34,12 +34,10 @@ test('고르는 자리에서 그 설명을 보여 준다', () => {
   assert.ok(BOARD.includes('stageHint'), '패널이 단계 설명을 쓰지 않는다');
 });
 
-test('고른 컷이 바로 적용되지 않는다는 것을 알려 준다', () => {
-  assert.ok(
-    BOARD.includes('고르면 예약됩니다'),
-    '예약이라는 말만 뜨고 무엇을 더 눌러야 하는지 알려 주지 않는다',
-  );
-  assert.ok(BOARD.includes('다시 시도'), '다음에 누를 버튼을 알려 주지 않는다');
+test('고른 컷은 저장 영수증 뒤 반영되고 다음 제품으로 이동한다고 알려 준다', () => {
+  assert.ok(BOARD.includes('저장 영수증'), '선택 확정 기준인 저장 영수증을 알려 주지 않는다');
+  assert.ok(BOARD.includes('다음 제품'), '같은 공정의 다음 제품 이동을 알려 주지 않는다');
+  assert.doesNotMatch(BOARD, /고르면 예약됩니다/u);
 });
 
 test('섹션이 적은 변형은 얼마나 적은지 알려 준다', () => {

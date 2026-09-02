@@ -197,6 +197,17 @@ def test_launcher_requires_business_api_readiness_and_replaces_only_owned_stale_
     assert all(fragment in source for fragment in required_fragments)
 
 
+def test_launcher_restarts_owned_backend_when_its_8082_origin_cannot_read_the_queue() -> None:
+    # Given: 바로가기가 8082 화면을 열고 기존 5062 backend를 재사용하려 한다.
+    source = _read_required(LAUNCHER_PATH)
+
+    # When: backend 준비 상태를 판정한다.
+    # Then: HTTP 200만으로는 부족하고 8082 Origin의 queue CORS 응답도 확인해야 한다.
+    assert '$corsHeaders = @{ Origin = "http://127.0.0.1:$FrontendPort" }' in source
+    assert 'Invoke-WebRequest -Uri $BackendJobsUrl -Method Get -Headers $corsHeaders' in source
+    assert '$jobs.Headers["Access-Control-Allow-Origin"] -eq "http://127.0.0.1:$FrontendPort"' in source
+
+
 def test_launcher_supports_explicit_task_owned_runtime_without_changing_shortcut_defaults() -> None:
     # Given: production 기본값과 격리 검증 override가 공존하는 launcher를 준비한다.
     source = _read_required(LAUNCHER_PATH)

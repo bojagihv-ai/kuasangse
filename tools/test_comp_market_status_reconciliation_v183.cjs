@@ -123,6 +123,40 @@ assert.equal(
 );
 assert.equal(staleSavedStatusRows[0].tone, 'warn');
 
+const notSearchedRows = candidateContext.factoryVmSearchSiteRows({
+  selectedSites: ['naver'],
+  marketTargets: { naver: 2 },
+  groupedResults: { naver: [] },
+});
+assert.equal(notSearchedRows[0].state, '대기', '검색 식별자나 시도 기록이 없으면 완료로 추정하면 안 됩니다.');
+
+const malformedNoSearchRows = candidateContext.factoryVmSearchSiteRows({
+  selectedSites: ['naver'],
+  marketTargets: { naver: 2 },
+  groupedResults: { naver: [] },
+  collectionStatus: {
+    marketReports: [{ marketId: 'naver', accepted: null, requested: '', status: {} }],
+  },
+});
+assert.equal(
+  malformedNoSearchRows[0].state,
+  '대기',
+  '유효한 검색 식별자 없이 null/빈 문자열/객체 필드만 있는 보고서를 검색 완료로 오인하면 안 됩니다.'
+);
+assert.equal(malformedNoSearchRows[0].tone, 'muted');
+
+const failedRows = candidateContext.factoryVmSearchSiteRows({
+  selectedSites: ['naver'],
+  searchId: 'search-failed',
+  marketTargets: { naver: 2 },
+  groupedResults: { naver: [] },
+  collectionStatus: {
+    marketReports: [{ marketId: 'naver', requested: 2, accepted: 0, status: 'failed' }],
+  },
+});
+assert.equal(failedRows[0].state, '수집 실패', '현재 최종 마켓 보고서의 실패 상태는 완료 0건보다 우선해야 합니다.');
+assert.equal(failedRows[0].tone, 'error');
+
 const bridgeContext = {
   setTimeout(callback) {
     callback();

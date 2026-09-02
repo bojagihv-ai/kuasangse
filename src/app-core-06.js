@@ -10722,7 +10722,8 @@ async function factoryQueueLocalArchiveAsset(asset = {}, reason = 'auto', option
     return true;
   }
   const pendingKey = asset.id || `${asset.stageId || 'asset'}:${asset.createdAt || Date.now()}`;
-  const savingAge = Date.now() - Number(asset.localArchive?.queuedAt || 0);
+  const queuedAt = Number(asset.localArchive?.queuedAt || 0);
+  const savingAge = queuedAt > 0 ? Date.now() - queuedAt : 0;
   if (asset.localArchive?.saving && savingAge > 0 && savingAge < 90000) return true;
   if (FACTORY_LOCAL_ARCHIVE_PENDING.has(pendingKey) && !(savingAge > 90000)) return true;
   if (savingAge > 90000) {
@@ -10735,7 +10736,9 @@ async function factoryQueueLocalArchiveAsset(asset = {}, reason = 'auto', option
       retryAt: Date.now(),
     };
   }
+  FACTORY_LOCAL_ARCHIVE_PENDING.add(pendingKey);
   const runSave = async () => {
+    try {
     if (!store.isOperationCurrent(operationToken)) return false;
     const liveAsset = (factory.assets || []).find(item =>
       String(item?.id || '') === String(asset?.id || '')
@@ -10743,8 +10746,6 @@ async function factoryQueueLocalArchiveAsset(asset = {}, reason = 'auto', option
     if (liveAsset) asset = liveAsset;
     const operationIdentity = factoryLocalArchiveAssetOperationIdentity(asset, operationToken);
     if (asset.localArchive?.saved && (asset.archiveId || asset.localArchive?.archiveId)) return true;
-    if (FACTORY_LOCAL_ARCHIVE_PENDING.has(pendingKey)) return true;
-    FACTORY_LOCAL_ARCHIVE_PENDING.add(pendingKey);
     const originalImageForState = String(asset.image || '');
     asset.localArchive = {
       ...(asset.localArchive || {}),
@@ -10869,6 +10870,7 @@ async function factoryQueueLocalArchiveAsset(asset = {}, reason = 'auto', option
     factoryLog(factory.archive.localStatus, 'warn', factory);
     scheduleLastWorkSave(900, { lightweight: true });
     return false;
+    }
     } finally {
       FACTORY_LOCAL_ARCHIVE_PENDING.delete(pendingKey);
     }

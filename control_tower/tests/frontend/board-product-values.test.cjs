@@ -35,7 +35,7 @@ test('한 칸만 고쳐도 나머지가 남는다', () => {
   // 이미 채운 값을 폼에 미리 넣어야, 통째로 다시 쓰지 않는다.
   const board = source('src', 'production-board.mjs');
   const at = board.indexOf('function renderProductValueForm');
-  const region = board.slice(at, at + 2200);
+  const region = board.slice(at, board.indexOf('function renderCafe24ValueForm', at));
   assert.ok(region.includes('row.requiredValues?.[key]'), '이미 채운 값을 보여주지 않습니다');
   assert.ok(region.includes("dataset.tone = 'attention'"), '비어 있는 칸을 구분하지 않습니다');
 });
@@ -44,7 +44,7 @@ test('옵션 여부는 골라 넣게 한다', () => {
   // 자유 입력으로 두면 provided/none 이 아닌 값이 들어가 조립공장이 거절한다.
   const board = source('src', 'production-board.mjs');
   const at = board.indexOf('function renderProductValueForm');
-  const region = board.slice(at, at + 2200);
+  const region = board.slice(at, board.indexOf('function renderCafe24ValueForm', at));
   assert.ok(region.includes("'provided'") && region.includes("'none'"), '옵션 여부를 고르게 하지 않습니다');
 });
 

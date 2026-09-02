@@ -4,6 +4,33 @@ const list = value => Array.isArray(value) ? value : [];
 
 const pick = (...values) => values.find(value => text(value)) ?? '';
 
+export function resolveCandidateAsset(candidateValue, assetsValue, stageKey) {
+  const candidate = record(candidateValue);
+  const candidateId = text(candidate.id);
+  const candidateAssetId = text(candidate.assetId);
+  const outputKeys = new Set(
+    [candidateId, candidateAssetId]
+      .filter(Boolean)
+      .map(identity => `output:${identity}`),
+  );
+  const sectionId = text(candidate.sectionId)
+    || (text(stageKey) === 'sections'
+      ? (/^([^:]+):[^:]+$/u.exec(candidateId)?.[1] || '')
+      : '');
+  if (text(stageKey) === 'sections' && sectionId) outputKeys.add(`output:sections:${sectionId}`);
+  const matches = list(assetsValue).filter(raw => {
+    const asset = record(raw);
+    if (text(asset.phase) !== 'output' || text(asset.factoryStageKey) !== text(stageKey)) return false;
+    return (candidateAssetId && [text(asset.id), text(asset.storedAssetId)].includes(candidateAssetId))
+      || (candidateId && candidateId === text(asset.id))
+      || outputKeys.has(text(asset.assetKey));
+  });
+  return Object.freeze({
+    status: matches.length === 1 ? 'matched' : matches.length > 1 ? 'ambiguous' : 'missing',
+    asset: matches.length === 1 ? matches[0] : null,
+  });
+}
+
 export const INPUT_STAGE_KEYS = Object.freeze([
   'sinhwa_db_product',
   'cafe24_match_candidates',
@@ -83,6 +110,115 @@ const STAGE_DEFINITIONS = Object.freeze({
     ['gpt_judgment_receipts', '모든 GPT 판단 receipt', 'GPT OAuth judgment registry'],
   ]),
 });
+
+export const ASSEMBLY_WORKBENCH_STEPS = Object.freeze([
+  Object.freeze({ key: 'start', label: '시작' }),
+  Object.freeze({ key: 'db', label: 'DB 확정' }),
+  Object.freeze({ key: 'required', label: '필수값' }),
+  Object.freeze({ key: 'competitors', label: '경쟁사' }),
+  Object.freeze({ key: 'cuts', label: '생성컷 선택' }),
+  Object.freeze({ key: 'sections', label: '섹션 생성' }),
+  Object.freeze({ key: 'send', label: '전송' }),
+]);
+
+const CUT_STAGE_KEYS = Object.freeze(['representative', 'size', 'option_color', 'general']);
+const WORKBENCH_STAGE_KEYS = Object.freeze({
+  intake: 'start',
+  queued: 'start',
+  product_matching: 'db',
+  db_product_match: 'db',
+  cafe24_product_match: 'db',
+  required_values: 'required',
+  required_fields: 'required',
+  competitors: 'competitors',
+  competitor_collection: 'competitors',
+  competitor_product_match: 'competitors',
+  representative: 'cuts',
+  size: 'cuts',
+  option_color: 'cuts',
+  general: 'cuts',
+  generated_images: 'cuts',
+  sections: 'sections',
+  final_detail: 'sections',
+  cafe24: 'send',
+  cafe24_preflight: 'send',
+  registration: 'send',
+});
+
+function assemblyStage(current, key) {
+  return list(record(current).stages).find(stage => text(record(stage).key) === key) || {};
+}
+
+function assemblyGroups(current, keys) {
+  return keys.map(key => {
+    const stage = record(assemblyStage(current, key));
+    const candidates = list(stage.candidates);
+    return Object.freeze({
+      key,
+      candidateCount: candidates.length,
+      selectedCount: text(stage.selectedId) ? 1 : 0,
+    });
+  });
+}
+
+function currentAssemblyStep(current, job) {
+  const jobRecord = record(job);
+  const stageKey = text(jobRecord.stageKey || record(current).progress?.stageKey);
+  if (text(jobRecord.status).toLowerCase() === 'completed' || WORKBENCH_STAGE_KEYS[stageKey] === 'send') return 'send';
+  if (WORKBENCH_STAGE_KEYS[stageKey]) return WORKBENCH_STAGE_KEYS[stageKey];
+  if (list(record(current).inputs).some(input => list(record(input).missing).length)) return 'required';
+  if (assemblyStage(current, 'final_detail').selectedId || assemblyStage(current, 'sections').selectedId) return 'sections';
+  if (CUT_STAGE_KEYS.some(key => text(record(assemblyStage(current, key)).selectedId))) return 'cuts';
+  return 'start';
+}
+
+export function deriveAssemblyWorkbench(currentValue = {}, jobValue = {}, cafe24Registered = false) {
+  const current = record(currentValue);
+  const job = record(jobValue);
+  const currentKey = currentAssemblyStep(current, job);
+  const currentIndex = ASSEMBLY_WORKBENCH_STEPS.findIndex(step => step.key === currentKey);
+  const status = text(job.status || record(current.progress).status).toLowerCase();
+  const disconnected = current.connected === false;
+  const inputMissing = list(current.inputs).reduce((total, input) => total + list(record(input).missing).length, 0);
+  const cuts = assemblyGroups(current, CUT_STAGE_KEYS);
+  const sections = assemblyGroups(current, ['sections', 'final_detail']);
+  const blockers = list(record(current.registration).blockers).map(text).filter(Boolean);
+  const steps = ASSEMBLY_WORKBENCH_STEPS.map((definition, index) => {
+    const groups = definition.key === 'cuts' ? cuts : definition.key === 'sections' ? sections : [];
+    const candidateCount = groups.reduce((total, group) => total + group.candidateCount, 0);
+    const selectedCount = groups.reduce((total, group) => total + group.selectedCount, 0);
+    let state = index < currentIndex ? 'done' : index > currentIndex ? 'pending' : 'active';
+    if (index === currentIndex && status === 'blocked') state = 'blocked';
+    if (index === currentIndex && status === 'waiting_manual') state = 'manual';
+    if (definition.key === 'required' && inputMissing && index === currentIndex) state = 'blocked';
+    if (definition.key === 'send' && cafe24Registered === true && !disconnected) state = 'done';
+    if (disconnected && index === currentIndex) state = 'blocked';
+    const blocker = definition.key === 'required' && inputMissing
+      ? `필수값 ${inputMissing}개 누락`
+      : disconnected && index === currentIndex
+        ? '조립공장 연결 끊김'
+      : state === 'manual'
+        ? 'A컷 선택 필요'
+        : definition.key === 'send' && blockers.length
+          ? blockers[0]
+          : state === 'blocked'
+            ? pick(job.message, current.blockReason, '작업 차단')
+            : '';
+    return Object.freeze({
+      ...definition,
+      state,
+      candidateCount,
+      selectedCount,
+      blocker,
+      nextAction: blocker || (state === 'done' ? '완료' : state === 'active' ? '현재 공정 확인' : '공정 대기'),
+      groups: Object.freeze(groups),
+    });
+  });
+  return Object.freeze({
+    currentStep: steps[currentIndex],
+    steps: Object.freeze(steps),
+  });
+}
 
 const LIFECYCLE_STATES = new Set([
   'empty',

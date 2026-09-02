@@ -2,10 +2,10 @@
 // "최종" 이 무엇의 최종인지, "4/4" 가 무슨 뜻인지 알 길이 없다 - 실측 2026-08-31:
 // 조작자가 "최종이라는게 뭐며 섹션 1개 2개 13개 14개가 뭘 말하는건지" 라고 물었다.
 export const BOARD_STAGES = Object.freeze([
-  Object.freeze({ key: 'representative', label: '대표', hint: '목록에 걸리는 대표 이미지' }),
-  Object.freeze({ key: 'size', label: '사이즈', hint: '치수를 보여 주는 이미지' }),
-  Object.freeze({ key: 'option_color', label: '옵션·색상', hint: '색상 옵션 이미지' }),
-  Object.freeze({ key: 'general', label: '일반', hint: '본문에 쓰는 일반 이미지' }),
+  Object.freeze({ key: 'representative', label: '대표이미지', hint: '목록에 걸리는 대표 이미지' }),
+  Object.freeze({ key: 'size', label: '사이즈이미지', hint: '치수를 보여 주는 이미지' }),
+  Object.freeze({ key: 'option_color', label: '색상옵션', hint: '색상 옵션 이미지' }),
+  Object.freeze({ key: 'general', label: '이미지컷', hint: '본문에 쓰는 일반 이미지' }),
   Object.freeze({ key: 'sections', label: '섹션', hint: '상세페이지를 이루는 각 문단' }),
   Object.freeze({
     key: 'final_detail',
@@ -42,6 +42,18 @@ function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+const WORK_IDENTITY_KEYS = Object.freeze([
+  'workspaceId', 'productKey', 'runId', 'inputFingerprint', 'workfileName',
+]);
+
+/** 워커 연결과 현재 작업 identity를 분리해 투영한다. */
+export function projectWorkerConnectionState(value) {
+  const projection = record(value);
+  if (projection.connected !== true) return 'disconnected';
+  const session = record(projection.session);
+  return WORK_IDENTITY_KEYS.some(key => text(session[key])) ? 'active' : 'idle';
+}
+
 function integer(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
@@ -57,6 +69,7 @@ function normalizeCandidate(value) {
   return id
     ? {
       id,
+      assetId: text(source.assetId || id),
       thumbnailUrl: text(source.thumbnailUrl || source.thumbnailRef),
       model: text(source.model),
       source: text(source.source),
@@ -111,21 +124,85 @@ function cellState(stage, { reservedCandidateId, jobStatus, waitingStageKey, rea
 
 // 투입값 이름을 사람 말로 보여준다. 코드 이름을 그대로 내면 무엇을 채워야 할지 모른다.
 export const PRODUCT_VALUE_LABELS = Object.freeze({
+  productName: '제품명',
   category: '상품 종류',
   material: '소재',
   originCountry: '원산지',
   size: '사이즈/규격',
-  widthMm: '가로(mm)',
-  depthMm: '세로(mm)',
+  widthMm: '가로',
+  depthMm: '세로/길이',
   salePrice: '판매가',
+  supplyPrice: '공급가/원가',
   stock: '기본 재고',
   usage: '사용용도',
   optionMode: '옵션 여부',
   cafe24CategoryId: 'Cafe24 분류번호',
-  supplyPrice: '공급가',
   displayStatus: '진열',
   sellingStatus: '판매',
 });
+
+export const REQUIRED_VALUE_PASTE_KEYS = Object.freeze([
+  'productName', 'salePrice', 'supplyPrice', 'stock', 'size', 'widthMm', 'depthMm',
+  'material', 'usage', 'optionMode', 'category', 'originCountry',
+]);
+
+const REQUIRED_VALUE_ALIASES = Object.freeze({
+  productname: 'productName', 제품명: 'productName', 상품명: 'productName',
+  saleprice: 'salePrice', 판매가: 'salePrice',
+  supplyprice: 'supplyPrice', 공급가: 'supplyPrice', 공급가원가: 'supplyPrice', 원가: 'supplyPrice',
+  stock: 'stock', 기본재고: 'stock', 재고: 'stock',
+  size: 'size', 사이즈규격: 'size', 규격: 'size',
+  widthmm: 'widthMm', 가로: 'widthMm',
+  depthmm: 'depthMm', 세로길이: 'depthMm', 세로: 'depthMm',
+  material: 'material', 소재: 'material',
+  usage: 'usage', 사용용도: 'usage', 용도: 'usage',
+  optionmode: 'optionMode', 옵션여부: 'optionMode',
+  category: 'category', 상품종류: 'category',
+  origincountry: 'originCountry', origin: 'originCountry', 원산지: 'originCountry',
+});
+
+function pasteAlias(value) {
+  return text(value).toLowerCase().replace(/[\s_\-/()]/g, '');
+}
+
+function normalizePasteValue(key, value) {
+  if (key !== 'optionMode') return value;
+  return ({ provided: 'provided', 옵션있음: 'provided', 있음: 'provided', none: 'none', 옵션없음: 'none', 없음: 'none' })[pasteAlias(value)] || '';
+}
+
+/** 붙여넣은 필수값을 화면 적용 전의 안전한 상태로만 분류한다. */
+export function parseRequiredValuePaste(input, {
+  existingValues = {},
+  supportedKeys = REQUIRED_VALUE_PASTE_KEYS,
+} = {}) {
+  const allowed = new Set(supportedKeys);
+  const existing = record(existingValues);
+  const seen = new Set();
+  const rows = [];
+  const applicableValues = {};
+  for (const [index, source] of String(input || '').split(/\r?\n/u).entries()) {
+    const line = source.trim();
+    if (!line) continue;
+    const cells = line.includes('\t') ? line.split('\t') : null;
+    const colon = cells ? -1 : line.indexOf(':');
+    const field = cells ? text(cells[0]) : text(line.slice(0, colon));
+    const malformed = !field || (cells ? cells.length !== 2 : colon < 1);
+    const rawValue = malformed ? '' : (cells ? text(cells[1]) : text(line.slice(colon + 1)));
+    const key = REQUIRED_VALUE_ALIASES[pasteAlias(field)] || '';
+    const value = key ? normalizePasteValue(key, rawValue) : rawValue;
+    let status = 'recognized';
+    if (malformed || !value) status = 'malformed';
+    else if (!key || !allowed.has(key)) status = 'unknown';
+    else if (text(existing[key]) || (key === 'originCountry' && text(existing.origin))) status = 'locked';
+    else if (seen.has(key)) status = 'duplicate';
+    else {
+      seen.add(key);
+      applicableValues[key] = value;
+    }
+    rows.push({ line: index + 1, field, key, value, status });
+  }
+  return { rows, applicableValues };
+}
 
 function valueLabel(key) {
   return PRODUCT_VALUE_LABELS[text(key)] || text(key);
@@ -619,16 +696,21 @@ export function buildBatchSelectionRequest(board, { candidateId = '', mode = 'ma
 }
 
 /** 현재 응답과 새 projection 모두 고른 후보를 확인한 뒤에만 다음 대기 칸을 연다. */
-export function advanceManualSelectionCursor({ board, current, selection, receipt } = {}) {
+export function advanceManualSelectionCursor({
+  board, current, selection, receipt, baselineRevision, currentRevision,
+} = {}) {
   const cursor = record(current);
   const request = record(selection);
   const response = record(receipt);
   const jobId = text(request.jobId);
   const stageKey = text(request.stageKey);
   const candidateId = text(request.candidateId);
+  const baseline = Number(baselineRevision);
+  const revision = Number(currentRevision);
   const currentCell = { jobId: text(cursor.jobId), stageKey: text(cursor.stageKey) };
   if (!jobId || !stageKey || !candidateId
     || currentCell.jobId !== jobId || currentCell.stageKey !== stageKey
+    || !Number.isInteger(baseline) || baseline < 0 || !Number.isInteger(revision) || revision <= baseline
     || text(response.schema) !== 'factory-batch-selection:v1' || text(response.mode) !== 'manual') return currentCell;
   const matchedReceipt = list(response.results).map(record).some(result => (
     text(result.jobId) === jobId
@@ -642,8 +724,7 @@ export function advanceManualSelectionCursor({ board, current, selection, receip
   const selectedCell = list(record(rows[rowIndex]).cells)
     .map(record)
     .find(cell => text(cell.stageKey) === stageKey);
-  if (!selectedCell || (text(selectedCell.selectedId) !== candidateId
-    && text(selectedCell.reservedCandidateId) !== candidateId)) return currentCell;
+  if (!selectedCell || text(selectedCell.selectedId) !== candidateId) return currentCell;
   const next = rows.slice(rowIndex + 1)
     .map(record)
     .map(row => ({ row, cell: list(row.cells).map(record).find(cell => text(cell.stageKey) === stageKey) }))

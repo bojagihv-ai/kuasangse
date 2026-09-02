@@ -50,6 +50,7 @@ PRODUCT_JOB_INPUT_KEYS = frozenset(
         "mode",
         "source",
         "productName",
+        "detailHint",
         "workfileName",
         "jcode",
         "imageModel",
@@ -88,6 +89,7 @@ PRODUCT_OPTIONAL_VALUE_KEYS = frozenset(
     }
 )
 PRODUCT_VALUE_KEYS = PRODUCT_REQUIRED_VALUE_KEYS | PRODUCT_OPTIONAL_VALUE_KEYS
+PRODUCT_INTAKE_VALUE_KEYS = frozenset({"productName", "detailHint", "sourceKind"})
 CAFE24_REGISTRATION_VALUE_KEYS = frozenset(
     {
         "categoryId",
@@ -1478,10 +1480,10 @@ class FactorySyncBridge:
         조립공장에 넘기지 않은 값이라 실행 중이 아닐 때만 손댄다.
         """
         source = values if isinstance(values, Mapping) else {}
-        unknown = set(source) - PRODUCT_VALUE_KEYS
+        unknown = set(source) - PRODUCT_VALUE_KEYS - PRODUCT_INTAKE_VALUE_KEYS
         if unknown:
             raise FactorySyncError("factory_product_values_invalid")
-        normalized: JsonObject = {}
+        normalized: dict[str, str] = {}
         for key, raw in source.items():
             if raw is None:
                 continue
@@ -1492,17 +1494,48 @@ class FactorySyncBridge:
                 normalized[key] = text_value
         if not normalized:
             raise FactorySyncError("factory_product_values_invalid")
+        source_kind = normalized.pop("sourceKind", None)
+        if source_kind is not None and source_kind not in {"sinhwa-db", "direct"}:
+            raise FactorySyncError("factory_product_values_invalid")
+        product_name = normalized.pop("productName", None)
+        detail_hint = normalized.pop("detailHint", None)
         with self._condition:
             job = self._product_jobs.get(job_id)
             if job is None:
                 raise FactorySyncError("factory_product_job_not_found")
             if job.status == "running" or job.current_order_id:
                 raise FactorySyncError("factory_product_job_busy")
+            updated_source: JsonObject | None = None
+            if source_kind is not None:
+                existing_source = job.payload.get("source")
+                if not isinstance(existing_source, Mapping):
+                    raise FactorySyncError("factory_product_source_invalid")
+                if source_kind == "sinhwa-db":
+                    selection_id = existing_source.get("selectionId")
+                    jcode = job.payload.get("jcode")
+                    if (
+                        not isinstance(selection_id, str)
+                        or not selection_id.strip()
+                        or type(jcode) is not int
+                        or jcode < 1
+                        or selection_id.strip() != str(jcode)
+                    ):
+                        raise FactorySyncError("factory_product_source_invalid")
+                    updated_source = {"kind": "sinhwa-db", "selectionId": selection_id.strip()}
+                else:
+                    updated_source = dict(existing_source)
+                    updated_source["kind"] = "direct"
             with self._product_state_transaction_locked():
                 existing = job.payload.get("requiredValues")
                 merged = dict(existing) if isinstance(existing, Mapping) else {}
                 merged.update(normalized)
                 job.payload["requiredValues"] = merged
+                if product_name is not None:
+                    job.payload["productName"] = product_name
+                if detail_hint is not None:
+                    job.payload["detailHint"] = detail_hint
+                if updated_source is not None:
+                    job.payload["source"] = updated_source
                 public_job = self._public_product_job(job)
                 self._append_event("factory.product.updated", {"job": public_job})
                 self._persist_product_jobs_locked()
@@ -2514,6 +2547,7 @@ class FactorySyncBridge:
                 else {}
             ),
             "productName": job.payload["productName"],
+            "detailHint": str(job.payload.get("detailHint") or ""),
             # 등록에 필요한 값이 투입값에 있는지 화면이 알아야, 없을 때 사람에게 받을 수 있다.
             # 분류 입력이 생기기 전에 투입된 작업은 이 값이 비어 있다.
             "cafe24Values": _cafe24_values_from_job(job.payload),
@@ -3700,6 +3734,7 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
     batch_id = _required_text(payload, "batchId")
     idempotency_key = _required_text(payload, "idempotencyKey")
     product_name = _required_text(payload, "productName")
+    detail_hint = str(payload.get("detailHint") or "").strip()
     workfile_name = str(
         payload.get("workfileName") or f"{product_name}.kuasangse"
     ).strip()
@@ -3717,29 +3752,28 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
     if image_model is not None and image_model not in PRODUCT_IMAGE_MODELS:
         raise FactorySyncError("factory_product_image_model_invalid")
     source = payload.get("source")
-    if not isinstance(source, dict) or source.get("kind") not in {"manual", "sinhwa-db", "workfile"}:
+    if not isinstance(source, dict) or source.get("kind") not in {"manual", "direct", "sinhwa-db", "workfile"}:
         raise FactorySyncError("factory_product_source_invalid")
     source_kind = str(source["kind"])
+    workfile_source_keys = {
+        "kind", "sha256", "revision", "runId", "workspaceId", "productId", "productKey", "inputFingerprint",
+    }
     expected_source_keys = (
         {"kind"}
         if source_kind == "manual"
         else {"kind", "selectionId"}
         if source_kind == "sinhwa-db"
-        else {
-            "kind",
-            "sha256",
-            "revision",
-            "runId",
-            "workspaceId",
-            "productId",
-            "productKey",
-            "inputFingerprint",
-        }
+        else workfile_source_keys
+        if source_kind == "workfile"
+        else set(source)
     )
-    if set(source) != expected_source_keys:
+    if set(source) != expected_source_keys or (
+        source_kind == "direct"
+        and set(source) not in ({"kind"}, {"kind", "selectionId"}, workfile_source_keys)
+    ):
         raise FactorySyncError("factory_product_source_invalid")
     source_revision = source.get("revision")
-    if source_kind == "workfile" and (
+    if source_kind in {"workfile", "direct"} and set(source) == workfile_source_keys and (
         re.fullmatch(r"[a-f0-9]{64}", str(source.get("sha256") or "")) is None
         or type(source_revision) is not int
         or source_revision < 0
@@ -3751,6 +3785,8 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
             "inputFingerprint",
         ))
     ):
+        raise FactorySyncError("factory_product_source_invalid")
+    if source_kind == "direct" and "selectionId" in source and not str(source["selectionId"]).strip():
         raise FactorySyncError("factory_product_source_invalid")
     jcode = payload.get("jcode")
     if source_kind == "sinhwa-db" and (not isinstance(jcode, int) or jcode < 1):
@@ -3806,6 +3842,8 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
         "requiredValues": normalized_required_values,
         "inputImages": normalized_images,
     }
+    if detail_hint:
+        normalized["detailHint"] = detail_hint
     pdp_job_id = payload.get("pdpJobId")
     if pdp_job_id is not None:
         if not isinstance(pdp_job_id, str) or not pdp_job_id.strip():

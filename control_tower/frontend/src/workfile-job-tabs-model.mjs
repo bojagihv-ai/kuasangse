@@ -1,5 +1,16 @@
 import { normalizeFactoryProjection } from './factory-sync-model.mjs?selectedId=4';
 
+const FACTORY_PROJECTION_SCHEMA = 'factory-control-projection:v1';
+const FACTORY_COMMAND_VERSION = 'factory-control-command:v1';
+const FACTORY_STAGE_KEYS = Object.freeze([
+  'representative',
+  'size',
+  'option_color',
+  'general',
+  'sections',
+  'final_detail',
+]);
+
 function record(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -14,6 +25,98 @@ function text(value) {
 
 function firstText(...values) {
   return values.map(text).find(Boolean) || '';
+}
+
+function integer(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function durableCandidate(value) {
+  const source = record(value);
+  const id = firstText(source.id, source.candidateId, source.assetId);
+  if (!id) return null;
+  return {
+    id,
+    assetId: firstText(source.assetId, id),
+    thumbnailUrl: firstText(source.thumbnailUrl, source.thumbnailRef),
+    digest: text(source.digest),
+    source: text(source.source),
+    model: text(source.model),
+    confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : null,
+    rationale: text(source.rationale),
+    receipt: source.receipt && typeof source.receipt === 'object' && !Array.isArray(source.receipt)
+      ? { ...source.receipt }
+      : null,
+  };
+}
+
+function durableStage(value) {
+  const source = record(value);
+  const key = firstText(source.key, source.stageKey);
+  if (!FACTORY_STAGE_KEYS.includes(key)) return null;
+  const candidates = list(source.candidates).map(durableCandidate).filter(Boolean);
+  const selectedId = firstText(source.selectedId, source.selectedCandidateId, list(source.selectedIds)[0]);
+  return {
+    key,
+    status: text(source.status || (selectedId ? 'completed' : candidates.length ? 'waiting_manual' : 'empty')),
+    selectedId: candidates.some(candidate => candidate.id === selectedId) ? selectedId : '',
+    updatedAt: text(source.updatedAt),
+    candidates,
+  };
+}
+
+export function createDurableJobProjection(jobValue, fallbackValue = {}) {
+  const job = record(jobValue);
+  const progress = record(job.progress);
+  const fallback = record(fallbackValue);
+  const fallbackSession = record(fallback.session);
+  const fallbackRegistration = record(fallback.registration);
+  const stages = list(progress.stages).map(durableStage).filter(Boolean);
+  if (!stages.some(stage => stage.candidates.length || stage.selectedId)) return null;
+  const jobId = text(job.jobId);
+  const productName = firstText(job.productName, fallbackSession.productKey);
+  const registrationProgress = record(progress.registration);
+  const productKey = firstText(
+    registrationProgress.productKey,
+    fallbackRegistration.productKey,
+    fallbackSession.productKey,
+    productName,
+  );
+  return normalizeFactoryProjection({
+    schema: FACTORY_PROJECTION_SCHEMA,
+    capabilityVersion: firstText(fallback.capabilityVersion, FACTORY_COMMAND_VERSION),
+    cursor: firstText(fallback.cursor, `job:${jobId}`),
+    sequence: integer(fallback.sequence),
+    connected: false,
+    status: 'blocked',
+    reason: 'factory_session_missing',
+    capturedAt: firstText(progress.updatedAt, fallback.capturedAt),
+    session: {
+      workspaceId: firstText(fallbackSession.workspaceId, job.workspaceId),
+      productId: firstText(fallbackSession.productId, job.productId, registrationProgress.productId),
+      productKey,
+      runId: firstText(fallbackSession.runId, job.runId, job.currentRunId),
+      inputFingerprint: firstText(fallbackSession.inputFingerprint, job.inputFingerprint),
+      revision: integer(fallbackSession.revision, integer(job.revision)),
+      workfileName: firstText(fallbackSession.workfileName, job.workfileName),
+      workfileSource: text(fallbackSession.workfileSource),
+      workfileSha256: firstText(fallbackSession.workfileSha256, job.sourceSha256),
+      workfileBytes: integer(fallbackSession.workfileBytes),
+    },
+    inputs: list(fallback.inputs),
+    stages,
+    progress,
+    registration: {
+      ...fallbackRegistration,
+      ...registrationProgress,
+      jobId: firstText(registrationProgress.jobId, fallbackRegistration.jobId, jobId),
+      productId: firstText(registrationProgress.productId, fallbackRegistration.productId, job.productId),
+      productKey,
+    },
+    receipts: list(fallback.receipts),
+    products: list(fallback.products),
+  });
 }
 
 export function workfileTabIdentity(value) {
@@ -132,7 +235,10 @@ export function createWorkfileJobTabRegistry() {
         && text(job.sourceRunId) === workfileTabIdentity(fileEntry.identity).runId,
       );
       const previous = tabs.get(key) || (sourceMatches ? fileTab : {}) || {};
-      const projectionSnapshot = liveJobId === jobId ? current : previous.projectionSnapshot;
+      const durableProjection = createDurableJobProjection(job, previous.projectionSnapshot);
+      const projectionSnapshot = liveJobId === jobId
+        ? current
+        : durableProjection || previous.projectionSnapshot;
       const identity = projectionSnapshot
         ? workfileTabIdentity(record(projectionSnapshot).session)
         : workfileTabIdentity(previous.identity);

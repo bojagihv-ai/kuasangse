@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const FRONTEND = path.resolve(__dirname, '../../frontend');
 const HTML = path.join(FRONTEND, 'control-tower.html');
 const MODULE = path.join(FRONTEND, 'src', 'production-workbench.mjs');
+const MODEL = path.join(FRONTEND, 'src', 'production-workbench-model.mjs');
 
 function projection(overrides = {}) {
   return {
@@ -52,6 +53,75 @@ function projection(overrides = {}) {
   };
 }
 
+test('assembly workbench derives exactly seven grouped operator steps without a candidate fallback', async () => {
+  const model = await import(`${pathToFileURL(MODEL).href}?assembly-steps=${Date.now()}`);
+  assert.deepEqual(model.ASSEMBLY_WORKBENCH_STEPS.map(step => step.label), [
+    '시작', 'DB 확정', '필수값', '경쟁사', '생성컷 선택', '섹션 생성', '전송',
+  ]);
+
+  const cases = [
+    [{ stageKey: 'intake', status: 'queued' }, {}, 'start'],
+    [{ stageKey: 'product_matching', status: 'blocked' }, {}, 'db'],
+    [{ stageKey: 'required_values', status: 'blocked' }, { inputs: [{ key: 'required_values', missing: ['소재'] }] }, 'required'],
+    [{ stageKey: 'competitors', status: 'running' }, {}, 'competitors'],
+    [{ stageKey: 'option_color', status: 'waiting_manual' }, { stages: [{ key: 'option_color', candidates: [{ id: 'option-a' }], selectedId: '' }] }, 'cuts'],
+    [{ stageKey: 'final_detail', status: 'running' }, { stages: [{ key: 'sections', candidates: [{ id: 'section-a' }], selectedId: 'section-a' }] }, 'sections'],
+    [{ stageKey: 'final_detail', status: 'completed' }, { registration: { status: 'approval_required', blockers: ['approval'] } }, 'send'],
+  ];
+  for (const [job, current, expected] of cases) {
+    assert.equal(model.deriveAssemblyWorkbench(current, job).currentStep.key, expected);
+  }
+
+  const cuts = model.deriveAssemblyWorkbench({
+    stages: [
+      { key: 'representative', candidates: [{ id: 'rep-a' }], selectedId: 'rep-a' },
+      { key: 'size', candidates: [{ id: 'size-a' }, { id: 'size-b' }], selectedId: '' },
+      { key: 'option_color', candidates: [], selectedId: '' },
+      { key: 'general', candidates: [{ id: 'general-a' }], selectedId: 'general-a' },
+    ],
+  }, { stageKey: 'size', status: 'waiting_manual' });
+  const grouped = cuts.steps.find(step => step.key === 'cuts');
+  assert.deepEqual(grouped.groups.map(group => [group.key, group.candidateCount, group.selectedCount]), [
+    ['representative', 1, 1], ['size', 2, 0], ['option_color', 0, 0], ['general', 1, 1],
+  ]);
+  assert.equal(grouped.state, 'manual');
+  assert.equal(grouped.blocker, 'A컷 선택 필요');
+});
+
+test('durable waiting job keeps saved candidates visible while factory is disconnected', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?durable-job-candidates=${Date.now()}`);
+  const registry = workbench.createWorkfileJobTabRegistry();
+  const disconnected = workbench.disconnectedFactoryProjection('factory_session_missing');
+  const job = {
+    jobId: 'factory-job-durable-candidates',
+    productName: '저장 후보 보존 제품',
+    status: 'waiting_manual',
+    stageKey: 'sections',
+    mode: 'manual',
+    progress: {
+      stageKey: 'sections',
+      stages: [{
+        key: 'sections',
+        status: 'waiting_manual',
+        candidates: [{
+          id: 'section-saved-a',
+          assetId: 'asset:section:saved-a',
+          thumbnailUrl: '/api/assets/section-saved-a.svg',
+        }],
+      }],
+    },
+  };
+
+  registry.syncJobs([job], disconnected);
+  const savedProjection = registry.projectionFor('job:factory-job-durable-candidates');
+
+  assert.equal(savedProjection.connected, false);
+  assert.equal(savedProjection.registration.jobId, job.jobId);
+  assert.equal(savedProjection.stages[0].key, 'sections');
+  assert.equal(savedProjection.stages[0].candidates[0].id, 'section-saved-a');
+  assert.equal(registry.active().remainingCount, 1);
+});
+
 test('factory workbench exposes one compact API-driven master-detail surface', () => {
   const html = fs.readFileSync(HTML, 'utf8');
 
@@ -89,14 +159,18 @@ test('Cafe24 영수증과 연결된 작업파일 이름을 한 묶음으로 만�
   const current = projection();
   const receipt = {
     schema: 'factory-cafe24-terminal-publication-receipt:v1',
+    status: 'staged_verified',
     receiptId: 'receipt-alpha',
     jobId: 'job-7',
+    productId: 'cafe24:3001',
     productName: '방울수저집',
     remoteProductNo: '3000',
     productCode: 'P00000ALPHA',
     sourceWorkfileName: '방울수저집.kuasangse',
     mallId: 'bojagi1928',
     variantCount: 4,
+    remoteReadbackDigest: 'sha256:readback-alpha',
+    remoteReadback: { productNo: '3000', productName: '방울수저집', mallId: 'bojagi1928' },
   };
   current.registration.publicationReceipt = receipt;
 
@@ -137,15 +211,20 @@ test('workbench consumes factory snapshot and SSE and uses only registered BFF c
   assert.match(source, /등록 결과 재확인 · 재등록 없음/);
   assert.match(source, /FACTORY_CONTROL_EVENT_VERSION/);
   assert.match(source, /buildACutSelectionCommand/);
-  assert.match(source, /projection = reconcileFactoryProjectionForSameWork\(projection, nextValue\);/);
+  assert.match(source, /projection = preserveCurrentProductProjection\(projection, nextValue\);/);
+  assert.match(source, /const reconciled = reconcileFactoryProjectionForSameWork\(current, incoming\);/);
   assert.doesNotMatch(source, /\/api\/automation\/decisions/);
   assert.match(source, /decisionMode/);
   assert.match(source, /expectedProjectionCursor/);
-  assert.doesNotMatch(source, /image\.loading = ['"]lazy['"]/);
   assert.equal(
     (source.match(/image\.loading = ['"]eager['"]/g) || []).length,
+    1,
+    '현재 오른쪽 작업자료 카드만 즉시 로드합니다.',
+  );
+  assert.equal(
+    (source.match(/(?:image|preview)\.loading = ['"]lazy['"]/g) || []).length,
     3,
-    '생산관제의 이력·경쟁사·A컷 썸네일은 내부 스크롤에서 지연 로드되면 안 됩니다.',
+    '경쟁사·A컷·근거 썸네일은 주 스크롤에서 지연 로드됩니다.',
   );
   assert.match(source, /CANDIDATE_PAGE_SIZE = 24/);
   assert.doesNotMatch(source, /factoryState|window\.state|app-core-0[56]|localStorage|indexedDB|querySelector\([^)]*factory/i);
@@ -341,6 +420,46 @@ test('transient state refresh failure keeps a usable production projection visib
     source,
     /async function refreshState\(\) \{[\s\S]*?catch \(error\) \{[\s\S]*?if \(!projection\.connected\) setProjection\(disconnectedFactoryProjection/,
   );
+});
+
+test('transient empty queue refresh keeps the existing operator rows and reports degradation', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?queue-refresh-retention=${Date.now()}`);
+  const alpha = { jobId: 'factory-job-alpha', productName: '보존 제품', status: 'waiting_manual' };
+  const beta = { jobId: 'factory-job-beta', productName: '새 제품', status: 'running' };
+  assert.equal(typeof workbench.reconcileOperatorQueueRefresh, 'function');
+
+  const seeded = workbench.reconcileOperatorQueueRefresh([], { jobs: [alpha, beta] });
+  const valid = workbench.reconcileOperatorQueueRefresh(seeded.jobs, { jobs: [beta] });
+  const empty = workbench.reconcileOperatorQueueRefresh(valid.jobs, { jobs: [] });
+  const repeated = workbench.reconcileOperatorQueueRefresh(empty.jobs, { jobs: [] });
+  const malformed = workbench.reconcileOperatorQueueRefresh(repeated.jobs, { jobs: [{ jobId: {} }] });
+  const failed = workbench.reconcileOperatorQueueRefresh(malformed.jobs, null, 'factory_queue_unavailable');
+  const a = workbench.reconcileOperatorQueueRefresh([], { jobs: [alpha] });
+  const b = workbench.reconcileOperatorQueueRefresh(a.jobs, { jobs: [beta] });
+  const bAfterEmpty = workbench.reconcileOperatorQueueRefresh(b.jobs, { jobs: [] });
+  const aAgain = workbench.reconcileOperatorQueueRefresh(bAfterEmpty.jobs, { jobs: [alpha] });
+
+  assert.deepEqual(valid.jobs.map(job => job.jobId), ['factory-job-beta']);
+  assert.deepEqual(empty.jobs.map(job => job.jobId), ['factory-job-beta']);
+  assert.equal(empty.jobs[0], beta);
+  assert.equal(empty.error, 'factory_queue_empty_transient');
+  assert.deepEqual(repeated.jobs.map(job => job.jobId), ['factory-job-beta']);
+  assert.equal(repeated.error, 'factory_queue_empty_transient');
+  assert.deepEqual(malformed.jobs.map(job => job.jobId), ['factory-job-beta']);
+  assert.equal(malformed.error, 'factory_queue_malformed_response');
+  assert.deepEqual(failed.jobs.map(job => job.jobId), ['factory-job-beta']);
+  assert.equal(failed.error, 'factory_queue_unavailable');
+  assert.deepEqual([a.jobs[0].jobId, b.jobs[0].jobId, bAfterEmpty.jobs[0].jobId, aAgain.jobs[0].jobId], [
+    'factory-job-alpha', 'factory-job-beta', 'factory-job-beta', 'factory-job-alpha',
+  ]);
+  assert.equal(bAfterEmpty.jobs[0], beta);
+  assert.equal(aAgain.jobs[0], alpha);
+  const rendered = workbench.projectFactoryQueueRenderModel(projection(), empty.jobs, { apiError: empty.error });
+  assert.equal(rendered.queue.length, 1);
+  assert.equal(rendered.activeJob.jobId, 'factory-job-beta');
+  assert.equal(rendered.connectivity.state, 'degraded');
+  assert.match(rendered.connectivity.detail, /마지막 작업 큐 유지/);
+  assert.notEqual(rendered.connectivity.state, 'connected');
 });
 
 test('cold state rejection keeps blocked durable Product B in the degraded queue detail', async () => {
@@ -633,6 +752,24 @@ test('candidate thumbnail projection uses a placeholder for empty and invalid UR
   );
 });
 
+test('operator queue filters map durable states to the four operator labels', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?queue-filter=${Date.now()}`);
+  const cases = [
+    ['waiting_manual', 'selection', '선택 필요'],
+    ['blocked', 'blocked', '차단'],
+    ['running', 'running', '진행 중'],
+    ['queued', 'running', '진행 중'],
+    ['completed', 'completed', '완료'],
+  ];
+
+  for (const [status, key, label] of cases) {
+    assert.deepEqual(workbench.operatorQueueState({ status }), { key, label });
+    assert.equal(workbench.queueFilterMatches({ status }, key), true);
+  }
+  assert.equal(workbench.queueFilterMatches({ status: 'blocked' }, 'completed'), false);
+  assert.equal(workbench.queueFilterMatches({ status: 'blocked' }, 'all'), true);
+});
+
 test('Cafe24 staging payload binds actual factory identity and F/F/F defaults', async () => {
   const moduleUrl = `${pathToFileURL(MODULE).href}?test=${Date.now()}-${Math.random()}`;
   const { buildCafe24StagingPayload } = await import(moduleUrl);
@@ -694,6 +831,22 @@ test('registration execution preserves the target checkbox across refreshes and 
   assert.doesNotMatch(source, /approvalToken[^]*textContent\s*=/);
 });
 
+test('live Cafe24 registration actions keep their canonical handlers', () => {
+  const source = fs.readFileSync(MODULE, 'utf8');
+  const handlers = [
+    ['cafe24-preflight', 'runPreflight'],
+    ['cafe24-preview', 'requestApproval'],
+    ['cafe24-approve', 'approveTarget'],
+    ['cafe24-execute', 'executeRegistration'],
+    ['cafe24-reconcile', 'reconcileRegistration'],
+  ];
+
+  for (const [action, handler] of handlers) {
+    assert.match(source, new RegExp(`dataset\\.action = '${action}'[\\s\\S]*addEventListener\\('click', \\(\\) => void ${handler}\\(`));
+  }
+  assert.match(source, /confirmInput\.dataset\.action = 'confirm-cafe24-target'[\s\S]*confirmInput\.addEventListener\('change'/);
+});
+
 test('operator queue does not replace a focused action while the user activates it', () => {
   const source = fs.readFileSync(MODULE, 'utf8');
 
@@ -722,7 +875,7 @@ test('Cafe24 등록 대상은 조립공장 update 모드를 기존 상품 수정
   const workbench = await import(`${pathToFileURL(MODULE).href}?registration-mode=${Date.now()}`);
   const source = fs.readFileSync(MODULE, 'utf8');
 
-  assert.match(source, /labelledValue\('Cafe24 등록 방식', cafe24RegistrationLabel/);
+  assert.match(source, /labelledValue\('Cafe24 등록 방식', publication\.registrationMode/);
   assert.equal(
     workbench.cafe24RegistrationTargetLabel({ mode: 'update', productId: 'cafe24:3011' }, {}),
     '기존 상품 #3011 수정',

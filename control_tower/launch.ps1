@@ -160,9 +160,12 @@ function Test-ControlTowerBackend {
         if ($factoryState.expectedWorkerBuildId -ne $ExpectedWorkerBuildId) {
             return $false
         }
-        $jobs = Invoke-WebRequest -Uri $BackendJobsUrl -Method Get -UseBasicParsing -TimeoutSec 4
+        $corsHeaders = @{ Origin = "http://127.0.0.1:$FrontendPort" }
+        $jobs = Invoke-WebRequest -Uri $BackendJobsUrl -Method Get -Headers $corsHeaders -UseBasicParsing -TimeoutSec 4
         $reviews = Invoke-WebRequest -Uri $BackendReviewsUrl -Method Get -UseBasicParsing -TimeoutSec 4
-        return $jobs.StatusCode -eq 200 -and $reviews.StatusCode -eq 200
+        return $jobs.StatusCode -eq 200 -and
+            $jobs.Headers["Access-Control-Allow-Origin"] -eq "http://127.0.0.1:$FrontendPort" -and
+            $reviews.StatusCode -eq 200
     }
     catch {
         return $false

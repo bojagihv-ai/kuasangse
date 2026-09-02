@@ -208,6 +208,64 @@ def test_factory_history_asset_route_resolves_current_v2_manifest_image_path(tmp
     assert thumbnail_response.data
 
 
+def test_factory_history_preserves_final_detail_candidate_asset_id(tmp_path: Path) -> None:
+    workspace_id = "batch:job-final"
+    candidate_id = "factory_detail_exact_candidate"
+    cache_root = tmp_path / "cache"
+    archive_root = tmp_path / "local-archive"
+    workfile_dir = archive_root / "workfiles" / f"batch_job-final__{hashlib.sha256(workspace_id.encode()).hexdigest()[:12]}"
+    image_path = workfile_dir / "assets" / "상품" / "run-final" / "14_OUTPUT_최종선택" / "detail.png"
+    image_path.parent.mkdir(parents=True)
+    Image.new("RGB", (8, 6), (80, 140, 220)).save(image_path, format="PNG")
+    (workfile_dir / "manifest.json").write_text(
+        json.dumps({
+            "version": 2,
+            "workspaceId": workspace_id,
+            "assets": [{
+                "assetId": candidate_id,
+                "productKey": "상품",
+                "currentRunId": "run-final",
+                "category": "14_OUTPUT_최종선택",
+                "stageId": "final_detail",
+                "title": "최종 상세 후보",
+                "contentHash": "final-detail-hash",
+                "files": {"imagePath": str(image_path)},
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    class HistoryFactory:
+        def product_job_context(self, job_id: str) -> JsonObject:
+            assert job_id == "job-final"
+            return {
+                "job": {},
+                "payload": {"productName": "상품", "inputImages": []},
+                "checkpoint": {
+                    "projectId": workspace_id,
+                    "productKey": "상품",
+                    "runId": "run-final",
+                    "revision": 8,
+                },
+            }
+
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(cache_root)})
+    client = create_app(
+        config,
+        pdp_api=FakePdpApi(),
+        cafe24_bridge=FakeCafe24Bridge(),
+        factory_sync_bridge=HistoryFactory(),
+    ).test_client()
+
+    response = client.get("/api/factory/jobs/job-final/history")
+
+    assert response.status_code == 200
+    asset = response.get_json()["workBundle"]["assets"][0]
+    assert asset["factoryStageKey"] == "final_detail"
+    assert asset["id"].startswith("archive-")
+    assert asset["storedAssetId"] == candidate_id
+
+
 def test_factory_history_route_canonicalizes_work_bundle_key_while_preserving_raw_workspace_id(tmp_path: Path) -> None:
     # Given: factory checkpoint의 raw workspace identity와 일치하는 보관소 manifest가 있다.
     workspace_id = "batch:job-1"

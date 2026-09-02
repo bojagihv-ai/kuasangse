@@ -47,7 +47,9 @@ export function buildOperatorQueueRow(jobValue, index = 0) {
     orderLabel: String(index + 1).padStart(2, '0'),
     stepLabel: `${stageIndex} / ${STAGES.length}단계`,
     stageLabel,
-    modeLabel: waitingForSelection ? '수동 선택' : mode === 'auto' ? '자동 진행' : '수동 진행',
+    modeLabel: waitingForSelection
+      ? mode === 'auto' ? '자동 진행 후 수동 선택' : '수동 선택'
+      : mode === 'auto' ? '자동 진행' : '수동 진행',
     stateLabel: labels.stateLabel,
     actionLabel: labels.actionLabel,
     needsSelection: waitingForSelection,

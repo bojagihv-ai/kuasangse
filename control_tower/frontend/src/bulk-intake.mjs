@@ -412,7 +412,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   const bulkBar = element('div', 'bulk-batch-bar');
 
   const actions = element('div', 'bulk-actions');
-  const submit = element('button', 'board-action primary', '투입');
+  const submit = element('button', 'board-action primary', '작업 큐에 투입');
   submit.type = 'button';
   submit.dataset.action = 'submit';
   const reset = element('button', 'board-action ghost', '고른 파일 비우기');
@@ -1198,7 +1198,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   }
 
   function render() {
-    submit.textContent = plan.ready ? `${plan.ready}건 투입` : '투입';
+    submit.textContent = plan.ready ? `작업 큐에 ${plan.ready}건 투입` : '작업 큐에 투입';
     submit.disabled = busy || plan.ready === 0;
     reset.disabled = busy || (!grouped.products.length && !csvRows.length);
     // 막힌 건이 있으면 그것부터 말한다. 무엇을 채워야 버튼이 열리는지 모르면
@@ -1246,8 +1246,15 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
           mode: policySnapshot?.locked === true ? 'auto' : 'manual',
           policySnapshot,
         });
-        await requestWithDeadline('/api/factory/jobs', { method: 'POST', body: JSON.stringify(payload) });
-        results.push({ productName: entry.productName, status: 'queued' });
+        const queued = await requestWithDeadline('/api/factory/jobs', { method: 'POST', body: JSON.stringify(payload) });
+        const queuedJob = queued?.job && typeof queued.job === 'object' && !Array.isArray(queued.job)
+          ? queued.job
+          : {};
+        results.push({
+          productName: entry.productName,
+          jobId: String(queuedJob.jobId || ''),
+          status: 'queued',
+        });
       } catch (error) {
         results.push({
           productName: entry.productName,
@@ -1272,7 +1279,17 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     if (summary.queued) {
       grouped = { products: [], skipped: [] };
       imageInput.value = '';
-      window.dispatchEvent(new CustomEvent('control-tower:job-created'));
+      const jobIds = results
+        .filter(item => item.status === 'queued')
+        .map(item => String(item.jobId || ''))
+        .filter(Boolean);
+      window.dispatchEvent(new CustomEvent('control-tower:job-created', {
+        detail: {
+          jobIds,
+          factoryJobIds: jobIds,
+          productNames: results.filter(item => item.status === 'queued').map(item => item.productName),
+        },
+      }));
     }
     rebuild();
   }

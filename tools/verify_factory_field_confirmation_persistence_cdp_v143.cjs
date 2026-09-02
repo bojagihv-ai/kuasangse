@@ -37,7 +37,7 @@ async function main() {
     window.state.currentProjectCreatedAt = Date.now();
     window.state.productName = productName;
     window.state.factory = window.normalizeFactoryState({});
-    const factory = window.factoryState();
+    let factory = window.factoryState();
     window.factoryStampWorkspaceIdentity(factory, { projectId, projectName: productName, createdAt: window.state.currentProjectCreatedAt });
     factory.product.productName = productName;
     factory.product.userProductName = productName;
@@ -143,14 +143,42 @@ async function main() {
       selectedDb: factory.product.selectedDbCandidateKey || '',
       cafe24Count: factory.product.cafe24Candidates?.length || 0,
     };
-    factory.product.confirmedDb = { product_name: productName, usage: '이전 확정 DB 사용용도' };
-    factory.product.dbCandidates = [{ key: 'old-db-candidate-v143', product_name: productName, usage: '이전 DB 후보 사용용도' }];
-    factory.product.cafe24Candidates = [{ key: 'old-cafe24-candidate-v143', product_name: productName, usage: '이전 Cafe24 후보 사용용도' }];
+    setAndConfirm('usage', '선물 포장, 답례품');
+    setAndConfirm('width_mm', '4.8cm');
+    setAndConfirm('depth_mm', '23cm');
+    setAndConfirm('weight', '5.3g');
+    factory.product.confirmedDb = { id: 'old-db-candidate-v143', product_name: productName, usage: '이전 확정 DB 사용용도' };
+    factory.product.dbCandidates = [{ id: 'old-db-candidate-v143', jcode: 'old-db-candidate-v143', product_name: productName, usage: '이전 DB 후보 사용용도' }];
+    factory.product.cafe24Candidates = [{ product_no: 'old-cafe24-candidate-v143', product_name: productName, usage: '이전 Cafe24 후보 사용용도' }];
     factory.product.selectedDbCandidateKey = 'old-db-candidate-v143';
     factory.product.selectedCafe24CandidateKey = 'old-cafe24-candidate-v143';
-    window.factorySetCurrentProductIdentity('다른 제품', { factory, syncDom: false, syncFinal: false });
-    const switchedSummary = window.factoryAutomationReviewSummary(factory, window.factoryAutomationCounts(factory));
-    const switchedUsage = switchedSummary.fields.find(field => field.id === 'usage') || {};
+    const candidateBaseline = {
+      confirmedDb: window.cloneData(factory.product.confirmedDb),
+      dbCandidates: window.cloneData(factory.product.dbCandidates),
+      cafe24Candidates: window.cloneData(factory.product.cafe24Candidates),
+      selectedDbCandidate: factory.product.selectedDbCandidateKey,
+      selectedCafe24Candidate: factory.product.selectedCafe24CandidateKey,
+    };
+    window.factorySetCurrentProductIdentity('다른 제품', { syncDom: false, syncFinal: false });
+    factory = window.factoryState();
+    const correctedSummary = window.factoryAutomationReviewSummary(factory, window.factoryAutomationCounts(factory));
+    const correctedUsage = correctedSummary.fields.find(field => field.id === 'usage') || {};
+    const correctedManualValues = Object.fromEntries(
+      ['usage', 'width_mm', 'depth_mm', 'weight'].map(fieldId => [
+        fieldId,
+        factory.product.dbFieldSettings?.[fieldId]?.manualValue || '',
+      ]),
+    );
+    const blankNameResult = window.factorySetCurrentProductIdentity('', { syncDom: false, syncFinal: false });
+    const correctedPreservation = {
+      reviewUsage: factory.automation.fieldReview?.usage?.value || '',
+      confirmedDb: window.cloneData(factory.product.confirmedDb),
+      dbCandidates: factory.product.dbCandidates?.length || 0,
+      cafe24Candidates: factory.product.cafe24Candidates?.length || 0,
+      selectedDbCandidate: factory.product.selectedDbCandidateKey || '',
+      selectedCafe24Candidate: factory.product.selectedCafe24CandidateKey || '',
+      blankNamePreserved: blankNameResult === window.factoryCurrentProductKey(factory),
+    };
     factory.automation.sizeFieldDrafts = {};
     factory.product.dbSizeManualByScope = {};
     ['size', 'dimensions', 'dimension', 'jsize', 'width_mm', 'width', 'product_width', 'depth_mm', 'depth', 'product_depth', 'height', 'product_height', 'weight', 'product_weight_g', 'product_weight'].forEach(key => {
@@ -170,6 +198,13 @@ async function main() {
       dimensions: '가로 12cm x 세로 24cm',
     };
     const scopedPersistedWidth = window.factoryDbSizeManualValueForField('width_mm', factory).value || '';
+    const previousWorkspaceScope = window.getCurrentLastWorkWorkspaceScope();
+    await window.resetActiveWorkspaceDocumentCore();
+    const newWorkFactory = window.factoryState();
+    const newWorkSummary = window.factoryAutomationReviewSummary(newWorkFactory, window.factoryAutomationCounts(newWorkFactory));
+    const newWorkUsage = newWorkSummary.fields.find(field => field.id === 'usage') || {};
+    const newWorkWorkspaceScope = window.getCurrentLastWorkWorkspaceScope();
+    window.completeWorkspaceBlankResetBoundary();
     return {
       usageStatus: usage.status || '',
       usageValue: usage.value || '',
@@ -197,16 +232,22 @@ async function main() {
       foreignInputUsageValue: foreignInputUsage.value || '',
       preserveCafe24Proof,
       preserveDbProof,
-      switchedUsageStatus: switchedUsage.status || '',
-      switchedUsageValue: switchedUsage.value || '',
-      reviewAfterProductSwitch: factory.automation.fieldReview?.usage?.value || '',
-      confirmedDbAfterProductSwitch: factory.product.confirmedDb,
-      dbCandidatesAfterProductSwitch: factory.product.dbCandidates?.length || 0,
-      cafe24CandidatesAfterProductSwitch: factory.product.cafe24Candidates?.length || 0,
-      selectedDbCandidateAfterProductSwitch: factory.product.selectedDbCandidateKey || '',
-      selectedCafe24CandidateAfterProductSwitch: factory.product.selectedCafe24CandidateKey || '',
+      correctedUsageStatus: correctedUsage.status || '',
+      correctedUsageValue: correctedUsage.value || '',
+      correctedManualValues,
+      blankNameResult,
+      candidateBaseline,
+      correctedPreservation,
       stalePersistedWidth,
       scopedPersistedWidth,
+      previousWorkspaceScope,
+      newWorkWorkspaceScope,
+      newWorkUsageStatus: newWorkUsage.status || '',
+      newWorkUsageValue: newWorkUsage.value || '',
+      newWorkReviewUsage: newWorkFactory.automation?.fieldReview?.usage?.value || '',
+      newWorkConfirmedDb: newWorkFactory.product?.confirmedDb || null,
+      newWorkDbCandidates: newWorkFactory.product?.dbCandidates?.length || 0,
+      newWorkCafe24Candidates: newWorkFactory.product?.cafe24Candidates?.length || 0,
     };
   })()`);
 
@@ -228,10 +269,16 @@ async function main() {
     { ok: proof.foreignInputUsageStatus === 'missing' && proof.foreignInputUsageValue === '', message: '다른 입력 이미지에 이전 작업의 사용용도가 섞였습니다.' },
     { ok: proof.preserveCafe24Proof.dbCount === 0 && proof.preserveCafe24Proof.cafe24Count === 1 && proof.preserveCafe24Proof.selectedCafe24 === 'preserve-cafe24-candidate-v143', message: `DB 후보 확정용 초기화가 Cafe24 후보를 보존하지 못했습니다: ${JSON.stringify(proof.preserveCafe24Proof)}` },
     { ok: proof.preserveDbProof.confirmedDbUsage === 'DB 확정 사용용도' && proof.preserveDbProof.dbCount === 1 && proof.preserveDbProof.selectedDb === 'preserve-db-candidate-v143' && proof.preserveDbProof.cafe24Count === 0, message: `Cafe24 후보 확정용 초기화가 DB 후보를 보존하지 못했습니다: ${JSON.stringify(proof.preserveDbProof)}` },
-    { ok: proof.switchedUsageStatus === 'missing' && proof.switchedUsageValue === '' && proof.reviewAfterProductSwitch === '', message: '다른 제품에 이전 제품의 사용용도가 섞였습니다.' },
-    { ok: proof.confirmedDbAfterProductSwitch === null && proof.dbCandidatesAfterProductSwitch === 0 && proof.cafe24CandidatesAfterProductSwitch === 0 && !proof.selectedDbCandidateAfterProductSwitch && !proof.selectedCafe24CandidateAfterProductSwitch, message: '다른 제품에 이전 확정 DB 또는 후보 선택값이 남았습니다.' },
+    { ok: proof.correctedUsageStatus === 'done' && proof.correctedUsageValue === '선물 포장, 답례품' && proof.correctedPreservation.reviewUsage === '선물 포장, 답례품', message: `같은 작업의 제품명 수정이 사용용도를 지웠습니다: ${JSON.stringify(proof)}` },
+    { ok: JSON.stringify(proof.correctedManualValues) === JSON.stringify({ usage: '선물 포장, 답례품', width_mm: '4.8cm', depth_mm: '23cm', weight: '5.3g' }), message: `같은 작업의 제품명 수정이 수동 필드를 지웠습니다: ${JSON.stringify(proof.correctedManualValues)}` },
+    { ok: proof.candidateBaseline.confirmedDb?.usage === '이전 확정 DB 사용용도' && proof.candidateBaseline.dbCandidates?.length === 1 && proof.candidateBaseline.cafe24Candidates?.length === 1, message: `이름 수정 전 후보 PIN이 유효하지 않습니다: ${JSON.stringify(proof.candidateBaseline)}` },
+    { ok: Object.entries(proof.candidateBaseline.confirmedDb).every(([key, value]) => proof.correctedPreservation.confirmedDb?.[key] === value) && proof.correctedPreservation.confirmedDb?.reviewProductScopeKey && proof.correctedPreservation.dbCandidates === 1 && proof.correctedPreservation.cafe24Candidates === 1 && proof.correctedPreservation.selectedDbCandidate === proof.candidateBaseline.selectedDbCandidate && proof.correctedPreservation.selectedCafe24Candidate === proof.candidateBaseline.selectedCafe24Candidate && proof.correctedPreservation.blankNamePreserved, message: `같은 작업의 제품명 수정이 이전 확정 DB 또는 후보 선택값을 지웠습니다: ${JSON.stringify({ before: proof.candidateBaseline, after: proof.correctedPreservation })}` },
+    { ok: proof.correctedPreservation.blankNamePreserved && proof.correctedUsageValue === '선물 포장, 답례품', message: `빈 제품명 입력이 현재 작업을 훼손했습니다: ${proof.blankNameResult}` },
     { ok: proof.stalePersistedWidth === '', message: `identity 없는 오래된 분석/payload 사이즈가 현재 작업에 복구됐습니다: ${proof.stalePersistedWidth}` },
     { ok: proof.scopedPersistedWidth === '12cm', message: `현재 작업 scope가 찍힌 분석 사이즈가 복구되지 않았습니다: ${proof.scopedPersistedWidth}` },
+    { ok: proof.newWorkWorkspaceScope && proof.newWorkWorkspaceScope !== proof.previousWorkspaceScope, message: `새 작업이 별도 workspace scope를 만들지 않았습니다: ${JSON.stringify({ before: proof.previousWorkspaceScope, after: proof.newWorkWorkspaceScope })}` },
+    { ok: proof.newWorkUsageStatus === 'missing' && proof.newWorkUsageValue === '' && proof.newWorkReviewUsage === '', message: '명시적 새 작업에 이전 제품의 사용용도가 섞였습니다.' },
+    { ok: proof.newWorkConfirmedDb === null && proof.newWorkDbCandidates === 0 && proof.newWorkCafe24Candidates === 0, message: '명시적 새 작업에 이전 확정 DB 또는 후보 선택값이 남았습니다.' },
   ]);
   const visual = await evaluate(cdp, `(async () => {
     const projectId = 'field_confirmation_persistence_visual_v143';

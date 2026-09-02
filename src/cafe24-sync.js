@@ -6593,8 +6593,8 @@ function factoryClearProductScopedDbManualFields(factory, reason = 'product-chan
   const product = factory.product || {};
   const keepDb = options.preserveDb === true;
   const keepCafe24 = options.preserveCafe24 === true;
+  const savedConfirmedDb = keepDb ? cloneData(product.confirmedDb || null) : null;
   const savedDb = keepDb ? {
-    confirmedDb: cloneData(product.confirmedDb || null),
     dbCandidates: cloneData(product.dbCandidates || []),
     pendingDbCandidates: cloneData(product.pendingDbCandidates || []),
     selectedDbCandidateKey: product.selectedDbCandidateKey || '',
@@ -6661,7 +6661,6 @@ function factoryClearProductScopedDbManualFields(factory, reason = 'product-chan
   product.cafe24DraftProductKey = '';
   product.finalDb = {};
   if (savedDb) {
-    product.confirmedDb = savedDb.confirmedDb;
     product.dbCandidates = savedDb.dbCandidates;
     product.pendingDbCandidates = savedDb.pendingDbCandidates;
     product.selectedDbCandidateKey = savedDb.selectedDbCandidateKey;
@@ -6676,6 +6675,11 @@ function factoryClearProductScopedDbManualFields(factory, reason = 'product-chan
     product.cafe24DraftProductKey = savedCafe24.cafe24DraftProductKey;
   }
   factoryRestoreLockedProductName(factory, lockedProductName);
+  if (keepDb) {
+    product.confirmedDb = savedConfirmedDb && typeof factoryStampReviewScopeOnConfirmed === 'function'
+      ? factoryStampReviewScopeOnConfirmed(savedConfirmedDb, factory)
+      : savedConfirmedDb;
+  }
   if (Object.keys(savedManualFields).length) {
     product.dbFieldSettings = {
       ...(product.dbFieldSettings || {}),

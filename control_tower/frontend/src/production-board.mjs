@@ -10,9 +10,13 @@ import {
   groupResultCuts,
   durationLabel,
   projectProductionBoard,
+  projectWorkerConnectionState,
+  parseRequiredValuePaste,
+  REQUIRED_VALUE_PASTE_KEYS,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=40';
+} from './production-board-model.mjs?parallelBoard=43';
+import { resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=2';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
 // 한 번에 수백 건이 와도 요청은 한 번만 나간다.
@@ -79,7 +83,10 @@ export function mountProductionBoard(runtime, {
 
   let jobs = [];
   let openCell = { jobId: '', stageKey: '' };
+  let pendingManualAdvance = null;
+  let projectionState = null;
   let statusLine = { copy: '병렬 생산 보드를 불러오는 중입니다.', tone: '' };
+  const statusByJob = new Map();
   // busy 는 보드 전체의 버튼을 한꺼번에 잠근다. 그래서 이 깃발이 한 번 걸린 채 남으면
   // 「다시 시도」·「작업 재개」·「Cafe24 등록」이 모두 죽고, 화면은 아무 말도 하지 않는다.
   // 실측 2026-08-31: 카드가 "다음: 다시 시도 누르기" 라고 적어 둔 바로 그 버튼이 잠겨
@@ -138,6 +145,9 @@ export function mountProductionBoard(runtime, {
   // 지금까지 화면에 반영된 이벤트 자리. 스트림은 이 다음부터 듣는다.
   let eventCursor = '0';
   let eventRefreshTimer = null;
+  let focusedSurface = null;
+  let gridHome = null;
+  let statusHome = null;
 
   const grid = element('div', 'board-grid');
   grid.addEventListener('pointerdown', event => {
@@ -178,8 +188,36 @@ export function mountProductionBoard(runtime, {
   );
   root.replaceChildren(heading, connection, summaryBar, headroom, toolbar, statusNode, grid);
 
+  function restoreGrid() {
+    grid.removeEventListener('click', onClick);
+    grid.removeEventListener('change', onChange);
+    if (gridHome?.isConnected) gridHome.replaceWith(grid);
+    if (statusHome?.isConnected) statusHome.replaceWith(statusNode);
+    gridHome = null;
+    statusHome = null;
+    focusedSurface = null;
+    lastBoardSignature = '';
+  }
+
+  function moveGrid(target) {
+    if (grid.parentNode !== target) {
+      if (!gridHome) {
+        gridHome = document.createComment('production-board-grid-home');
+        grid.before(gridHome);
+      }
+      if (!statusHome) {
+        statusHome = document.createComment('production-board-status-home');
+        statusNode.before(statusHome);
+      }
+      target.append(statusNode, grid);
+    }
+    grid.addEventListener('click', onClick);
+    grid.addEventListener('change', onChange);
+  }
+
   function setStatus(copy, tone = '') {
     statusLine = { copy, tone };
+    if (focusedSurface?.jobId) statusByJob.set(focusedSurface.jobId, statusLine);
     renderStatus();
   }
 
@@ -214,6 +252,12 @@ export function mountProductionBoard(runtime, {
       connection.dataset.tone = 'error';
       connection.textContent = '조립공장이 연결되지 않았습니다 · 상세페이지 AI 자동화를 실행하면 멈춘 작업이 다시 흐릅니다.';
       renderWorkerFrontendHint();
+      return;
+    }
+    if (connected === true && projectWorkerConnectionState(projectionState) === 'idle') {
+      connection.hidden = false;
+      connection.dataset.tone = 'neutral';
+      connection.textContent = '조립공장 워커 연결됨 · 현재 작업 없음';
       return;
     }
     const silence = workerSilenceMs();
@@ -315,16 +359,12 @@ export function mountProductionBoard(runtime, {
   { name: 'targetProductNo', label: '수정할 상품번호', placeholder: '기존 상품 수정일 때만 · 예: 3011' },
   { name: 'categoryId', label: '상품분류 번호', placeholder: '비우면 스토어 값을 씁니다' },
   { name: 'salePrice', label: '판매가', placeholder: '예: 2700' },
-  { name: 'supplyPrice', label: '공급가', placeholder: '예: 500' },
+  { name: 'supplyPrice', label: '공급가/원가', placeholder: '예: 500' },
   { name: 'displayStatus', label: '진열 (T/F)', placeholder: 'F = 진열 안 함' },
   { name: 'sellingStatus', label: '판매 (T/F)', placeholder: 'F = 판매 안 함' },
 ]);
 
-  const REQUIRED_VALUE_ORDER = Object.freeze([
-    // 가로·세로가 없으면 사이즈이미지 단계에서 막히므로, 여기서도 채울 수 있어야 한다.
-    'category', 'material', 'originCountry', 'size', 'widthMm', 'depthMm',
-    'salePrice', 'stock', 'usage', 'optionMode',
-  ]);
+  const REQUIRED_VALUE_ORDER = REQUIRED_VALUE_PASTE_KEYS;
 
   async function fileToImage(file, role, ordinal) {
     const dataUrl = await new Promise((resolve, reject) => {
@@ -350,7 +390,7 @@ export function mountProductionBoard(runtime, {
     Object.freeze({ role: 'color-option', key: 'color', title: '색상 옵션 이미지', hint: '이미지마다 색상명을 붙입니다' }),
   ]);
 
-  function renderProductValueForm(row) {
+  function renderProductValueForm(row, { surface = 'all', sourceJob = {} } = {}) {
     // 투입값 한 곳에서 필수값 · 기본 이미지 · 색상 옵션 이미지를 모두 다룬다. 입력·소스
     // 화면으로 되돌아가지 않아도 되게 하는 것이 이 패널의 목적이다.
     const draft = imageDrafts.get(row.jobId) || { base: [], color: [] };
@@ -359,7 +399,7 @@ export function mountProductionBoard(runtime, {
     panel.addEventListener('submit', event => event.preventDefault());
 
     const head = element('div', 'board-candidate-heading');
-    head.append(element('strong', '', row.productName + ' · 투입값'));
+    head.append(element('strong', '', row.productName + (surface === 'required' ? ' · 필수값' : ' · 제품·소스')));
     const missingCount = row.missingRequiredValues.length;
     const badge = element('span', 'factory-pill', missingCount ? '비어 있음 ' + missingCount + '개' : '모두 채워짐');
     badge.dataset.tone = missingCount ? 'attention' : 'ok';
@@ -369,40 +409,150 @@ export function mountProductionBoard(runtime, {
     head.append(button('board-action ghost', '닫기', { action: 'panel-close', panel: 'values' }));
     panel.append(head);
 
-    const values = element('section', 'board-intake-group');
-    values.append(element('p', 'board-intake-group-title', '필수값'));
-    const grid = element('div', 'board-cafe24-fields');
-    const missing = new Set(row.missingRequiredValues);
-    for (const key of REQUIRED_VALUE_ORDER) {
-      const label = element('label', 'board-cafe24-field');
-      const name = element('span', 'board-cafe24-field-label', PRODUCT_VALUE_LABELS[key] || key);
-      if (missing.has(key)) name.dataset.tone = 'attention';
-      label.append(name);
-      if (key === 'optionMode') {
-        const select = document.createElement('select');
-        select.name = key;
-        for (const option of [['', '고르세요'], ['provided', '옵션 있음'], ['none', '옵션 없음']]) {
-          const node = document.createElement('option');
-          node.value = option[0];
-          node.textContent = option[1];
-          select.append(node);
-        }
-        select.value = String(row.requiredValues?.[key] || '');
-        label.append(select);
-      } else {
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.name = key;
-        input.value = String(row.requiredValues?.[key] || '');
-        label.append(input);
+    if (surface !== 'required') {
+      const identity = element('section', 'board-intake-group');
+      identity.append(element('p', 'board-intake-group-title', '제품과 입력 출처'));
+      const grid = element('div', 'board-cafe24-fields');
+      const productName = element('label', 'board-cafe24-field');
+      productName.append(element('span', 'board-cafe24-field-label', '제품명'));
+      const productNameInput = document.createElement('input');
+      productNameInput.type = 'text';
+      productNameInput.name = 'productName';
+      productNameInput.value = String(sourceJob.productName || row.requiredValues?.productName || row.productName || '');
+      productName.append(productNameInput);
+      const hint = element('label', 'board-cafe24-field');
+      hint.append(element('span', 'board-cafe24-field-label', '상세페이지 제작 힌트'));
+      const hintInput = document.createElement('textarea');
+      hintInput.name = 'detailHint';
+      hintInput.rows = 3;
+      hintInput.value = String(sourceJob.detailHint || row.requiredValues?.detailHint || '');
+      hint.append(hintInput);
+      const source = element('label', 'board-cafe24-field');
+      source.append(element('span', 'board-cafe24-field-label', '입력 출처'));
+      const sourceSelect = document.createElement('select');
+      sourceSelect.name = 'sourceKind';
+      for (const option of [['sinhwa-db', '신화사 DB'], ['direct', '직접 입력']]) {
+        const node = document.createElement('option');
+        node.value = option[0];
+        node.textContent = option[1];
+        sourceSelect.append(node);
       }
-      grid.append(label);
+      sourceSelect.value = String(sourceJob.sourceKind || 'direct');
+      source.append(sourceSelect);
+      grid.append(productName, hint, source);
+      identity.append(grid);
+      panel.append(identity);
     }
-    values.append(grid);
-    panel.append(values);
+
+    if (surface !== 'intake') {
+      const values = element('section', 'board-intake-group');
+      values.append(element('p', 'board-intake-group-title', '필수값'));
+      const paste = element('section', 'board-required-paste');
+      const pasteLabel = element('label', 'board-cafe24-field');
+      pasteLabel.append(element('span', 'board-cafe24-field-label', '필수값 붙여넣기'));
+      const pasteInput = document.createElement('textarea');
+      pasteInput.rows = 5;
+      pasteInput.placeholder = '예: 판매가: 12000 또는 소재[TAB]면';
+      pasteLabel.append(pasteInput);
+      const preview = element('div', 'required-paste-preview');
+      preview.hidden = true;
+      preview.setAttribute('aria-live', 'polite');
+      const previewButton = button('board-mini-action', '붙여넣기 확인');
+      const applyButton = button('board-mini-action board-action-primary', '인식한 값 적용');
+      applyButton.disabled = true;
+      let previewText = '';
+      const pasteActions = element('div', 'button-row required-paste-actions');
+      pasteActions.append(previewButton, applyButton);
+      const currentValues = () => Object.fromEntries(REQUIRED_VALUE_ORDER.map(key => {
+        const control = panel.querySelector(`[name="${key}"]`);
+        return [key, String(control?.value || '').trim()];
+      }));
+      const showPreview = result => {
+        preview.replaceChildren();
+        preview.hidden = false;
+        if (!result.rows.length) {
+          preview.append(element('p', 'status-message', '붙여넣은 값이 없습니다.'));
+          applyButton.disabled = true;
+          return;
+        }
+        const list = element('ul', 'required-paste-list');
+        const statusLabel = {
+          recognized: '인식됨', locked: '기존값 유지', duplicate: '중복', unknown: '알 수 없음', malformed: '형식 오류',
+        };
+        for (const item of result.rows) {
+          const rowNode = element('li', 'required-paste-row');
+          rowNode.dataset.requiredPasteRow = 'true';
+          rowNode.dataset.status = item.status;
+          const fieldLabel = PRODUCT_VALUE_LABELS[item.key] || item.field || '필드명 없음';
+          rowNode.append(
+            element('strong', '', `${item.line}. ${fieldLabel}`),
+            element('span', '', item.value || '값 없음'),
+            element('span', 'required-paste-status', statusLabel[item.status]),
+          );
+          list.append(rowNode);
+        }
+        preview.append(list);
+        applyButton.disabled = !Object.keys(result.applicableValues).length;
+      };
+      previewButton.addEventListener('click', () => showPreview(parseRequiredValuePaste(pasteInput.value, {
+        existingValues: currentValues(),
+      })));
+      previewButton.addEventListener('click', () => { previewText = pasteInput.value; });
+      pasteInput.addEventListener('input', () => {
+        previewText = '';
+        preview.hidden = true;
+        preview.replaceChildren();
+        applyButton.disabled = true;
+      });
+      applyButton.addEventListener('click', () => {
+        if (previewText !== pasteInput.value) return;
+        const result = parseRequiredValuePaste(pasteInput.value, { existingValues: currentValues() });
+        let applied = 0;
+        for (const [key, value] of Object.entries(result.applicableValues)) {
+          const control = panel.querySelector(`[name="${key}"]`);
+          if (!control || String(control.value || '').trim()) continue;
+          control.value = value;
+          applied += 1;
+        }
+        showPreview(parseRequiredValuePaste(pasteInput.value, { existingValues: currentValues() }));
+        previewText = pasteInput.value;
+        preview.prepend(element('p', 'status-message', applied ? `${applied}개 값을 빈 입력칸에만 채웠습니다. 저장 전에는 전송하지 않습니다.` : '이미 입력한 값은 그대로 유지했습니다.'));
+      });
+      paste.append(pasteLabel, pasteActions, preview);
+      values.append(paste);
+      const grid = element('div', 'board-cafe24-fields');
+      const missing = new Set(row.missingRequiredValues);
+      for (const key of REQUIRED_VALUE_ORDER) {
+        const label = element('label', 'board-cafe24-field');
+        const name = element('span', 'board-cafe24-field-label', PRODUCT_VALUE_LABELS[key] || key);
+        if (missing.has(key)) name.dataset.tone = 'attention';
+        label.append(name);
+        if (key === 'optionMode') {
+          const select = document.createElement('select');
+          select.name = key;
+          for (const option of [['', '고르세요'], ['provided', '옵션 있음'], ['none', '옵션 없음']]) {
+            const node = document.createElement('option');
+            node.value = option[0];
+            node.textContent = option[1];
+            select.append(node);
+          }
+          select.value = String(row.requiredValues?.[key] || '');
+          label.append(select);
+        } else {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.name = key;
+          input.value = String(row.requiredValues?.[key] || (key === 'originCountry' ? row.requiredValues?.origin : '') || '');
+          label.append(input);
+        }
+        grid.append(label);
+      }
+      values.append(grid);
+      panel.append(values);
+    }
 
     const uploaded = row.inputImageSummary || [];
-    for (const spec of IMAGE_GROUPS) {
+    for (const spec of surface === 'required' ? [] : IMAGE_GROUPS) {
       const group = element('section', 'board-intake-group');
       const title = element('p', 'board-intake-group-title', spec.title);
       title.append(element('span', 'board-intake-group-hint', spec.hint));
@@ -497,12 +647,13 @@ export function mountProductionBoard(runtime, {
     return panel;
   }
 
-  function renderCafe24ValueForm(row) {
+  function renderCafe24ValueForm(row, { readOnly = false, sourceJob = {} } = {}) {
     // 이 값들은 조립공장에 등록 화면이 없어 관제탑에서만 지정할 수 있다. 비어 있는 채로
     // 지시하면 등록이 "차단: category_id" 로 끝난다.
     const form = document.createElement('form');
     form.className = 'board-cafe24-values';
     form.dataset.jobId = row.jobId;
+    form.dataset.readOnly = String(readOnly);
     form.addEventListener('submit', event => event.preventDefault());
     const title = element('div', 'board-candidate-heading');
     title.append(
@@ -511,6 +662,13 @@ export function mountProductionBoard(runtime, {
       button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cafe24' }),
     );
     form.append(title);
+    if (readOnly) {
+      const reason = element('p', 'status-message', '현재 등록 대상이 아니어서 읽기 전용');
+      reason.dataset.tone = 'attention';
+      form.append(reason);
+    }
+    const basic = element('section', 'board-intake-group');
+    basic.append(element('p', 'board-intake-group-title', '기본 등록값'));
     const grid = element('div', 'board-cafe24-fields');
     let modeSelect = null;
     let targetInput = null;
@@ -527,6 +685,7 @@ export function mountProductionBoard(runtime, {
           select.append(node);
         }
         select.value = String(row.cafe24Values?.[field.name] || '');
+        select.disabled = readOnly;
         label.append(select);
         if (field.name === 'registrationMode') modeSelect = select;
       } else {
@@ -535,6 +694,7 @@ export function mountProductionBoard(runtime, {
         input.name = field.name;
         input.placeholder = field.placeholder;
         input.value = String(row.cafe24Values?.[field.name] || '');
+        input.disabled = readOnly;
         label.append(input);
         if (field.name === 'targetProductNo') targetInput = input;
       }
@@ -545,7 +705,7 @@ export function mountProductionBoard(runtime, {
     const syncTargetAvailability = () => {
       if (!targetInput || !modeSelect) return;
       const creating = modeSelect.value === 'create';
-      targetInput.disabled = creating;
+      targetInput.disabled = readOnly || creating;
       if (creating) targetInput.value = '';
       targetInput.placeholder = creating
         ? '새 상품으로 올릴 때는 쓰지 않습니다'
@@ -565,12 +725,34 @@ export function mountProductionBoard(runtime, {
         if (digits !== targetInput.value) targetInput.value = digits;
       });
     }
-    form.append(grid);
+    basic.append(grid);
+    form.append(basic);
+    const registration = record(record(sourceJob.progress).registration || sourceJob.registration);
+    const optionInventory = element('section', 'board-intake-group');
+    optionInventory.append(element('p', 'board-intake-group-title', '옵션·재고'));
+    const optionGrid = element('div', 'board-cafe24-fields');
+    for (const [labelText, value] of [
+      ['옵션', `${String(registration.optionCount ?? row.requiredValues?.optionCount ?? 0)}개`],
+      ['재고', String(registration.stock ?? row.requiredValues?.stock ?? '확인 필요')],
+    ]) {
+      const label = element('label', 'board-cafe24-field');
+      label.append(element('span', 'board-cafe24-field-label', labelText));
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = value;
+      input.disabled = true;
+      label.append(input);
+      optionGrid.append(label);
+    }
+    optionInventory.append(optionGrid);
+    form.append(optionInventory);
+    const displaySale = element('p', 'status-message', `진열 ${String(row.cafe24Values?.displayStatus || row.cafe24Values?.display || '확인 필요')} · 판매 ${String(row.cafe24Values?.sellingStatus || row.cafe24Values?.selling || '확인 필요')}`);
+    form.append(displaySale);
     const submit = button('board-mini-action', '이 값으로 Cafe24 등록', {
       action: 'cafe24-values-submit',
       jobId: row.jobId,
     });
-    submit.disabled = busy;
+    submit.disabled = busy || readOnly;
     form.append(submit);
     return form;
   }
@@ -820,20 +1002,35 @@ export function mountProductionBoard(runtime, {
       stageKey: cell.stageKey,
       candidateId: candidate.id,
     });
-    option.disabled = busy;
     if (candidate.id === cell.reservedCandidateId) option.dataset.reserved = 'true';
     if (picked) option.dataset.picked = 'true';
     // 무엇으로 보여 줄지는 모델이 한 번에 정한다. 여기서 조건을 줄줄이 걸러 내려가면
     // 칸이 빠진 옛 기록이 어느 갈래에도 걸리지 않아 원시 id 가 그대로 뜬다.
-    const presentation = candidatePresentation(candidate, cell.stageKey);
-    if (presentation === 'image' && candidate.thumbnailUrl) {
+    const candidateAsset = resolveCandidateAsset(
+      candidate,
+      resultCache.get(String(row.jobId))?.assets,
+      cell.stageKey,
+    );
+    const bundleAsset = candidateAsset.asset;
+    // final_detail 후보는 보관 출력의 정확한 자산 identity가 있어야만 고를 수 있다.
+    // 옛 기록의 후보 번호와 보관 이미지를 순서·이름으로 맞추면 엉뚱한 상세를 확정할 수 있다.
+    const identityBlocked = cell.stageKey === 'final_detail' && candidateAsset.status !== 'matched';
+    option.disabled = busy || identityBlocked;
+    if (identityBlocked) option.dataset.identityState = candidateAsset.status;
+    const previewCandidate = bundleAsset ? {
+      ...candidate,
+      thumbnailUrl: bundleAsset.thumbnailReference,
+      contentUrl: bundleAsset.contentReference || bundleAsset.thumbnailReference,
+    } : candidate;
+    const presentation = candidatePresentation(previewCandidate, cell.stageKey);
+    if (presentation === 'image' && previewCandidate.thumbnailUrl) {
       const image = document.createElement('img');
-      image.src = assetUrl ? assetUrl(candidate.thumbnailUrl) : candidate.thumbnailUrl;
+      image.src = assetUrl ? assetUrl(previewCandidate.thumbnailUrl) : previewCandidate.thumbnailUrl;
       image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
       image.loading = 'lazy';
       // 작은 그림으로는 고를 수 없다. 그림을 누르면 크게 본다. 카드의 나머지를
       // 누르면 그 컷을 고른다 — 보는 것과 고르는 것을 갈라 놓는다.
-      image.dataset.zoomSrc = candidate.thumbnailUrl;
+      image.dataset.zoomSrc = previewCandidate.contentUrl || previewCandidate.thumbnailUrl;
       image.dataset.zoomLabel = `${row.productName} · ${cell.stageLabel}`;
       option.append(image);
     } else if (presentation === 'document') {
@@ -928,6 +1125,51 @@ export function mountProductionBoard(runtime, {
     return wrap;
   }
 
+  function renderFinalDetailStoryboard(row) {
+    const entry = resultCache.get(String(row.jobId));
+    const assets = entry && !entry.error && Array.isArray(entry.assets)
+      ? entry.assets.filter(asset => {
+        const item = record(asset);
+        return item.phase === 'output'
+          && item.factoryStageKey === 'final_detail'
+          && (item.thumbnailReference || item.contentReference);
+      })
+      : [];
+    if (!assets.length) return null;
+    const storyboard = element('section', 'board-result-strip board-final-detail-storyboard');
+    storyboard.dataset.finalDetailStoryboard = 'true';
+    storyboard.dataset.jobId = row.jobId;
+    const title = element('div', 'board-candidate-heading');
+    title.append(
+      element('strong', '', '최종 상세 보관 결과 미리보기'),
+      element('span', 'factory-pill', '읽기 전용'),
+      element('span', 'board-candidate-meta', '같은 작업의 보관 출력입니다. 후보 선택과 연결되지 않습니다.'),
+    );
+    storyboard.append(title);
+    const options = element('div', 'board-candidate-options');
+    for (const asset of assets) {
+      const card = element('article', 'board-candidate');
+      card.dataset.readOnly = 'true';
+      card.dataset.assetId = String(asset.id || '');
+      card.dataset.assetKey = String(asset.assetKey || '');
+      const thumbnail = String(asset.thumbnailReference || asset.contentReference || '');
+      const content = String(asset.contentReference || asset.thumbnailReference || '');
+      const image = document.createElement('img');
+      image.src = assetUrl ? assetUrl(thumbnail) : thumbnail;
+      image.alt = `${row.productName} 최종 상세 보관 결과`;
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.dataset.zoomSrc = content;
+      image.dataset.zoomLabel = `${row.productName} · 최종 상세 보관 결과`;
+      const label = element('span', 'board-candidate-label', readableAssetName(asset.displayName || asset.assetKey));
+      label.title = String(asset.displayName || asset.assetKey || asset.id || '');
+      card.append(image, label);
+      options.append(card);
+    }
+    storyboard.append(options);
+    return storyboard;
+  }
+
   /**
    * 보관함 파일 이름을 사람이 읽는 이름으로 줄인다.
    * "091019_차분한_대표_이미지_generated_hero_1_m" 은 앞이 시각이고 뒤가 기계용 꼬리다.
@@ -965,9 +1207,10 @@ export function mountProductionBoard(runtime, {
     // 라고 물었다. 고르는 자리에서 바로 답해 준다.
     const stageHint = BOARD_STAGES.find(stage => stage.key === cell.stageKey)?.hint;
     if (stageHint) title.append(element('span', 'board-candidate-meta', stageHint));
-    // 고른 컷은 바로 적용되지 않는다. 그 사실을 안 적으면 "눌렀는데 아무 일도 없다" 가 된다.
+    // 선택 요청만 보낸 시점과 실제 저장 완료를 구분한다. 저장 영수증 전에는 다음 제품으로
+    // 이동하지 않으므로, 화면에도 완료 기준을 그대로 적는다.
     title.append(element('span', 'board-candidate-meta',
-      '고르면 예약됩니다. 「다시 시도」를 눌러야 조립공장이 반영합니다.'));
+      '고른 컷은 저장 영수증 확인 뒤 반영되고, 같은 공정의 다음 제품으로 이동합니다.'));
     // 섹션 단계는 여러 섹션의 변형이 한 칸에 함께 온다. 한 줄로 쏟으면 52개가 원시
     // 식별자만 달고 늘어서서 사람이 무엇을 고르는지 알 수 없다. 섹션마다 나눠 놓는다.
     if (cell.stageKey === 'sections' && cell.candidates.some(candidate => candidate.sectionId)) {
@@ -1071,6 +1314,10 @@ export function mountProductionBoard(runtime, {
     }
     options.append(renderComposeSlot(row, cell));
     strip.append(options);
+    if (cell.stageKey === 'final_detail') {
+      const storyboard = renderFinalDetailStoryboard(row);
+      if (storyboard) strip.append(storyboard);
+    }
     if (cell.reservedCandidateId) {
       const cancel = button('board-action ghost', '이 작업 예약 취소', { action: 'clear-one', jobId: row.jobId });
       cancel.disabled = busy;
@@ -1477,6 +1724,8 @@ export function mountProductionBoard(runtime, {
     return JSON.stringify([
       busy, connected, openResults, openCafe24Values, openProductValues,
       openCell.jobId, openCell.stageKey, statusLine.copy, statusLine.tone,
+      focusedSurface?.jobId || '', focusedSurface?.surface || '', focusedSurface?.stageKey || '',
+      focusedSurface?.readOnly === true,
       // 펼친 프롬프트와 새 컷 만들기 칸도 화면 모양을 바꾼다. 서명에 없으면
       // 눌러도 표가 다시 그려지지 않아 아무 일도 일어나지 않는다.
       promptAlwaysOpen, openCompose, [...openPrompts].sort().join('|'),
@@ -1516,6 +1765,40 @@ export function mountProductionBoard(runtime, {
     renderSummary(board.summary);
     renderToolbar(board);
     renderStatus();
+    if (focusedSurface) {
+      const row = board.rows.find(item => item.jobId === focusedSurface.jobId);
+      if (!row) {
+        grid.replaceChildren(element('p', 'factory-empty-state', '선택한 제품의 기존 작업면을 불러올 수 없습니다.'));
+        return board;
+      }
+      const nodes = [];
+      const sourceJob = jobs.find(item => String(item.jobId || '') === row.jobId) || {};
+      if (focusedSurface.surface === 'intake') nodes.push(renderProductValueForm(row, { surface: 'intake', sourceJob }));
+      if (focusedSurface.surface === 'values') nodes.push(renderProductValueForm(row, { surface: 'required', sourceJob }));
+      if (focusedSurface.surface === 'cuts') {
+        for (const stageKey of ['representative', 'size', 'option_color', 'general']) {
+          const cell = row.cells.find(item => item.stageKey === stageKey);
+          nodes.push(cell?.candidates.length
+            ? renderCandidateStrip(row, cell)
+            : element('p', 'factory-empty-state', `${cell?.stageLabel || stageKey} · 아직 생성된 후보가 없습니다.`));
+        }
+      }
+      if (focusedSurface.surface === 'sections') {
+        for (const stageKey of ['sections', 'final_detail']) {
+          const cell = row.cells.find(item => item.stageKey === stageKey);
+          nodes.push(cell?.candidates.length
+            ? renderCandidateStrip(row, cell)
+            : element('p', 'factory-empty-state', `${cell?.stageLabel || stageKey} · 아직 생성된 후보가 없습니다.`));
+        }
+        nodes.push(renderResultStrip(row));
+      }
+      if (focusedSurface.surface === 'cafe24') nodes.push(renderCafe24ValueForm(row, {
+        readOnly: focusedSurface.readOnly,
+        sourceJob,
+      }));
+      grid.replaceChildren(...nodes);
+      return board;
+    }
     const nodes = [renderHeaderRow()];
     if (!board.rows.length) {
       const empty = element('p', 'factory-empty-state', '아직 투입된 작업이 없습니다. 입력·소스에서 제품을 투입하면 이 표에 나란히 쌓입니다.');
@@ -1564,7 +1847,11 @@ export function mountProductionBoard(runtime, {
         loadJobs(),
         apiRequest('/api/factory/state').catch(() => null),
       ]);
-      jobs = Array.isArray(response?.jobs) ? response.jobs : [];
+      const incomingJobs = Array.isArray(response?.jobs) ? response.jobs : null;
+      const retainedQueue = jobs.length > 0 && (!incomingJobs || incomingJobs.length === 0);
+      if (!incomingJobs && !retainedQueue) throw new Error('factory_jobs_invalid');
+      if (!retainedQueue) jobs = incomingJobs;
+      projectionState = state;
       connected = state ? state.connected === true : connected;
       // 지금까지의 이벤트는 이 응답에 이미 반영돼 있다. 이 자리를 기억해 두었다가
       // 이벤트 스트림을 그 다음부터 듣는다 — 처음부터 들으면 이력을 통째로 되받는다.
@@ -1572,10 +1859,41 @@ export function mountProductionBoard(runtime, {
       if (state && typeof state.capturedAt === 'string') workerHeartbeatAt = state.capturedAt;
       void fillMissingProgress();
       loaded = true;
-      if (statusLine.tone === 'error' || statusLine.tone === '') statusLine = { copy: '', tone: '' };
-      render();
+      if (retainedQueue) {
+        statusLine = { copy: `마지막 작업 큐 ${jobs.length}건 유지 · 상태 갱신 지연`, tone: 'warning' };
+      } else if (statusLine.tone === '' || statusLine.copy.startsWith('생산 보드를 불러오지 못했습니다')
+        || statusLine.copy.startsWith('마지막 작업 큐')) {
+        statusLine = { copy: '', tone: '' };
+        if (focusedSurface?.jobId) statusByJob.delete(focusedSurface.jobId);
+      }
+      const board = render();
+      if (pendingManualAdvance) {
+        const selection = pendingManualAdvance.selection;
+        if (openCell.jobId !== selection.jobId || openCell.stageKey !== selection.stageKey) {
+          pendingManualAdvance = null;
+        } else {
+          const next = advanceManualSelectionCursor({
+            board,
+            current: openCell,
+            selection,
+            receipt: pendingManualAdvance.receipt,
+            baselineRevision: pendingManualAdvance.baselineRevision,
+            currentRevision: projectionState?.registration?.jobId === selection.jobId
+              ? projectionState?.session?.revision
+              : -1,
+          });
+          if (next.jobId !== openCell.jobId || next.stageKey !== openCell.stageKey) {
+            openCell = next;
+            pendingManualAdvance = null;
+            render();
+          }
+        }
+      }
     } catch (error) {
-      setStatus(`생산 보드를 불러오지 못했습니다 · ${String(error?.code || error?.message || error)}`, 'error');
+      const detail = String(error?.code || error?.message || error);
+      setStatus(jobs.length
+        ? `마지막 작업 큐 ${jobs.length}건 유지 · 상태 갱신 지연 · ${detail}`
+        : `생산 보드를 불러오지 못했습니다 · ${detail}`, jobs.length ? 'warning' : 'error');
       render();
     }
   }
@@ -1637,7 +1955,19 @@ export function mountProductionBoard(runtime, {
   }
 
   async function submitBatch(body) {
-    const current = { ...openCell };
+    const selection = body.mode === 'manual' && body.selections?.length === 1
+      ? body.selections[0]
+      : null;
+    const selectedCell = selection && lastBoard?.rows
+      ?.find(row => row.jobId === selection.jobId)?.cells
+      ?.find(cell => cell.stageKey === selection.stageKey);
+    const selectedCandidate = selection && selectedCell?.candidates?.find(candidate => candidate.id === selection.candidateId);
+    if (selection && !selectedCandidate) return;
+    if (selection?.stageKey === 'final_detail'
+      && resolveCandidateAsset(selectedCandidate, resultCache.get(String(selection.jobId))?.assets, selection.stageKey).status !== 'matched') return;
+    const baselineRevision = selection && projectionState?.registration?.jobId === selection.jobId
+      ? projectionState?.session?.revision
+      : -1;
     let receipt = null;
     busy = true;
     try {
@@ -1648,20 +1978,20 @@ export function mountProductionBoard(runtime, {
       });
       const summary = summarizeBatchSelection(receipt);
       setStatus(summary.copy, summary.tone);
+      const accepted = selection && receipt?.results?.some(result => (
+        result?.jobId === selection.jobId
+        && result?.stageKey === selection.stageKey
+        && result?.candidateId === selection.candidateId
+        && (result?.status === 'applied' || result?.status === 'reserved')
+      ));
+      pendingManualAdvance = accepted && Number.isInteger(baselineRevision) && baselineRevision >= 0
+        ? { selection, receipt, baselineRevision }
+        : null;
     } catch (error) {
       setStatus(`일괄 선택 실패 · ${String(error?.code || error?.message || error)}`, 'error');
     } finally {
       busy = false;
       await refresh();
-      if (body.mode === 'manual' && body.selections?.length === 1) {
-        openCell = advanceManualSelectionCursor({
-          board: lastBoard,
-          current,
-          selection: body.selections[0],
-          receipt,
-        });
-        render();
-      }
     }
   }
 
@@ -1793,6 +2123,7 @@ export function mountProductionBoard(runtime, {
     } catch (error) {
       resultCache.set(jobId, { assets: [], error: String(error?.code || error?.message || error) });
     }
+    lastBoardSignature = '';
     if (!quiet || openResults) render();
     else render();
   }
@@ -2022,7 +2353,7 @@ export function mountProductionBoard(runtime, {
       return;
     }
     if (!target) return;
-    if (busy) {
+    if (busy && target.dataset.action !== 'open') {
       // 처리 중이라고 눌린 것을 조용히 버리면, 사람은 버튼이 고장 난 줄 안다. 실측:
       // "다시 시도" 를 눌러도 아무 반응이 없다는 신고가 있었고 원인이 이것이었다.
       setStatus('앞선 요청을 처리하는 중입니다. 끝나면 다시 눌러 주세요.', 'warning');
@@ -2055,7 +2386,7 @@ export function mountProductionBoard(runtime, {
     if (action === 'product-values-submit') {
       const form = target.closest('form');
       const values = {};
-      for (const input of form?.querySelectorAll('input[name], select[name]') || []) {
+      for (const input of form?.querySelectorAll('input[name], select[name], textarea[name]') || []) {
         const value = String(input.value || '').trim();
         if (value) values[input.name] = value;
       }
@@ -2196,12 +2527,14 @@ export function mountProductionBoard(runtime, {
       return;
     }
     if (action === 'pick') {
+      const candidateId = target.dataset.candidateId || '';
+      if (!candidateId) return;
       void submitBatch({
         mode: 'manual',
         selections: [{
           jobId: target.dataset.jobId,
           stageKey: target.dataset.stageKey,
-          candidateId: target.dataset.candidateId,
+          candidateId,
         }],
       });
       return;
@@ -2228,7 +2561,9 @@ export function mountProductionBoard(runtime, {
   }
 
   function connectEvents() {
-    if (typeof EventSourceImpl !== 'function') return;
+    eventSource?.close?.();
+    eventSource = null;
+    if (document.hidden || typeof EventSourceImpl !== 'function') return;
     try {
       // cursor=0 으로 붙으면 관제탑이 쌓아 둔 이벤트를 전부 되돌려준다. 실측 2026-08-28:
       // 화면을 열 때마다 4초 동안 1,300건(초당 350건)이 쏟아져 크롬의 호스트당 연결이
@@ -2251,12 +2586,22 @@ export function mountProductionBoard(runtime, {
    * 한 건마다 refresh 를 부르면 요청 수가 이벤트 수만큼 늘어난다. 사람이 보는 결과는
    * 어차피 마지막 한 번과 같으므로, 짧게 모아서 한 번만 읽는다.
    */
-  function scheduleEventRefresh() {
+  function scheduleEventRefresh(event) {
+    window.dispatchEvent(new CustomEvent('control-tower:factory-event', { detail: event }));
     if (eventRefreshTimer) return;
     eventRefreshTimer = setTimeout(() => {
       eventRefreshTimer = null;
       void refresh();
     }, EVENT_REFRESH_COALESCE_MS);
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      eventSource?.close?.();
+      eventSource = null;
+      return;
+    }
+    void refresh().then(connectEvents);
   }
 
   function apiOrigin() {
@@ -2266,6 +2611,46 @@ export function mountProductionBoard(runtime, {
       return '';
     }
   }
+
+  function focusBoardSurface(event) {
+    const detail = record(event.detail);
+    const target = detail.target;
+    if (!target?.append || !String(detail.jobId || '') || !String(detail.surface || '')) return;
+    const jobId = String(detail.jobId);
+    focusedSurface = {
+      jobId,
+      surface: String(detail.surface),
+      stageKey: String(detail.stageKey || ''),
+      readOnly: detail.readOnly === true,
+    };
+    statusLine = statusByJob.get(jobId) || { copy: '', tone: '' };
+    moveGrid(target);
+    lastBoardSignature = '';
+    if (focusedSurface.surface === 'sections' && !resultCache.has(focusedSurface.jobId)) {
+      void loadResults(focusedSurface.jobId, { quiet: true });
+    }
+    render();
+  }
+
+  function focusBoardStage(event) {
+    if (!focusedSurface) return;
+    focusedSurface.stageKey = String(record(event.detail).stageKey || '');
+    render();
+    grid.querySelector(`[data-stage-key="${focusedSurface.stageKey}"]`)?.focus?.();
+  }
+
+  function restoreBoardSurface() {
+    if (!focusedSurface && !gridHome) return;
+    restoreGrid();
+    render();
+  }
+
+  const activeMenuObserver = typeof MutationObserver === 'function'
+    ? new MutationObserver(() => {
+      if (document.getElementById('app')?.dataset.activeMenu !== 'overview') restoreBoardSurface();
+    })
+    : null;
+  activeMenuObserver?.observe(document.getElementById('app'), { attributes: true, attributeFilter: ['data-active-menu'] });
 
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
@@ -2282,15 +2667,33 @@ export function mountProductionBoard(runtime, {
     render();
   });
   window.addEventListener('control-tower:job-created', refresh);
-  void refresh().then(connectEvents);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('control-tower:production-board-focus', focusBoardSurface);
+  document.addEventListener('control-tower:production-board-focus-stage', focusBoardStage);
+  document.addEventListener('control-tower:production-board-restore', restoreBoardSurface);
+  void refresh().then(() => {
+    connectEvents();
+    const target = document.querySelector('[data-production-board-focus="true"]');
+    if (target) focusBoardSurface({ detail: {
+      target,
+      jobId: target.dataset.jobId,
+      surface: target.dataset.surface,
+    } });
+  });
 
   return () => {
     stopped = true;
     if (eventRefreshTimer) { clearTimeout(eventRefreshTimer); eventRefreshTimer = null; }
     eventSource?.close?.();
+    activeMenuObserver?.disconnect();
+    restoreGrid();
     root.removeEventListener('click', onClick);
     root.removeEventListener('change', onChange);
     window.removeEventListener('control-tower:job-created', refresh);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    document.removeEventListener('control-tower:production-board-focus', focusBoardSurface);
+    document.removeEventListener('control-tower:production-board-focus-stage', focusBoardStage);
+    document.removeEventListener('control-tower:production-board-restore', restoreBoardSurface);
   };
 }
 

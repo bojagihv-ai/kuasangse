@@ -106,6 +106,39 @@ test('menu precedes collapsed sync diagnostics so the active work surface is imm
   assert.match(html, /\.sync-disclosure:not\(\[open\]\)\s*>\s*\.sync-disclosure-content\s*{[^}]*display:\s*none/);
 });
 
+test('queue starts with the operator console and overview keeps the workfile desk secondary', () => {
+  const html = fs.readFileSync(HTML_PATH, 'utf8');
+  const overviewIndex = html.indexOf('<section id="menu-panel-overview"');
+  const queueIndex = html.indexOf('<section id="menu-panel-queue"');
+  const consoleIndex = html.indexOf('class="section operator-console-shell"');
+  const workfileIndex = html.indexOf('class="workfile-job-desk"');
+  const reportIndex = html.indexOf('id="workfile-report-heading"');
+
+  assert.ok(overviewIndex > 0, 'overview panel is missing');
+  assert.ok(queueIndex > overviewIndex, 'queue panel must follow overview');
+  assert.ok(consoleIndex > queueIndex, 'operator console must be inside queue');
+  assert.ok(workfileIndex > overviewIndex, 'workfile desk must remain inside overview');
+  assert.ok(reportIndex > workfileIndex, 'report ledger must remain secondary to the workfile desk');
+  assert.match(html.slice(queueIndex), /^<section[^>]+>\s*<section class="section operator-console-shell"/u);
+});
+
+test('operator queue declares accessible status filters beside its heading', () => {
+  const html = fs.readFileSync(HTML_PATH, 'utf8');
+  const console = html.match(/class="section operator-console-shell"[\s\S]*?<\/section>\s*<\/section>/u)?.[0] || '';
+
+  for (const [value, label] of [
+    ['all', '전체'],
+    ['selection', '선택 대기만'],
+    ['blocked', '차단만'],
+    ['running', '진행 중'],
+    ['completed', '완료'],
+  ]) {
+    assert.match(console, new RegExp(`data-queue-filter="${value}"[^>]*>${label}<`));
+  }
+  assert.equal((console.match(/data-queue-filter=/g) || []).length, 5);
+  assert.match(console, /data-queue-filter="all"[^>]*aria-pressed="true"/u);
+});
+
 test('menu panels have unique ids and hidden inactive panels do not duplicate roots', () => {
   const html = fs.readFileSync(HTML_PATH, 'utf8');
   const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
@@ -114,8 +147,10 @@ test('menu panels have unique ids and hidden inactive panels do not duplicate ro
   assert.equal((html.match(/data-menu-panel="/g) || []).length, 8);
   assert.match(html, /data-menu-panel="overview"[^>]*>/);
   assert.match(html, /data-menu-panel="input-source"[^>]*hidden/);
+  const overview = html.match(/id="menu-panel-overview"[\s\S]*?id="menu-panel-queue"/)?.[0] || '';
   const queue = html.match(/id="menu-panel-queue"[\s\S]*?id="menu-panel-input-source"/)?.[0] || '';
   const audit = html.match(/id="menu-panel-audit-sync"[\s\S]*?<footer/)?.[0] || '';
+  assert.doesNotMatch(overview, /id="product-list"/);
   assert.match(queue, /id="product-list"/);
   assert.doesNotMatch(audit, /id="product-list"/);
 });

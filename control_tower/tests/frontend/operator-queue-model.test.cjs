@@ -22,6 +22,13 @@ test('자동과 수동 작업을 같은 대량생산 행 정보로 표시한다'
     stageKey: 'sections',
     policy: { resolved: { section_variant: 'auto' } },
   }, 1);
+  const mixed = queue.buildOperatorQueueRow({
+    jobId: 'factory-job-mixed',
+    mode: 'auto',
+    status: 'waiting_manual',
+    stageKey: 'option_color',
+    policy: { resolved: { option_image: 'auto' } },
+  }, 2);
 
   assert.deepEqual(manual, {
     orderLabel: '01',
@@ -40,5 +47,14 @@ test('자동과 수동 작업을 같은 대량생산 행 정보로 표시한다'
     stateLabel: '자동 생성 중',
     actionLabel: '진행 관찰',
     needsSelection: false,
+  });
+  assert.deepEqual(mixed, {
+    orderLabel: '03',
+    stepLabel: '4 / 8단계',
+    stageLabel: '옵션·색상',
+    modeLabel: '자동 진행 후 수동 선택',
+    stateLabel: '내 선택 대기',
+    actionLabel: '컷 고르기',
+    needsSelection: true,
   });
 });

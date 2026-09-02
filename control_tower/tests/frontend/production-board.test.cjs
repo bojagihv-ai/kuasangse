@@ -7,6 +7,86 @@ const { pathToFileURL } = require('node:url');
 const MODEL_URL = pathToFileURL(
   path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board-model.mjs'),
 ).href;
+const BOARD_URL = pathToFileURL(
+  path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board.mjs'),
+).href;
+
+class FakeElement {
+  constructor(tagName = 'div') {
+    this.tagName = String(tagName).toUpperCase();
+    this.children = [];
+    this.dataset = {};
+    this.attributes = {};
+    this.style = {};
+    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.listeners = new Map();
+    this.textContent = '';
+  }
+  get childElementCount() { return this.children.length; }
+  append(...children) { this.children.push(...children); }
+  appendChild(child) { this.children.push(child); return child; }
+  replaceChildren(...children) { this.children = [...children]; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  addEventListener(type, listener) { this.listeners.set(type, listener); }
+  removeEventListener(type) { this.listeners.delete(type); }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  closest(selector) { return selector === '[data-action]' && this.dataset.action ? this : null; }
+  remove() {}
+  focus() {}
+}
+
+function installBoardDocument(t) {
+  const previous = { document: globalThis.document, window: globalThis.window, Element: globalThis.Element };
+  const windowListeners = new Map();
+  globalThis.Element = FakeElement;
+  globalThis.document = {
+    createElement: tagName => new FakeElement(tagName),
+    createTextNode: value => ({ textContent: String(value) }),
+    addEventListener() {}, removeEventListener() {}, getElementById: () => null,
+    querySelector: () => null, querySelectorAll: () => [], activeElement: null,
+    body: new FakeElement('body'),
+  };
+  globalThis.window = {
+    location: { href: 'http://127.0.0.1/control-tower.html' },
+    addEventListener: (type, listener) => windowListeners.set(type, listener),
+    removeEventListener: type => windowListeners.delete(type),
+  };
+  t.after(() => Object.assign(globalThis, previous));
+  return { root: new FakeElement('div'), windowListeners };
+}
+
+function dispatchBoardClick(root, dataset) {
+  const target = new FakeElement('button');
+  Object.assign(target.dataset, dataset);
+  root.listeners.get('click')({ target });
+}
+
+function viewedCell(root) {
+  const visit = node => {
+    if (node?.className === 'board-candidate-strip') return { jobId: node.dataset.jobId, stageKey: node.dataset.stageKey };
+    for (const child of node?.children || []) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(root);
+}
+
+function nodesByClass(root, className) {
+  const matches = [];
+  const visit = node => {
+    if (String(node?.className || '').split(/\s+/u).includes(className)) matches.push(node);
+    for (const child of node?.children || []) visit(child);
+  };
+  visit(root);
+  return matches;
+}
+
+const jobRows = root => nodesByClass(root, 'board-row').filter(node => node.dataset.jobId);
 
 function stage(key, { selectedId = '', candidates = [] } = {}) {
   return {
@@ -172,7 +252,7 @@ test('후보 ID가 없거나 현재 칸에 없으면 수동 일괄 선택 요청
   assert.deepEqual(buildBatchSelectionRequest(board, { candidateId: 'missing' }), { mode: 'manual', selections: [] });
 });
 
-test('수동 선택 receipt가 현재 projection과 맞을 때만 같은 공정의 다음 대기 제품을 본다', async () => {
+test('같은 후보의 예전 projection은 이동하지 않고 더 새 저장 차수만 다음 제품을 연다', async () => {
   const { advanceManualSelectionCursor, projectProductionBoard } = await import(MODEL_URL);
   const current = { jobId: 'w-1', stageKey: 'representative' };
   const selection = { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' };
@@ -199,35 +279,279 @@ test('수동 선택 receipt가 현재 projection과 맞을 때만 같은 공정�
     results: [{ ...selection, status: 'applied' }],
   };
 
-  assert.deepEqual(
-    advanceManualSelectionCursor({ board, current, selection, receipt }),
-    { jobId: 'w-2', stageKey: 'representative' },
-  );
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, receipt, baselineRevision: 10, currentRevision: 10,
+  }), current);
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, receipt, baselineRevision: 10, currentRevision: 11,
+  }), { jobId: 'w-2', stageKey: 'representative' });
 });
 
-test('stale 또는 거절된 수동 선택 receipt는 현재 보는 제품을 유지한다', async () => {
+test('stale·누락·거절 receipt와 중간 보기 변경은 현재 제품을 유지한다', async () => {
   const { advanceManualSelectionCursor, projectProductionBoard } = await import(MODEL_URL);
   const current = { jobId: 'w-1', stageKey: 'representative' };
   const selection = { jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' };
-  const board = projectProductionBoard([job({ jobId: 'w-1' }), job({ jobId: 'w-2' })]);
+  const board = projectProductionBoard([
+    job({
+      jobId: 'w-1',
+      progress: {
+        ...job().progress,
+        stages: [stage('representative', { selectedId: 'rep-b', candidates: ['rep-a', 'rep-b'] })],
+      },
+    }),
+    job({ jobId: 'w-2' }),
+  ]);
   const stale = {
     schema: 'factory-batch-selection:v1',
     mode: 'manual',
-    results: [{ ...selection, candidateId: 'rep-a', status: 'reserved' }],
+    results: [{ ...selection, status: 'reserved' }],
   };
   const rejected = {
     schema: 'factory-batch-selection:v1',
     mode: 'manual',
     results: [{ ...selection, status: 'error' }],
   };
+  const mismatched = {
+    schema: 'factory-batch-selection:v1',
+    mode: 'manual',
+    results: [{ ...selection, candidateId: 'rep-a', status: 'applied' }],
+  };
 
-  assert.deepEqual(advanceManualSelectionCursor({ board, current, selection, receipt: stale }), current);
-  assert.deepEqual(advanceManualSelectionCursor({ board, current, selection, receipt: rejected }), current);
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, receipt: stale, baselineRevision: 10, currentRevision: 9,
+  }), current);
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, baselineRevision: 10, currentRevision: 11,
+  }), current);
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, receipt: rejected, baselineRevision: 10, currentRevision: 11,
+  }), current);
+  assert.deepEqual(advanceManualSelectionCursor({
+    board, current, selection, receipt: mismatched, baselineRevision: 10, currentRevision: 11,
+  }), current);
+  assert.deepEqual(
+    advanceManualSelectionCursor({
+      board: projectProductionBoard([
+        job({
+          jobId: 'w-1',
+          progress: {
+            ...job().progress,
+            stages: [stage('representative', { selectedId: 'rep-b', candidates: ['rep-a', 'rep-b'] })],
+          },
+        }),
+        job({ jobId: 'w-2' }),
+      ]),
+      current: { jobId: 'w-2', stageKey: 'representative' },
+      selection,
+      receipt: stale,
+      baselineRevision: 10,
+      currentRevision: 11,
+    }),
+    { jobId: 'w-2', stageKey: 'representative' },
+  );
 });
 
-test('생산 보드에는 첫 후보 수동 일괄 예약 action이 없다', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board.mjs'), 'utf8');
-  assert.doesNotMatch(source, /action:\s*'first'/);
+test('수동 카드 controller는 잘못된 후보를 보내지 않고 새 projection 뒤에만 이동한다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root, windowListeners } = installBoardDocument(t);
+  let revision = 10;
+  let selectedId = '';
+  let delaySelection = false;
+  let releaseSelection = null;
+  const selectionBodies = [];
+  const jobs = () => [
+    job({
+      jobId: 'w-1',
+      status: selectedId ? 'running' : 'waiting_manual',
+      progress: {
+        ...job().progress,
+        stages: [stage('representative', { selectedId, candidates: ['rep-a', 'rep-b'] })],
+      },
+    }),
+    job({ jobId: 'w-2' }),
+  ];
+  const runtime = {
+    factoryBackend: 'http://127.0.0.1:43170',
+    factoryApp: 'http://127.0.0.1:42170',
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async (requestPath, options = {}) => {
+      if (requestPath === '/api/factory/state') {
+        return { connected: true, eventCursor: '1', registration: { jobId: 'w-1' }, session: { revision } };
+      }
+      if (requestPath === '/api/factory/jobs/selections') {
+        const body = JSON.parse(options.body);
+        selectionBodies.push(body);
+        if (delaySelection) await new Promise(resolve => { releaseSelection = resolve; });
+        selectedId = body.selections[0].candidateId;
+        return {
+          schema: 'factory-batch-selection:v1', mode: 'manual',
+          results: [{ ...body.selections[0], status: 'applied' }],
+        };
+      }
+      return {};
+    },
+  };
+  const stop = mountProductionBoard(runtime, {
+    root,
+    EventSourceImpl: null,
+    fetchJobs: async () => ({ jobs: jobs() }),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  dispatchBoardClick(root, { action: 'open', jobId: 'w-1', stageKey: 'representative' });
+  dispatchBoardClick(root, { action: 'pick', jobId: 'w-1', stageKey: 'representative', candidateId: '' });
+  dispatchBoardClick(root, { action: 'pick', jobId: 'w-1', stageKey: 'representative', candidateId: 'unknown' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(selectionBodies.length, 0);
+
+  dispatchBoardClick(root, { action: 'pick', jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(selectionBodies.length, 1);
+  assert.deepEqual(viewedCell(root), { jobId: 'w-1', stageKey: 'representative' });
+
+  revision = 11;
+  await windowListeners.get('control-tower:job-created')();
+  assert.deepEqual(viewedCell(root), { jobId: 'w-2', stageKey: 'representative' });
+  stop();
+
+  revision = 10;
+  selectedId = '';
+  delaySelection = true;
+  releaseSelection = null;
+  selectionBodies.length = 0;
+  const raceRoot = new FakeElement('div');
+  const stopRace = mountProductionBoard(runtime, {
+    root: raceRoot,
+    EventSourceImpl: null,
+    fetchJobs: async () => ({ jobs: jobs() }),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  dispatchBoardClick(raceRoot, { action: 'open', jobId: 'w-1', stageKey: 'representative' });
+  dispatchBoardClick(raceRoot, { action: 'pick', jobId: 'w-1', stageKey: 'representative', candidateId: 'rep-b' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  dispatchBoardClick(raceRoot, { action: 'open', jobId: 'w-2', stageKey: 'representative' });
+  assert.deepEqual(viewedCell(raceRoot), { jobId: 'w-2', stageKey: 'representative' });
+  revision = 11;
+  releaseSelection();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(selectionBodies.length, 1);
+  assert.deepEqual(viewedCell(raceRoot), { jobId: 'w-2', stageKey: 'representative' });
+  stopRace();
+});
+
+test('이미 읽은 작업 큐는 다음 200 응답이 비어도 유지하고 갱신 지연을 알린다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root, windowListeners } = installBoardDocument(t);
+  const responses = [
+    { jobs: [job({ jobId: 'keep-1' }), job({ jobId: 'keep-2' })] },
+    { jobs: [] },
+  ];
+  const runtime = {
+    factoryBackend: 'http://127.0.0.1:43170',
+    factoryApp: 'http://127.0.0.1:42170',
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async requestPath => requestPath === '/api/factory/state'
+      ? { connected: true, session: {} }
+      : {},
+  };
+  const stop = mountProductionBoard(runtime, {
+    root,
+    EventSourceImpl: null,
+    fetchJobs: async () => responses.shift(),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(jobRows(root).length, 2);
+
+  await windowListeners.get('control-tower:job-created')();
+
+  assert.equal(jobRows(root).length, 2, '빈 응답이 기존 작업 2건을 지웠습니다');
+  const [status] = nodesByClass(root, 'status-message');
+  assert.match(status.textContent, /마지막 작업 큐 2건 유지/u);
+  assert.match(status.textContent, /상태 갱신 지연/u);
+  assert.equal(status.dataset.tone, 'warning');
+  stop();
+});
+
+test('잘못된 작업 목록과 API 오류도 이미 읽은 큐를 보존한다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root, windowListeners } = installBoardDocument(t);
+  const unavailable = new Error('HTTP_404');
+  unavailable.code = 'HTTP_404';
+  const responses = [
+    { jobs: [job({ jobId: 'keep-1' })] },
+    { jobs: 'malformed' },
+    unavailable,
+  ];
+  const runtime = {
+    factoryBackend: 'http://127.0.0.1:43170',
+    factoryApp: 'http://127.0.0.1:42170',
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async requestPath => requestPath === '/api/factory/state'
+      ? { connected: true, session: { workspaceId: 'workspace-a' } }
+      : {},
+  };
+  const stop = mountProductionBoard(runtime, {
+    root,
+    EventSourceImpl: null,
+    fetchJobs: async () => {
+      const next = responses.shift();
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  await windowListeners.get('control-tower:job-created')();
+  assert.equal(jobRows(root).length, 1, 'malformed 목록이 기존 작업을 지웠습니다');
+  await windowListeners.get('control-tower:job-created')();
+  assert.equal(jobRows(root).length, 1, '404 오류가 기존 작업을 지웠습니다');
+  const [status] = nodesByClass(root, 'status-message');
+  assert.match(status.textContent, /마지막 작업 큐 1건 유지/u);
+  assert.equal(status.dataset.tone, 'warning');
+  stop();
+});
+
+test('초기 빈 큐는 허용하고 blank session은 연결된 idle 워커로 구분한다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root } = installBoardDocument(t);
+  const runtime = {
+    factoryBackend: 'http://127.0.0.1:43170',
+    factoryApp: 'http://127.0.0.1:42170',
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async requestPath => requestPath === '/api/factory/state'
+      ? {
+        connected: true,
+        session: { workspaceId: '', productKey: '', runId: '', inputFingerprint: '', workfileName: '' },
+      }
+      : {},
+  };
+  const stop = mountProductionBoard(runtime, {
+    root,
+    EventSourceImpl: null,
+    fetchJobs: async () => ({ jobs: [] }),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  assert.equal(jobRows(root).length, 0);
+  const [connection] = nodesByClass(root, 'board-connection');
+  assert.equal(connection.hidden, false);
+  assert.match(connection.textContent, /워커 연결됨/u);
+  assert.match(connection.textContent, /현재 작업 없음/u);
+  stop();
+});
+
+test('projection 연결 상태는 blank session과 실제 작업 identity를 구분한다', async () => {
+  const { projectWorkerConnectionState } = await import(MODEL_URL);
+
+  assert.equal(projectWorkerConnectionState({ connected: true, session: {} }), 'idle');
+  assert.equal(projectWorkerConnectionState({
+    connected: true,
+    session: { workspaceId: '', productKey: '', runId: 'run-a', inputFingerprint: '', workfileName: '' },
+  }), 'active');
+  assert.equal(projectWorkerConnectionState({ connected: false, session: { runId: 'run-a' } }), 'disconnected');
 });
 
 test('일괄 선택 결과를 한 줄로 요약한다', async () => {
@@ -382,8 +706,8 @@ test('영어 단계 이름은 화면에서 한글로 바뀐다', async () => {
     job({ jobId: 'o', message: 'option_color 결과 중 쓸 컷을 골라 주세요.' }),
   ]).rows;
 
-  assert.equal(general.message, '일반 결과 중 쓸 컷을 골라 주세요.');
-  assert.equal(option.message, '옵션·색상 결과 중 쓸 컷을 골라 주세요.');
+  assert.equal(general.message, '이미지컷 결과 중 쓸 컷을 골라 주세요.');
+  assert.equal(option.message, '색상옵션 결과 중 쓸 컷을 골라 주세요.');
 });
 
 
@@ -470,6 +794,12 @@ test('모듈 import 에 버전을 붙여 낡은 캐시가 남지 않게 한다',
   }
 });
 
+test('읽기 전용 Cafe24 값 화면은 동작하지 않는 승인 버튼 라벨을 만들지 않는다', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board.mjs'), 'utf8');
+
+  assert.doesNotMatch(source, /for \(const label of \['일회 승인', '고정된 대상 1건 실행', '등록 결과 재확인 · 재등록 없음'\]\)/);
+});
+
 test('행 지문은 그 행이 그리는 것만 본다 — 흘러가는 총 시간에는 흔들리지 않는다', async () => {
   const { boardRowSignature, projectProductionBoard } = await import(MODEL_URL);
 
@@ -497,4 +827,35 @@ test('행 지문은 그 행이 그리는 것만 본다 — 흘러가는 총 시�
   assert.notEqual(boardRowSignature(before, { busy: true }), boardRowSignature(before));
   assert.notEqual(boardRowSignature(before, { connected: true }), boardRowSignature(before));
   assert.notEqual(boardRowSignature(before, { resultsOpen: true }), boardRowSignature(before));
+});
+
+test('Task 20 필수값 붙여넣기는 한글·raw 별칭을 안전한 적용값으로만 분류한다', async () => {
+  const { parseRequiredValuePaste } = await import(MODEL_URL);
+
+  const result = parseRequiredValuePaste([
+    '판매가: 12000',
+    'material\t면',
+    '기본 재고\t99',
+    'salePrice: 13000',
+    '없는 필드: 값',
+    '형식 오류',
+    '제품명: 이미 있는 제품명',
+  ].join('\n'), { existingValues: { productName: '보존할 제품명' } });
+
+  assert.deepEqual(result.rows.map(row => [row.key, row.value, row.status]), [
+    ['salePrice', '12000', 'recognized'],
+    ['material', '면', 'recognized'],
+    ['stock', '99', 'recognized'],
+    ['salePrice', '13000', 'duplicate'],
+    ['', '값', 'unknown'],
+    ['', '', 'malformed'],
+    ['productName', '이미 있는 제품명', 'locked'],
+  ]);
+  assert.deepEqual(result.applicableValues, { salePrice: '12000', material: '면', stock: '99' });
+
+  const options = parseRequiredValuePaste('옵션 여부: 옵션 있음\noptionMode\t옵션 없음\n옵션 여부: 지원 안 함');
+  assert.deepEqual(options.rows.map(row => [row.value, row.status]), [
+    ['provided', 'recognized'], ['none', 'duplicate'], ['', 'malformed'],
+  ]);
+  assert.deepEqual(options.applicableValues, { optionMode: 'provided' });
 });

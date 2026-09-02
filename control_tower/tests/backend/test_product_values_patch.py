@@ -78,6 +78,142 @@ def test_empty_request_is_refused(tmp_path: Path) -> None:
         bridge.update_product_values(job_id, {})
 
 
+def test_stage1_identity_hint_and_source_survive_bridge_restart(tmp_path: Path) -> None:
+    state_path = tmp_path / "factory-product-jobs.json"
+    bridge, job_id = _bridge(tmp_path, "stage1-restart")
+    bridge._product_jobs[job_id].payload["source"] = {
+        "kind": "workfile",
+        "sha256": "a" * 64,
+        "revision": 17,
+        "runId": "run:stage1-restart",
+        "workspaceId": "workspace:stage1-restart",
+        "productId": "product:stage1-restart",
+        "productKey": "key:stage1-restart",
+        "inputFingerprint": "fingerprint:stage1-restart",
+    }
+
+    updated = bridge.update_product_values(
+        job_id,
+        {
+            "productName": "재시작 보존 제품",
+            "detailHint": "task19-restart-unique-hint",
+            "sourceKind": "direct",
+            "usage": "선물 포장",
+        },
+    )
+    restarted = FactorySyncBridge(state_path=state_path)
+    restored = next(job for job in restarted.product_jobs() if job["jobId"] == job_id)
+
+    assert updated["productName"] == restored["productName"] == "재시작 보존 제품"
+    assert updated["detailHint"] == restored["detailHint"] == "task19-restart-unique-hint"
+    assert updated["sourceKind"] == restored["sourceKind"] == "direct"
+    required_values = restored["requiredValues"]
+    assert isinstance(required_values, dict)
+    assert required_values["usage"] == "선물 포장"
+    assert not {"productName", "detailHint", "sourceKind"} & set(required_values)
+    context = restarted.product_job_context(job_id)
+    payload = context["payload"]
+    assert isinstance(payload, dict)
+    stored_source = payload["source"]
+    assert isinstance(stored_source, dict)
+    assert stored_source["runId"] == "run:stage1-restart"
+    assert stored_source["revision"] == 17
+
+
+def test_invalid_stage1_source_kind_is_refused(tmp_path: Path) -> None:
+    bridge, job_id = _bridge(tmp_path, "invalid-source")
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_values(job_id, {"sourceKind": "workfile"})
+
+    assert error.value.code == "factory_product_values_invalid"
+
+
+def test_direct_selection_can_become_canonical_sinhwa_and_survive_restart(tmp_path: Path) -> None:
+    state_path = tmp_path / "factory-product-jobs.json"
+    bridge, job_id = _bridge(tmp_path, "sinhwa-valid")
+    bridge._product_jobs[job_id].payload["source"] = {"kind": "direct", "selectionId": "2994"}
+    bridge._product_jobs[job_id].payload["jcode"] = 2994
+
+    updated = bridge.update_product_values(job_id, {"sourceKind": "sinhwa-db"})
+    restarted = FactorySyncBridge(state_path=state_path)
+    restored = next(job for job in restarted.product_jobs() if job["jobId"] == job_id)
+    payload = restarted.product_job_context(job_id)["payload"]
+    assert isinstance(payload, dict)
+
+    assert updated["sourceKind"] == restored["sourceKind"] == "sinhwa-db"
+    assert payload["source"] == {"kind": "sinhwa-db", "selectionId": "2994"}
+
+
+@pytest.mark.parametrize(
+    ("source", "jcode"),
+    [
+        ({"kind": "direct"}, None),
+        ({"kind": "direct", "selectionId": "2994"}, 3102),
+        (
+            {
+                "kind": "workfile",
+                "sha256": "b" * 64,
+                "revision": 18,
+                "runId": "run:unsafe-sinhwa",
+                "workspaceId": "workspace:unsafe-sinhwa",
+                "productId": "product:unsafe-sinhwa",
+                "productKey": "key:unsafe-sinhwa",
+                "inputFingerprint": "fingerprint:unsafe-sinhwa",
+            },
+            None,
+        ),
+    ],
+)
+def test_noncanonical_sinhwa_transition_fails_without_mutation(
+    tmp_path: Path,
+    source: dict[str, str | int],
+    jcode: int | None,
+) -> None:
+    state_path = tmp_path / "factory-product-jobs.json"
+    bridge, job_id = _bridge(tmp_path, f"sinhwa-invalid-{source['kind']}-{jcode}")
+    bridge._product_jobs[job_id].payload["source"] = source
+    bridge._product_jobs[job_id].payload["jcode"] = jcode
+    bridge.update_product_values(job_id, {"detailHint": "unsafe-transition-baseline"})
+    before = bridge.product_job_context(job_id)
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_values(job_id, {"sourceKind": "sinhwa-db"})
+
+    assert error.value.code == "factory_product_source_invalid"
+    assert bridge.product_job_context(job_id) == before
+    restarted = FactorySyncBridge(state_path=state_path)
+    assert restarted.product_job_context(job_id) == before
+
+
+@pytest.mark.parametrize("invalid_value", [["not", "text"], True])
+def test_invalid_stage1_value_type_fails_without_mutation(
+    tmp_path: Path,
+    invalid_value: list[str] | bool,
+) -> None:
+    bridge, job_id = _bridge(tmp_path, f"invalid-type-{type(invalid_value).__name__}")
+    before = bridge.product_job_context(job_id)
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_values(job_id, {"detailHint": invalid_value})
+
+    assert error.value.code == "factory_product_values_invalid"
+    assert bridge.product_job_context(job_id) == before
+
+
+def test_dispatched_job_values_fail_busy_without_mutation(tmp_path: Path) -> None:
+    bridge, job_id = _bridge(tmp_path, "busy-current-order")
+    bridge._product_jobs[job_id].status = "completed"
+    bridge._product_jobs[job_id].current_order_id = "factory-order-active"
+    before = bridge.product_job_context(job_id)
+
+    with pytest.raises(FactorySyncError) as error:
+        bridge.update_product_values(job_id, {"detailHint": "must-not-change"})
+
+    assert error.value.code == "factory_product_job_busy"
+    assert bridge.product_job_context(job_id) == before
+
+
 def _png_data_url() -> str:
     return (
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"

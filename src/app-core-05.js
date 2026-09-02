@@ -9535,6 +9535,15 @@ function factoryVmSearchSiteRows(market = {}) {
   const loading = !!market.loading;
   const activeLabel = String(market.activeSiteLabel || '');
   const aggregateVm = loading && (!activeLabel || /VM|후보검색/.test(activeLabel));
+  const hasCompletedSearchId = [market.searchId, market.vmSearchId].some(value => (
+    typeof value === 'string' ? !!value.trim() : typeof value === 'number' && Number.isFinite(value) && value > 0
+  ));
+  const reportNumber = value => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
   const reports = Array.isArray(market.collectionStatus?.marketReports) ? market.collectionStatus.marketReports : [];
   const reportBySite = Object.fromEntries(reports.map(report => [String(report?.marketId || ''), report]));
   const statusReason = /실패|network|HTTP|연결 실패/i.test(String(market.status || '')) ? String(market.status || '').trim() : '';
@@ -9549,12 +9558,14 @@ function factoryVmSearchSiteRows(market = {}) {
       : rawRows;
     const saved = statusBySite[siteId] || {};
     const report = reportBySite[siteId] || {};
-    const reportStatus = String(report.status || '').trim().toLowerCase();
-    const reportReason = String(report.shortfallReason || '').trim().toLowerCase();
-    const reportedAccepted = Number.isFinite(Number(report.accepted)) ? Number(report.accepted) : null;
+    const reportStatus = typeof report.status === 'string' ? report.status.trim().toLowerCase() : '';
+    const reportReason = typeof report.shortfallReason === 'string' ? report.shortfallReason.trim().toLowerCase() : '';
+    const reportedAccepted = reportNumber(report.accepted);
+    const reportedRequested = reportNumber(report.requested);
+    const reportedShortfall = reportNumber(report.shortfall);
     const hasFinalReport = reportedAccepted !== null
-      || Number.isFinite(Number(report.requested))
-      || Number.isFinite(Number(report.shortfall))
+      || reportedRequested !== null
+      || reportedShortfall !== null
       || !!reportStatus
       || !!reportReason;
     const authoritativeZeroResult = reportStatus === 'zero_result' || reportReason === 'zero_result';
@@ -9582,7 +9593,7 @@ function factoryVmSearchSiteRows(market = {}) {
       //   (스크래퍼: "네이버쇼핑 접속 제한 + 통합검색 폴백에서도 결과 없음").
       //   그런데 화면은 '검색 완료 · 결과 없음' 이라고만 말해, 주인님이 "실제로 검색은 했니?" 하고
       //   되물어야 했다. 물건이 없는 것과 막힌 것은 완전히 다른 얘기다. 모르면 모른다고 한다.
-      state = '결과 없음 · 사유 미확인';
+      state = hasCompletedSearchId ? '검색 완료 · 결과 없음' : '결과 없음 · 사유 미확인';
       tone = 'warn';
     }
     if (!state) {
@@ -9618,7 +9629,7 @@ function factoryVmSearchSiteRows(market = {}) {
         : /결과 없음|0건/.test(state) ? 'warn'
         : 'muted';
     }
-    const requested = Number.isFinite(Number(report.requested)) ? Number(report.requested) : compMarketTargetForSite(market, siteId);
+    const requested = reportedRequested ?? compMarketTargetForSite(market, siteId);
     const accepted = count;
     const shortfall = Math.max(0, requested - accepted);
     return {
@@ -19568,4 +19579,3 @@ registerBindEventExtension(bindFactoryOpenMarketEvents);
 function factoryFindDbRawRow(rowId) {
   return factoryDbSourceRows(factoryRuntimeReadFactory()).find(row => row.id === rowId) || null;
 }
-

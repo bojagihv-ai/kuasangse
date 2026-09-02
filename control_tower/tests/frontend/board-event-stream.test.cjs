@@ -56,7 +56,7 @@ function installFakeDocument(t) {
   const previousWindow = globalThis.window;
   globalThis.window = {
     location: { href: 'http://127.0.0.1:8083/control-tower.html' },
-    addEventListener() {}, removeEventListener() {},
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
     setTimeout: (...args) => setTimeout(...args),
     clearTimeout: (...args) => clearTimeout(...args),
   };
