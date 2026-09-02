@@ -2,6 +2,7 @@
 Product Detail Page Auto-Generator - Flask Backend
 Main application entry point
 """
+import logging
 import os
 from flask import Flask, send_from_directory
 from flask_cors import CORS
@@ -49,6 +50,20 @@ def create_app():
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return response
+
+    # 키 없이 뜬 백엔드는 살아 있지만 쓸 수 없다 - 크게 말한다.
+    #
+    # 실측 2026-08-31/09-02: 공식 기동 경로 셋(start-backend.bat, start-all.bat,
+    # tools/launch_public_api.ps1)이 키 없이 백엔드를 띄웠고, launcher.ps1 도 키 로드에
+    # 실패하면 말없이 키 없이 띄운 뒤 /api/sections 만 보고 'Backend ready' 를 찍었다.
+    # 그러면 /api/sections 는 200 인데 신화사 조회는 전부 service_key_missing 으로 막히고,
+    # 화면에는 'DB 후보 0건' 만 보인다 - 하루에 두 번 이걸로 사고가 났다.
+    if not str(os.environ.get("SINHWA_PDP_SERVICE_KEY", "")).strip():
+        logging.getLogger(__name__).warning(
+            "SINHWA_PDP_SERVICE_KEY 가 없이 백엔드가 시작됩니다. "
+            "신화사 상세페이지 자산 조회·동기화가 전부 막히고 화면에는 'DB 후보 0건' 으로만 보입니다. "
+            "이 창을 닫고 launcher.ps1 로 다시 실행해주세요."
+        )
 
     # Ensure directories exist
     os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
