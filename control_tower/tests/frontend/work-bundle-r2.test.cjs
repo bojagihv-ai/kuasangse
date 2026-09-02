@@ -363,7 +363,7 @@ test('current work-bundle roles keep Korean labels in the production-control sur
   assert.match(source, /'cafe24-candidate-image': 'Cafe24 후보'/);
   assert.match(source, /'competitor-image': '경쟁사 후보'/);
   assert.match(source, /'competitor-page': '경쟁사 상세 수집'/);
-  assert.match(source, /'color-option': '옵션·색상'/);
+  assert.match(source, /'color-option': '색상옵션'/);
 });
 
 test('production control cache-revised module reference resolves to the workbench API', async () => {

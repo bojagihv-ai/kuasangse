@@ -1176,11 +1176,18 @@ export function createWorkBundleAssetCard(asset, assetUrl = value => value, disp
     image.height = 120;
     frame.dataset.action = 'view-work-bundle-image';
     frame.setAttribute('aria-label', `${image.alt} 크게 보기`);
+    let retriedAfterError = false;
     image.addEventListener('error', () => {
+      if (!retriedAfterError && /^https?:\/\//iu.test(imageUrl)) {
+        // 브라우저 HTTP 캐시에 남은 불량 사본(예: 허브 재기동 중 받은 응답)을 한 번 우회한다.
+        retriedAfterError = true;
+        image.src = `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}retry=${Date.now()}`;
+        return;
+      }
       placeholder.textContent = '이미지 불러오기 실패';
       placeholder.dataset.broken = 'true';
       image.replaceWith(placeholder);
-    }, { once: true });
+    });
     frame.append(image);
   } else {
     placeholder.dataset.broken = 'true';
