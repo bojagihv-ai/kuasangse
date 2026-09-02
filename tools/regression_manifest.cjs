@@ -138,6 +138,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('UNIT-ARCH-01', '공통/구조', '실행 기준·identity·revision 구조 계약', 'tests/frontend/architecture_source_contracts.test.cjs', 'fast'),
     nodeFile('ARCH-TARGETS-01', '공통/구조', '20개 메뉴·탭 소유권과 저장·잠금 목표 계약', 'tests/frontend/menu_modularization_target.test.cjs', 'fast'),
     nodeFile('ARCH-IMPORTS-01', '공통/구조', 'ESM import graph·전역·mutable export 계약', 'tests/frontend/import_graph_contracts.test.cjs', 'fast'),
+    nodeFile('ARCH-RATCHET-01', '공통/구조', '죽은 함수·TDZ 함정이 더 늘지 않는다(래칫)', 'tests/frontend/structure_ratchets.test.cjs', 'fast'),
     nodeFile('ARCH-ENFORCE-01', '공통/구조', 'manifest·module size·저장 경계·bundle 통합 계약', 'tests/frontend/task8_architecture_gates.test.cjs', 'fast'),
     nodeFile('UI-CJK-01', '공통/화면', '작은 창 한글 단어·조립공장 탭 라벨 가시성 계약', 'tests/frontend/task8_responsive_cjk.test.cjs', 'fast'),
     nodeFile('RUNTIME-BUILD-01', '공통/실행 기준', '구버전 탭 클릭 차단·새 빌드 적용 게이트', 'tests/frontend/runtime_build_stale_guard.test.cjs', 'fast'),
