@@ -326,6 +326,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('SAVE-ASCANCEL-01', '7 저장/내보내기', "'다른 이름으로 저장' 취소가 원래 작업파일을 그대로 둔다", 'tools/verify_save_as_cancel_keeps_original_cdp_v1.cjs'),
     nodeFile('SAVE-04', '7 저장/내보내기', '같은 작업파일 범위 새로고침 복원', 'tools/verify_workfile_scoped_reload_cdp_v138.cjs'),
     nodeFile('SAVE-26', '7 저장/내보내기', '강제 새로고침이 조립공장 생성물을 잃지 않는다', 'tools/verify_factory_assets_survive_hard_reload_v1.cjs'),
+    nodeFile('KEEP-ALL-01', '7 저장/내보내기', '생성물·필수값·VM 후보·이미지컷 수량이 함께 강제 새로고침을 견딘다', 'tools/verify_everything_survives_hard_reload_v1.cjs'),
     nodeFile('SAVE-05', '7 저장/내보내기', 'Ctrl+F5 로컬 아카이브 부트스트랩', 'tools/verify_workfile_ctrl_f5_archive_bootstrap_cdp_v195.cjs'),
     nodeFile('SAVE-33', '7 저장/내보내기', '보관 archive ID 결과의 복원 경고 정확성', 'tests/frontend/session_asset_restore_warning.test.cjs', 'fast'),
     nodeFile('SAVE-38', '7 저장/내보내기', '최근 저장 작업 자동 보관 연결·새 작업 초기화 경계', 'tests/frontend/workfile_archive_autorefresh.test.cjs', 'fast'),
