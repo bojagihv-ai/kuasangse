@@ -34483,7 +34483,7 @@ registerBindEventExtension(function bindFactoryEvents() {
       factorySetDbSizeManualDraft(input.dataset.factorySizeManual, input.value);
     };
     input.onkeydown = event => {
-      if (event.key !== 'Enter') return;
+      if (event.key !== 'Enter' || isImeComposingKeyEvent(event)) return; // 한글 조합 중 Enter 는 값을 확정하지 않는다.
       event.preventDefault();
       factoryCommitDbSizeManualDraft(input.dataset.factorySizeManual, input.value);
     };
