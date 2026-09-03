@@ -252,10 +252,25 @@ export const BLOCKING_ISSUES = new Set([
 /** 조립공장이 받아들이는 치수 상한(mm). 이 위는 조용히 버려진다. */
 const MAX_DIMENSION_MM = 2000;
 
+/**
+ * 카메라·메신저가 붙이는 이름은 제품명이 아니다.
+ *
+ * 실측 2026-09-03: 사진을 고르고 그대로 투입했더니 큐에 IMG_5968 이라는 제품이 생겼다.
+ * 제품명 칸은 있지만 기본값이 파일 이름이라, 손대지 않으면 그대로 흘러가 작업파일 이름과
+ * Cafe24 등록 이름까지 그 이름이 된다. 막지는 않고 눈에 띄게만 한다 — 정말 그 이름으로
+ * 쓰려는 사람도 있기 때문이다.
+ */
+const CAMERA_FILE_NAME = /^(?:img|dsc|dscn|p|pic|photo|image|screenshot|스크린샷|kakaotalk|카카오톡|received|download)[\s_.-]*\d{2,}(?:[\s_.-]+\d+)*$/i;
+
+export function looksLikeCameraFileName(value) {
+  return CAMERA_FILE_NAME.test(text(value).replace(/\.[^.]+$/u, ''));
+}
+
 function issuesFor(entry) {
   const issues = [];
   if (!entry.images.length) issues.push('image_missing');
   if (!entry.productName) issues.push('product_name_missing');
+  if (entry.productName && looksLikeCameraFileName(entry.productName)) issues.push('product_name_from_file');
   if (!entry.requiredValues.category) issues.push('category_missing');
   if (!entry.requiredValues.salePrice) issues.push('sale_price_missing');
   if (entry.requiredValues.salePrice && !/^\d{1,12}$/.test(entry.requiredValues.salePrice)) {

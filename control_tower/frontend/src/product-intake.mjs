@@ -6,7 +6,7 @@ import {
 } from './product-intake-model.mjs';
 import { resolveWorkfileIdentity } from './workfile-identity-model.mjs';
 // 크기 한 줄에서 가로·세로를 읽는 규칙은 대량 투입과 한 곳에서 나눠 쓴다.
-import { readSizePair, resolveSizePair } from './bulk-intake-model.mjs?bulkIntake=10';
+import { readSizePair, resolveSizePair } from './bulk-intake-model.mjs?bulkIntake=11';
 
 export {
   buildDbSnapshotRequest,

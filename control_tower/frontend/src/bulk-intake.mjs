@@ -10,7 +10,7 @@ import {
   readImageName,
   serializeWorkingState,
   summarizeBulkIntake,
-} from './bulk-intake-model.mjs?bulkIntake=10';
+} from './bulk-intake-model.mjs?bulkIntake=11';
 
 // 회색 글씨는 보기일 뿐 값이 아니다. '주방' 처럼만 적어 두면 이미 채워진 것처럼 읽혀서,
 // 아래 카드가 "분류 비어 있음" 이라고 말하는 것과 서로 어긋나 보인다. 보기라고 못박는다.
@@ -40,6 +40,7 @@ const DEFAULT_FIELDS = Object.freeze([
 const ISSUE_LABELS = Object.freeze({
   image_missing: '이미지 없음',
   product_name_missing: '제품명 비어 있음',
+  product_name_from_file: '제품명이 사진 파일 이름 그대로입니다',
   base_image_missing: '기본 이미지 없음',
   color_name_missing: '옵션 사진에 색상명 없음',
   category_missing: '분류 비어 있음',
