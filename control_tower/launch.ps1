@@ -6,9 +6,9 @@ param(
     [switch]$NoDialog,
     [switch]$Json,
     [ValidateRange(1, 65535)]
-    [int]$BackendPort = 5062,
+    [int]$BackendPort = 41009,
     [ValidateRange(1, 65535)]
-    [int]$FrontendPort = 8082,
+    [int]$FrontendPort = 42011,
     [string]$PdpServiceKeyPath = (Join-Path ([Environment]::GetFolderPath("UserProfile")) "sinhwa-db-hub\.runtime\pdp-control-service-key.dpapi"),
     [string]$RuntimeRootOverride = "",
     [string]$FrontendRootOverride = "",
@@ -40,8 +40,8 @@ $BackendFactoryStateUrl = "http://127.0.0.1:$BackendPort/api/factory/state"
 # localhost 는 윈도우에서 ::1 로 먼저 풀린다. 화면 서버는 127.0.0.1 만 듣고 있어
 # localhost 로 열면 준비 확인부터 실패한다. 주소는 127.0.0.1 로 둔다.
 $FrontendUrl = "http://127.0.0.1:$FrontendPort/control-tower.html"
-$FrontendReadyMarker = if ($BackendPort -eq 5062) {
-    'const healthUrl = "http://127.0.0.1:5062/api/health";'
+$FrontendReadyMarker = if ($BackendPort -eq 41009) {
+    'const healthUrl = "http://127.0.0.1:41009/api/health";'
 }
 else {
     "const healthUrl = `"http://127.0.0.1:$BackendPort/api/health`";"
@@ -66,7 +66,7 @@ else {
     $RuntimeRootOverride
 }
 $StatePath = Join-Path $RuntimeRoot "launcher-state.json"
-$MutexName = if ($BackendPort -eq 5062 -and $FrontendPort -eq 8082) {
+$MutexName = if ($BackendPort -eq 41009 -and $FrontendPort -eq 42011) {
     "Local\KuaSangseProductionControlLauncher"
 }
 else {
@@ -544,7 +544,7 @@ function Start-ControlTowerBrowser {
 }
 
 function Start-FactoryWorkerBrowser {
-    if ($NoBrowser -or $BackendPort -ne 5062 -or $FrontendPort -ne 8082) {
+    if ($NoBrowser -or $BackendPort -ne 41009 -or $FrontendPort -ne 42011) {
         return
     }
     if (-not (Test-Path -LiteralPath $FactoryLauncherPath -PathType Leaf)) {

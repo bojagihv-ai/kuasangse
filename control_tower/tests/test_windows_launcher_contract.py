@@ -19,8 +19,8 @@ def test_launcher_owns_only_isolated_control_tower_ports() -> None:
 
     # When: 실행기가 소유하도록 선언한 포트와 기동 경로를 확인한다.
     required_fragments = (
-        "$BackendPort = 5062",
-        "$FrontendPort = 8082",
+        "$BackendPort = 41009",
+        "$FrontendPort = 42011",
         "control_tower.backend.app",
         "http.server",
         "-WindowStyle Hidden",
@@ -85,12 +85,12 @@ def test_frontend_readiness_survives_windows_powershell_51_utf8_decoding() -> No
     frontend_source = (REPOSITORY_ROOT / "control_tower" / "frontend" / "control-tower.html").read_text(
         encoding="utf-8",
     )
-    marker = 'const healthUrl = "http://127.0.0.1:5062/api/health";'
+    marker = 'const healthUrl = "http://127.0.0.1:41009/api/health";'
 
     assert marker.isascii()
     assert marker in frontend_source
     assert f"    '{marker}'" in launcher_source
-    assert "$BackendPort -eq 5062" in launcher_source
+    assert "$BackendPort -eq 41009" in launcher_source
     assert "$response.Content.Contains($FrontendReadyMarker)" in launcher_source
     assert '$response.Content.Contains("<title>생산관제</title>")' not in launcher_source
 
@@ -197,12 +197,12 @@ def test_launcher_requires_business_api_readiness_and_replaces_only_owned_stale_
     assert all(fragment in source for fragment in required_fragments)
 
 
-def test_launcher_restarts_owned_backend_when_its_8082_origin_cannot_read_the_queue() -> None:
-    # Given: 바로가기가 8082 화면을 열고 기존 5062 backend를 재사용하려 한다.
+def test_launcher_restarts_owned_backend_when_its_42011_origin_cannot_read_the_queue() -> None:
+    # Given: 바로가기가 42011 화면을 열고 기존 41009 backend를 재사용하려 한다.
     source = _read_required(LAUNCHER_PATH)
 
     # When: backend 준비 상태를 판정한다.
-    # Then: HTTP 200만으로는 부족하고 8082 Origin의 queue CORS 응답도 확인해야 한다.
+    # Then: HTTP 200만으로는 부족하고 42011 Origin의 queue CORS 응답도 확인해야 한다.
     assert '$corsHeaders = @{ Origin = "http://127.0.0.1:$FrontendPort" }' in source
     assert 'Invoke-WebRequest -Uri $BackendJobsUrl -Method Get -Headers $corsHeaders' in source
     assert '$jobs.Headers["Access-Control-Allow-Origin"] -eq "http://127.0.0.1:$FrontendPort"' in source
@@ -212,10 +212,10 @@ def test_launcher_supports_explicit_task_owned_runtime_without_changing_shortcut
     # Given: production 기본값과 격리 검증 override가 공존하는 launcher를 준비한다.
     source = _read_required(LAUNCHER_PATH)
 
-    # When/Then: 기본 5062/8082는 유지하되 tests가 임시 포트·artifact·runtime root를 주입할 수 있어야 한다.
+    # When/Then: 기본 41009/42011는 유지하되 tests가 임시 포트·artifact·runtime root를 주입할 수 있어야 한다.
     required_fragments = (
-        "[int]$BackendPort = 5062",
-        "[int]$FrontendPort = 8082",
+        "[int]$BackendPort = 41009",
+        "[int]$FrontendPort = 42011",
         "[string]$PdpServiceKeyPath",
         "[string]$RuntimeRootOverride",
         "[string]$PdpControlBaseUrl",

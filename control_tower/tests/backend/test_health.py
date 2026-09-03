@@ -15,10 +15,10 @@ def test_default_config_uses_isolated_local_runtime_defaults() -> None:
     config = ControlTowerConfig.from_env({})
     # Then: 기존 조립공장과 겹치지 않는 기본값을 사용해야 한다.
     assert config.backend_host == "127.0.0.1"
-    assert config.backend_port == 5062
+    assert config.backend_port == 41009
     assert config.frontend_host == "127.0.0.1"
-    assert config.frontend_port == 8082
-    assert config.cors_origins == ("http://127.0.0.1:8082",)
+    assert config.frontend_port == 42011
+    assert config.cors_origins == ("http://127.0.0.1:42011",)
 
 
 def test_health_is_deterministic_and_exposes_runtime_topology() -> None:
@@ -38,7 +38,7 @@ def test_health_is_deterministic_and_exposes_runtime_topology() -> None:
             "factoryBackend": "http://127.0.0.1:5050",
             "factoryFrontend": "http://127.0.0.1:8081",
         },
-        "listen": {"host": "127.0.0.1", "port": 5062},
+        "listen": {"host": "127.0.0.1", "port": 41009},
         "schemaVersion": "1",
         "service": "batch-production-control",
         "status": "ready",
@@ -53,10 +53,10 @@ def test_default_backend_port_is_browser_safe_without_chrome_bypass() -> None:
     # When: 기본 백엔드 포트 계약을 읽는다.
     config = ControlTowerConfig.from_env({})
     # Then: 기본값과 프론트 health URL은 우회 없이 browser-safe 5062를 사용해야 한다.
-    assert DEFAULT_BACKEND_PORT == 5062
-    assert config.backend_port == 5062
+    assert DEFAULT_BACKEND_PORT == 41009
+    assert config.backend_port == 41009
     assert config.backend_port not in restricted_ports
-    assert "http://127.0.0.1:5062/api/health" in frontend_source
+    assert "http://127.0.0.1:41009/api/health" in frontend_source
     assert "http://127.0.0.1:5060/api/health" not in frontend_source
     assert "explicitly-allowed-ports" not in frontend_source
 
@@ -265,7 +265,7 @@ def test_allowed_local_origin_get_and_options_return_precise_cors_headers() -> N
     # Given: 기본 로컬 프론트엔드 origin으로 실행하는 test client를 준비한다.
     config = ControlTowerConfig.from_env({})
     client = create_app(config).test_client()
-    allowed_origin = "http://127.0.0.1:8082"
+    allowed_origin = "http://127.0.0.1:42011"
     # When: health GET과 preflight OPTIONS를 허용 origin으로 호출한다.
     get_response = client.get("/api/health", headers={"Origin": allowed_origin})
     options_response = client.options(
@@ -308,7 +308,7 @@ def test_disallowed_unsafe_origin_is_rejected_without_cors_permission() -> None:
     [
         ("CONTROL_TOWER_CORS_ORIGINS", "*"),
         ("CONTROL_TOWER_CORS_ORIGINS", "http://example.com"),
-        ("CONTROL_TOWER_CORS_ORIGINS", "http://0.0.0.0:8082"),
+        ("CONTROL_TOWER_CORS_ORIGINS", "http://0.0.0.0:42011"),
     ],
 )
 def test_invalid_cors_origin_is_rejected_at_configuration_boundary(

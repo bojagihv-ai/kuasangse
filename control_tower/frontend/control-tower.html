@@ -4822,7 +4822,7 @@
             <span class="status-mark" aria-hidden="true">BT</span>
             <div>
               <h3 id="status-title">백엔드 응답 대기 중</h3>
-              <p id="status-detail">127.0.0.1:5062에서 준비 상태를 확인하고 있습니다.</p>
+              <p id="status-detail">127.0.0.1:41009에서 준비 상태를 확인하고 있습니다.</p>
             </div>
           </div>
           <div class="detail-grid">
@@ -5229,7 +5229,7 @@
         factoryBackend: document.getElementById("factory-backend"),
         apiHub: document.getElementById("api-hub")
       };
-      const healthUrl = "http://127.0.0.1:5062/api/health";
+      const healthUrl = "http://127.0.0.1:41009/api/health";
       const requestedApiBase = new URLSearchParams(window.location.search).get("apiBase");
       const activeHealthUrl = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(requestedApiBase || "")
         ? `${requestedApiBase}/api/health`
@@ -5281,7 +5281,7 @@
         } catch (error) {
           const message = error instanceof DOMException && error.name === "AbortError"
             ? "health 응답 시간이 초과되었습니다."
-            : "127.0.0.1:5062 백엔드에 연결할 수 없습니다.";
+            : "127.0.0.1:41009 백엔드에 연결할 수 없습니다.";
           renderFailure(message);
         } finally {
           window.clearTimeout(timeoutId);
@@ -5298,7 +5298,7 @@
         const value = params.get(name);
         return /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(value || "") ? value : fallback;
       };
-      const API_BASE = localOrigin("apiBase", "http://127.0.0.1:5062");
+      const API_BASE = localOrigin("apiBase", "http://127.0.0.1:41009");
       const FACTORY_BACKEND = localOrigin("factoryBackend", "http://127.0.0.1:5050");
       const API_HUB = localOrigin("apiHub", "http://127.0.0.1:4321");
       // 판단에 쓸 기본 모델. 목록에 있으면 이것을 고른다.

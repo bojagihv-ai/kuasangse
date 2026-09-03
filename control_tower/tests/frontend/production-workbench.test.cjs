@@ -148,7 +148,7 @@ test('factory workbench exposes one compact API-driven master-detail surface', (
   assert.match(html, /production-workbench\.mjs\?[^"']*imageLoading=1/);
   assert.match(html, /<main\s+class=["']page["']\s+id=["']app["']/);
   assert.match(html, /main\.page\s*\{[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s);
-  assert.match(html, /const API_BASE = localOrigin\("apiBase", "http:\/\/127\.0\.0\.1:5062"\)/);
+  assert.match(html, /const API_BASE = localOrigin\("apiBase", "http:\/\/127\.0\.0\.1:41009"\)/);
   assert.match(html, /const FACTORY_BACKEND = localOrigin\("factoryBackend", "http:\/\/127\.0\.0\.1:5050"\)/);
   assert.match(html, /source\.startsWith\("\/api\/local-archive\/"\) \? FACTORY_BACKEND : API_BASE/);
   assert.doesNotMatch(html, /(?:factory-sync-workspace|a-cut-contact-sheet|artifact-inspector)[^{]*\{[^}]*(?:overflow-y:\s*(?:auto|scroll)|height:\s*\d+px)/s);
