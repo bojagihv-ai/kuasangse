@@ -1149,6 +1149,39 @@ export function renderWorkfileJobTabs(root, snapshotValue, onActivate = () => {}
   root.append(...buttons);
 }
 
+/**
+ * 보관 원본 주소를 격자용 작은 사본 주소로 바꾼다. 보관함(/api/local-archive/...) 주소만 바꾸고
+ * 나머지(허브 썸네일 등)는 그대로 둔다. 실측 2026-09-03: 카드 123px 자리에 1200px 원본이 들어와
+ * 숨은 화면에서도 서른 장이 남았다.
+ */
+const ARCHIVE_GRID_THUMB_WIDTH = 320;
+
+export function archiveGridThumbSource(value) {
+  const source = text(value);
+  const matched = source.match(/^(.*\/api\/local-archive\/assets\/[^/?#]+)\/image(?:\?.*)?$/u);
+  return matched ? `${matched[1]}/thumbnail?w=${ARCHIVE_GRID_THUMB_WIDTH}` : source;
+}
+
+/**
+ * 작은 사본을 먼저 쓰고, 그 주소가 없으면 원본으로 되돌린다.
+ * 되돌릴 곳이 없으면 호출한 쪽의 실패 처리(플레이스홀더)가 그대로 동작한다.
+ */
+function useGridThumb(image, url) {
+  const original = text(url);
+  const small = archiveGridThumbSource(original);
+  if (small !== original) {
+    let retried = false;
+    image.addEventListener('error', event => {
+      if (retried) return;
+      retried = true;
+      event.stopImmediatePropagation();
+      image.src = original;
+    });
+  }
+  image.src = small;
+  return image;
+}
+
 export function createWorkBundleAssetCard(asset, assetUrl = value => value, display = {}) {
   const displayTitle = text(display.title) || asset.displayName || asset.assetKey;
   const displayDetail = text(display.detail);
@@ -1170,7 +1203,10 @@ export function createWorkBundleAssetCard(asset, assetUrl = value => value, disp
   }
   if (imageUrl) {
     const image = element('img');
-    image.src = imageUrl;
+    // 카드는 123px 안팎으로 그린다. 보관 원본(1024~1200px)을 그대로 물면 화면 전체가 무거워진다.
+    // 크게 보기는 원본을 따로 받으므로 여기서 작은 사본을 써도 잃는 것이 없다.
+    const smallUrl = archiveGridThumbSource(imageUrl);
+    image.src = smallUrl;
     image.alt = displayTitle || `${asset.role} 자산`;
     image.loading = 'eager';
     image.decoding = 'async';
@@ -1178,12 +1214,17 @@ export function createWorkBundleAssetCard(asset, assetUrl = value => value, disp
     image.height = 120;
     frame.dataset.action = 'view-work-bundle-image';
     frame.setAttribute('aria-label', `${image.alt} 크게 보기`);
-    let retriedAfterError = false;
+    // 되돌리는 순서: 작은 사본 → 원본 → 캐시 우회 → 그때야 실패 문구.
+    const fallbacks = [
+      ...(smallUrl === imageUrl ? [] : [imageUrl]),
+      ...(/^https?:\/\//iu.test(imageUrl)
+        ? [`${imageUrl}${imageUrl.includes('?') ? '&' : '?'}retry=${Date.now()}`]
+        : []),
+    ];
     image.addEventListener('error', () => {
-      if (!retriedAfterError && /^https?:\/\//iu.test(imageUrl)) {
-        // 브라우저 HTTP 캐시에 남은 불량 사본(예: 허브 재기동 중 받은 응답)을 한 번 우회한다.
-        retriedAfterError = true;
-        image.src = `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}retry=${Date.now()}`;
+      const next = fallbacks.shift();
+      if (next) {
+        image.src = next;
         return;
       }
       placeholder.textContent = '이미지 불러오기 실패';
@@ -2789,7 +2830,7 @@ export function mountProductionWorkbench({
       placeholder.setAttribute('role', 'status');
       if (thumbnail.kind === 'image') {
         const image = element('img');
-        image.src = thumbnail.url;
+        useGridThumb(image, thumbnail.url);
         image.alt = `${STAGE_LABELS[stage.key]} 후보 ${candidate.id}`;
         image.loading = 'lazy';
         image.decoding = 'async';
@@ -3480,7 +3521,7 @@ export function mountProductionWorkbench({
     const shot = resolveCandidateThumbnail(candidate, assetUrl);
     if (shot.kind === 'image') {
       const preview = element('img', 'factory-inspector-shot');
-      preview.src = shot.url;
+      useGridThumb(preview, shot.url);
       preview.alt = `${STAGE_LABELS[stage.key]} 후보 ${candidate.id}`;
       preview.loading = 'lazy';
       preview.decoding = 'async';

@@ -2300,6 +2300,69 @@ def get_local_archive_workfile_manifest(workspace_id):
     })
 
 
+LOCAL_ARCHIVE_THUMBNAIL_WIDTHS = (160, 240, 320, 480, 640)
+LOCAL_ARCHIVE_THUMBNAIL_DIR = Path("output") / "local-archive-thumbs"
+
+
+def _local_archive_thumbnail_file(image_path, width):
+    """보관 원본에서 줄인 사본을 만들어 그 경로를 돌려준다. 못 만들면 None.
+
+    실측 2026-09-03: 생산관제 보드는 격자 칸을 100px 남짓으로 그리면서 보관 원본을
+    그대로 물었다. 숨겨진 화면에서도 1200~1840px 짜리 서른 장이 남아 있어 화면 전체가
+    무거웠다. 원본은 확대해서 볼 때만 필요하다.
+    """
+    try:
+        from PIL import Image  # 지연 임포트 — Pillow 가 없어도 원본 경로는 살아 있어야 한다
+    except Exception:
+        return None
+    try:
+        source_stat = image_path.stat()
+        target_dir = LOCAL_ARCHIVE_THUMBNAIL_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(f"{image_path}|{source_stat.st_mtime_ns}|{width}".encode("utf-8")).hexdigest()[:32]
+        target = target_dir / f"{digest}.jpg"
+        if target.is_file() and target.stat().st_size > 0:
+            return target
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+            image.thumbnail((width, width * 4), Image.LANCZOS)
+            staging = target.with_suffix(".tmp.jpg")
+            image.save(staging, format="JPEG", quality=82, optimize=True)
+        staging.replace(target)
+        return target
+    except Exception:
+        return None
+
+
+@api.route("/local-archive/assets/<archive_id>/thumbnail", methods=["GET"])
+def get_local_archive_asset_thumbnail(archive_id):
+    """격자에 뿌릴 작은 사본. 만들지 못하면 원본을 그대로 내준다(그림이 깨지지 않게)."""
+    archive_id = str(archive_id or "").strip()
+    if not archive_id:
+        return jsonify({"ok": False, "error": "archive_id가 필요합니다."}), 400
+    index = _local_archive_load_index()
+    record = next((item for item in index.get("assets", []) if str(item.get("archiveId") or "") == archive_id), None)
+    if not record:
+        return jsonify({"ok": False, "error": "로컬 보관 자산을 찾지 못했습니다."}), 404
+    files = record.get("files") if isinstance(record.get("files"), dict) else {}
+    image_path = _local_archive_safe_existing_file(files.get("imagePath"))
+    if not image_path:
+        return jsonify({"ok": False, "error": "이미지 파일을 찾지 못했습니다."}), 404
+    try:
+        requested = int(request.args.get("w") or 320)
+    except (TypeError, ValueError):
+        requested = 320
+    if requested <= 0:
+        requested = 320
+    # 아무 숫자나 받으면 사본이 끝없이 늘어난다. 정해진 단계로만 만든다.
+    width = min(LOCAL_ARCHIVE_THUMBNAIL_WIDTHS, key=lambda allowed: abs(allowed - requested))
+    thumbnail = _local_archive_thumbnail_file(image_path, width)
+    if thumbnail is not None:
+        return send_file(str(thumbnail), mimetype="image/jpeg", conditional=True, max_age=3600)
+    mime = str(files.get("imageMime") or mimetypes.guess_type(str(image_path))[0] or "image/png")
+    return send_file(str(image_path), mimetype=mime, conditional=True, max_age=3600)
+
+
 @api.route("/local-archive/assets/<archive_id>/image", methods=["GET"])
 def get_local_archive_asset_image(archive_id):
     archive_id = str(archive_id or "").strip()

@@ -77,6 +77,38 @@ export function mountProductionBoard(runtime, {
 } = {}) {
   if (!root || !runtime) return () => {};
   const { apiRequest, assetUrl } = runtime;
+
+  /**
+   * 격자에 뿌릴 그림은 작은 사본으로 받는다.
+   *
+   * 실측 2026-09-03: 격자 칸은 100px 남짓으로 그리는데 보관 원본(1200~1840px)을 그대로
+   * 물고 있었다. 숨겨진 화면에서도 서른 장이 남아 화면 전체가 무거웠다. 확대해서 볼 때는
+   * 원본이 필요하니 그 길(dataset.zoomSrc)은 건드리지 않는다.
+   *
+   * 사본을 못 만드는 백엔드에서도 그림이 비면 안 되므로, 실패하면 원본으로 한 번 되돌린다.
+   */
+  const GRID_THUMB_WIDTH = 320;
+
+  function gridThumbSource(value) {
+    const source = String(value || '');
+    const matched = source.match(/^(.*\/api\/local-archive\/assets\/[^/?#]+)\/image(?:\?.*)?$/);
+    return matched ? `${matched[1]}/thumbnail?w=${GRID_THUMB_WIDTH}` : source;
+  }
+
+  function applyGridThumb(image, source) {
+    const original = String(source || '');
+    const small = gridThumbSource(original);
+    if (small !== original) {
+      let retried = false;
+      image.addEventListener('error', () => {
+        if (retried) return;
+        retried = true;
+        image.src = assetUrl ? assetUrl(original) : original;
+      });
+    }
+    image.src = assetUrl ? assetUrl(small) : small;
+    return image;
+  }
   const factoryBackend = String(runtime.factoryBackend || '').replace(/\/+$/, '');
   const factoryApp = String(runtime.factoryApp || '').replace(/\/+$/, '');
   const loadJobs = fetchJobs || (() => apiRequest('/api/factory/jobs'));
@@ -1025,7 +1057,7 @@ export function mountProductionBoard(runtime, {
     const presentation = candidatePresentation(previewCandidate, cell.stageKey);
     if (presentation === 'image' && previewCandidate.thumbnailUrl) {
       const image = document.createElement('img');
-      image.src = assetUrl ? assetUrl(previewCandidate.thumbnailUrl) : previewCandidate.thumbnailUrl;
+      applyGridThumb(image, previewCandidate.thumbnailUrl);
       image.alt = `${cell.stageLabel} 후보 ${candidate.id}`;
       image.loading = 'lazy';
       // 작은 그림으로는 고를 수 없다. 그림을 누르면 크게 본다. 카드의 나머지를
@@ -1062,7 +1094,7 @@ export function mountProductionBoard(runtime, {
       // 문서(상세페이지) 변형보다 뒤에 둔다 — 상세 변형에 섹션 그림을 붙이면
       // 그 변형과 아무 상관 없는 그림을 보고 고르게 된다.
       const image = document.createElement('img');
-      image.src = assetUrl ? assetUrl(fallbackThumbUrl) : fallbackThumbUrl;
+      applyGridThumb(image, fallbackThumbUrl);
       image.alt = `${cell.stageLabel} 후보`;
       image.loading = 'lazy';
       image.dataset.zoomSrc = fallbackThumbUrl;
@@ -1155,7 +1187,7 @@ export function mountProductionBoard(runtime, {
       const thumbnail = String(asset.thumbnailReference || asset.contentReference || '');
       const content = String(asset.contentReference || asset.thumbnailReference || '');
       const image = document.createElement('img');
-      image.src = assetUrl ? assetUrl(thumbnail) : thumbnail;
+      applyGridThumb(image, thumbnail);
       image.alt = `${row.productName} 최종 상세 보관 결과`;
       image.loading = 'lazy';
       image.decoding = 'async';
@@ -1590,7 +1622,9 @@ export function mountProductionBoard(runtime, {
       node.title = `${cell.stageLabel} · ${CELL_TITLES[cell.state] || ''}`;
       if (cell.selectedThumbnailUrl) {
         const thumbKey = `${row.jobId}:${cell.stageKey}`;
-        const wanted = assetUrl ? assetUrl(cell.selectedThumbnailUrl) : cell.selectedThumbnailUrl;
+        const wanted = assetUrl
+          ? assetUrl(gridThumbSource(cell.selectedThumbnailUrl))
+          : gridThumbSource(cell.selectedThumbnailUrl);
         const cached = thumbNodes.get(thumbKey);
         const reuse = cached && cached.dataset.thumbSrc === wanted;
         const thumb = reuse ? cached : document.createElement('img');

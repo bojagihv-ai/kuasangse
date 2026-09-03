@@ -5,7 +5,7 @@ param(
   [ValidateRange(1, 65535)]
   [int]$BackendPort = 5050,
   [ValidateRange(1, 65535)]
-  [int]$ControlTowerPort = 5062,
+  [int]$ControlTowerPort = 41009,
   [string]$ExpectedWorkerBuildId = ''
 )
 

@@ -386,7 +386,7 @@
         }
         const workerSearchParams = new URL(location.href).searchParams;
         const workerApiUrl = new URL(
-          workerSearchParams.get('controlTowerBase') || 'http://127.0.0.1:5062',
+          workerSearchParams.get('controlTowerBase') || 'http://127.0.0.1:41009',
           location.origin,
         );
         if (
