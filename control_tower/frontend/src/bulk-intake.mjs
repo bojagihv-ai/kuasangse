@@ -4,6 +4,7 @@ import {
   buildProductPayload,
   groupImageFiles,
   hydrateWorkingState,
+  looksLikeCameraFileName,
   readSizePair,
   isSupportedImage,
   parseIntakeCsv,
@@ -11,6 +12,19 @@ import {
   serializeWorkingState,
   summarizeBulkIntake,
 } from './bulk-intake-model.mjs?bulkIntake=11';
+
+/**
+ * '전체 자동' 이 실제로 무엇을 대신 정하는지 사람 말로. 값만 보여 주면 그 값이 뭘
+ * 하는 건지는 여전히 몰라야 정상이다 — 실측 2026-09-03: 이 값이 숨은 화면(hidden
+ * manual-intake-panel)의 기본값을 조용히 물려받고 있었고, 조작자는 그 존재조차 몰랐다.
+ */
+const AUTOMATION_PRESET_COPY = Object.freeze({
+  full_auto: '대표·사이즈·색상옵션·이미지컷·섹션·최종 상세페이지까지 전부 AI가 고릅니다. 생산·A컷에서 언제든 다시 고를 수 있습니다.',
+  representative_manual: '대표 이미지만 사람이 고릅니다. 나머지는 AI가 고릅니다.',
+  representative_and_size_manual: '대표·사이즈 이미지를 사람이 고릅니다. 나머지는 AI가 고릅니다.',
+  all_images_manual: '이미지컷까지 모든 생성 이미지를 사람이 고릅니다. 섹션·최종은 AI가 고릅니다.',
+  custom: '자동판단 화면에서 단계별로 정한 값을 그대로 씁니다.',
+});
 
 // 회색 글씨는 보기일 뿐 값이 아니다. '주방' 처럼만 적어 두면 이미 채워진 것처럼 읽혀서,
 // 아래 카드가 "분류 비어 있음" 이라고 말하는 것과 서로 어긋나 보인다. 보기라고 못박는다.
@@ -246,7 +260,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   async function lockPolicy(productId, batchId) {
     const base = automation.snapshotRequest?.(String(productId)) || {
       productId: String(productId),
-      preset: String(document.getElementById('batch-policy')?.value || '').trim() || 'full_auto',
+      preset: String(policySelect.value || '').trim() || 'full_auto',
       batchOverride: { ...(automation.batchOverride || {}) },
       productOverride: { ...(automation.productOverride || {}) },
       stageOverride: { ...(automation.stageOverride || {}) },
@@ -412,6 +426,42 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   colorRuleDetails.append(colorRuleBox);
   const bulkBar = element('div', 'bulk-batch-bar');
 
+  // 자동화 방식 · 이미지 생성 모델 — 이 두 값은 예전에 숨은 옛 직접 입력 폼
+  // (#image-model-select, #batch-policy · manual-intake-panel, hidden) 에서 조용히
+  // 읽어 왔다. 조작자는 그 폼을 본 적이 없어 자신이 뭘 골랐는지도 몰랐다 — 실측
+  // 2026-09-03: "자동 수동 선택하는것도 나 한번도 인식하지못했어. 내가 정하게끔
+  // 해놨어야지." 이제 이 화면 자체에 보이는 컨트롤을 두고, 값은 여기서만 가져온다.
+  const legacyImageModelSelect = document.getElementById('image-model-select');
+  const legacyPolicySelect = document.getElementById('batch-policy');
+  const automationBox = element('div', 'bulk-automation-box');
+  const automationHead = element('div', 'bulk-automation-head');
+  automationHead.append(
+    element('strong', '', '자동화 설정'),
+    element('span', 'status-message', '이 설정으로 투입 전 확인 화면에서 다시 보여 줍니다.'),
+  );
+  const automationRow = element('div', 'bulk-automation-row');
+  const imageModelField = element('label', 'field-stack');
+  const imageModelSelect = document.createElement('select');
+  imageModelSelect.id = 'bulk-image-model-select';
+  imageModelSelect.innerHTML = legacyImageModelSelect ? legacyImageModelSelect.innerHTML : '';
+  if (legacyImageModelSelect) imageModelSelect.value = legacyImageModelSelect.value;
+  imageModelField.append(element('span', '', '이미지 생성 모델'), imageModelSelect);
+  const policyField = element('label', 'field-stack');
+  const policySelect = document.createElement('select');
+  policySelect.id = 'bulk-automation-preset-select';
+  policySelect.innerHTML = legacyPolicySelect ? legacyPolicySelect.innerHTML : '';
+  if (legacyPolicySelect) policySelect.value = legacyPolicySelect.value;
+  policyField.append(element('span', '', '자동화 방식'), policySelect);
+  automationRow.append(imageModelField, policyField);
+  const automationCopy = element('p', 'status-message bulk-automation-copy');
+  automationBox.append(automationHead, automationRow, automationCopy);
+  function renderAutomationCopy() {
+    automationCopy.textContent = AUTOMATION_PRESET_COPY[policySelect.value] || '';
+  }
+  imageModelSelect.addEventListener('change', () => { confirmState = null; render(); });
+  policySelect.addEventListener('change', () => { renderAutomationCopy(); confirmState = null; render(); });
+  renderAutomationCopy();
+
   const actions = element('div', 'bulk-actions');
   const submit = element('button', 'board-action primary', '작업 큐에 투입');
   submit.type = 'button';
@@ -425,7 +475,11 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   const statusNode = element('p', 'status-message');
   const table = element('div', 'bulk-plan');
 
-  root.replaceChildren(heading, pickers, defaultsBox, colorRuleDetails, bulkBar, actions, statusNode, table);
+  const confirmBox = element('div', 'bulk-confirm-box');
+  confirmBox.hidden = true;
+  let confirmState = null;
+
+  root.replaceChildren(heading, pickers, defaultsBox, automationBox, colorRuleDetails, bulkBar, confirmBox, actions, statusNode, table);
 
   function setStatus(copy, tone = '') {
     status = { copy, tone };
@@ -1198,10 +1252,79 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     table.replaceChildren(...nodes);
   }
 
+  function labelledConfirmRow(label, value) {
+    const dt = element('dt', '', label);
+    const dd = element('dd', '', value);
+    return [dt, dd];
+  }
+
+  /**
+   * 큐로 보내기 전 마지막 확인. 실측 2026-09-03: 사진 넣고 바로 투입했더니 파일명이
+   * 제품명이 된 채, 자동화 방식도 이미지 모델도 뭘로 진행되는지 한 번도 못 보고 넘어갔다.
+   * "내가 정하게끔 해놨어야지" — 여기서 정확히 무엇으로 진행되는지 보여 주고 사람이
+   * 한 번 더 눌러야 실제로 큐에 들어간다.
+   */
+  function renderConfirmBox() {
+    confirmBox.hidden = !confirmState;
+    confirmBox.replaceChildren();
+    if (!confirmState) return;
+    const { entries } = confirmState;
+    confirmBox.append(element('strong', '', `${entries.length}건을 아래 설정으로 투입합니다`));
+
+    const settings = document.createElement('dl');
+    settings.className = 'bulk-confirm-settings';
+    const modelLabel = imageModelSelect.selectedOptions[0]?.textContent.trim() || imageModelSelect.value || '지정 안 됨';
+    settings.append(...labelledConfirmRow('이미지 생성 모델', modelLabel));
+    const presetLabel = policySelect.selectedOptions[0]?.textContent.trim() || policySelect.value;
+    settings.append(...labelledConfirmRow('자동화 방식', presetLabel));
+    const decisionModel = String(document.getElementById('model-select')?.value || '').trim();
+    const decisionEffort = String(document.getElementById('reasoning-select')?.value || '').trim();
+    settings.append(...labelledConfirmRow(
+      '판단 모델 (경쟁사·색상 등 AI 판단)',
+      decisionModel && decisionEffort
+        ? `${decisionModel} · 추론 ${decisionEffort}`
+        : '자동판단 화면에서 설정되지 않음 — 자동 판단이 필요한 항목에서 막힐 수 있습니다',
+    ));
+    confirmBox.append(settings);
+    confirmBox.append(element('p', 'bulk-automation-copy', AUTOMATION_PRESET_COPY[policySelect.value] || ''));
+
+    const flagged = entries.filter(entry => looksLikeCameraFileName(entry.productName));
+    if (flagged.length) {
+      const warn = element(
+        'p',
+        'bulk-confirm-warning',
+        `제품명이 사진 파일 이름 그대로인 ${flagged.length}건은 그 이름으로 경쟁사도 검색됩니다 · `
+          + `${flagged.slice(0, 4).map(entry => entry.productName).join(', ')}${flagged.length > 4 ? ' 외' : ''}`,
+      );
+      confirmBox.append(warn);
+    }
+
+    const list = document.createElement('ul');
+    list.className = 'bulk-confirm-list';
+    for (const entry of entries) {
+      const li = document.createElement('li');
+      li.append(element('span', '', entry.productName));
+      if (looksLikeCameraFileName(entry.productName)) li.append(element('span', 'bulk-confirm-flag', '파일명 그대로'));
+      list.append(li);
+    }
+    confirmBox.append(list);
+
+    const row = element('div', 'bulk-confirm-actions');
+    const cancel = element('button', 'board-action ghost', '다시 확인');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => { confirmState = null; render(); });
+    row.append(cancel);
+    confirmBox.append(row);
+  }
+
   function render() {
-    submit.textContent = plan.ready ? `작업 큐에 ${plan.ready}건 투입` : '작업 큐에 투입';
+    if (!plan.ready) confirmState = null;
+    submit.textContent = confirmState
+      ? '이 설정으로 투입'
+      : plan.ready ? `확인하고 ${plan.ready}건 투입` : '작업 큐에 투입';
     submit.disabled = busy || plan.ready === 0;
     reset.disabled = busy || (!grouped.products.length && !csvRows.length);
+    renderConfirmBox();
     // 막힌 건이 있으면 그것부터 말한다. 무엇을 채워야 버튼이 열리는지 모르면
     // 사람은 회색 버튼만 보고 고장으로 읽는다.
     hint.textContent = plan.blocked
@@ -1223,9 +1346,10 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     // 버튼의 'N건 투입' 과 실제 전송 건수도 어긋난다.
     const entries = plan.entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue)));
     if (!entries.length) return;
+    confirmState = null;
     busy = true;
     const batchId = `batch-bulk-${entries.length}-${entries[0].productName}`.slice(0, 60);
-    const imageModel = document.getElementById('image-model-select')?.value || '';
+    const imageModel = imageModelSelect.value || '';
     const results = [];
     progress = { done: 0, total: entries.length, current: entries[0].productName };
     render();
@@ -1349,7 +1473,16 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   function onClick(event) {
     const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
     if (!target || busy) return;
-    if (target.dataset.action === 'submit') void submitPlan();
+    if (target.dataset.action === 'submit') {
+      if (!confirmState) {
+        const entries = plan.entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue)));
+        if (!entries.length) return;
+        confirmState = { entries };
+        render();
+        return;
+      }
+      void submitPlan();
+    }
     if (target.dataset.action === 'reset') {
       grouped = { products: [], skipped: [] };
       csvRows = [];

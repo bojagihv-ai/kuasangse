@@ -2015,6 +2015,110 @@
       gap: var(--space-1);
     }
 
+    /* 자동화 방식·이미지 모델 — 예전엔 숨은 옛 폼에서 조용히 물려받던 값이라 눈에 띄게 둔다. */
+    .bulk-automation-box {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-automation-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--space-1);
+    }
+
+    .bulk-automation-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .bulk-automation-row .field-stack {
+      min-inline-size: 12rem;
+      flex: 1 1 12rem;
+    }
+
+    .bulk-automation-copy {
+      color: var(--color-text-secondary);
+    }
+
+    /* 큐로 투입하기 전 확인 화면. 회색 버튼만 보고 아무 일도 안 일어난 줄 알면 안 된다. */
+    .bulk-confirm-box {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-emphasis) solid var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+    }
+
+    .bulk-confirm-settings {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: var(--space-half) var(--space-1);
+      margin: 0;
+    }
+
+    .bulk-confirm-settings dt {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-confirm-settings dd {
+      margin: 0;
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-confirm-warning {
+      margin: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-warn-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+    }
+
+    .bulk-confirm-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-half);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      max-inline-size: 100%;
+    }
+
+    .bulk-confirm-list li {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-half) var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-confirm-flag {
+      padding: var(--badge-padding-block) var(--space-1);
+      border: var(--border-width-default) solid var(--color-warn-border);
+      border-radius: var(--radius-pill);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+      font-size: var(--font-size-compact);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-confirm-actions {
+      display: flex;
+      gap: var(--space-1);
+    }
+
     .bulk-actions {
       display: flex;
       flex-wrap: wrap;
@@ -5626,6 +5730,6 @@
     }
   </script>
   <script type="module" src="./src/production-board.mjs?parallelBoard=78"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=21"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=22"></script>
 </body>
 </html>
