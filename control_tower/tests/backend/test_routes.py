@@ -873,6 +873,73 @@ def test_worker_lifecycle_and_sse_proxy_remote_state(tmp_path: Path) -> None:
     assert api.worker_payloads == [("claim", None), ("ack", "order-001")]
 
 
+def _manual_intake_http_payload(*, suffix: str) -> dict[str, object]:
+    return {
+        "contractType": "manual-product-intake",
+        "contractVersion": "1.0.0",
+        "batchId": "batch-http-delete",
+        "idempotencyKey": f"http-delete-{suffix}",
+        "mode": "manual",
+        "source": {"kind": "manual"},
+        "productName": f"삭제 시험 제품 {suffix}",
+        "category": "주방",
+        "requiredValues": {
+            "material": "면", "originCountry": "대한민국", "size": "10cm",
+            "salePrice": "9000", "usage": "생활", "optionMode": "none",
+        },
+        "inputImages": [{
+            "role": "base", "ordinal": 1, "name": "정면", "fileName": "front.png",
+            "sha256": f"fixture-sha-{suffix}", "dataUrl": "data:image/png;base64,aGVsbG8=",
+        }],
+    }
+
+
+def test_deleting_a_job_over_http_actually_removes_it_from_the_saved_file(tmp_path: Path) -> None:
+    """작업 큐 삭제 — 화면에서 지운 것처럼 보이기만 하지 않는다.
+
+    2026-09-04: 잘못 넣은 제품을 지울 방법이 없어 큐에 계속 남았다. HTTP 로 지우면
+    저장 파일(factory-product-jobs.json)에서도 실제로 사라져야 하고, 목록에서도
+    빠져야 하고, 같은 id 를 다시 지우려 하면 이제 없다고 분명히 답해야 한다.
+    """
+    api = FakePdpApi()
+    client = _client(api, tmp_path)
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+
+    created = client.post("/api/factory/jobs", json=_manual_intake_http_payload(suffix="a"), headers=headers)
+    assert created.status_code == 202
+    job_id = created.get_json()["job"]["jobId"]
+
+    deleted = client.delete(f"/api/factory/jobs/{job_id}", headers=headers)
+    assert deleted.status_code == 200
+    assert deleted.get_json() == {"accepted": True, "jobId": job_id, "productName": "삭제 시험 제품 a", "removed": True}
+
+    listing = client.get("/api/factory/jobs").get_json()
+    assert job_id not in {job["jobId"] for job in listing["jobs"]}
+
+    state_path = tmp_path / "factory-product-jobs.json"
+    assert job_id not in state_path.read_text(encoding="utf-8")
+
+    again = client.delete(f"/api/factory/jobs/{job_id}", headers=headers)
+    assert again.status_code == 404
+    assert again.get_json()["error"]["code"] == "factory_product_job_not_found"
+
+
+def test_deleting_a_job_without_csrf_headers_is_refused(tmp_path: Path) -> None:
+    api = FakePdpApi()
+    client = _client(api, tmp_path)
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+    created = client.post("/api/factory/jobs", json=_manual_intake_http_payload(suffix="b"), headers=headers)
+    job_id = created.get_json()["job"]["jobId"]
+
+    response = client.delete(f"/api/factory/jobs/{job_id}")
+
+    assert response.status_code == 428
+    listing = client.get("/api/factory/jobs").get_json()
+    assert job_id in {job["jobId"] for job in listing["jobs"]}
+
+
 def test_worker_routes_prioritize_local_cafe24_bridge_order_without_remote_claim(tmp_path: Path) -> None:
     api = FakePdpApi()
     bridge = QueuedCafe24CommandBridge(execution_timeout_seconds=1.0)

@@ -1544,6 +1544,7 @@ export function mountProductionWorkbench({
   let queueApiError = '';
   const pendingResumeByStage = new Map();
   const resumeInFlight = new Set();
+  const deleteInFlight = new Set();
   const workfileForkInFlight = new Set();
   const heldDecisions = new Set();
   let approval = {
@@ -4157,6 +4158,19 @@ export function mountProductionWorkbench({
           historyAction.addEventListener('click', () => void loadHistoricalWorkBundle(job.jobId));
           actions.append(historyAction);
         }
+        // 지금 조립공장이 붙잡은 작업(jobId === projectionJobId)·진행 중인 작업·이미 Cafe24
+        // 에 올라간 작업은 서버가 지우는 것 자체를 거절한다(remove_product_job 의 세 가지
+        // 잠금). 눌러 놓고 거절 문구만 보게 하지 않도록 여기서 먼저 걸러 둔다.
+        const alreadyRegistered = text(record(job.progress).registration?.status) === 'staged_verified';
+        const canDelete = jobId !== projectionJobId && job.status !== 'running' && !alreadyRegistered;
+        if (canDelete) {
+          const deleteAction = element('button', 'button-danger', deleteInFlight.has(jobId) ? '지우는 중…' : '작업 지우기');
+          deleteAction.type = 'button';
+          deleteAction.dataset.action = 'delete-factory-job';
+          deleteAction.disabled = deleteInFlight.has(jobId);
+          deleteAction.addEventListener('click', () => void deleteFactoryJob(jobId, job.productName));
+          actions.append(deleteAction);
+        }
         if (actions.childElementCount) row.append(actions);
         root.append(row);
       }
@@ -4282,6 +4296,48 @@ export function mountProductionWorkbench({
     await refreshAfterEventError();
     if (renewed && !stopped) connectEvents(true);
   });
+
+  const DELETE_JOB_ERROR_COPY = Object.freeze({
+    factory_product_job_not_found: '이미 지워진 작업입니다.',
+    factory_product_job_busy: '조립공장이 지금 이 작업을 처리하는 중이라 지울 수 없습니다. 끝나거나 멈춘 뒤 다시 시도하세요.',
+    factory_product_job_active_session: '지금 조립공장이 붙잡고 있는 작업이라 지울 수 없습니다. 다른 제품으로 넘어간 뒤 지우세요.',
+    factory_product_job_already_registered: 'Cafe24 에 이미 등록된 작업이라 지울 수 없습니다. 실제로 올라간 기록은 남겨 둡니다.',
+  });
+
+  /**
+   * 작업 큐에서 실제로 지운다 — 화면에서만 숨기지 않는다.
+   *
+   * 실측 2026-09-04: 이름을 잘못 넣거나 엉뚱한 경쟁사로 오염된 작업을 지울 방법이
+   * 없어 큐에 유령처럼 남았다. 서버가 저장 파일에서도 그 자리를 실제로 없앤다
+   * (control_tower/backend/factory_sync.py remove_product_job). 되돌릴 수 없으니
+   * 한 번 더 묻는다.
+   */
+  async function deleteFactoryJob(jobId, productName) {
+    const key = text(jobId);
+    if (!key || deleteInFlight.has(key)) return;
+    const label = text(productName) || key;
+    if (!globalThis.confirm(`${label} 작업을 지울까요? 되돌릴 수 없고, 저장 기록에서도 실제로 없어집니다.`)) return;
+    deleteInFlight.add(key);
+    render();
+    try {
+      const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(key)}`, { method: 'DELETE' });
+      productJobs = productJobs.filter(item => text(item.jobId) !== key);
+      // 방금 누른 삭제 버튼이 이 행 안에 있어 초점이 여기 남는다. renderQueue 는 초점이
+      // 자기 안에 있으면 다시 그리지 않는다(타이핑 중 깨지지 않게 한 보호) — 그 보호가
+      // 방금 지운 행을 화면에 계속 남겨 둔다. 지운 자리는 더 지킬 초점이 아니다.
+      // 방금 누른 삭제 버튼이 이 행 안에 있어 초점이 여기 남는다. renderQueue 는 초점이
+      // 자기 안에 있으면 다시 그리지 않는다(타이핑 중 깨지지 않게 한 보호) — 그 보호가
+      // 방금 지운 행을 화면에 계속 남겨 둔다. 지운 자리는 더 지킬 초점이 아니다.
+      if (roots.queue?.contains(document.activeElement)) document.activeElement.blur();
+      setStatus('live-status', `${text(result?.productName) || label} 작업을 지웠습니다.`, 'ok');
+    } catch (error) {
+      const code = text(error?.code);
+      setStatus('live-status', DELETE_JOB_ERROR_COPY[code] || `작업을 지우지 못했습니다 · ${text(error?.message || error)}`, 'error');
+    } finally {
+      deleteInFlight.delete(key);
+      render();
+    }
+  }
 
   async function resumeFactoryJob(jobId) {
     const key = text(jobId);

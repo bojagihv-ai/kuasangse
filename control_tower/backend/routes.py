@@ -1735,6 +1735,23 @@ def register_routes(
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
         return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
 
+    @app.delete("/api/factory/jobs/<job_id>")
+    def factory_product_delete(job_id: str) -> Response | tuple[Response, int]:
+        """작업 큐 기록을 실제로 지운다. 화면에서만 숨기는 삭제가 아니다."""
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        try:
+            result = factory_sync.remove_product_job(job_id)
+        except FactorySyncError as error:
+            status = (
+                404
+                if error.code == "factory_product_job_not_found"
+                else 409
+            )
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, **result})
+
     @app.post("/api/factory/jobs/<job_id>/cafe24/register")
     def factory_product_cafe24_register(job_id: str) -> Response | tuple[Response, int]:
         csrf_error = require_csrf()

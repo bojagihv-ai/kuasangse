@@ -1653,6 +1653,42 @@ class FactorySyncBridge:
             self._condition.notify_all()
             return {"accepted": True, "orderId": order["orderId"]}
 
+    def remove_product_job(self, job_id: str) -> JsonObject:
+        """작업 큐 기록을 실제로 지운다 — 화면에서만 숨기지 않고 저장 파일에서도 없앤다.
+
+        2026-09-04: 사람이 잘못 넣은 제품(엉뚱한 이름·엉뚱한 경쟁사로 오염된 결과)을
+        되살릴 방법도, 지울 방법도 없어 큐에 유령처럼 남았다. '삭제'가 화면에만 안
+        보이고 factory-product-jobs.json 에는 그대로면, 다음에 같은 자리를 또 헷갈리거나
+        복구 스크립트가 죽은 작업을 진짜 작업으로 다시 읽어 들인다. 지우면 정말 없어야 한다.
+
+        아직 조립공장에 나가 있는 주문(current_order_id)이나 지금 워크스페이스가 붙잡고
+        있는 작업(registration.jobId)은 지우지 않는다 — 워커가 중간에 잃어버릴 자리를
+        만들거나, 화면이 존재하지 않는 작업을 계속 가리키게 되기 때문이다. Cafe24 에 실제로
+        올라간(staged_verified) 기록도 지우지 않는다 — 외부에 실제로 벌어진 일의 증거다.
+        """
+        with self._condition:
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            if job.current_order_id:
+                raise FactorySyncError("factory_product_job_busy")
+            registration = (self._projection or {}).get("registration")
+            on_target = isinstance(registration, dict) and registration.get("jobId") == job_id
+            if on_target:
+                raise FactorySyncError("factory_product_job_active_session")
+            job_registration = job.progress.get("registration") if isinstance(job.progress, dict) else None
+            if isinstance(job_registration, dict) and job_registration.get("status") == "staged_verified":
+                raise FactorySyncError("factory_product_job_already_registered")
+            product_name = str((job.payload or {}).get("productName") or "")
+            del self._product_jobs[job_id]
+            self._persist_product_jobs_locked()
+            self._append_event(
+                "factory.product.removed",
+                {"jobId": job_id, "productName": product_name},
+            )
+            self._condition.notify_all()
+            return {"jobId": job_id, "productName": product_name, "removed": True}
+
     def queue_compose_cut(self, job_id: str, stage_key: str, prompt: str) -> JsonObject:
         """사람이 적은 프롬프트로 그 단계의 컷을 새로 만들라고 조립공장에 지시한다.
 
