@@ -1887,8 +1887,10 @@ export function mountProductionWorkbench({
       row?.focus?.();
       return;
     }
-    // board / board-values
-    globalThis.controlTowerMenu?.activate?.('production-acut');
+    // board / board-values — 병렬 생산 보드(격자)는 '생산·A컷' 이 아니라 '작업 큐' 패널 안에 있다.
+    // 실측 2026-09-03: 이름만 보고 production-acut 으로 보냈더니 사람은 제품 하나짜리 화면에
+    // 떨어지고, 정작 고를 격자는 숨은 패널에 있어 아무 일도 일어나지 않았다.
+    globalThis.controlTowerMenu?.activate?.('queue');
     const stageKey = text(record(action).stageKey);
     // 메뉴를 막 바꿔서 보드가 아직 그리는 중일 수 있다. 다음 프레임에 찾는다.
     requestAnimationFrame(() => {

@@ -99,7 +99,7 @@ test('개요 첫 화면은 지금 사람이 할 일을 제품 이름과 함께 �
   assert.match(readback.headline, /손댈 일|할 일은 없습니다|투입된 제품이 없습니다/u);
 });
 
-test('컷 고르기 줄을 누르면 생산·A컷 보드의 그 제품으로 데려간다', async t => {
+test('컷 고르기 줄을 누르면 격자가 있는 작업 큐로 데려가고 그 제품이 보인다', async t => {
   const page = await openControlTower(t);
   const pick = page.locator('#next-action-list .next-action-item[data-kind="pick"]').first();
   const hasPick = await pick.count();
@@ -110,14 +110,14 @@ test('컷 고르기 줄을 누르면 생산·A컷 보드의 그 제품으로 데
   }
   const jobId = await pick.getAttribute('data-job-id');
   await pick.locator('button[data-action="next-action-primary"]').click();
-  await page.waitForSelector('#menu-tab-production-acut[aria-selected="true"]');
-  assert.equal(await page.locator('#menu-panel-production-acut').isVisible(), true);
-  const focusedJob = await page.evaluate(() => document.activeElement?.closest?.('[data-job-id]')?.dataset?.jobId || '');
+  // 격자는 '작업 큐' 패널 안에 있다. 이름이 비슷한 '생산·A컷' 은 제품 하나짜리 화면이다.
+  await page.waitForSelector('#menu-tab-queue[aria-selected="true"]');
+  assert.equal(await page.locator('#menu-panel-queue').isVisible(), true);
+  // 보이는 것까지 확인한다. 숨은 패널 안에 요소만 있으면 사람에게는 아무 일도 일어나지 않는다.
+  const target = page.locator(`#production-board [data-job-id="${jobId}"]`).first();
+  await target.waitFor({ state: 'visible', timeout: 10_000 });
   await page.screenshot({ path: path.join(EVIDENCE, 'inbox-routed-to-board.png') });
-  assert.ok(
-    focusedJob === jobId || await page.locator(`#production-board [data-job-id="${jobId}"]`).count() > 0,
-    `보드에 ${jobId} 가 없다`,
-  );
+  assert.equal(await target.isVisible(), true, `보드에서 ${jobId} 가 보이지 않는다`);
 });
 
 test('할 일과 별개로 기존 제품 전환·파일 연결 자리는 그대로 남는다', async t => {
