@@ -13480,9 +13480,14 @@ function factoryRuntimeSectionsHelpers() {
   };
 }
 
-function factoryRuntimeBatchCommandError(code) {
-  const error = new Error(code);
+function factoryRuntimeBatchCommandError(code, detail = '') {
+  // 코드만 올려 보내면 관제탑에는 factory_product_workfile_save_failed 같은 낱말만 남고,
+  // 왜 실패했는지는 조립공장 화면의 빨간 띠에만 있다. 사람이 두 화면을 오가며 맞춰야 했다.
+  // 실측 2026-09-03: 투입 직후 차단된 작업의 원인을 관제탑만 보고는 알 수 없었다.
+  const reason = String(detail || '').trim();
+  const error = new Error(reason ? `${code}: ${reason}` : code);
   error.code = code;
+  if (reason) error.detail = reason;
   return error;
 }
 
@@ -18045,7 +18050,11 @@ async function factoryRuntimeControlPrepareProduct(payload = {}) {
     })
     : true;
   if (!savedWorkfile) {
-    throw factoryRuntimeBatchCommandError('factory_product_workfile_save_failed');
+    // 방금 저장이 남긴 사유를 그대로 실어 보낸다(화면에 뜨는 그 문장).
+    throw factoryRuntimeBatchCommandError(
+      'factory_product_workfile_save_failed',
+      String(state.error || '').replace(/^작업파일 내보내기 실패:\s*/u, ''),
+    );
   }
   const savedWorkfileReceipt = typeof window !== 'undefined'
     ? window.__KUASANGSE_LAST_WORKFILE_RECEIPT__
