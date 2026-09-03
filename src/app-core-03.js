@@ -1664,6 +1664,22 @@ function stripFactoryImages(factory = {}, options = {}) {
       uploadedAt: img.uploadedAt || null,
       hasImage: !!(img.base64 || img.preview || img.hasImage),
     }));
+    // 색상 이미지도 사진이다. 여기서 빼지 않으면 가벼운 사본이 전혀 가볍지 않다.
+    //
+    // 실측 2026-09-03: 관제탑에서 사진 다섯 장(기본 1 + 색상 4)을 투입했더니 저장본이
+    // 125.6MB 가 됐다. 색상 4장이 base64·preview·dataUrl 세 벌로 60MB 이고, 그 전체가
+    // 통짜 사본과 가벼운 사본 두 벌로 들어갔다. 브라우저 저장이 그 크기에서 어긋나
+    // 제품이 factory_product_workfile_save_failed 로 곧바로 차단됐다.
+    // 원본은 통짜 사본(assets)이 그대로 들고 있으므로 복원에는 영향이 없다.
+    copy.product.colorImages = (Array.isArray(copy.product.colorImages) ? copy.product.colorImages : [])
+      .map(img => {
+        const light = { ...(img || {}) };
+        light.hasImage = !!(light.base64 || light.preview || light.dataUrl || light.hasImage);
+        light.base64 = null;
+        light.preview = light.hasImage ? '__stored_in_indexeddb__' : null;
+        light.dataUrl = null;
+        return light;
+      });
     ['dbCandidates', 'cafe24Candidates', 'pendingDbCandidates', 'pendingCafe24Candidates', 'selectedDbCandidate', 'selectedCafe24Candidate', 'cafe24Product'].forEach(key => {
       const value = copy.product[key];
       if (Array.isArray(value)) {
