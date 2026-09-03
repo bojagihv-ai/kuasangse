@@ -7,7 +7,11 @@ const { pathToFileURL } = require('node:url');
 
 const FACTORY_SYNC_MODEL = path.resolve(__dirname, '../../frontend/src/factory-sync-model.mjs');
 const WORKBENCH = path.resolve(__dirname, '../../frontend/src/production-workbench.mjs');
-const FACTORY_SYNC_URL = `${pathToFileURL(FACTORY_SYNC_MODEL).href}?selectedId=3`;
+// 워크벤치가 실제로 쓰는 캐시 토큰을 소스에서 읽는다. 손으로 적어 두면 토큰을 올릴 때마다
+// 이 계약만 조용히 깨져, 정작 재수출이 어긋난 날에는 아무도 이 실패를 믿지 않게 된다.
+const WORKBENCH_SOURCE = require('node:fs').readFileSync(WORKBENCH, 'utf8');
+const FACTORY_SYNC_TOKEN = (WORKBENCH_SOURCE.match(/factory-sync-model\.mjs\?([^'"]+)/) || [])[1] || 'selectedId=3';
+const FACTORY_SYNC_URL = `${pathToFileURL(FACTORY_SYNC_MODEL).href}?${FACTORY_SYNC_TOKEN}`;
 const WORKBENCH_URL = `${pathToFileURL(WORKBENCH).href}?factory-sync-export-contract=3`;
 
 test('reusing selectedId keeps the original ESM module namespace after source changes', async () => {

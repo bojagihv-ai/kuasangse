@@ -11,7 +11,9 @@ import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
 import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=2';
 // 사람 말로 옮긴 사유 표는 보드 모델이 들고 있다. 화면마다 따로 두면 한쪽만 번역되어
 // 같은 코드가 어떤 화면에서는 한국어로, 어떤 화면에서는 원시 코드로 뜬다.
-import { OPERATOR_MESSAGES } from './production-board-model.mjs?parallelBoard=43';
+import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=43';
+// 개요 첫 화면은 새 사실을 만들지 않는다. 보드가 이미 만든 파생을 사람이 할 일 순서로만 다시 세운다.
+import { buildNextActionInbox, inboxHeadline } from './next-action-model.mjs?nextAction=2';
 import { deriveAssemblyWorkbench, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=2';
 import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
 import {
@@ -1423,6 +1425,9 @@ export function mountProductionWorkbench({
     audit: document.getElementById('audit-sync-summary'),
     bundleInputs: document.getElementById('work-bundle-input-assets'),
     bundleOutputs: document.getElementById('work-bundle-output-assets'),
+    nextActionList: document.getElementById('next-action-list'),
+    nextActionHeadline: document.getElementById('next-action-headline'),
+    nextActionWatching: document.getElementById('next-action-watching'),
     workfileTabs: document.getElementById('workfile-job-tabs'),
     workfileTabPanel: document.getElementById('workfile-job-tabpanel'),
     imageDialog: document.getElementById('work-bundle-image-dialog'),
@@ -1811,6 +1816,118 @@ export function mountProductionWorkbench({
       workfileForkInFlight.delete(sha256);
       render();
       if (forkCompleted) setStatus('live-status', '새 작업 생성 완료', 'ok');
+    }
+  }
+
+  /**
+   * 인박스의 한 줄이 갈 곳으로 실제로 보낸다. 화면을 바꾸는 일은 이미 있는 길(메뉴 전환,
+   * 보드 포커스 이벤트, 탭 활성화)만 쓴다. 여기서 새로 명령을 보내지는 않는다 —
+   * 무엇을 고르고 무엇을 등록할지는 그 화면에서 사람이 정한다.
+   */
+  function routeNextAction(item, action) {
+    const route = text(record(action).route);
+    const jobId = text(item.jobId);
+    if (item.tabKey) activateWorkfileTab(item.tabKey);
+    if (route === 'workfile-desk') {
+      globalThis.controlTowerMenu?.activate?.('overview');
+      const desk = document.querySelector('.workfile-job-desk');
+      desk?.scrollIntoView?.({ block: 'start' });
+      document.getElementById('workfile-job-tabpanel')?.focus?.();
+      return;
+    }
+    if (route === 'cafe24') {
+      globalThis.controlTowerMenu?.activate?.('cafe24');
+      return;
+    }
+    if (route === 'queue') {
+      globalThis.controlTowerMenu?.activate?.('queue');
+      const row = document.querySelector(`#product-list .operator-job-row[data-job-id="${CSS.escape(jobId)}"]`);
+      row?.scrollIntoView?.({ block: 'center' });
+      row?.focus?.();
+      return;
+    }
+    // board / board-values
+    globalThis.controlTowerMenu?.activate?.('production-acut');
+    const stageKey = text(record(action).stageKey);
+    // 메뉴를 막 바꿔서 보드가 아직 그리는 중일 수 있다. 다음 프레임에 찾는다.
+    requestAnimationFrame(() => {
+      const board = document.getElementById('production-board');
+      if (!board) return;
+      const target = (stageKey && board.querySelector(`[data-job-id="${CSS.escape(jobId)}"][data-stage-key="${CSS.escape(stageKey)}"]`))
+        || board.querySelector(`[data-job-id="${CSS.escape(jobId)}"]`);
+      target?.scrollIntoView?.({ block: 'center' });
+      const focusable = target?.matches?.('button, [tabindex]') ? target : target?.querySelector?.('button, [tabindex]');
+      focusable?.focus?.();
+    });
+  }
+
+  function createNextActionItem(item, index) {
+    const article = element('article', 'next-action-item');
+    article.dataset.jobId = text(item.jobId);
+    article.dataset.kind = text(item.kind);
+    article.dataset.tone = text(item.tone);
+    article.dataset.live = String(item.live === true);
+    const copy = element('div', 'next-action-copy');
+    const title = element('strong', '', `${text(item.productName)} · ${text(item.headline)}`);
+    const meta = element('span', 'status-message', [
+      text(item.detail),
+      item.live ? '지금 조립공장이 이 제품을 붙잡고 있습니다' : '',
+      text(item.waitLabel) && item.waitLabel !== '방금' ? `${item.waitLabel} 대기` : '',
+    ].filter(Boolean).join(' · '));
+    copy.append(title, meta);
+    const actions = element('div', 'next-action-actions');
+    const primary = element('button', '', text(record(item.primary).label) || '열기');
+    primary.type = 'button';
+    primary.dataset.action = 'next-action-primary';
+    primary.dataset.route = text(record(item.primary).route);
+    primary.addEventListener('click', () => routeNextAction(item, item.primary));
+    actions.append(primary);
+    for (const entry of list(item.secondary)) {
+      const button = element('button', 'button-secondary', text(entry.label));
+      button.type = 'button';
+      button.dataset.action = 'next-action-secondary';
+      button.dataset.route = text(entry.route);
+      button.addEventListener('click', () => routeNextAction(item, entry));
+      actions.append(button);
+    }
+    article.append(element('span', 'next-action-rank', String(index + 1).padStart(2, '0')), copy, actions);
+    return article;
+  }
+
+  function renderNextActionInbox() {
+    const root = roots.nextActionList;
+    if (!root) return;
+    // 사람이 이 목록 안의 버튼에 손을 올린 채 목록이 다시 그려지면 누르던 것이 사라진다.
+    if (root.contains(document.activeElement)) return;
+    const inbox = buildNextActionInbox({
+      board: projectProductionBoard(productJobs, { results: [] }),
+      // 파일을 실제로 열었는지는 탭 스냅샷에 없다. 이게 없으면 "맞는 파일이 없다" 를
+      // 파일을 연 적도 없는 작업에까지 사고처럼 붙이게 된다.
+      tabs: workfileTabs.snapshot().tabs.map(tab => ({
+        ...tab,
+        hasWorkfile: Boolean(workfileTabs.workfileFor(tab.key)?.file),
+      })),
+      activeJobId: text(projection.registration.jobId),
+    });
+    if (roots.nextActionHeadline) roots.nextActionHeadline.textContent = inboxHeadline(inbox);
+    root.replaceChildren();
+    root.dataset.count = String(inbox.items.length);
+    if (!inbox.items.length) {
+      const rest = inbox.summary.watching
+        ? `자동 진행 ${inbox.summary.watching}건이 끝나면 여기에 다음 할 일이 나타납니다.`
+        : '새 제품을 투입하거나 작업파일을 열면 여기에 할 일이 나타납니다.';
+      root.append(element('p', 'status-message', rest));
+    } else {
+      for (const [index, item] of inbox.items.entries()) root.append(createNextActionItem(item, index));
+    }
+    const watching = roots.nextActionWatching;
+    if (!watching) return;
+    watching.replaceChildren();
+    for (const item of inbox.watching.slice(0, 8)) {
+      watching.append(element('span', 'factory-pill', `${text(item.productName)} · ${text(item.headline)}`));
+    }
+    if (inbox.done.length) {
+      watching.append(element('span', 'factory-pill', `등록 완료 ${inbox.done.length}건`));
     }
   }
 
@@ -4053,6 +4170,7 @@ export function mountProductionWorkbench({
   }
 
   function render() {
+    renderNextActionInbox();
     if (roots.resultWorkspace) roots.resultWorkspace.dataset.historyActive = String(Boolean(archivedJobId));
     renderWorkfileTabs();
     renderSyncBar();

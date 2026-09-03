@@ -66,6 +66,9 @@ test('Task 21 headed QA: Ctrl+F5 keeps current-product A+B sets and verified rec
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&task21=1`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  // 8f4569a 부터 작업 큐와 작업대는 '작업 큐' 패널에 있다. 개요에 머물면 숨어 있어 보이지 않는다.
+  await page.locator('#menu-tab-queue').click();
+  await page.waitForSelector('#menu-panel-queue:not([hidden])');
   await page.waitForSelector('#operator-assembly-body[data-step-key="sections"]');
   await page.locator('#operator-assembly-steps [data-assembly-step="start"]').click();
   await page.waitForSelector('#operator-assembly-body input[name]');
@@ -77,6 +80,8 @@ test('Task 21 headed QA: Ctrl+F5 keeps current-product A+B sets and verified rec
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
   await cdp.send('Page.reload', { ignoreCache: true });
+  await page.locator('#menu-tab-queue').click();
+  await page.waitForSelector('#menu-panel-queue:not([hidden])');
   await page.waitForSelector('#operator-assembly-body[data-step-key="sections"]');
   await page.waitForSelector('#product-list .operator-job-row[data-job-id="factory-job-qa-2994"]');
   await page.locator('#operator-assembly-steps [data-assembly-step="start"]').click();

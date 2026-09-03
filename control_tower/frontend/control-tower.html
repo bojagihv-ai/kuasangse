@@ -4648,6 +4648,80 @@
       padding-top: var(--space-1);
     }
 
+
+    /* 지금 할 일 — 개요 첫 화면. 사람이 손댈 일만 급한 순으로 세우고, 각 줄이 갈 곳을 안다. */
+    .next-action-list {
+      display: grid;
+      gap: var(--space-1);
+      min-inline-size: 0;
+    }
+
+    .next-action-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-half) var(--space-1);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .next-action-item[data-tone="error"] {
+      border-color: var(--color-error-border);
+      background: var(--color-danger-wash);
+    }
+
+    .next-action-item[data-tone="attention"] {
+      border-color: var(--color-warn-border);
+      background: var(--color-warn-wash);
+    }
+
+    .next-action-item[data-live="true"] {
+      box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
+    }
+
+    .next-action-rank {
+      font-family: var(--font-family-mono);
+      font-size: var(--font-size-compact);
+      color: var(--color-text-muted);
+    }
+
+    .next-action-copy {
+      display: grid;
+      gap: calc(var(--space-half) / 2);
+      min-inline-size: 0;
+    }
+
+    .next-action-copy strong {
+      overflow-wrap: anywhere;
+    }
+
+    .next-action-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      justify-content: flex-end;
+    }
+
+    .next-action-watching {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      margin-block-start: var(--space-1);
+    }
+
+    @media (max-width: 720px) {
+      .next-action-item {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .next-action-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+      }
+    }
   </style>
 </head>
 <body>
@@ -4694,10 +4768,25 @@
 
       <section id="menu-panel-overview" class="menu-panel" data-menu-panel="overview" role="tabpanel" aria-labelledby="menu-tab-overview">
 
+
+      <section class="section next-action-inbox" id="next-action-inbox" aria-labelledby="next-action-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">지금 할 일</p>
+            <h2 id="next-action-heading">내 차례</h2>
+          </div>
+          <p class="section-copy" id="next-action-headline">지금 사람이 손댈 일을 고르는 중입니다.</p>
+        </div>
+        <div id="next-action-list" class="next-action-list" aria-live="polite">
+          <p class="status-message">작업 큐를 확인하고 있습니다.</p>
+        </div>
+        <div id="next-action-watching" class="next-action-watching" aria-live="polite"></div>
+      </section>
+
       <section class="workfile-job-desk" aria-labelledby="workfile-job-desk-heading">
         <div class="workfile-job-desk-heading">
-          <div><p class="eyebrow">작업파일 탭</p><h2 id="workfile-job-desk-heading">제품별 작업대</h2></div>
-          <p class="status-message">탭과 큐 행은 보기만 전환합니다. 파일 연결과 작업 재개는 아래 명시적 버튼으로만 실행됩니다.</p>
+          <div><p class="eyebrow">작업파일 연결</p><h2 id="workfile-job-desk-heading">제품 전환과 파일 연결</h2></div>
+          <p class="status-message">탭을 누르면 그 제품을 보기만 전환합니다. 저장한 .kuasangse 파일을 어느 작업에 연결할지, 멈춘 작업을 다시 이어갈지는 아래 버튼으로만 실행됩니다.</p>
         </div>
         <div id="workfile-job-tabs" class="workfile-job-tabs" role="tablist" aria-label="제품과 작업파일 전환">
           <p class="status-message">작업 큐와 작업파일을 확인하고 있습니다.</p>
@@ -5431,7 +5520,7 @@
       window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=26&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=27&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
     import { mountProductIntake } from "./src/product-intake.mjs?productIntake=7";

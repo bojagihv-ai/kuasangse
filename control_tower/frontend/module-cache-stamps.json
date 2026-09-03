@@ -23,6 +23,10 @@
     "token": "batchList=2",
     "digest": "aa038e498bb62de8"
   },
+  "next-action-model.mjs": {
+    "token": "nextAction=2",
+    "digest": "bac5f26b94bcfa2c"
+  },
   "production-result-groups.mjs": {
     "token": "detailSections=1",
     "digest": "ad9cd83f376aa8cc"
