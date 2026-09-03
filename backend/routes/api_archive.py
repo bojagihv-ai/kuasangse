@@ -2301,7 +2301,9 @@ def get_local_archive_workfile_manifest(workspace_id):
 
 
 LOCAL_ARCHIVE_THUMBNAIL_WIDTHS = (160, 240, 320, 480, 640)
-LOCAL_ARCHIVE_THUMBNAIL_DIR = Path("output") / "local-archive-thumbs"
+# 보관함 옆에 둔다. 상대경로로 두면 백엔드를 어느 폴더에서 띄우느냐에 따라 사본이
+# 여기저기 흩어진다(실측: backend/output 에 생겼다).
+LOCAL_ARCHIVE_THUMBNAIL_DIR = Path(Config.LOCAL_ARCHIVE_FOLDER).parent / "local-archive-thumbs"
 
 
 def _local_archive_thumbnail_file(image_path, width):
