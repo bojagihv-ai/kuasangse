@@ -20,6 +20,15 @@ export const INBOX_SCHEMA = 'control-tower-next-action-inbox:v1';
 /** 급한 순. 앞의 것이 막히면 뒤의 것은 해도 소용이 없다. */
 export const ACTION_ORDER = Object.freeze(['link', 'blocked', 'values', 'pick', 'cafe24']);
 
+/**
+ * 이만큼 기다린 일은 "오래 묵음" 으로 따로 부른다.
+ *
+ * 실측 2026-09-04: 개요 첫 줄이 17시간 48분째 대기였는데, 7분짜리와 같은 모양으로 앉아 있었다.
+ * 급한 순 정렬만으로는 하루를 묵은 일과 방금 생긴 일이 구분되지 않는다. 두 시간이면 조작자가
+ * 한 번은 봤어야 할 시간이다 — 그 뒤로도 남아 있으면 잊힌 것이다.
+ */
+export const STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+
 const LINK_COPY = Object.freeze({
   rebind_required: {
     headline: '작업파일 연결 승인',
@@ -137,6 +146,7 @@ function buildItem(row, tab, { activeJobId }) {
     live: Boolean(activeJobId) && text(activeJobId) === jobId,
     waitMs: integer(row.waitMs),
     waitLabel: waitLabel(row.waitMs),
+    stale: integer(row.waitMs) >= STALE_AFTER_MS,
     reserved: row.hasReservation === true,
   };
   const nextAction = record(row.nextAction);
@@ -333,6 +343,7 @@ export function buildNextActionInbox({ board: boardValue, tabs: tabsValue = [], 
 
   const summary = Object.freeze({
     mine: items.length,
+    stale: items.filter(item => item.stale).length,
     watching: watching.length,
     done: done.length,
     total: rows.length,
@@ -369,6 +380,7 @@ export function inboxHeadline(inboxValue) {
       : '지금 사람이 할 일은 없습니다.';
   }
   const parts = [`손댈 일 ${mine}건`];
+  if (integer(summary.stale)) parts.push(`오래 묵음 ${integer(summary.stale)}건`);
   if (watching) parts.push(`자동 진행 ${watching}건`);
   if (integer(summary.done)) parts.push(`등록 완료 ${integer(summary.done)}건`);
   return parts.join(' · ');

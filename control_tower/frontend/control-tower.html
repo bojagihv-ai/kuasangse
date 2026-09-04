@@ -4786,6 +4786,16 @@
       background: var(--color-warn-wash);
     }
 
+    .next-action-item[data-stale="true"] {
+      outline: var(--border-width-emphasis) solid var(--color-error-border);
+      outline-offset: calc(-1 * var(--border-width-emphasis));
+    }
+
+    .next-action-stale {
+      font-weight: var(--font-weight-strong);
+      color: var(--color-status-error);
+    }
+
     .next-action-item[data-live="true"] {
       box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
     }
@@ -5628,7 +5638,7 @@
       window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=30&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=30&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1&amp;staleInbox=1"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
     import { mountProductIntake } from "./src/product-intake.mjs?productIntake=7";

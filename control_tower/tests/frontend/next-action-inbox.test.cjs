@@ -240,3 +240,33 @@ test('막힌 작업의 사유에 영문 예외가 그대로 새지 않는다', a
   assert.doesNotMatch(item.detail, /classic runtime|did not respond/i);
   assert.match(item.detail, /조립공장 앱이 응답하지 않았습니다/);
 });
+
+/**
+ * 실측 2026-09-04: 개요 첫 줄이 17시간 48분째 대기였는데 7분짜리와 같은 모양으로 앉아 있었다.
+ * 급한 순 정렬만으로는 하루 묵은 일과 방금 생긴 일이 구분되지 않는다.
+ */
+test('두 시간 넘게 기다린 일은 오래 묵음으로 따로 부르고 머리글에도 센다', async () => {
+  const HOUR = 60 * 60 * 1000;
+  const inbox = await inboxFor([
+    job({ jobId: 'job-old', productName: '방울수저집', status: 'blocked', stageKey: '', message: '조립공장 워커 연결이 만료되었습니다.', timing: { totalWaitMs: 17 * HOUR + 48 * 60 * 1000 } }),
+    job({ jobId: 'job-fresh', productName: '자수 미니 파우치', status: 'blocked', stageKey: '', message: 'Cafe24 등록이 막혔습니다.', timing: { totalWaitMs: 7 * 60 * 1000 } }),
+  ]);
+  const old = inbox.items.find(item => item.jobId === 'job-old');
+  const fresh = inbox.items.find(item => item.jobId === 'job-fresh');
+  assert.equal(old.stale, true);
+  assert.equal(old.waitLabel, '17시간 48분째');
+  assert.equal(fresh.stale, false);
+  assert.equal(inbox.summary.stale, 1);
+  assert.deepEqual(inbox.items.map(item => item.jobId), ['job-old', 'job-fresh'], '오래 묵은 것이 위로 온다');
+  const { inboxHeadline } = await import(INBOX_URL);
+  assert.equal(inboxHeadline(inbox), '손댈 일 2건 · 오래 묵음 1건');
+});
+
+test('정확히 두 시간부터 오래 묵음이고, 그 전은 아니다', async () => {
+  const { STALE_AFTER_MS } = await import(INBOX_URL);
+  const at = await inboxFor([job({ jobId: 'job-at', status: 'blocked', stageKey: '', timing: { totalWaitMs: STALE_AFTER_MS } })]);
+  const before = await inboxFor([job({ jobId: 'job-before', status: 'blocked', stageKey: '', timing: { totalWaitMs: STALE_AFTER_MS - 1 } })]);
+  assert.equal(at.items[0].stale, true);
+  assert.equal(before.items[0].stale, false);
+  assert.equal(before.summary.stale, 0);
+});

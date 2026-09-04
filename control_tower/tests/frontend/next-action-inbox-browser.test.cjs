@@ -44,7 +44,7 @@ function stopProcess(child) {
   } catch { /* 이미 끝났다 */ }
 }
 
-async function openControlTower(t) {
+async function openControlTower(t, { beforeNavigate } = {}) {
   fs.mkdirSync(EVIDENCE, { recursive: true });
   const server = spawn(process.execPath, [SERVER], {
     cwd: ROOT,
@@ -60,6 +60,7 @@ async function openControlTower(t) {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  if (beforeNavigate) await beforeNavigate(page);
   await page.goto(
     `http://127.0.0.1:${FRONTEND_PORT}/control-tower.html?apiBase=http://127.0.0.1:${API_PORT}&apiHub=http://127.0.0.1:${API_PORT}&workfileTabsQa=browser`,
     { waitUntil: 'networkidle' },
@@ -125,4 +126,46 @@ test('할 일과 별개로 기존 제품 전환·파일 연결 자리는 그대�
   assert.ok(await page.locator('#workfile-job-tabs .workfile-job-tab').count() >= 1);
   assert.equal(await page.locator('#workfile-job-tabpanel').isVisible(), true);
   assert.match(await page.locator('#workfile-job-desk-heading').innerText(), /파일 연결/u);
+});
+
+/**
+ * 실측 2026-09-04: 개요 첫 줄이 17시간 48분째 대기였는데 7분짜리와 같은 모양으로 앉아 있었다.
+ * fixture 에는 묵은 작업이 없으니, 작업 목록 응답에서 첫 작업의 기다린 시간만 세 시간으로 바꿔 넣는다.
+ */
+test('두 시간 넘게 묵은 일은 기다린 시간을 굵게 앞세우고 머리글에도 센다', async t => {
+  const HOUR = 60 * 60 * 1000;
+  let agedJobId = '';
+  const page = await openControlTower(t, {
+    beforeNavigate: async candidate => {
+      await candidate.route('**/api/factory/jobs*', async route => {
+        if (route.request().method() !== 'GET') { await route.fallback(); return; }
+        const response = await route.fetch();
+        const body = await response.json();
+        if (Array.isArray(body.jobs) && body.jobs.length) {
+          agedJobId = body.jobs[0].jobId;
+          body.jobs[0].timing = { ...(body.jobs[0].timing || {}), totalWaitMs: 3 * HOUR };
+        }
+        await route.fulfill({ response, body: JSON.stringify(body) });
+      });
+    },
+  });
+  const stale = page.locator('#next-action-list .next-action-item[data-stale="true"]');
+  await stale.first().waitFor({ state: 'visible', timeout: 10_000 });
+  const readback = await page.evaluate(() => ({
+    headline: document.querySelector('#next-action-headline').textContent.trim(),
+    stale: [...document.querySelectorAll('#next-action-list .next-action-item[data-stale="true"]')].map(item => ({
+      jobId: item.dataset.jobId,
+      badge: item.querySelector('.next-action-stale')?.textContent.trim() || '',
+      detail: item.querySelector('.status-message').textContent.trim(),
+    })),
+    freshWithBadge: document.querySelectorAll('#next-action-list .next-action-item[data-stale="false"] .next-action-stale').length,
+  }));
+  await page.screenshot({ path: path.join(EVIDENCE, 'inbox-stale-badge.png'), fullPage: false });
+  assert.ok(readback.stale.length >= 1, JSON.stringify(readback));
+  assert.ok(readback.stale.some(item => item.jobId === agedJobId), `묵힌 작업 ${agedJobId} 이 오래 묵음으로 표시되지 않았다`);
+  const aged = readback.stale.find(item => item.jobId === agedJobId);
+  assert.match(aged.badge, /^오래 묵음 · 3시간째 대기$/u);
+  assert.doesNotMatch(aged.detail, /3시간째/u, '기다린 시간이 두 번 나온다');
+  assert.equal(readback.freshWithBadge, 0);
+  assert.match(readback.headline, /오래 묵음 1건/u);
 });

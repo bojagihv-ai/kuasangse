@@ -13,7 +13,7 @@ import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=2';
 // 같은 코드가 어떤 화면에서는 한국어로, 어떤 화면에서는 원시 코드로 뜬다.
 import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=44';
 // 개요 첫 화면은 새 사실을 만들지 않는다. 보드가 이미 만든 파생을 사람이 할 일 순서로만 다시 세운다.
-import { buildNextActionInbox, inboxHeadline } from './next-action-model.mjs?nextAction=2';
+import { buildNextActionInbox, inboxHeadline } from './next-action-model.mjs?nextAction=3';
 import { deriveAssemblyWorkbench, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=2';
 import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
 import {
@@ -1960,14 +1960,18 @@ export function mountProductionWorkbench({
     article.dataset.kind = text(item.kind);
     article.dataset.tone = text(item.tone);
     article.dataset.live = String(item.live === true);
+    article.dataset.stale = String(item.stale === true);
     const copy = element('div', 'next-action-copy');
     const title = element('strong', '', `${text(item.productName)} · ${text(item.headline)}`);
     const meta = element('span', 'status-message', [
       text(item.detail),
       item.live ? '지금 조립공장이 이 제품을 붙잡고 있습니다' : '',
-      text(item.waitLabel) && item.waitLabel !== '방금' ? `${item.waitLabel} 대기` : '',
+      !item.stale && text(item.waitLabel) && item.waitLabel !== '방금' ? `${item.waitLabel} 대기` : '',
     ].filter(Boolean).join(' · '));
-    copy.append(title, meta);
+    copy.append(title);
+    // 오래 묵은 일은 기다린 시간을 사유보다 앞에, 굵게 — 정렬만으로는 하루 묵은 것과 방금 것이 같아 보인다.
+    if (item.stale) copy.append(element('span', 'next-action-stale', `오래 묵음 · ${text(item.waitLabel)} 대기`));
+    copy.append(meta);
     const actions = element('div', 'next-action-actions');
     const primary = element('button', '', text(record(item.primary).label) || '열기');
     primary.type = 'button';
