@@ -283,6 +283,7 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('SAVE-REFUSE-01', '공통/저장', '옵션 이미지 삭제 뒤에도 저장이 이어지고 Ctrl+F5 를 견딤', 'tools/verify_option_image_delete_survives_reload_v1.cjs'),
     nodeFile('SAVE-REFUSE-02', '공통/저장', '서버 저장 보류를 사람 말로 알리고 사본을 남긴다', 'tests/frontend/protected_save_refusal_is_visible.test.cjs', 'fast'),
     nodeFile('SAVE-BODY-01', '7 저장/내보내기', '화면 확정값이 서버로 나가는 몸통에 그대로 들어간다', 'tools/verify_screen_values_reach_the_server_v1.cjs'),
+    nodeFile('GEN-KEEP-01', '5 조립공장', '이미지 생성 성공 뒤 보관만 거절됐을 때 사실대로 즉시 알린다', 'tools/verify_generated_image_survives_archive_reject_v1.cjs'),
     nodeFile('TEST-HONEST-01', '공통/검사', '회귀 제목이 약속한 것을 그 검사가 실제로 한다', 'tests/frontend/regression_titles_match_what_they_check.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-02', '공통/검사', '소스 슬라이스 도우미가 줄 끝과 무관하게 같은 결과를 낸다', 'tests/frontend/source_slice_utils.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-03', '공통/검사', '흔들린 검사와 최근 흔들림 이력이 보고서에 남는다', 'tests/frontend/regression_report_shows_flakes.test.cjs', 'fast'),
