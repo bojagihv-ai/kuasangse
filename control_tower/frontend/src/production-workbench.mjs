@@ -954,6 +954,55 @@ export function projectFactoryConnectivity(projectionValue, {
   });
 }
 
+/**
+ * 화면 맨 위, 접혀 있는 동기화 막대의 한 줄 요약을 조작자 말로 만든다.
+ *
+ * 실측 2026-09-04: 그 줄에 "생산관제 상태 응답 정상 · 조립공장 연결 끊김 · 조립공장 session이
+ * 없습니다. · 현재 제품 선택된 제품 없음 · 대기 1 · 작업 차단 확인 필요" 가 떠 있었다. 다섯 가지
+ * 사실을 은어로 이어붙인 데다, 현재 제품이 없는데도 "작업 차단 확인 필요" 라고 했다 — 그 "차단" 은
+ * 작업이 아니라 빈 session 이었다. 기술 값(backend·session·capability·revision)은 펼친 안쪽에
+ * 그대로 있으니, 이 줄은 지금 무엇이 문제이고 무엇을 하면 되는지 한 문장만 말한다.
+ */
+export function describeSyncSummary({
+  connectivity: connectivityValue,
+  backendError = '',
+  hasProduct = false,
+  productLabel = '',
+  jobStatus = '',
+  stageLabel = '',
+  percent = 0,
+  queuedCount = 0,
+  registrationVerified = false,
+} = {}) {
+  const connectivity = record(connectivityValue);
+  const state = text(connectivity.state);
+  const queued = Math.max(0, Number(queuedCount) || 0);
+  const waiting = queued > 0 ? ` · 대기 ${queued}건` : '';
+  if (state === 'backend-error' || text(backendError)) {
+    return { text: `생산관제 서버가 응답하지 않습니다 · ${text(backendError) || text(connectivity.detail) || '잠시 뒤 새로고침하세요'}`, tone: 'error' };
+  }
+  if (state === 'storage-blocked') return { text: text(connectivity.detail) || '조립공장 저장 공간이 막혔습니다.', tone: 'error' };
+  if (state === 'degraded') return { text: `상태 조회가 잠시 실패해 마지막으로 읽은 작업 큐를 보여 줍니다${waiting}`, tone: 'warn' };
+  if (state !== 'connected') {
+    return queued > 0
+      ? { text: `조립공장이 연결되어 있지 않습니다 · 조립공장 창을 열면 대기 ${queued}건이 순서대로 이어집니다`, tone: 'error' }
+      : { text: '조립공장이 연결되어 있지 않습니다 · 대기 중인 작업은 없습니다', tone: 'warn' };
+  }
+  if (!hasProduct) return { text: `조립공장 연결됨 · 진행 중인 제품 없음${waiting}`, tone: 'ok' };
+  const product = text(productLabel) || '현재 제품';
+  const status = text(jobStatus).toLowerCase();
+  if (status === 'waiting_manual') return { text: `${product} · A컷 선택을 기다립니다${waiting}`, tone: 'warn' };
+  if (status === 'blocked') return { text: `${product} · 막힘 · 되살리기 필요${waiting}`, tone: 'error' };
+  if (status === 'running') return { text: `${product} · ${text(stageLabel) || '진행 중'} ${Math.max(0, Number(percent) || 0)}%${waiting}`, tone: 'ok' };
+  if (status === 'queued') return { text: `${product} · 생산 순서 대기${waiting}`, tone: 'ok' };
+  if (status === 'completed') {
+    return registrationVerified
+      ? { text: `${product} · Cafe24 등록 검증 완료${waiting}`, tone: 'ok' }
+      : { text: `${product} · 생산 완료 · Cafe24 승인 필요${waiting}`, tone: 'warn' };
+  }
+  return { text: `${product} · ${statusLabel(status)}${waiting}`, tone: 'ok' };
+}
+
 export function projectFactoryQueueRenderModel(projectionValue, jobsValue, {
   transport = 'connecting',
   lastEventAt = '',
@@ -2078,13 +2127,21 @@ export function mountProductionWorkbench({
       ? `${productLabel} · ${statusLabel(jobStatus)}`
       : '선택된 제품 없음';
     const queuedCount = productJobs.filter(job => text(job.status) === 'queued').length;
-    let actionLabel = `${stageLabel} ${Number(progress.percent || 0)}%`;
-    if (jobStatus === 'waiting_manual') actionLabel = 'A컷 선택 필요';
-    else if (jobStatus === 'blocked') actionLabel = '작업 차단 확인 필요';
-    else if (jobStatus === 'queued') actionLabel = '생산 순서 대기';
-    else if (jobStatus === 'completed') actionLabel = registrationStatus() === 'staged_verified' ? 'Cafe24 검증 완료' : 'Cafe24 승인 필요';
     if (roots.syncSummary) {
-      roots.syncSummary.textContent = `생산관제 ${backendTruth} · 조립공장 ${factoryTruth} · 현재 제품 ${productTruth} · 대기 ${queuedCount} · ${actionLabel}`;
+      const summary = describeSyncSummary({
+        connectivity: state,
+        backendError: factoryApiError,
+        hasProduct: Boolean(projection.session.productKey),
+        productLabel,
+        jobStatus,
+        stageLabel,
+        percent: progress.percent,
+        queuedCount,
+        registrationVerified: registrationStatus() === 'staged_verified',
+      });
+      roots.syncSummary.textContent = summary.text;
+      const disclosure = roots.syncSummary.closest('summary');
+      if (disclosure) disclosure.dataset.tone = summary.tone;
     }
     root.replaceChildren();
     root.dataset.connected = String(state.state === 'connected');
