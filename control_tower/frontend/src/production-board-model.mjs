@@ -306,6 +306,19 @@ export function operatorMessage(value) {
   if (CODE_SHAPE.test(message) || (CODE_SHAPE.test(code) && rest.length && !/[가-힣]/.test(message))) {
     return { copy: '조립공장에서 처리하지 못했습니다.', code: message };
   }
+  // 조립공장 로더(src/app-loader.js)가 던지는 영문 예외 두 가지. 실측 2026-09-04: 개요
+  // "내 차례" 다섯째 줄에 classic runtime endpoint did not respond: factory-control-command
+  // 가 번역 없이 그대로 떴다. 다른 아홉 줄은 전부 우리말 한 문장이었다.
+  if (/classic runtime endpoint did not respond/i.test(message)) {
+    return { copy: '조립공장 앱이 응답하지 않았습니다. 조립공장 탭이 열려 있고 멈추지 않았는지 확인한 뒤 되살리세요.', code: message };
+  }
+  if (/^classic runtime .+ failed$/i.test(message)) {
+    return { copy: '조립공장 앱이 지시를 처리하지 못했습니다. 되살리면 저장된 지점부터 이어집니다.', code: message };
+  }
+  // 한글이 한 글자도 없는 영문은 조작자를 위한 말이 아니다. 문장은 우리말로, 원문은 코드 자리에.
+  if (/[a-z]/i.test(message) && !/[가-힣]/.test(message)) {
+    return { copy: '조립공장에서 처리하지 못했습니다.', code: message };
+  }
   return { copy: withStageLabels(message), code: '' };
 }
 

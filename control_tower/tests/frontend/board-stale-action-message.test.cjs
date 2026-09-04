@@ -23,3 +23,38 @@ test('원래 코드는 접어 둔 자리에 그대로 남는다', async () => {
   const shown = operatorMessage('STALE_FACTORY_RUNTIME_ACTION: factory/hero:generate');
   assert.ok(shown.code.includes('factory/hero:generate'));
 });
+
+/**
+ * 실측 2026-09-04: 개요 "내 차례" 다섯째 줄에 조립공장 로더(src/app-loader.js)의 영문 예외
+ * classic runtime endpoint did not respond: factory-control-command 가 번역 없이 그대로 떴다.
+ * 다른 아홉 줄은 전부 우리말 한 문장이었다.
+ */
+test('조립공장 앱이 응답하지 않은 것은 우리말로 말한다', async () => {
+  const { operatorMessage } = await import(MODEL_URL);
+  const shown = operatorMessage('classic runtime endpoint did not respond: factory-control-command');
+  assert.match(shown.copy, /조립공장 앱이 응답하지 않았습니다/);
+  assert.doesNotMatch(shown.copy, /classic runtime/i);
+  assert.equal(shown.code, 'classic runtime endpoint did not respond: factory-control-command');
+});
+
+test('조립공장 앱이 지시를 처리하지 못한 것도 우리말로 말한다', async () => {
+  const { operatorMessage } = await import(MODEL_URL);
+  const shown = operatorMessage('classic runtime factory-control-command failed');
+  assert.match(shown.copy, /지시를 처리하지 못했습니다/);
+  assert.doesNotMatch(shown.copy, /[a-z]/i);
+  assert.equal(shown.code, 'classic runtime factory-control-command failed');
+});
+
+test('한글이 한 글자도 없는 낯선 영문은 문장을 우리말로 바꾸고 원문은 코드 자리에 둔다', async () => {
+  const { operatorMessage } = await import(MODEL_URL);
+  const shown = operatorMessage('Unexpected token < in JSON at position 0');
+  assert.equal(shown.copy, '조립공장에서 처리하지 못했습니다.');
+  assert.equal(shown.code, 'Unexpected token < in JSON at position 0');
+});
+
+test('우리말 문장은 손대지 않고 그대로 보여 준다', async () => {
+  const { operatorMessage } = await import(MODEL_URL);
+  const shown = operatorMessage('경쟁사 후보 수집 결과가 없어 상세수집을 진행할 수 없습니다.');
+  assert.equal(shown.copy, '경쟁사 후보 수집 결과가 없어 상세수집을 진행할 수 없습니다.');
+  assert.equal(shown.code, '');
+});

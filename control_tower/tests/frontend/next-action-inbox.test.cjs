@@ -223,3 +223,20 @@ test('한 줄의 제목과 설명은 같은 단계를 말한다', async () => {
   assert.equal(item.stageKey, 'final_detail');
   assert.match(item.headline, /최종/);
 });
+
+/**
+ * 실측 2026-09-04: 개요 "내 차례" 에 IMG_5968 줄만 영문 예외가 그대로 떴다. 보드 행의
+ * message 는 operatorMessage 를 거친 문장이고 이 화면은 그 문장을 그대로 믿는다 — 번역은
+ * 보드 모델 한 곳에서 끝나야 하고, 여기서는 그것이 새는지만 감시한다.
+ */
+test('막힌 작업의 사유에 영문 예외가 그대로 새지 않는다', async () => {
+  const inbox = await inboxFor([
+    job({ jobId: 'job-loader', productName: 'IMG_5968', status: 'blocked', stageKey: '',
+      message: 'classic runtime endpoint did not respond: factory-control-command' }),
+  ]);
+  const item = inbox.items.find(entry => entry.jobId === 'job-loader');
+  assert.ok(item, '막힌 작업이 내 차례에 없다');
+  assert.equal(item.kind, 'blocked');
+  assert.doesNotMatch(item.detail, /classic runtime|did not respond/i);
+  assert.match(item.detail, /조립공장 앱이 응답하지 않았습니다/);
+});
