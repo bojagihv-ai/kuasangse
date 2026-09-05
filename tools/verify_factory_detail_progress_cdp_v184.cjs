@@ -1,3 +1,13 @@
+// !! 이 검사는 2026-09-04 현재 **아직 실패한다.** 5건이 남아 있다:
+//    heartbeat stage is not still running / VM detail completion mismatch /
+//    small viewport layout mismatch / failure state is not visibly closed as an error /
+//    status API failure was not preserved through an empty result
+//
+// 그 전에는 7건이 실패했는데, 그중 2건은 원인이 이 검사 밖에 있었다 -
+// 앱이 연결자를 안 거치고 스크래퍼(43000)로 직접 나가는 경로가 하나 있어서
+// 격리 환경에서 CORS 로 막혔고, "제품스크래퍼 API에 연결하지 못했습니다" 가
+// 진짜 원인을 덮고 있었다. 그 한 경로를 아래에서 막았다.
+// 남은 5건은 화면 상태 전이 자체의 문제이므로, 이어서 볼 사람은 거기서 시작하면 된다.
 const fs = require('fs');
 const path = require('path');
 const { assertChecks, connectCdp, ensureCdp, evaluate, waitFor } = require('./factory_cdp_test_utils.cjs');
@@ -132,6 +142,49 @@ async function main() {
         detailOperation: null,
       };
       window.compMarketEnsureVmDetailCaptureReady = async () => ({ ready: true, enabled: true, runtime: 'vm' });
+
+      // 연결자(compMarketInvokeV1)를 거치지 않고 **스크래퍼로 직접 나가는** 경로가 하나 있다.
+      // compMarketFetchJson('/api/scrape_details', ...) 다(src/app-core-06.js:19042).
+      // 그 한 줄 때문에 이 검사가 격리 환경에서 늘 실패했다 -
+      // "제품스크래퍼 API에 연결하지 못했습니다" 는 앱이 진짜 스크래퍼(43000)에
+      // CORS 로 닿지 못해서 나온 말이고, 이 검사가 보려던 화면 상태와는 아무 상관이 없다.
+      // 실측 2026-09-04: 직접 나가는 경로는 정확히 ['/api/scrape_details'] 하나뿐이었다.
+      //
+      // 이 검사는 **진행 상태 표시**를 보는 것이지 스크래퍼와 실제로 대화하는 것이 아니다.
+      // 그래서 연결자 스텁과 같은 몸통을 여기서도 돌려준다.
+      const nativeCompFetchV184 = window.compMarketFetchJson;
+      window.compMarketFetchJson = async (path, options, timeoutMs) => {
+        if (String(path || '').startsWith('/api/scrape_details')) {
+          if (window.__detailProgressModeV184 === 'status-failure') return {};
+          if (window.__detailProgressModeV184 === 'failure') {
+            return { status: 'error', completed: 0, failed: 1, total: 1, message: '검증용 상세수집 실패' };
+          }
+          return {
+            status: 'completed',
+            completed: 1,
+            failed: 0,
+            currentRunId: scope.currentRunId,
+            productKey: scope.productKey,
+            inputImageFingerprint: scope.inputImageFingerprint,
+            stageId: scope.stageId,
+            scraped_data: {
+              [candidate.id]: {
+                status: 'success',
+                title: candidate.title,
+                platform: candidate.platform,
+                product_url: candidate.product_url,
+                currentRunId: scope.currentRunId,
+                productKey: scope.productKey,
+                inputImageFingerprint: scope.inputImageFingerprint,
+                stageId: scope.stageId,
+                screenshot_paths: ['C:\\JepumScraper\\data\\detail_pages\\auction_ui_v184\\detail.jpg'],
+                screenshot_urls: ['/api/v1/detail-captures/detail_job_ui_v184/screenshots/auction_ui_v184/0'],
+              },
+            },
+          };
+        }
+        return nativeCompFetchV184 ? nativeCompFetchV184(path, options, timeoutMs) : {};
+      };
       let statusCalls = 0;
       const endpointCalls = [];
       window.compMarketInvokeV1 = async endpointId => {
