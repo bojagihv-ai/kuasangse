@@ -493,14 +493,41 @@ def _last_work_fill_missing(existing_value, incoming_value):
     return _LAST_WORK_UNCHANGED
 
 
+def _last_work_option_source_deletion_budget(existing_options, incoming_options):
+    """이번 저장에서 **새로 지운다고 표시한** 옵션 원본이 몇 개인가.
+
+    프런트는 옵션 이미지 ✕ 를 누르면 지운 보관 ID 를 optionSourceDeletedArchiveIds 에 쌓는다
+    (src/menus/optionsorter-image-bindings.mjs, src/app-core-02.js 에서 기존 목록과 병합).
+    그 목록이 이번에 **늘어난 만큼**만 줄어듦을 허용한다 — 지난번 표식이 남아 있다고
+    이번에 또 지울 권한이 생기면 안 되기 때문이다.
+
+    왜 필요한가 (실측 2026-09-02): 이 탈출구가 없어서 옵션 이미지를 하나 지우는 순간
+    'optionSorter.images.length' 로 거절이 시작되고, 그 뒤 그 작업의 모든 저장이 같은 사유로
+    막혔다. 낙지발노리개 작업은 08-31 21:37 ~ 09-01 15:20 사이 54건이 연속 거절돼
+    서버 사본이 08-21 에 멈춰 있었다. marketScrape(searchId) · selectedIds(detailSelectionVersion) ·
+    analysisResult(analysisInvalidatedAt) 는 이미 같은 종류의 탈출구를 갖고 있고 optionSorter 에만 없었다.
+    """
+    key = "optionSourceDeletedArchiveIds"
+    existing_deleted = _list_len(existing_options.get(key))
+    incoming_deleted = _list_len(incoming_options.get(key))
+    return max(0, incoming_deleted - existing_deleted)
+
+
 def _last_work_derived_state_drop_reason(existing, incoming):
     existing_assets = existing.get("assets") if isinstance(existing.get("assets"), dict) else {}
     incoming_assets = incoming.get("assets") if isinstance(incoming.get("assets"), dict) else {}
     existing_options = existing_assets.get("optionSorter") if isinstance(existing_assets.get("optionSorter"), dict) else {}
     incoming_options = incoming_assets.get("optionSorter") if isinstance(incoming_assets.get("optionSorter"), dict) else {}
+    deleted_on_purpose = _last_work_option_source_deletion_budget(existing_options, incoming_options)
     for key in ("images", "pool", "optionResults", "slots"):
-        if _list_len(existing_options.get(key)) > _list_len(incoming_options.get(key)):
-            return f"optionSorter.{key}.length"
+        shrink = _list_len(existing_options.get(key)) - _list_len(incoming_options.get(key))
+        if shrink <= 0:
+            continue
+        # 사람이 일부러 지운 원본 이미지는 '보호할 데이터가 사라졌다' 가 아니다.
+        # 삭제 표식은 원본 이미지(images)에 대한 것이라 나머지 목록의 보호는 그대로 둔다.
+        if key == "images" and shrink <= deleted_on_purpose:
+            continue
+        return f"optionSorter.{key}.length"
     for key in ("slots", "optionResults"):
         sparse_reason = _last_work_rows_sparse_drop_reason(
             existing_options.get(key),
@@ -655,11 +682,20 @@ def _last_work_trace(stage, workspace_id, existing, incoming, extra=None):
     거절 사유만 보고 원인을 짐작하다 세 번 빗나갔다(실측 2026-08-30). 요청이 도착했는지,
     어느 분기에서, 어떤 값으로 막혔는지를 남겨야 추측 없이 확정할 수 있다.
     KUASANGSE_LASTWORK_TRACE 를 끄면 아무것도 남기지 않는다.
+
+    어디에·얼마나 (묶음 G6 #31, 2026-09-02): 예전엔 저장소 루트 output/ 에 상한 없이 쌓였고,
+    KUASANGSE_LOCAL_STATE_FOLDER 를 바꾼 격리 런타임(회귀 검사·진단 VM)의 저장 요청까지
+    사장님 로그에 섞여 들어왔다. 지금은 상태 폴더(Config.LOCAL_STATE_FOLDER) 아래
+    lastwork-trace.jsonl 에 쓰고, 상태 폴더가 기본(backend/.local)이 아니면 기록하지 않는다.
+    _LAST_WORK_TRACE_MAX_BYTES 를 넘으면 .1 로 한 번 밀어 두 벌만 남긴다.
     """
     import os
     from datetime import datetime
 
     if os.environ.get("KUASANGSE_LASTWORK_TRACE", "1") != "1":
+        return
+    path = _last_work_trace_path()
+    if not path:
         return
     try:
         def comp_of(snapshot):
@@ -705,12 +741,34 @@ def _last_work_trace(stage, workspace_id, existing, incoming, extra=None):
         }
         if extra:
             record["extra"] = extra
-        path = os.path.join(os.path.dirname(__file__), "..", "..", "output", "lastwork-trace.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        _last_work_trace_rotate(path)
         with open(path, "a", encoding="utf-8", newline=chr(10)) as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + chr(10))
     except Exception:
         pass
+
+
+_LAST_WORK_TRACE_MAX_BYTES = 8 * 1024 * 1024
+_DEFAULT_LOCAL_STATE_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".local"))
+
+
+def _last_work_trace_path():
+    """기본 상태 폴더일 때만 경로를 준다. 격리 런타임(상태 폴더를 옮긴 실행)은 None."""
+    state_folder = os.path.abspath(str(Config.LOCAL_STATE_FOLDER or ""))
+    if os.path.normcase(state_folder) != os.path.normcase(_DEFAULT_LOCAL_STATE_FOLDER):
+        return None
+    return os.path.join(state_folder, "lastwork-trace.jsonl")
+
+
+def _last_work_trace_rotate(path):
+    """상한을 넘으면 현재 파일을 .1 로 밀고 새로 시작한다(두 벌 유지)."""
+    try:
+        if os.path.getsize(path) < _LAST_WORK_TRACE_MAX_BYTES:
+            return
+    except OSError:
+        return
+    os.replace(path, f"{path}.1")
 
 
 @api.route("/last-work", methods=["POST"])
@@ -1303,8 +1361,15 @@ def _local_asset_http_client():
     return httpx2.Client(
         transport=transport,
         timeout=_LOCAL_ASSET_HTTP_TIMEOUT,
-        follow_redirects=True,
+        # 리다이렉트는 _local_asset_fetch_remote_image 가 홉마다 공개망 검사를 하며 직접 따라간다.
+        # follow_redirects=True 였을 때는 첫 홉만 검사하고 302 뒤 127.0.0.1 을 그대로 따라갔다
+        # (묶음 G6 #20, 2026-09-02).
+        follow_redirects=False,
     )
+
+
+_LOCAL_ASSET_MAX_REDIRECT_HOPS = 5
+_LOCAL_ASSET_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 def _local_asset_remote_url_is_public(url):
@@ -1312,46 +1377,44 @@ def _local_asset_remote_url_is_public(url):
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
     try:
-        addresses = socket.getaddrinfo(
+        assert_public_hostname(
             parsed.hostname,
             parsed.port or (443 if parsed.scheme == "https" else 80),
-            type=socket.SOCK_STREAM,
         )
-    except socket.gaierror:
+    except PublicAddressPolicyError:
         return False
-    for address in addresses:
-        ip = ipaddress.ip_address(address[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            return False
-    return bool(addresses)
+    return True
 
 
 def _local_asset_fetch_remote_image(client, url):
-    if not _local_asset_remote_url_is_public(url):
-        return None
-    try:
-        with client.stream("GET", url) as response:
-            response.raise_for_status()
-            mime = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-            if not mime.startswith("image/"):
-                return None
-            chunks = []
-            total = 0
-            for chunk in response.iter_bytes():
-                total += len(chunk)
-                if total > _LOCAL_ASSET_MAX_REMOTE_BYTES:
+    current = str(url or "").strip()
+    for _hop in range(_LOCAL_ASSET_MAX_REDIRECT_HOPS + 1):
+        if not _local_asset_remote_url_is_public(current):
+            return None
+        try:
+            with client.stream("GET", current) as response:
+                status = int(getattr(response, "status_code", 0) or 0)
+                if status in _LOCAL_ASSET_REDIRECT_STATUSES:
+                    location = str(response.headers.get("location") or "").strip()
+                    if not location:
+                        return None
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                mime = str(response.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+                if not mime.startswith("image/"):
                     return None
-                chunks.append(chunk)
-            return mime, b"".join(chunks)
-    except httpx2.HTTPError:
-        return None
+                chunks = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > _LOCAL_ASSET_MAX_REMOTE_BYTES:
+                        return None
+                    chunks.append(chunk)
+                return mime, b"".join(chunks)
+        except httpx2.HTTPError:
+            return None
+    return None
 
 
 def _local_asset_read_image_file(path_value):
@@ -2472,6 +2535,7 @@ def get_local_archive_asset(archive_id):
 
 
 @api.route("/local-archive/folders/open", methods=["POST"])
+@_require_local_action
 def open_local_archive_folder():
     body = request.get_json(silent=True) or {}
     archive_id = str(body.get("archiveId") or "").strip()

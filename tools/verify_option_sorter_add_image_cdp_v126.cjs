@@ -73,9 +73,6 @@ async function main() {
       });
       await window.render();
       window.__optionSorterUploadProof = { inputClickCount: 0 };
-      const input = document.getElementById('optFileInput');
-      input?.addEventListener('click', () => { window.__optionSorterUploadProof.inputClickCount += 1; });
-      document.getElementById('optAddImagesBtn')?.click();
       return true;
     })()`);
     await waitFor(cdp, '!!document.getElementById("optAddImagesBtn") && !!document.getElementById("optFileInput")', 10000);
@@ -116,6 +113,31 @@ async function main() {
       document.querySelectorAll('#optPoolList [data-img-id]').length === 2 &&
       document.body.innerText.includes('0/2장 배정됨')`, 15000);
 
+    // "이미지 추가" 버튼이 정말 파일 선택 창을 여는지 - **버튼이 실제로 있는 지금** 확인한다.
+    //
+    // 전에는 render() 직후, 이미지가 0장일 때 눌렀다. 그때는 버튼도 input 도 아직 DOM 에 없다
+    // (실측 2026-09-04: 이미지 0장 -> 버튼 0개 / 2장 -> 버튼 1개, 그리고 위 waitFor 가
+    //  버튼을 최대 10초 기다린다는 것 자체가 render 직후엔 없다는 뜻이다).
+    // 그래서 늘 inputClickCount 0 으로 떨어졌다 - 제품은 멀쩡한데 검사가 빨간 줄을 그었다.
+    //
+    // 감시는 노드 하나가 아니라 HTMLInputElement.prototype.click 에 건다.
+    // 다시 그리기로 노드가 바뀌어도 놓치지 않는다.
+    await evaluate(cdp, `(() => {
+      window.__optionSorterUploadProof = { inputClickCount: 0, clickedLiveNode: false };
+      const nativeClick = HTMLInputElement.prototype.click;
+      HTMLInputElement.prototype.click = function () {
+        if (this.id === 'optFileInput') {
+          window.__optionSorterUploadProof.inputClickCount += 1;
+          window.__optionSorterUploadProof.clickedLiveNode =
+            document.contains(this) && this === document.getElementById('optFileInput');
+        }
+        return nativeClick.apply(this, arguments);
+      };
+      document.getElementById('optAddImagesBtn')?.click();
+      HTMLInputElement.prototype.click = nativeClick;
+      return true;
+    })()`);
+
     const proof = await evaluate(cdp, `(async () => {
       const os = window.state.optionSorter;
       const button = document.getElementById('optAddImagesBtn');
@@ -133,6 +155,7 @@ async function main() {
         firstInputReset: ${firstInputReset ? 'true' : 'false'},
         secondInputReset: input?.value === '',
         inputClickCount: window.__optionSorterUploadProof?.inputClickCount || 0,
+        clickedLiveNode: window.__optionSorterUploadProof?.clickedLiveNode === true,
         imageCount: os.images.length,
         poolCount: os.pool.length,
         slotCount: os.slots.length,
@@ -151,6 +174,7 @@ async function main() {
       { ok: proof.subStep === 'sort', message: '정렬 화면 상태가 유지되지 않았습니다.' },
       { ok: proof.buttonVisible && proof.buttonText.includes('이미지 추가'), message: '정렬 화면에 이미지 추가 버튼이 보이지 않습니다.' },
       { ok: proof.inputClickCount === 1, message: '이미지 추가 버튼이 파일 입력을 열지 않았습니다.' },
+      { ok: proof.clickedLiveNode === true, message: '이미지 추가 버튼이 화면에 없는 낡은 파일 입력을 눌렀습니다 - 사장님 화면에서는 창이 안 열립니다.' },
       { ok: proof.inputMultiple && proof.inputAccept.includes('image/'), message: '이미지 파일 다중 선택 입력이 아닙니다.' },
       { ok: proof.firstInputReset && proof.secondInputReset, message: '같은 파일을 다시 선택할 수 있도록 파일 입력이 초기화되지 않았습니다.' },
       { ok: proof.imageCount === 2 && proof.poolCount === 2, message: '두 번 추가한 이미지가 옵션 분류기와 미배정 풀에 반영되지 않았습니다.' },

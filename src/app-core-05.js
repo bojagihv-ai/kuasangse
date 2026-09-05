@@ -588,20 +588,25 @@ function factoryGoalRunHasFailure(goal = {}, stageText = '') {
 
 function factoryGoalRunDisplayProgress(goal = {}, stageText = '') {
   const rawProgress = Math.max(0, Math.min(100, Math.round(Number(goal.progress || 0) || 0)));
-  const stage = String(stageText || goal.currentStage || '');
-  const reason = String(goal.failureReason || '');
-  const failed = factoryGoalRunHasFailure(goal, stage);
-  const completed = !failed && !goal.running && /완료|검색 완료|수집 완료|확보/.test(`${stage} ${reason}`);
-  return completed ? 100 : rawProgress;
+  // 판정에는 **실행 자신**(goal)만 쓴다. stageText 에는 부르는 쪽이 최근 로그 한 줄을 넣기도 하는데,
+  // 그 줄에 '완료'·'확보' 가 들어 있다고 진행률을 100 으로 채우면 거짓말이 된다.
+  // 실측 2026-09-02: 실행이 40~52% 에서 멈춰 있는데 바가 가득 차고 '완료' 가 찍혔다.
+  // (오전에 고친 '실패' 판정 RUN-STATUS-01 과 같은 원칙 — 실행이 어떤지는 실행만 답한다)
+  // 문구에 '완료'·'확보' 가 있다고 100 을 만들지 않는다. 실행이 40~52% 에서 멈춰 있는데
+  // 바가 가득 차던 자리다(실측 2026-09-02). 끝났으면 실행이 스스로 100 을 말해야 한다 -
+  // 단독 VM 후보 수집이 그러도록 app-core-06 쪽을 함께 고쳤다.
+  return rawProgress;
 }
 
 function factoryGoalRunPillText(goal = {}, stageText = '', hasLog = false) {
-  const progress = factoryGoalRunDisplayProgress(goal, stageText);
-  const text = `${stageText || goal.currentStage || ''} ${goal.failureReason || ''}`;
+  // 여기도 판정은 실행 자신만 본다. stageText 는 화면에 보여줄 문구일 뿐이다.
+  const verdictStage = String(goal.currentStage || '');
+  const progress = factoryGoalRunDisplayProgress(goal, verdictStage);
+  const text = `${verdictStage} ${goal.failureReason || ''}`;
   if (goal.running) return `${progress}%`;
-  if (factoryGoalRunHasFailure(goal, stageText)) return `실패 · ${progress}%`;
-  if (factoryGoalRunNeedsAttention(goal, stageText) || /확인 필요|후보 0건/.test(text)) return `확인 필요 · ${progress}%`;
-  if (progress >= 100 || /완료|검색 완료|수집 완료|확보/.test(text)) return '완료';
+  if (factoryGoalRunHasFailure(goal, verdictStage)) return `실패 · ${progress}%`;
+  if (factoryGoalRunNeedsAttention(goal, verdictStage) || /확인 필요|후보 0건/.test(text)) return `확인 필요 · ${progress}%`;
+  if (progress >= 100) return '완료';
   return hasLog ? '최근 기록' : '대기';
 }
 
@@ -613,10 +618,14 @@ function renderFactoryProductActionStatus(factory) {
   const dbStage = factory.stages?.db || {};
   const running = !!goal.running;
   const stage = goal.currentStage || dbStage.message || latestLog?.message || '대기';
-  const progress = factoryGoalRunDisplayProgress(goal, stage);
+  // 판정에는 실행 자신(goal.currentStage)만 쓴다. 위의 stage 는 화면 문구라 진행 단계가 비면
+  // DB 단계 메시지나 최근 로그 한 줄이 들어오는데, 그 줄이 오류면 아무 실행도 실패하지 않았는데
+  // 이 카드가 '조립공장 실행 실패' 로 빨개진다(오전에 고친 RUN-STATUS-01 과 같은 뿌리).
+  const verdictStage = String(goal.currentStage || '');
+  const progress = factoryGoalRunDisplayProgress(goal, verdictStage);
   const isImageAnalysis = factory.automation?.activeTaskId === 'product-analysis' || /이미지.*분석|제품 이미지/.test(String(stage || ''));
-  const failed = factoryGoalRunHasFailure(goal, stage) || dbStage.status === 'error';
-  const needsAttention = !failed && (factoryGoalRunNeedsAttention(goal, stage) || dbStage.status === 'review');
+  const failed = factoryGoalRunHasFailure(goal, verdictStage) || dbStage.status === 'error';
+  const needsAttention = !failed && (factoryGoalRunNeedsAttention(goal, verdictStage) || dbStage.status === 'review');
   const toneColor = running ? 'var(--primary-h)' : (failed ? 'var(--danger)' : (needsAttention ? 'var(--warn)' : 'var(--text-m)'));
   const borderColor = running ? 'rgba(99,102,241,.42)' : (failed ? 'rgba(239,68,68,.72)' : (needsAttention ? 'rgba(245,158,11,.62)' : 'rgba(255,255,255,.10)'));
   const bg = running ? 'rgba(99,102,241,.10)' : (failed ? 'rgba(127,29,29,.20)' : (needsAttention ? 'rgba(245,158,11,.10)' : 'rgba(255,255,255,.025)'));
@@ -11598,13 +11607,17 @@ function renderDraftRecoveryPanel() {
   const scopeId = typeof getCurrentLastWorkWorkspaceScope === 'function'
     ? String(getCurrentLastWorkWorkspaceScope() || '')
     : '';
-  // 저장된 작업(project:)은 정상 저장·불러오기가 있다. 이 칸은 저장 전 작업만을 위한 것이다.
-  if (!scopeId.startsWith('draft:')) return '';
+  // 저장 전(draft:) 작업에는 항상 보여 준다 - 정상 저장 경로가 아예 없기 때문이다.
+  // 저장된 작업(project:)에는 평소엔 숨기고, **서버가 저장을 거절해 사본이 쌓이는 동안에만** 보여 준다.
+  // 그때가 사본이 유일한 그물인 순간이다(실측 2026-09-02: 낙지발노리개 54건 연속 거절).
+  const refused = String(state.storageWarningDismissKey || '') === 'protected-save-refused';
+  const savedWorkNeedsNet = scopeId.startsWith('project:') && (refused || !!state.draftRecovery?.opened);
+  if (!scopeId.startsWith('draft:') && !savedWorkNeedsNet) return '';
   const view = state.draftRecovery || {};
   // 앱 껍데기에 붙는 떠 있는 칸이다. 본문 흐름을 밀지 않게 오른쪽 아래에 고정한다.
   const shell = value => `<aside class="draft-recovery-float" aria-label="저장 전 작업 복구본">${value}</aside>`;
   if (!view.opened) {
-    return shell(`<button class="btn-sm" data-draft-recovery-action="list">저장 안 한 이 작업의 복구본</button>`);
+    return shell(`<button class="btn-sm" data-draft-recovery-action="list">${refused ? '저장이 보류된 이 작업의 복구본' : '저장 안 한 이 작업의 복구본'}</button>`);
   }
   if (view.loading) {
     return shell('<div class="factory-small">복구본을 찾는 중입니다...</div>');
@@ -17250,6 +17263,8 @@ function bindEvents() {
   if (agentSendBtn) agentSendBtn.onclick = doSend;
   if (agentInputEl) {
     agentInputEl.onkeydown = e => {
+      // 한글 조합 중 Enter(keyCode 229) 는 IME 가 글자를 확정하는 키다. 여기서 보내면 마지막 글자가 빠진다.
+      if (isImeComposingKeyEvent(e)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
     };
     // 자동 높이 조절
@@ -17315,7 +17330,10 @@ function bindEvents() {
   const addDirectiveBtn = document.getElementById('addDirectiveBtn');
   if (directiveInput) {
     directiveInput.oninput = e => { state.imageDirectiveInput = e.target.value; scheduleLastWorkSave(); };
-    directiveInput.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addImageDirective(state.imageDirectiveInput); } };
+    directiveInput.onkeydown = e => {
+      if (isImeComposingKeyEvent(e)) return; // 한글 조합 중 Enter 는 IME 몫 — 지시사항을 두 번 넣거나 마지막 글자를 빠뜨린다.
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addImageDirective(state.imageDirectiveInput); }
+    };
   }
   if (addDirectiveBtn) addDirectiveBtn.onclick = () => addImageDirective(state.imageDirectiveInput);
 
@@ -19390,7 +19408,7 @@ function bindFactoryOpenMarketEvents() {
 
   document.querySelectorAll('[data-factory-final-basic-field]').forEach(input => {
     input.onkeydown = event => {
-      if (event.key !== 'Enter') return;
+      if (event.key !== 'Enter' || isImeComposingKeyEvent(event)) return; // 한글 조합 중 Enter 는 값을 확정하지 않는다.
       event.preventDefault();
       factoryApplyFinalRegistrationBasicInfoInputs({
         container: input.closest('[data-factory-final-basic-info-panel]'),

@@ -445,20 +445,30 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
   const sessionAssetsCommit = extractFunction(persistence, 'sessionAssetsForAuthoritativeCommit');
   const acceptedIndex = savePersistentState.indexOf('if (!commitResult.accepted || commitResult.partial)');
   const protectedNoOpIndex = savePersistentState.indexOf('if (commitResult.protectedNoOp)');
-  const protectedWarningClearIndex = savePersistentState.indexOf(
-    'clearResolvedSessionPersistenceWarning()',
-    protectedNoOpIndex,
-  );
+  // 2026-09-02 이전에는 이 자리에서 clearResolvedSessionPersistenceWarning() 으로 경고를 **지웠다**.
+  // 그래서 서버가 거절하는 동안에도 화면이 멀쩡했고, 탭을 닫으면 서버의 옛 사본으로 돌아갔다
+  // (실측: 낙지발노리개 작업 54건 연속 거절, 서버 사본이 08-21 에 멈춤).
+  // 이제는 반대로 **경고를 남기고** 되살릴 사본을 만든다. 지키던 핵심 — 새 로컬 리비전을
+  // 올리기 전에 멈추는 것 — 은 그대로다. 그걸 어기면 서버가 안 받은 리비전이 앞서 나가
+  // 이후 저장이 전부 어긋난다.
+  const protectedWarnIndex = savePersistentState.indexOf('warnProtectedSaveRefused(', protectedNoOpIndex);
+  const protectedRecoveryIndex = savePersistentState.indexOf('saveRejectedWorkRecoverySnapshot(', protectedNoOpIndex);
   const protectedReturnIndex = savePersistentState.indexOf('return true;', protectedNoOpIndex);
   const commitIndex = savePersistentState.indexOf('commitCurrentWorkspaceRevision(commitResult.envelope.metadata.revision)');
   const bootstrapIndex = savePersistentState.indexOf('saveLastWorkBootstrap(', commitIndex);
   const completionReturnIndex = savePersistentState.lastIndexOf('return persistenceCompletion;');
   assert.ok(
     protectedNoOpIndex > acceptedIndex
-      && protectedWarningClearIndex > protectedNoOpIndex
-      && protectedReturnIndex > protectedWarningClearIndex
+      && protectedWarnIndex > protectedNoOpIndex
+      && protectedRecoveryIndex > protectedNoOpIndex
+      && protectedReturnIndex > protectedWarnIndex
       && commitIndex > protectedReturnIndex,
-    'protected server no-op must clear the resolved warning and stop before publishing a new local revision',
+    '서버 보호 거절은 사장님께 알리고 되살릴 사본을 남긴 뒤, 새 로컬 리비전을 올리기 전에 멈춰야 합니다.',
+  );
+  assert.equal(
+    savePersistentState.slice(protectedNoOpIndex, protectedReturnIndex).includes('clearResolvedSessionPersistenceWarning()'),
+    false,
+    '서버가 거절했는데 경고를 지우면 저장된 줄로 오해합니다.',
   );
   assert.ok(acceptedIndex >= 0 && commitIndex > acceptedIndex && bootstrapIndex > commitIndex);
   assert.ok(completionReturnIndex > bootstrapIndex, 'savePersistentState must return durable completion');

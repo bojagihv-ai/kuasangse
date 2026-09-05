@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const fs = require('node:fs');
+const { functionSource, readSourceLf } = require('./source_slice_utils.cjs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const CURRENT_PRODUCT_KEY = '양단호박바늘쌈';
@@ -157,10 +158,11 @@ test('표시용 프롬프트 정보는 실제 생성과 동일한 조립 함수�
 });
 
 test('범위가 없거나 이전 상품인 경쟁사 리포트는 현재 생성 프롬프트에서 제외한다', () => {
-  const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
-  const match = core.match(/function competitorPromptReportIsCurrent\([^]*?\n}\n/);
+  // 줄 끝은 readSourceLf 가 LF 로 맞춘다 — CRLF 작업본에서 `\n}\n` 을 못 찾던 거짓 실패 방지(2026-09-02).
+  const core = readSourceLf(path.join(ROOT, 'src', 'app-core-03.js'));
+  const match = functionSource(core, 'competitorPromptReportIsCurrent');
   assert.ok(match, 'competitorPromptReportIsCurrent 함수가 필요합니다.');
-  const create = new Function('sectionWorkScopeMatches', `${match[0]}; return competitorPromptReportIsCurrent;`);
+  const create = new Function('sectionWorkScopeMatches', `${match}; return competitorPromptReportIsCurrent;`);
   const isCurrent = create((reportScope, currentScope) => reportScope.scopeKey === currentScope.scopeKey);
 
   assert.equal(isCurrent(null, { scopeKey: 'product:a' }, false), false);
@@ -171,10 +173,10 @@ test('범위가 없거나 이전 상품인 경쟁사 리포트는 현재 생성 
 });
 
 test('화면의 실제 생성 요청 입력에는 content prompt와 별도 competitor reference가 모두 포함된다', () => {
-  const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
-  const match = core.match(/function formatSectionGenerationRequestInputs\([^]*?\n}\n/);
+  const core = readSourceLf(path.join(ROOT, 'src', 'app-core-03.js'));
+  const match = functionSource(core, 'formatSectionGenerationRequestInputs');
   assert.ok(match, 'formatSectionGenerationRequestInputs 함수가 필요합니다.');
-  const format = new Function(`${match[0]}; return formatSectionGenerationRequestInputs;`)();
+  const format = new Function(`${match}; return formatSectionGenerationRequestInputs;`)();
 
   assert.equal(format('CONTENT', ''), '[section_content_prompt]\nCONTENT');
   assert.equal(
@@ -184,15 +186,14 @@ test('화면의 실제 생성 요청 입력에는 content prompt와 별도 compe
 });
 
 test('최종 provider prompt 미리보기와 실제 세 provider 실행은 같은 조립 함수를 사용한다', () => {
-  const core = fs.readFileSync(path.join(ROOT, 'src', 'app-core-01.js'), 'utf8');
-  // core.autocrlf 체크아웃에서는 줄 끝이 CRLF이므로 `\n}\n`으로는 함수 끝을 못 찾는다.
-  const match = core.match(/function buildSectionContentProviderPrompt\([^]*?\r?\n}\r?\n/);
+  const core = readSourceLf(path.join(ROOT, 'src', 'app-core-01.js'));
+  const match = functionSource(core, 'buildSectionContentProviderPrompt');
   assert.ok(match, 'buildSectionContentProviderPrompt 함수가 필요합니다.');
   const create = new Function(
     'getEffectiveImageDirectives',
     'buildBrandPromptBlock',
     'buildLayoutPromptBlock',
-    `${match[0]}; return buildSectionContentProviderPrompt;`,
+    `${match}; return buildSectionContentProviderPrompt;`,
   );
   const build = create(() => ['로고 금지'], () => 'BRAND_BLOCK', () => 'LAYOUT_BLOCK');
   const prompt = build(

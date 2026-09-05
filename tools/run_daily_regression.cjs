@@ -381,7 +381,26 @@ function commandText(step) {
 }
 
 function isBrowserStep(step) {
-  return step.browser === true || (step.args || []).some(value => /cdp/i.test(String(value)));
+  // 파일 이름에 'cdp' 가 들어 있는지로 가르면, 실제로 브라우저를 띄우는 검사 상당수가
+  // 인프라 실패 재시도를 못 받는다 - 전수 진단 #24 (실측 2026-09-02: daily 프로파일의
+  // CDP 도구 27개가 여기서 빠졌다. DB-07·DRAFT-NET-01/02·NAV-01·CUTS-RATCHET-01 포함).
+  // 그러면 백엔드 기동 지연이나 CDP 포트 충돌 같은 환경 흔들림이 '앱 실패' 로 보고돼
+  // 조사 시간을 먹고, 반복되면 사람이 빨간 줄을 믿지 않게 된다.
+  // 이름이 아니라 **실제로 브라우저 하네스를 쓰는지**로 가른다.
+  if (step.browser === true) return true;
+  const args = (step.args || []).map(value => String(value));
+  if (args.some(value => /cdp/i.test(value))) return true;
+  const file = args.find(value => /\.cjs$/i.test(value));
+  if (!file) return false;
+  try {
+    const source = fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+    // '도우미를 가져다 쓴다' 가 아니라 '실제로 브라우저에 붙는다' 가 기준이다.
+    // UNIT-FE-02 는 factory_cdp_test_utils 를 require 하지만 순수 함수만 검사한다 -
+    // 그런 것까지 인프라 재시도 대상으로 넣으면 진짜 실패를 두 번 돌리게 된다.
+    return /(?:ensureCdp|connectCdp)\s*\(/.test(source);
+  } catch (_) {
+    return false;
+  }
 }
 
 function isRetryableInfrastructureFailure(step, result) {
@@ -389,7 +408,7 @@ function isRetryableInfrastructureFailure(step, result) {
   const output = String(result.tail || '');
   if (/Factory browser verification failed/i.test(output)) return false;
   if (result.timedOut === true) return true;
-  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET|SocketError: other side closed|waitFor timeout:[\s\S]{0,800}(?:classicRuntimeHydrationReady|typeof state === ['"]object['"]|window\.(?:state|__kuasangseState))/i.test(output);
+  return /CDP WebSocket error|CDP WebSocket closed|CDP command timed out|CDP page target not found|Page target not found|ERR_CONNECTION|ECONNRESET|ECONNREFUSED|UND_ERR_SOCKET|SocketError: other side closed|Failed to fetch|fetch failed|waitFor timeout:[\s\S]{0,800}(?:classicRuntimeHydrationReady|typeof state === ['"]object['"]|window\.(?:state|__kuasangseState))/i.test(output);
 }
 
 function terminateProcessTree(child) {
@@ -511,6 +530,52 @@ async function runStep(step, index, runDir, runtimeEnv) {
   };
 }
 
+// 지난 실행들의 report.json 을 읽어 **어떤 검사가 자주 흔들리는지** 센다.
+// 왜 필요한가: 재시도로 통과하면 표에는 '통과' 만 남는다. 그러면 늘 흔들리는 검사와
+// 오늘 처음 깨진 검사가 같아 보여, 진짜 회귀를 흔들림으로 넘겨버리게 된다.
+// 실측 2026-09-02: GENERATE-01 이 기준선에서도 9번 중 1번 실패했는데, 그 사실이
+// 어디에도 남지 않아 "내 수정이 깨뜨렸나" 를 매번 처음부터 조사했다.
+function readRecentRunHistory(reportRoot, limit = 10) {
+  const history = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(reportRoot, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+      .sort()
+      .reverse()
+      .slice(0, limit);
+  } catch (_) {
+    return history;
+  }
+  for (const name of entries) {
+    try {
+      const raw = fs.readFileSync(path.join(reportRoot, name, 'report.json'), 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.results)) history.push({ name, results: parsed.results });
+    } catch (_) {
+      // 읽히지 않는 과거 보고서는 조용히 건너뛴다. 이력은 참고용이지 판정 근거가 아니다.
+    }
+  }
+  return history;
+}
+
+function summarizeFlakiness(history) {
+  const byId = new Map();
+  for (const run of history) {
+    for (const result of run.results) {
+      const id = String(result?.id || '');
+      if (!id) continue;
+      const entry = byId.get(id) || { runs: 0, failed: 0, wobbled: 0 };
+      entry.runs += 1;
+      if (result.passed === false) entry.failed += 1;
+      else if ((result.attemptCount || 1) > 1) entry.wobbled += 1;
+      byId.set(id, entry);
+    }
+  }
+  return byId;
+}
+
 function markdownReport(report) {
   const rows = report.results.map(result =>
     `| ${result.passed ? '통과' : '실패'} | ${result.id} | ${result.area} | ${result.title.replace(/\|/g, '/')} | ${result.attemptCount || 1}회 | ${(result.durationMs / 1000).toFixed(1)}초 | ${result.logPath} |`
@@ -518,6 +583,34 @@ function markdownReport(report) {
   const failures = report.results.filter(result => !result.passed).map(result =>
     `### ${result.id} ${result.title}\n\n\`\`\`text\n${result.tail.trim() || '(출력 없음)'}\n\`\`\``
   );
+  // 이번 실행에서 한 번 넘어졌다가 통과한 것 - 표에서는 '통과' 로만 보인다.
+  const wobbled = report.results.filter(result => result.passed && (result.attemptCount || 1) > 1);
+  const wobbleSection = wobbled.length
+    ? ['', '## 이번에 한 번 넘어졌다가 통과한 검사', '',
+       '아래는 최종적으로 통과했지만 첫 시도에서 실패한 것들입니다.',
+       '환경 흔들림일 수도 있고, 가끔만 나오는 진짜 고장일 수도 있습니다.', '',
+       ...wobbled.map(result => {
+         const first = (result.attempts || [])[0] || {};
+         const reason = String(first.tail || '').trim().split('\n').slice(-6).join('\n');
+         return `### ${result.id} ${result.title}\n\n첫 시도 실패 이유:\n\n\`\`\`text\n${reason || '(출력 없음)'}\n\`\`\``;
+       })]
+    : [];
+
+  const flakyRows = [];
+  for (const [id, entry] of (report.flakiness || new Map())) {
+    if (entry.failed === 0 && entry.wobbled === 0) continue;
+    const known = report.results.find(result => result.id === id);
+    flakyRows.push(`| ${id} | ${known ? known.title.replace(/\|/g, '/') : '(이번 실행에 없음)'} `
+      + `| ${entry.failed}회 실패 | ${entry.wobbled}회 흔들림 | 최근 ${entry.runs}회 중 |`);
+  }
+  const historySection = flakyRows.length
+    ? ['', '## 최근 실행 이력에서 자주 흔들린 검사', '',
+       '오늘 처음 깨진 것인지, 원래 가끔 깨지던 것인지 구별하는 데 씁니다.', '',
+       '| ID | 검증 항목 | 실패 | 재시도 후 통과 | 표본 |',
+       '|---|---|---:|---:|---:|',
+       ...flakyRows]
+    : [];
+
   return [
     '# 상세페이지 매일 회귀테스트 결과',
     '',
@@ -535,6 +628,8 @@ function markdownReport(report) {
     '',
     ...MANUAL_EXTERNAL_GATES.map(item => `- ${item}`),
     ...(failures.length ? ['', '## 정확한 실패 로그', '', ...failures] : []),
+    ...wobbleSection,
+    ...historySection,
     '',
   ].join('\n');
 }
@@ -613,9 +708,13 @@ async function main() {
     results,
     manualExternalGates: MANUAL_EXTERNAL_GATES,
   };
+  // 이력은 **이번 실행을 저장하기 전에** 읽는다. 안 그러면 자기 자신을 표본에 넣는다.
+  report.flakiness = summarizeFlakiness(readRecentRunHistory(reportRoot, 10));
   const jsonPath = path.join(runDir, 'report.json');
   const markdownPath = path.join(runDir, 'report.md');
-  fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  // Map 은 JSON.stringify 로 {} 가 된다. 저장본에는 평범한 객체로 남긴다.
+  const storable = { ...report, flakiness: Object.fromEntries(report.flakiness) };
+  fs.writeFileSync(jsonPath, `${JSON.stringify(storable, null, 2)}\n`, 'utf8');
   fs.writeFileSync(markdownPath, markdownReport(report), 'utf8');
   fs.copyFileSync(jsonPath, path.join(reportRoot, 'latest.json'));
   fs.copyFileSync(markdownPath, path.join(reportRoot, 'latest.md'));

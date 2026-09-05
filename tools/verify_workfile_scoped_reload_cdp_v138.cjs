@@ -163,6 +163,30 @@ async function main() {
     restoreTimedOut = true;
   }
   const restoreElapsedMs = Date.now() - restoreStartedAt;
+
+  // 화면 썸네일은 **상태 복원보다 늦게** 붙는다.
+  // 위의 기다림은 state.optionSorter.images 만 본다. 그런데 아래에서 세는 domThumbCount 는
+  // document.images 의 naturalWidth > 0 (= 디코딩까지 끝남)을 요구한다.
+  // 그 사이를 안 기다렸더니 데이터는 전부 복원됐는데 domThumbCount 만 0 으로 잡혀
+  // "새로고침 후 화면 썸네일 복원 실패: 0" 으로 떨어졌다 - 실측 2026-09-02,
+  // 같은 실행에서 imageCount·usableImages·slotImageIds 는 전부 통과했다(16회 중 2회).
+  //
+  // 단언은 그대로 둔다. 여기서 기다리는 것은 **판정 기준을 무르게 하는 것이 아니라**
+  // "썸네일이 15초 안에 화면에 뜬다" 로 더 분명하게 만드는 것이다.
+  // 정말로 안 뜨면 15초 뒤에도 0 이고 그대로 실패한다.
+  const domThumbExpression = `Array.from(document.images).filter(image =>
+      String(image.currentSrc || image.src || '').startsWith('data:image/') && image.naturalWidth > 0
+    ).length`;
+  const domThumbCountImmediate = Number(await evaluate(cdp, `(${domThumbExpression})`)) || 0;
+  let domThumbTimedOut = false;
+  const domThumbStartedAt = Date.now();
+  try {
+    await waitFor(cdp, `(${domThumbExpression}) >= 4`, 15000);
+  } catch (_) {
+    domThumbTimedOut = true;
+  }
+  const domThumbElapsedMs = Date.now() - domThumbStartedAt;
+
   const restored = await evaluate(cdp, `(async () => {
     const state = window.__kuasangseState || window.state;
     const expectedProjectId = ${JSON.stringify(projectId)};
@@ -225,6 +249,9 @@ async function main() {
       domThumbCount: Array.from(document.images).filter(image =>
         String(image.currentSrc || image.src || '').startsWith('data:image/') && image.naturalWidth > 0
       ).length,
+      domThumbCountImmediate: ${domThumbCountImmediate},
+      domThumbElapsedMs: ${domThumbElapsedMs},
+      domThumbTimedOut: ${domThumbTimedOut},
       restoreElapsedMs: ${restoreElapsedMs},
       restoreTimedOut: ${restoreTimedOut},
       foreignApplied,
@@ -248,7 +275,9 @@ async function main() {
     { ok: !!EXPECTED_BUILD_ID && restored.buildId === EXPECTED_BUILD_ID, message: `최신 빌드가 아닙니다: ${restored.buildId} (예상: ${EXPECTED_BUILD_ID || '빌드 ID 없음'})` },
     { ok: restored.projectId === projectId && restored.projectName === projectName, message: `새로고침 후 작업파일 식별자 불일치: ${JSON.stringify(restored)}` },
     { ok: restored.imageCount === 4 && restored.usableImages === 4, message: `새로고침 후 옵션 이미지 복원 실패: ${JSON.stringify(restored)}` },
-    { ok: restored.domThumbCount >= 4, message: `새로고침 후 화면 썸네일 복원 실패: ${restored.domThumbCount}` },
+    { ok: restored.domThumbCount >= 4, message: `새로고침 후 화면 썸네일 복원 실패: ${restored.domThumbCount}`
+      + ` (즉시 ${restored.domThumbCountImmediate} · ${restored.domThumbElapsedMs}ms 기다림`
+      + `${restored.domThumbTimedOut ? ' · 15초 안에 안 떴음' : ''})` },
     { ok: Number(restored.restoreElapsedMs) < 10000, message: `새로고침 이미지 복원이 제한 시간 안에 완료되지 않았습니다: ${restored.restoreElapsedMs}ms` },
     { ok: JSON.stringify(restored.slotNames) === JSON.stringify(colors.map(([name]) => name)), message: `새로고침 후 옵션명 복원 실패: ${restored.slotNames.join(', ')}` },
     { ok: restored.slotImageIds.every(Boolean), message: `새로고침 후 사진-옵션 매핑 복원 실패: ${restored.slotImageIds.join(', ')}` },

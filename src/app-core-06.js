@@ -3720,8 +3720,12 @@ function factoryPatchGoalRunStatusInPlace(factory = factoryRuntimeReadFactory())
     ? factoryGoalRunDisplayProgress(goal, stage)
     : factoryGoalProgressClamp(goal.progress);
   const isImageAnalysis = factory.automation?.activeTaskId === 'product-analysis' || /이미지.*분석|제품 이미지/.test(String(stage || ''));
-  const hasIssue = (typeof factoryGoalRunHasFailure === 'function' && factoryGoalRunHasFailure(goal, stage)) || dbStage.status === 'error';
-  const needsAttention = !hasIssue && typeof factoryGoalRunNeedsAttention === 'function' && factoryGoalRunNeedsAttention(goal, stage);
+  // 판정에는 실행 자신(goal.currentStage)만 쓴다. 위의 stage 는 화면 문구라
+  // 진행 단계가 비면 DB 단계 메시지나 최근 로그 한 줄이 들어온다 — 그 줄이 오류면
+  // 아무 실행도 실패하지 않았는데 이 카드가 빨개진다(오전에 고친 RUN-STATUS-01 과 같은 뿌리).
+  const verdictStage = String(goal.currentStage || '');
+  const hasIssue = (typeof factoryGoalRunHasFailure === 'function' && factoryGoalRunHasFailure(goal, verdictStage)) || dbStage.status === 'error';
+  const needsAttention = !hasIssue && typeof factoryGoalRunNeedsAttention === 'function' && factoryGoalRunNeedsAttention(goal, verdictStage);
   const toneColor = running ? 'var(--primary-h)' : (hasIssue ? 'var(--danger)' : (needsAttention ? 'var(--warn)' : 'var(--text-m)'));
   const borderColor = running ? 'rgba(99,102,241,.42)' : (hasIssue ? 'rgba(239,68,68,.72)' : (needsAttention ? 'rgba(245,158,11,.62)' : 'rgba(255,255,255,.10)'));
   const bg = running ? 'rgba(99,102,241,.10)' : (hasIssue ? 'rgba(127,29,29,.20)' : (needsAttention ? 'rgba(245,158,11,.10)' : 'rgba(255,255,255,.025)'));
@@ -4691,6 +4695,11 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
           ...options,
           factory: draft,
           operationToken,
+          // factory 없이 불렸다 = 사용자가 이것만 눌렀다. 큰 흐름의 한 단계가 아니라 여기가 끝이다.
+          // 그래서 '확보' 단계에서 52 가 아니라 100 을 말한다. 예전에는 표시 쪽이 문구를 보고
+          // 100 을 만들어 줬는데(실측 2026-09-02: 52% 인데 바가 가득 참) 그걸 뺐으니
+          // 실행이 스스로 말해야 한다.
+          standalone: true,
         }),
       ),
     );
@@ -4886,7 +4895,9 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
       try { if (typeof compMarketPersistCandidateSnapshot === 'function') compMarketPersistCandidateSnapshot(timeoutUpdated); } catch(_) {}
       factoryShowVmCandidateSelectionTab(factory);
       factoryLog(`VM 후보 ${competitorCount || partialRows.rows.length}건을 확보했습니다. 수집 작업이 늦게 끝나도 후보 카드는 현재 작업에 먼저 표시합니다.`, 'ok', factory);
-      factorySetGoalRunProgress(52, 'VM 경쟁사 후보 확보', '후보 카드를 표시했습니다. 상세페이지 수집 후보를 선택해주세요.', 'ok', { render: false, factory });
+      // 큰 흐름의 한 단계면 52% 지만, 이것만 단독으로 돌린 경우엔 여기가 끝이다.
+      // 표시가 문구를 보고 100 을 만들어 주던 것을 뺐으니 실행이 스스로 말해야 한다.
+      factorySetGoalRunProgress(options.standalone ? 100 : 52, 'VM 경쟁사 후보 확보', '후보 카드를 표시했습니다. 상세페이지 수집 후보를 선택해주세요.', 'ok', { render: false, factory });
       saveLastWorkNow();
       render();
       return { ok: true, label: '경쟁사 후보 수집', partial: true, timedOut: true };
@@ -5159,7 +5170,7 @@ async function factoryRunVmCompetitorCollectionForSelection(options = {}) {
   factoryLog(detailCount
     ? `경쟁사 수집 완료: 후보 ${competitorCount}건, 상세페이지 이미지 ${detailCount}장. 경쟁사 분석 탭에서 분석할 이미지를 선택하세요.`
     : `경쟁사 후보 ${competitorCount}건 수집 완료. 자동 상세 스크래핑은 실행하지 않았습니다. 상세페이지 수집 후보를 선택한 뒤 VM 상세수집/분석을 진행하세요.`, detailCount ? 'ok' : 'warn', factory);
-  factorySetGoalRunProgress(52, detailCount ? '경쟁사 상세이미지 확보' : '경쟁사 후보 확보', '', detailCount ? 'ok' : 'warn', {
+  factorySetGoalRunProgress(options.standalone ? 100 : 52, detailCount ? '경쟁사 상세이미지 확보' : '경쟁사 후보 확보', '', detailCount ? 'ok' : 'warn', {
     failureReason: '',
     render: false,
     factory,
@@ -6459,6 +6470,21 @@ function factoryStampFreshGeneratedCutResult(cut = {}, stageId = '', generationR
   return cut;
 }
 
+// 생성이 실패한 것인가, 만들어 놓고 보관에 실패한 것인가 — 사람에게 사실대로 말한다.
+//
+// 왜 (실측 2026-09-03): 두 가지가 똑같이 "이미지 API 실패" 로 떴다.
+//   (가) Vertex 결제가 꺼져 생성 자체가 막힘 → 결제를 켜야 한다. 다시 눌러도 소용없다.
+//   (나) 편집권 경합으로 보관 저장만 거절됨 → 그림은 이미 있다. 잠시 뒤 다시 하면 된다.
+// 같은 문구라서 사장님은 (가)일 때도 계속 다시 누르고, (나)일 때도 원인을 못 찾았다.
+// 실제로 문구 안에 'lease expired' 가 그대로 들어 있는데도 앞에는 "이미지 API 실패" 가 붙어 있었다.
+function factoryGenerationFailureMessage(error) {
+  const reason = error?.message || String(error || '');
+  if (error?.code === 'ARCHIVE_PERSIST_FAILED') {
+    return `보관 저장 실패: ${reason} · 그림은 만들어졌습니다. 잠시 뒤 다시 시도해주세요.`;
+  }
+  return `이미지 API 실패: ${reason}`;
+}
+
 async function factoryPersistGeneratedCutPromptResult(stageId = '', index = 0, image = '', prompt = {}, generationRunId = '', options = {}) {
   const rawImage = String(image || '').trim();
   if (!rawImage) {
@@ -6587,7 +6613,12 @@ async function factoryPersistGeneratedCutPromptResult(stageId = '', index = 0, i
   }
   const archiveId = String(asset.archiveId || asset.localArchive?.archiveId || '').trim();
   if (!ok || !archiveId) {
-    throw new Error(asset.localArchive?.error || '생성 이미지를 로컬 보관함에 저장하지 못했습니다.');
+    // 여기까지 왔다는 것은 **이미지는 이미 만들어졌다**는 뜻이다(API 200, 요금도 나갔다).
+    // 실패한 것은 그 그림을 보관함에 넣는 일뿐이다. 부르는 쪽이 그 둘을 구별할 수 있게
+    // 표를 붙인다 - 표가 없으면 catch 가 "이미지 API 실패" 로 뭉뚱그린다(전수 진단, 2026-09-03).
+    const persistError = new Error(asset.localArchive?.error || '생성 이미지를 로컬 보관함에 저장하지 못했습니다.');
+    persistError.code = 'ARCHIVE_PERSIST_FAILED';
+    throw persistError;
   }
   const imageUrl = asset.imageUrl || `/api/local-archive/assets/${encodeURIComponent(archiveId)}/image`;
   prompt.archiveId = archiveId;
@@ -30370,7 +30401,7 @@ ${sizeHint}`;
     if (previousResult && !p.completedAt && previousCompletedAt) p.completedAt = previousCompletedAt;
     if (previousResult && !p.updatedAt && previousUpdatedAt) p.updatedAt = previousUpdatedAt;
     p.warning = previousResult ? '새 이미지 생성은 실패했지만 이전 성공 결과는 보존했습니다.' : '';
-    p.error = `이미지 API 실패: ${apiError}`;
+    p.error = factoryGenerationFailureMessage(e);
     const restoredRunId = previousJobState
       ? (previousJobState.currentRunId || previousJobState.generationRunId || previousJobState.factoryGenerationRunId || '')
       : factoryGenerationRunId;
@@ -31216,7 +31247,7 @@ ${sizeHint}`;
     }
     if (previousResult && !p.completedAt && previousCompletedAt) p.completedAt = previousCompletedAt;
     if (previousResult && !p.updatedAt && previousUpdatedAt) p.updatedAt = previousUpdatedAt;
-    p.error = `이미지 API 실패: ${aiError}`;
+    p.error = factoryGenerationFailureMessage(e);
     p.warning = previousResult ? '새 사이즈컷 생성은 실패했지만 이전 성공 결과는 보존했습니다.' : '';
     const restoredRunId = previousJobState
       ? (previousJobState.currentRunId || previousJobState.generationRunId || previousJobState.factoryGenerationRunId || '')
@@ -34483,7 +34514,7 @@ registerBindEventExtension(function bindFactoryEvents() {
       factorySetDbSizeManualDraft(input.dataset.factorySizeManual, input.value);
     };
     input.onkeydown = event => {
-      if (event.key !== 'Enter') return;
+      if (event.key !== 'Enter' || isImeComposingKeyEvent(event)) return; // 한글 조합 중 Enter 는 값을 확정하지 않는다.
       event.preventDefault();
       factoryCommitDbSizeManualDraft(input.dataset.factorySizeManual, input.value);
     };

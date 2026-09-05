@@ -49,6 +49,7 @@ async function reloadAndReadUnsaved(cdp, appUrl) {
         cafeResolution: factory.product?.cafe24CandidateResolution || '',
         hasConfirmedDb: !!factory.product?.confirmedDb,
         confirmedCafeKey: factory.product?.confirmedCafe24ProductKey || '',
+        dbConfirmFailureNote: String(factory.product?.dbConfirmFailureNote || ''),
       },
       candidateState: {
         pendingDbCount: Number(factory.product?.pendingDbCandidates?.length || 0),
@@ -152,6 +153,9 @@ async function main() {
   const evidence = { productName, confirmed, firstReload, secondReload };
   fs.writeFileSync(RESULT_PATH, JSON.stringify(evidence, null, 2), 'utf8');
 
+  // 어느 길로 갔는지 먼저 정한다. 검사 환경에는 신화사 서비스 키가 없어 대개 실패 쪽으로 간다.
+  const confirmedDbSucceeded = confirmed.hasConfirmedDb === true;
+
   const checks = [
     { ok: /^draft:/.test(String(confirmed.scopeBeforeConfirm)),
       message: `전제 불성립 - 저장 전 작업(draft:)이 아닙니다: ${confirmed.scopeBeforeConfirm}` },
@@ -168,6 +172,24 @@ async function main() {
     { ok: confirmed.hasConfirmedDb === true || !!confirmed.dbConfirmFailureNote,
       message: `신화사DB 확정이 조용히 실패했습니다 - 사유가 어디에도 남지 않았습니다: ${JSON.stringify({ dbApplied: confirmed.dbApplied, candidateReviewStatus: confirmed.candidateReviewStatus, dbConfirmFailureNote: confirmed.dbConfirmFailureNote })}` },
 
+    // 'A 이거나 B' 는 여기서 끝내면 안 된다 - 전수 진단 #7.
+    // 둘 중 어느 길로 갔든, **그 길도 새로고침을 견뎌야** 사람에게 쓸모가 있다.
+    // 확정에 성공했으면 확정값이 남아야 하고, 실패했으면 그 사유가 남아야 한다.
+    // 사유가 새로고침에 날아가면 화면은 다시 "아직 확인하지 않음" 이 되어,
+    // 2026-08-31 과 똑같이 아무 설명 없는 빈 화면이 된다.
+    ...(confirmedDbSucceeded
+      ? [
+        { ok: firstReload.state.hasConfirmedDb === true && secondReload.state.hasConfirmedDb === true,
+          message: `신화사DB 확정이 강제 새로고침에 사라졌습니다: ${JSON.stringify({ first: firstReload.state.hasConfirmedDb, second: secondReload.state.hasConfirmedDb })}` },
+      ]
+      : [
+        { ok: !!firstReload.state.dbConfirmFailureNote && !!secondReload.state.dbConfirmFailureNote,
+          message: `신화사DB 실패 사유가 강제 새로고침에 사라졌습니다 - 화면에는 다시 이유 없는 "아직 확인하지 않음" 만 남습니다: ${JSON.stringify({ first: firstReload.state.dbConfirmFailureNote, second: secondReload.state.dbConfirmFailureNote, atConfirm: confirmed.dbConfirmFailureNote })}` },
+        { ok: /[가-힣]/.test(confirmed.dbConfirmFailureNote)
+            && !/undefined|null|\[object Object\]/i.test(confirmed.dbConfirmFailureNote),
+          message: `신화사DB 실패 사유가 사람이 읽을 수 없는 글입니다: ${JSON.stringify(confirmed.dbConfirmFailureNote)}` },
+      ]),
+
     // 저장을 누르지 않은 작업이라도 고른 것은 강제 새로고침을 견뎌야 한다.
     { ok: firstReload.state.cafeKey === confirmed.cafeKey && firstReload.state.confirmedCafeKey === confirmed.confirmedCafeKey,
       message: `저장 전 작업에서 첫 강제 새로고침에 Cafe24 확정이 사라졌습니다: ${JSON.stringify(firstReload.state)} (확정 당시 ${confirmed.cafeKey})` },
@@ -179,7 +201,9 @@ async function main() {
       message: `새로고침 뒤 후보 목록이 0건이 되었습니다(화면에는 "DB 후보 0건, Cafe24 후보 0건" 으로 보입니다): ${JSON.stringify(firstReload.candidateState)}` },
   ];
   assertChecks(checks);
-  console.log(`[PASS] 저장 전 작업의 DB/Cafe24 확정이 강제 새로고침 2회를 견딤 - 증거 ${RESULT_PATH}`);
+  console.log(`[PASS] 저장 전 작업의 DB/Cafe24 확정이 강제 새로고침 2회를 견딤`
+    + ` · 신화사DB 경로: ${confirmedDbSucceeded ? '확정 성공(확정값 유지 확인)' : `확정 실패(사유 유지 확인: ${JSON.stringify(confirmed.dbConfirmFailureNote)})`}`
+    + ` - 증거 ${RESULT_PATH}`);
   return cdp;
 }
 

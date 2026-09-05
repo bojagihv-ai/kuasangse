@@ -1,3 +1,30 @@
+// 사진을 드래그로 배정/해제한 직후 **생성 버튼의 잠금만** 자리에서 고친다.
+//
+// 왜 여기 있나: 이 파일이 optGenerateOptions 를 소유한다(아래 onclick 바인딩).
+// 드래그 처리는 화면 떨림을 막으려고 다시 그리지 않고 자리에서 고치는데,
+// 생성 버튼만 그 손질에서 빠져 있었다. 그래서 마지막 사진을 슬롯에 넣어도
+// 버튼은 "미배정 사진 1장을 ... 배정해주세요" 라고 말한 채 잠겨 있었다
+// (실측 2026-09-04, 회귀 FULL-08: 매칭 13/13 · 미배정 0 인데 10초 뒤에도 잠김).
+// 슬롯 순서 드래그는 requestRender() 를 부르지만 사진 드래그는 안 부른다 - 그 차이였다.
+//
+// 다른 사유(생성 중 · 색상이미지 안씀 · 원본 복원 중)로 잠긴 것은 건드리지 않는다.
+// '미배정' 사유로 잠긴 경우에만 손대서, 다른 잠금을 함부로 풀지 않는다.
+export function syncOptionGenerateLock(byId, optionSorter) {
+  const button = byId?.('optGenerateOptions');
+  if (!button) return;
+  const unassigned = (optionSorter?.pool || []).length;
+  const lockedForUnassigned = /미배정 사진/.test(button.title || '');
+  if (unassigned > 0) {
+    if (!button.disabled || lockedForUnassigned) {
+      button.disabled = true;
+      button.title = `미배정 사진 ${unassigned}장을 옵션 이름 슬롯에 먼저 배정해주세요.`;
+    }
+  } else if (lockedForUnassigned) {
+    button.disabled = false;
+    button.title = '';
+  }
+}
+
 export function bindOptionSorterGeneration(context) {
   const {
     byId, queryAll, optionSorter, requestRender, applyOptionGenerationPipeline,

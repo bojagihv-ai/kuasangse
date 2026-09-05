@@ -24,8 +24,15 @@ from werkzeug.utils import secure_filename
 import requests
 import google.auth
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from functools import wraps
 from services.pipeline import pipeline
 from services.section_definitions import get_all_sections
+from services.public_network import (  # noqa: F401 - 라우트 모듈들이 globals() 로 받아 쓴다
+    PublicAddressPolicyError,
+    assert_public_hostname,
+    resolve_public_addresses,
+    review_public_addresses,
+)
 from config import Config
 
 _JEPUM_DETAIL_ROOT = r"C:\JepumScraper\data\detail_pages"
@@ -90,6 +97,30 @@ def _local_action_request_allowed():
     except ValueError:
         return False
 
+
+def _require_local_action(view):
+    """프로세스를 띄우거나 폴더·브라우저를 여는 라우트에 붙인다 — 남의 사이트 탭이 못 누르게.
+
+    왜 (묶음 G6 #21, 2026-09-02): 같은 검사가 cafe24-control/start·sinhwa-db/start·
+    workfile-reports/folder/open 세 곳에만 손으로 들어가 있었고, JepumScraper 시작·탐색기 열기·
+    로컬 보관 폴더 열기·Chrome 띄우기는 아무 사이트에서나 `fetch()` 한 줄로 눌렀다
+    (GET 도 받는 open-detail-folder 는 <img src> 로도). 백엔드는 127.0.0.1 에만 듣지만
+    브라우저가 대신 눌러 주면 그 벽은 없다.
+    판정 자체는 _local_action_request_allowed 그대로다(Sec-Fetch-Site: cross-site 거절,
+    Origin 이 있으면 로컬 앱 포트만). 데코레이터는 호출 시점에 찾아 쓰므로 검사에서
+    api_shared._local_action_request_allowed 를 바꿔치기해도 따라간다.
+    """
+    @wraps(view)
+    def guarded(*args, **kwargs):
+        if not _local_action_request_allowed():
+            return jsonify({
+                "ok": False,
+                "code": "LOCAL_ACTION_ORIGIN_REQUIRED",
+                "error": "이 동작은 로컬 앱 화면에서만 실행할 수 있습니다. 다른 사이트에서 보낸 요청은 거절했습니다.",
+            }), 403
+        return view(*args, **kwargs)
+    return guarded
+
 # ── Vertex Config (공용 중앙 설정) ─────────────────────────────────
 _VERTEX_CONFIG_PATH = os.path.join(os.path.dirname(__file__), '..', '.local', 'vertex-config.json')
 _SACHYOSANGSE_VERTEX_CONFIG_PATH = r'C:\Users\kua\Documents\Playground\sachyosangse\apps\api\.local\vertex-config.json'
@@ -118,16 +149,33 @@ def _load_vertex_config():
             'location': Config.GOOGLE_CLOUD_LOCATION or 'us-central1',
         }
 
+class VertexConfigSaveError(OSError):
+    """어느 파일이 왜 안 써졌는지 들고 올라간다 — 화면이 그대로 보여 준다."""
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        detail = "; ".join(f"{path}: {reason}" for path, reason in self.failures)
+        super().__init__(f"Vertex 설정 파일을 저장하지 못했습니다 — {detail}")
+
+
 def _save_vertex_config(project: str, location: str):
-    """두 곳 동시 저장 (kuasangse + sachyosangse)."""
+    """두 곳 동시 저장 (kuasangse + sachyosangse). 실패는 삼키지 않고 올린다.
+
+    왜 (묶음 G6 #22, 2026-09-02): 예전엔 open('w') 로 파일을 먼저 비운 뒤 json.dump 가
+    실패해도 except: pass 라서 (1) 원본이 0바이트로 날아가고 (2) 화면은 ok:true 를 받았다.
+    다음 요청부터 _load_vertex_config 가 빈 파일을 못 읽어 .env 기본값으로 조용히 되돌아간다.
+    _atomic_write_json 은 임시 파일에 다 쓴 뒤 os.replace 로 바꿔 끼우므로 실패해도 원본은
+    그대로다. 한 곳이라도 실패하면 VertexConfigSaveError 로 올려 라우트가 500 과 원인을 준다.
+    """
     data = {'project': project, 'location': location}
+    failures = []
     for path in [_VERTEX_CONFIG_PATH, _SACHYOSANGSE_VERTEX_CONFIG_PATH]:
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            _atomic_write_json(path, data, indent=2)
+        except OSError as exc:
+            failures.append((path, f"{exc.__class__.__name__}: {exc}"))
+    if failures:
+        raise VertexConfigSaveError(failures)
 
 def _mask_secret(value: str, head: int = 6, tail: int = 4) -> str:
     text = str(value or "").strip()
@@ -191,21 +239,29 @@ api = Blueprint("api", __name__)
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
 
 
-def _atomic_write_json(path, data):
+def _atomic_write_json(path, data, indent=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    for attempt in range(6):
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(6):
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    except BaseException:
+        # 바꿔 끼우기에 실패한 임시 파일을 남기지 않는다(원본은 손대지 않았다).
         try:
-            os.replace(tmp_path, path)
-            return
-        except PermissionError:
-            if attempt == 5:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _load_json_file(path):
@@ -271,10 +327,101 @@ def _cafe24_control_port_open(timeout=0.8):
         return False
 
 
+def _parse_cafe24_setup_status(body):
+    """Control Tower 의 setup/status 본문을 읽어 **쓸 수 있는가** 를 답한다.
+
+    켜져 있는 것과 쓸 수 있는 것은 다르다 - 전수 진단 #16.
+    예전에는 HTTP 200 이면 running=True 로 끝냈다. 그래서 OAuth 가 끊겼거나 토큰이 만료돼도
+    준비 카드는 '준비 완료' 를 찍고, 수집은 첫 요청에서 401 로 죽었다.
+
+    본문 형태(실측 2026-09-02, /api/setup/status?include_secrets=0):
+      {"ok":true,"data":{"missing_scopes":[...],
+                         "checks":[{"id":"mall-connection","status":"pass"},
+                                   {"id":"scopes",...},{"id":"token-keeper",...}]}}
+    checks[].status 는 pass | warn | fail | info.
+
+    읽을 수 없는 본문(옛 판 Control Tower, 깨진 응답)에는 usable=None 을 돌려준다.
+    모르는 것을 '쓸 수 없다' 로 단정해 막으면, 멀쩡한 환경에서 수집을 못 하게 된다.
+    """
+    unknown = {
+        "usable": None,
+        "oauthState": "unknown",
+        "missingScopes": [],
+        "tokenMessage": "",
+        "problem": "",
+    }
+    if not isinstance(body, dict):
+        return unknown
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return unknown
+    checks = data.get("checks")
+    if not isinstance(checks, list):
+        return unknown
+    by_id = {}
+    for check in checks:
+        if isinstance(check, dict) and check.get("id"):
+            by_id[str(check["id"])] = check
+    mall = by_id.get("mall-connection")
+    scopes = by_id.get("scopes")
+    token = by_id.get("token-keeper")
+    if mall is None and scopes is None and token is None:
+        return unknown
+
+    def status_of(check):
+        return str((check or {}).get("status") or "").strip().lower()
+
+    missing = [str(item) for item in (data.get("missing_scopes") or []) if str(item).strip()]
+    token_message = str((token or {}).get("message") or "")
+
+    if status_of(mall) == "fail":
+        return {
+            "usable": False,
+            "oauthState": "disconnected",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": "Cafe24 OAuth 연결이 끊겼습니다. Control Tower 에서 다시 연결해주세요.",
+        }
+    if status_of(token) == "fail":
+        return {
+            "usable": False,
+            "oauthState": "reauth_required",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": "Cafe24 토큰이 만료됐습니다. Control Tower 에서 다시 로그인해주세요.",
+        }
+    if missing or status_of(scopes) in {"fail", "warn"}:
+        named = ", ".join(missing) if missing else "일부 권한"
+        return {
+            "usable": False,
+            "oauthState": "scopes_missing",
+            "missingScopes": missing,
+            "tokenMessage": token_message,
+            "problem": f"Cafe24 권한이 모자랍니다({named}). Control Tower 에서 권한을 다시 승인해주세요.",
+        }
+    if status_of(token) == "warn":
+        # 곧 만료되지만 지금은 쓸 수 있다. 막지 않고 알리기만 한다.
+        return {
+            "usable": True,
+            "oauthState": "expiring",
+            "missingScopes": [],
+            "tokenMessage": token_message,
+            "problem": "",
+        }
+    return {
+        "usable": True,
+        "oauthState": "connected",
+        "missingScopes": [],
+        "tokenMessage": token_message,
+        "problem": "",
+    }
+
+
 def _cafe24_control_status_payload():
     port_open = _cafe24_control_port_open()
     health_ok = False
     health_detail = ""
+    verdict = {"usable": None, "oauthState": "unknown", "missingScopes": [], "tokenMessage": "", "problem": ""}
     if port_open:
         try:
             response = requests.get(
@@ -284,6 +431,11 @@ def _cafe24_control_status_payload():
             )
             health_ok = response.ok
             health_detail = f"HTTP {response.status_code}"
+            # 본문을 버리지 않는다. 토큰·연결·권한 검사표가 여기 들어 있다.
+            try:
+                verdict = _parse_cafe24_setup_status(response.json())
+            except Exception:
+                verdict = {"usable": None, "oauthState": "unknown", "missingScopes": [], "tokenMessage": "", "problem": ""}
         except requests.RequestException as exc:
             health_detail = exc.__class__.__name__
     running = port_open and health_ok
@@ -298,10 +450,19 @@ def _cafe24_control_status_payload():
         "port": _CAFE24_CONTROL_PORT,
         "root": str(_CAFE24_CONTROL_ROOT),
         "scriptExists": _CAFE24_CONTROL_SCRIPT.is_file(),
+        # 꺼져 있으면 쓸 수 없는 것이 확실하다(False). 켜져 있는데 본문을 못 읽으면 모르는 것(None) -
+        # 모르는 것을 '쓸 수 없다' 로 단정해 막으면 멀쩡한 환경에서 수집을 못 하게 된다.
+        "usable": (verdict["usable"] if verdict["usable"] is None else bool(verdict["usable"])) if running else False,
+        # 꺼져 있으면 OAuth 가 어떤 상태인지는 정말 모른다. usable 은 False 로 확실하지만
+        # oauthState 까지 단정하지 않는다 - '재로그인 필요' 같은 틀린 안내를 하게 된다.
+        "oauthState": verdict["oauthState"] if running else "unknown",
+        "missingScopes": verdict["missingScopes"],
+        "tokenMessage": verdict["tokenMessage"],
         "message": (
-            "Cafe24 Control Tower가 실행 중입니다. API Hub 후보 수집을 계속합니다."
-            if running
-            else "Cafe24 Control Tower가 꺼져 있습니다."
+            "Cafe24 Control Tower가 꺼져 있습니다."
+            if not running
+            else verdict["problem"]
+            or "Cafe24 Control Tower가 실행 중입니다. API Hub 후보 수집을 계속합니다."
         ),
     }
 
@@ -401,6 +562,17 @@ def _jepum_scraper_python_executable():
     return None
 
 
+def _jepum_watcher_verdict():
+    """VM 안 후보 수집 watcher 가 살아 있는가.
+
+    호스트 스크래퍼 포트가 열려 있는 것과, 실제로 후보검색을 처리하는 VM 안 watcher 가
+    살아 있는 것은 다르다 - 전수 진단 #5. watcher 만 죽은 고장이 흔하다
+    (2026-08-31 에 41시간, 09-02 전수 진단 중에도 26분).
+    """
+    from services.vm_candidate_bridge import watcher_readiness
+    return watcher_readiness()
+
+
 def _jepum_scraper_status_payload():
     # 어느 포트를 볼지부터 찾는다. 외운 번호를 믿다가 두 번 사고가 났다.
     port = _jepum_scraper_port()
@@ -430,6 +602,33 @@ def _jepum_scraper_status_payload():
     running = port_open and health_ok
     port_conflict = port_open and not health_ok
     python_path = _jepum_scraper_python_executable()
+    # 켜져 있는 것(running)과 쓸 수 있는 것(usable)을 가른다.
+    # watcher 를 못 물어봤으면 모르는 것(None)으로 둔다 - 모르는 것을 '쓸 수 없다' 로
+    # 단정해 막으면 멀쩡한 환경에서 수집을 못 하게 된다.
+    watcher_alive = None
+    heartbeat_age = None
+    try:
+        verdict = _jepum_watcher_verdict()
+        if isinstance(verdict, dict):
+            watcher_alive = verdict.get("candidateWatcherAlive")
+            heartbeat_age = verdict.get("heartbeatAgeSeconds")
+    except Exception:
+        watcher_alive = None
+        heartbeat_age = None
+    if not running:
+        usable = False
+    elif watcher_alive is None:
+        usable = None
+    else:
+        usable = bool(watcher_alive)
+    if running and watcher_alive is False:
+        minutes = int(round((heartbeat_age or 0) / 60))
+        watcher_note = (
+            f"JepumScraper는 포트 {port} 에서 실행 중이지만, VM 안 후보 수집 watcher 가 응답하지 않습니다"
+            f"(마지막 응답 {minutes}분 전). VM 안에서 후보 수집 watcher 를 다시 실행해주세요."
+        )
+    else:
+        watcher_note = ""
     return {
         "ok": True,
         "running": running,
@@ -443,8 +642,12 @@ def _jepum_scraper_status_payload():
         "pythonExists": bool(python_path),
         # 어느 포트를 봤는지 말한다. 이 한 줄이 없어서 "꺼져 있습니다" 만 보고
         # 멀쩡히 돌고 있는 서비스를 한참 찾아다녔다.
+        "usable": usable,
+        "candidateWatcherAlive": watcher_alive,
+        "heartbeatAgeSeconds": heartbeat_age,
         "message": (
-            f"JepumScraper가 실행 중입니다. (포트 {port})"
+            watcher_note
+            or f"JepumScraper가 실행 중입니다. (포트 {port})"
             if running
             else f"JepumScraper가 포트 {port} 에 없습니다. "
                  "스크래퍼가 다른 포트에 떠 있으면 JEPUM_SCRAPER_PORT 로 알려 주세요."

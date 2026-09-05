@@ -343,7 +343,45 @@ async function main() {
     { ok: visual.cardText.includes('사용용도') && visual.inputValue === '선물 포장, 답례품', message: `화면용 카드에 사용용도 완료값이 보이지 않습니다: ${JSON.stringify({ card: visual.cardText, value: visual.inputValue })}` },
     { ok: visual.inputVisible, message: `화면용 사용용도 입력 행이 뷰포트에 보이지 않습니다: y=${visual.viewportY}` },
   ]);
-  console.log(JSON.stringify({ ok: true, proof, visual, screenshot: SCREENSHOT_PATH, visibleScreenshot: VISIBLE_SCREENSHOT_PATH }, null, 2));
+  // ── 여기서부터: 제목이 약속한 '새로고침 유지' 를 실제로 확인한다 ──────────────
+  //
+  // 2026-09-02 까지 이 검사는 Page.reload 를 한 번도 하지 않았다(최초 로드뿐).
+  // 이름은 "필수값 확인 상태 새로고침 유지" 인데 실제로는 메모리 정합성만 봤다.
+  // 사장님은 이 이름을 보고 안심하신다 — "필수값 고른 게 날아가면 안 된다" 는
+  // 그분이 가장 자주 말씀하신 원칙이다. 그래서 진짜로 새로고침한다.
+  await evaluate(cdp, `(async () => {
+    // 확정값을 다시 세우고 저장까지 마친 뒤 새로고침한다.
+    const factory = window.factoryState();
+    window.factoryCommitAutomationWizardFieldValue('usage', '선물 포장, 답례품', 'usage', false, factory);
+    if (typeof window.saveLastWorkNow === 'function') {
+      await window.saveLastWorkNow({ force: true, sync: false });
+    }
+    return true;
+  })()`);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  await cdp.send('Page.reload', { ignoreCache: true });
+  await waitFor(cdp, '!!(window.state && window.render && window.factoryState && window.factoryAutomationReviewSummary)', 60000);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  const afterReload = await evaluate(cdp, `(() => {
+    const factory = window.factoryState();
+    const summary = window.factoryAutomationReviewSummary(factory, window.factoryAutomationCounts(factory));
+    const usage = summary.fields.find(field => field.id === 'usage') || {};
+    return {
+      productName: window.state?.productName || '',
+      usageStatus: usage.status || '',
+      usageValue: usage.value || '',
+      manualValue: factory.product?.dbFieldSettings?.usage?.manualValue || '',
+      reviewValue: factory.automation?.fieldReview?.usage?.value || '',
+    };
+  })()`);
+  assertChecks([
+    { ok: afterReload.usageValue === '선물 포장, 답례품' || afterReload.manualValue === '선물 포장, 답례품' || afterReload.reviewValue === '선물 포장, 답례품',
+      message: `Ctrl+F5 뒤 확정한 필수값이 사라졌습니다: ${JSON.stringify(afterReload)}` },
+    { ok: afterReload.usageStatus === 'done',
+      message: `Ctrl+F5 뒤 확인 상태가 완료가 아닙니다: ${JSON.stringify(afterReload)}` },
+  ]);
+
+  console.log(JSON.stringify({ ok: true, proof, visual, afterReload, screenshot: SCREENSHOT_PATH, visibleScreenshot: VISIBLE_SCREENSHOT_PATH }, null, 2));
   cdp.close();
   if (cdpRuntime.cleanup) await cdpRuntime.cleanup();
 }

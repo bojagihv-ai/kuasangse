@@ -1,4 +1,5 @@
 import { bindNativeOptionImageDrag } from './optionsorter-native-drag.mjs';
+import { syncOptionGenerateLock } from './optionsorter-generation-bindings.mjs';
 
 export function bindOptionSorterSlots(context) {
   const {
@@ -28,6 +29,8 @@ export function bindOptionSorterSlots(context) {
       matchStatus.classList.toggle('warn', os.pool.length > 0);
       matchStatus.classList.toggle('ok', os.pool.length === 0);
     }
+    // 생성 버튼 잠금은 그 버튼을 소유한 모듈이 자리에서 고친다(FULL-08, 2026-09-04).
+    syncOptionGenerateLock(byId, os);
     const poolWrap = byId('optPoolWrap');
     if (poolWrap) poolWrap.style.opacity = os.pool.length === 0 ? '.55' : '1';
     const poolStatus = byId('optPoolStatus');
@@ -211,10 +214,7 @@ export function bindOptionSorterSlots(context) {
   if (currentStep() === 'optionsorter' && optionSorter().subStep === 'sort' && sortable) {
     const os = optionSorter();
     const sharedGroup = { name: 'opt-imgs', pull: true, put: true };
-    const onImgEnd = () => {
-      syncOptFromDOM();
-      refreshAssignmentIndicators();
-    };
+    const onImgEnd = () => { syncOptFromDOM(); refreshAssignmentIndicators(); };
     const imageSortableOptions = {
       group: sharedGroup,
       animation: 80,

@@ -3109,6 +3109,20 @@ class ClaudeOAuthAPI extends GptOAuthAPI {
 }
 
 // ════════════════════════════════════════════════════════════════
+// 한글 IME 조합 중 키 입력 판정
+// ════════════════════════════════════════════════════════════════
+// 사장님 말(2026-09-02): "한글 치다가 엔터 누르면 마지막 글자가 빠진 채로 날아간다."
+// 한국어 IME 는 마지막 음절을 조합하는 동안 Enter 를 keyCode 229·isComposing=true 로 보낸다.
+// 이때 Enter 핸들러가 전송하면 조합 중이던 글자가 입력창에 되살아나 두 번 보내지거나 빠진다
+// (실측 2026-09-02, tools/verify_ime_composition_enter_cdp_v1.cjs: '수저' → '수저' + '저' 두 번 전송).
+// Enter 로 무언가를 확정·전송하는 핸들러는 먼저 이 판정을 거쳐 조합 중이면 아무것도 하지 않는다.
+// 구형 Chrome/Windows 는 isComposing 없이 keyCode 229 만 주므로 둘 다 본다.
+function isImeComposingKeyEvent(event) {
+  if (!event) return false;
+  return event.isComposing === true || event.keyCode === 229;
+}
+
+// ════════════════════════════════════════════════════════════════
 // LLM ROUTER — 선택된 프로바이더/모델로 자동 분기
 // ════════════════════════════════════════════════════════════════
 function getLLMClient() {

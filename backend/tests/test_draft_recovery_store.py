@@ -25,11 +25,39 @@ def client():
 DRAFT = "draft:lastwork_pytest_contract"
 
 
-def test_project_scope_is_refused(client):
-    # 편집권 검증을 우회하는 뒷문이 되면 안 된다.
-    response = client.post("/api/draft-recovery", json={"scopeId": "project:abc", "snapshot": {}})
+def test_saved_work_is_accepted_because_the_normal_path_can_refuse_it(client):
+    # 2026-09-02 부터 project: 도 받는다. 정상 저장(/api/last-work)이 보호 사유로 거절하면
+    # 그 작업이야말로 사본이 필요하기 때문이다(낙지발노리개 54건 연속 거절).
+    # 뒷문이 아닌 근거: 이 저장소는 자동 복원에 쓰이지 않는다 - 아래 검사가 그것을 지킨다.
+    response = client.post("/api/draft-recovery", json={
+        "scopeId": "project:abc", "snapshot": {"productName": "거절된작업"}, "reason": "server-refused",
+    })
+    assert response.status_code == 200
+    assert response.get_json()["ok"] is True
+
+
+def test_nonsense_scope_is_still_refused(client):
+    response = client.post("/api/draft-recovery", json={"scopeId": "batch:job-1", "snapshot": {}})
     assert response.status_code == 400
     assert response.get_json()["ok"] is False
+
+
+def test_recovery_store_is_never_read_by_automatic_restore():
+    # 이 저장소를 자동 복원이 읽기 시작하면 편집권을 우회하는 뒷문이 된다.
+    # 되살리기 버튼(restoreDraftRecoveryEntry)만 읽어야 한다.
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[2]
+    callers = []
+    for path in (root / "src").rglob("*.js"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "/api/draft-recovery" in text:
+            callers.append(path.name)
+    for path in (root / "src").rglob("*.mjs"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if "/api/draft-recovery" in text:
+            callers.append(path.name)
+    # app-core-02: 사본 남기기(쓰기), app-core-03: 되살리기 버튼(읽기). 그 둘뿐이어야 한다.
+    assert sorted(set(callers)) == ["app-core-02.js", "app-core-03.js"], sorted(set(callers))
 
 
 def test_snapshot_must_be_an_object(client):
