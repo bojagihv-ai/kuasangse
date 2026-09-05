@@ -215,11 +215,35 @@ async function main() {
       throw new Error(`${error.message}; dragDiagnostics=${JSON.stringify(diagnostics)}`);
     }
 
+    // 드래그로 마지막 사진을 배정한 직후 - **상태는 바로 바뀌지만 버튼 DOM 은 다시 그린 뒤에 바뀐다.**
+    // 예전에는 곧바로 읽어서 generateEnabled 가 false 로 잡혔다. 상태는 13개 다 매칭인데도.
+    // 여기서 기다리는 것은 판정을 무르게 하는 것이 아니라
+    // "모두 매칭되면 생성 버튼이 켜진다" 를 분명하게 만드는 것이다.
+    // 정말 안 켜지면 아래 시간이 다 지나고도 false 라 그대로 실패한다.
+    const dragEnabledImmediate = await evaluate(cdp,
+      `!document.getElementById('optGenerateOptions')?.disabled`);
+    let dragEnableTimedOut = false;
+    try {
+      await waitFor(cdp, `!document.getElementById('optGenerateOptions')?.disabled`, 10000);
+    } catch (_) {
+      dragEnableTimedOut = true;
+    }
+
     const dragProof = await evaluate(cdp, `(() => ({
       pairCount: window.getOptionImagePairs(window.state.optionSorter).length,
       poolCount: window.state.optionSorter.pool.length,
       firstSlotImageCount: window.state.optionSorter.slots[0]?.imgIds?.length || 0,
       generateEnabled: !document.getElementById('optGenerateOptions')?.disabled,
+      generateButtonExists: !!document.getElementById('optGenerateOptions'),
+      generateDisabledReason: (document.getElementById('optGenerateOptions')?.getAttribute('title')
+        || document.getElementById('optGenerateOptions')?.getAttribute('data-disabled-reason') || ''),
+      unassignedCount: (window.state.optionSorter.pool || []).length,
+      missingPayload: (window.getOptionImagePairs(window.state.optionSorter) || [])
+        .filter(pair => !(pair?.image?.preview || pair?.image?.dataUrl || pair?.image?.base64)).length,
+      optionGenRunning: window.state.optionSorter.optionGenRunning === true,
+      colorImagesDisabled: window.state.optionSorter.colorImagesDisabled === true,
+      enabledImmediate: ${dragEnabledImmediate ? 'true' : 'false'},
+      enableTimedOut: ${dragEnableTimedOut ? 'true' : 'false'},
     }))()`);
 
     const manualAutoProof = await evaluate(cdp, `(() => {
