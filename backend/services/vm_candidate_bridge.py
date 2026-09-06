@@ -194,9 +194,15 @@ def watcher_readiness() -> dict:
     except OSError:
         age_seconds = None
         candidate_alive = False
+    # watcher 가 죽었을 때만 VM 전원을 묻는다. 멀쩡할 때 VBoxManage 를 부르면
+    # 상태 조회마다 수백 ms 가 붙는다(화면이 이 값을 자주 읽는다).
+    power_state = "running" if candidate_alive else vm_power_state()
     return {
         **detail,
         "candidateWatcherAlive": candidate_alive,
+        "vmPowerState": power_state,
+        # 사람이 눌러서 해결할 수 있는가. 화면은 이 값을 보고 "켜 드릴까요?" 를 띄운다.
+        "canStartVm": (not candidate_alive) and power_state == "poweroff",
         "heartbeatAgeSeconds": age_seconds,
         "maxAgeSeconds": _WATCHER_HEARTBEAT_MAX_AGE_SECONDS,
     }
@@ -212,6 +218,83 @@ def _vboxmanage_path() -> Path | None:
         return installed
     located = shutil.which("VBoxManage")
     return Path(located) if located else None
+
+
+def vm_power_state() -> str:
+    """VM 이 켜져 있는가. "running" / "poweroff" / "unknown".
+
+    왜 필요한가 (실측 2026-09-06): 호스트 스크래퍼는 포트 43000 에서 멀쩡히 돌고 있는데
+    VM 이 통째로 꺼져 있어 watcher 가 35시간 응답이 없었다. 그런데 화면은
+    "VM 안에서 후보 수집 watcher 를 다시 실행해주세요" 라고만 했다 -
+    **들어갈 VM 자체가 꺼져 있는데** 사람에게 들어가라고 한 것이다.
+    무엇을 켤 수 있는지 알아야 화면이 "켜 드릴까요?" 라고 물을 수 있다.
+    """
+    executable = _vboxmanage_path()
+    if executable is None:
+        return "unknown"
+    vm_name = str(os.getenv("KUASANGSE_VM_NAME", _DEFAULT_VM_NAME)).strip() or _DEFAULT_VM_NAME
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            [str(executable), "showvminfo", vm_name, "--machinereadable"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creation_flags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if completed.returncode != 0:
+        return "unknown"
+    for line in (completed.stdout or "").splitlines():
+        if line.startswith("VMState="):
+            state = line.split("=", 1)[1].strip().strip('"')
+            return "running" if state == "running" else ("poweroff" if state in {"poweroff", "aborted", "saved"} else state)
+    return "unknown"
+
+
+def start_vm() -> dict:
+    """VM 을 켠다. 이미 켜져 있으면 아무것도 하지 않는다.
+
+    화면에서 "켜 드릴까요?" 에 사장님이 예를 눌렀을 때만 불린다.
+    켠 뒤 watcher 가 살아나기까지는 부팅 시간이 걸리므로, 여기서 기다리지는 않는다.
+    """
+    state = vm_power_state()
+    if state == "running":
+        return {"ok": True, "started": False, "vmPowerState": "running", "message": "VM 은 이미 켜져 있습니다."}
+    executable = _vboxmanage_path()
+    if executable is None:
+        return {"ok": False, "started": False, "vmPowerState": state,
+                "message": "VirtualBox(VBoxManage)를 찾지 못해 VM 을 켤 수 없습니다."}
+    vm_name = str(os.getenv("KUASANGSE_VM_NAME", _DEFAULT_VM_NAME)).strip() or _DEFAULT_VM_NAME
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            [str(executable), "startvm", vm_name, "--type", "gui"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creation_flags,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"ok": False, "started": False, "vmPowerState": state,
+                "message": f"VM 을 켜지 못했습니다: {error.__class__.__name__}"}
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip().splitlines()
+        return {"ok": False, "started": False, "vmPowerState": vm_power_state(),
+                "message": f"VM 을 켜지 못했습니다: {detail[-1] if detail else '알 수 없는 오류'}"}
+    return {
+        "ok": True,
+        "started": True,
+        "vmPowerState": "running",
+        "message": "VM 을 켰습니다. 부팅과 후보 수집 watcher 준비까지 1~3분쯤 걸립니다.",
+    }
 
 
 def _wake_vm_display_for_gui_job() -> bool:

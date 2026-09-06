@@ -786,6 +786,21 @@ def jepum_scraper_start():
     with _JEPUM_START_LOCK:
         status = _jepum_scraper_status_payload()
         if status["running"]:
+            # 호스트 스크래퍼가 떠 있어도 **VM 이 꺼져 있으면** 후보 수집은 못 한다.
+            # 예전에는 여기서 "이미 실행 중" 이라며 그대로 돌아갔고, 화면은
+            # "VM 안에서 watcher 를 다시 실행해주세요" 라고만 했다 - 들어갈 VM 이 꺼져 있는데.
+            # 실측 2026-09-06: VM 이 통째로 꺼진 채 35시간이 지나 수집이 계속 실패했다.
+            if status.get("canStartVm"):
+                from services.vm_candidate_bridge import start_vm
+
+                result = start_vm()
+                refreshed = _jepum_scraper_status_payload()
+                return jsonify({
+                    **refreshed,
+                    "ok": bool(result.get("ok")),
+                    "vmStarted": bool(result.get("started")),
+                    "message": result.get("message") or "VM 실행을 시도했습니다.",
+                }), (200 if result.get("ok") else 502)
             return jsonify({
                 **status,
                 "message": "JepumScraper가 이미 실행 중입니다. VM 후보 수집을 계속합니다.",

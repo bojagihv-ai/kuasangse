@@ -20,7 +20,7 @@ const test = require('node:test');
 const ROOT = path.resolve(__dirname, '../..');
 const MODULE_URL = new URL(`file:///${path.join(ROOT, 'src/modules/local-service-preflight.mjs').replace(/\\/g, '/')}`);
 
-function makeRuntime({ backendDown = false, running = {}, onConfirm } = {}) {
+function makeRuntime({ backendDown = false, running = {}, extra = {}, onConfirm } = {}) {
   const calls = { fetches: [], logs: [], states: [], confirms: 0 };
   const runtime = {
     state: { backendBaseUrl: 'http://127.0.0.1:5050' },
@@ -35,7 +35,7 @@ function makeRuntime({ backendDown = false, running = {}, onConfirm } = {}) {
       if (backendDown) throw new TypeError('Failed to fetch');
       const id = String(url).includes('sinhwa') ? 'sinhwa'
         : String(url).includes('cafe24') ? 'cafe24' : 'jepum';
-      return { ok: true, running: running[id] !== false, port: 1234 };
+      return { ok: true, running: running[id] !== false, port: 1234, ...(extra[id] || {}) };
     },
     factoryLog(message, level) { calls.logs.push({ message: String(message), level }); },
   };
@@ -106,4 +106,61 @@ test('백엔드는 살아 있고 서비스만 꺼져 있으면 예전처럼 그 
   assert.equal(ok, false);
   const said = states().map(item => item.message).join('\n');
   assert.match(said, /신화사DB/, `꺼진 서비스를 지목하지 않았습니다: ${said}`);
+});
+
+
+// ── VM 이 꺼져 있으면 "켤까요?" 를 묻는다 ────────────────────────────────
+//
+// 주인님 2026-09-06: "꺼져있으면 실행하게끔 UX가 가야하지 않어? 전엔 그랬었는데"
+//
+// 실측 2026-09-06: 호스트 스크래퍼는 포트 43000 에서 멀쩡히 돌고 있었는데
+// **VM 이 통째로 꺼져 있어** 후보 수집 watcher 가 35시간 응답이 없었다.
+// 그런데 화면은 "VM 안에서 watcher 를 다시 실행해주세요" 라고만 하고 멈췄다 -
+// 들어갈 VM 이 꺼져 있는데. 2026-09-02 에 이 갈래를 만들며 적은
+// "이미 켜져 있으니 켜라고 물어도 소용없다" 는 판단이 좁았던 것이다.
+
+test('켜져 있어도 못 쓰는데 VM 을 켤 수 있으면, 켤지 묻는다', async () => {
+  const ensure = await loadPreflight();
+  const asked = [];
+  const { runtime, calls, factory, states } = makeRuntime({
+    extra: { jepum: { usable: false, canStartVm: true, message: 'VM 이 꺼져 있습니다.' } },
+    onConfirm(message) { asked.push(String(message)); return true; },
+  });
+  await ensure(factory, runtime, {});
+
+  assert.equal(calls.confirms, 1, 'VM 을 켤 수 있는데 묻지 않았습니다');
+  assert.match(asked[0], /켤까요|켜시겠/, `묻는 문구가 아닙니다: ${asked[0]}`);
+  const started = calls.fetches.filter(item => item.method === 'POST' && /jepum-scraper\/start/.test(item.url));
+  assert.equal(started.length, 1, '예를 눌렀는데 실행 요청을 보내지 않았습니다');
+  // 부팅을 기다리며 화면을 굳히지 않는다. 다시 눌러 달라고 말한다.
+  assert.match(states()[0]?.message || '', /다시 눌러/, '준비되면 다시 누르라는 안내가 없습니다');
+});
+
+test('켤 수 있는데 사람이 아니오를 누르면 켜지 않는다', async () => {
+  const ensure = await loadPreflight();
+  const { runtime, calls, factory, states } = makeRuntime({
+    extra: { jepum: { usable: false, canStartVm: true, message: 'VM 이 꺼져 있습니다.' } },
+    onConfirm() { return false; },
+  });
+  const result = await ensure(factory, runtime, {});
+
+  assert.equal(result, false);
+  assert.equal(calls.confirms, 1);
+  const started = calls.fetches.filter(item => item.method === 'POST');
+  assert.equal(started.length, 0, '아니오를 눌렀는데 실행 요청을 보냈습니다');
+  assert.equal(states()[0]?.phase, 'cancelled');
+});
+
+test('켤 것이 없으면 묻지 않고 무엇이 막혔는지만 보여 준다', async () => {
+  // VM 은 켜져 있는데 watcher 만 죽은 경우. 여기서 물으면 켤 것이 없어 헛물만 켠다.
+  const ensure = await loadPreflight();
+  const { runtime, calls, factory, states } = makeRuntime({
+    extra: { jepum: { usable: false, canStartVm: false, message: 'VM 안에서 watcher 를 다시 실행해주세요.' } },
+    onConfirm() { throw new Error('켤 것이 없는데 물었습니다'); },
+  });
+  const result = await ensure(factory, runtime, {});
+
+  assert.equal(result, false);
+  assert.equal(calls.confirms, 0, '켤 것이 없는데 물었습니다');
+  assert.match(states()[0]?.message || '', /watcher/);
 });

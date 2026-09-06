@@ -607,14 +607,20 @@ def _jepum_scraper_status_payload():
     # 단정해 막으면 멀쩡한 환경에서 수집을 못 하게 된다.
     watcher_alive = None
     heartbeat_age = None
+    vm_power_state = ""
+    can_start_vm = False
     try:
         verdict = _jepum_watcher_verdict()
         if isinstance(verdict, dict):
             watcher_alive = verdict.get("candidateWatcherAlive")
             heartbeat_age = verdict.get("heartbeatAgeSeconds")
+            vm_power_state = str(verdict.get("vmPowerState") or "")
+            can_start_vm = verdict.get("canStartVm") is True
     except Exception:
         watcher_alive = None
         heartbeat_age = None
+        vm_power_state = ""
+        can_start_vm = False
     if not running:
         usable = False
     elif watcher_alive is None:
@@ -623,10 +629,18 @@ def _jepum_scraper_status_payload():
         usable = bool(watcher_alive)
     if running and watcher_alive is False:
         minutes = int(round((heartbeat_age or 0) / 60))
-        watcher_note = (
+        head = (
             f"JepumScraper는 포트 {port} 에서 실행 중이지만, VM 안 후보 수집 watcher 가 응답하지 않습니다"
-            f"(마지막 응답 {minutes}분 전). VM 안에서 후보 수집 watcher 를 다시 실행해주세요."
+            f"(마지막 응답 {minutes}분 전)."
         )
+        # VM 이 꺼져 있는데 "VM 안에서 실행해주세요" 라고 하면 들어갈 곳이 없다.
+        # 실측 2026-09-06: VM 이 통째로 꺼진 채 35시간이 지났는데 화면은 그렇게만 말했다.
+        if can_start_vm:
+            watcher_note = f"{head} VM 이 꺼져 있습니다. 시작 버튼을 다시 누르면 켤지 물어봅니다."
+        elif vm_power_state == "running":
+            watcher_note = f"{head} VM 은 켜져 있으니, VM 안에서 후보 수집 watcher 를 다시 실행해주세요."
+        else:
+            watcher_note = f"{head} VM 상태를 확인해주세요."
     else:
         watcher_note = ""
     return {
@@ -643,6 +657,9 @@ def _jepum_scraper_status_payload():
         # 어느 포트를 봤는지 말한다. 이 한 줄이 없어서 "꺼져 있습니다" 만 보고
         # 멀쩡히 돌고 있는 서비스를 한참 찾아다녔다.
         "usable": usable,
+        # 화면이 "지금 켤 수 있는 것이 있는가" 를 판단하는 근거.
+        "vmPowerState": vm_power_state,
+        "canStartVm": can_start_vm,
         "candidateWatcherAlive": watcher_alive,
         "heartbeatAgeSeconds": heartbeat_age,
         "message": (
