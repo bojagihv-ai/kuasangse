@@ -290,6 +290,8 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('RUNID-DRIFT-01', '5 조립공장', '같은 작업파일의 생성 이미지는 실행 번호가 달라져도 화면에 남는다', 'tools/verify_generated_images_survive_run_id_drift_v1.cjs'),
     nodeFile('AGREE-COUNT-01', '5 조립공장', '진행률이 세는 개수와 화면이 보여 주는 개수가 같다', 'tools/verify_progress_and_panel_agree_v1.cjs'),
     nodeFile('STAGE-HONEST-CDP-01', '5 조립공장', '끊긴 생성은 화면에 "3개 중 1개만 생성됨" 으로 뜬다 (완료가 아니라)', 'tools/verify_interrupted_stage_reports_honestly_v1.cjs'),
+    nodeFile('FILL-MISSING-01', '5 조립공장', '"나머지 N개만 생성" 은 부족한 N장만 만들고 멀쩡한 장은 그대로 둔 채 함께 보여 준다', 'tools/verify_fill_missing_cuts_only_v1.cjs'),
+    nodeFile('FILL-MISSING-02', '5 조립공장', '"나머지 N개만 생성" 경로 계약 (버튼→브리지→실행기→루프)', 'tests/frontend/fill_missing_cuts_only.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-01', '공통/검사', '회귀 제목이 약속한 것을 그 검사가 실제로 한다', 'tests/frontend/regression_titles_match_what_they_check.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-02', '공통/검사', '소스 슬라이스 도우미가 줄 끝과 무관하게 같은 결과를 낸다', 'tests/frontend/source_slice_utils.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-03', '공통/검사', '흔들린 검사와 최근 흔들림 이력이 보고서에 남는다', 'tests/frontend/regression_report_shows_flakes.test.cjs', 'fast'),

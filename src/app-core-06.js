@@ -8510,7 +8510,13 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   requireCurrent();
   if (!ready) return false;
   const factory = commandFactory;
-  const generationRunId = uid(`factory_${stageId}_run`);
+  // "나머지 N개만 생성": 남아 있는 결과와 같은 실행 번호를 이어 쓴다. 새 번호를 발급하면
+  // 화면이 "최신 실행" 만 앞세워 멀쩡한 1장이 "이전 생성" 으로 밀려난다.
+  const onlyMissing = options.onlyMissing === true;
+  const resumedRunId = onlyMissing
+    ? String(commandFactory.stages?.[stageId]?.latestGenerationRunId || commandFactory.stages?.[stageId]?.currentRunId || '').trim()
+    : '';
+  const generationRunId = resumedRunId || uid(`factory_${stageId}_run`);
   factoryMarkImageStageRunActive(stageId, generationRunId);
   const previousSelectedAssetIds = Array.isArray(factory.stages?.[stageId]?.selectedAssetIds)
     ? factory.stages[stageId].selectedAssetIds.slice()
@@ -8534,12 +8540,14 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   stagePrompts.forEach(cut => {
     if (!cut) return;
     const hasPrompt = String(cut.prompt || '').trim();
-    cut.generating = !!hasPrompt;
-    cut.generationStartedAt = hasPrompt ? queuedAt : null;
-    cut.generationPageSessionId = hasPrompt ? FACTORY_IMAGE_GENERATION_PAGE_SESSION_ID : '';
+    // 부족한 것만 채울 때는 결과가 있는 슬롯을 건드리지 않는다 (generateAllCuts 와 같은 규칙).
+    const willGenerate = !!hasPrompt && (!onlyMissing || !cut.result || cut.staleResult === true);
+    cut.generating = willGenerate;
+    cut.generationStartedAt = willGenerate ? queuedAt : null;
+    cut.generationPageSessionId = willGenerate ? FACTORY_IMAGE_GENERATION_PAGE_SESSION_ID : '';
     cut.error = '';
     cut.warning = '';
-    cut.pendingGenerationRunId = generationRunId;
+    if (willGenerate) cut.pendingGenerationRunId = generationRunId;
     if (!cut.result) {
       cut.staleResult = false;
       cut.staleResultReason = '';
@@ -8549,20 +8557,30 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
       stampCutPromptSource(cut, stageId, factory);
     }
   });
-  const target = stagePrompts.length;
+  const target = onlyMissing
+    ? stagePrompts.filter(cut => String(cut?.prompt || '').trim() && (!cut?.result || cut?.staleResult === true)).length
+    : stagePrompts.length;
+  if (onlyMissing && target === 0) {
+    factoryMarkImageStageRunInactive(stageId, generationRunId);
+    factorySetStageStatus(stageId, 'review', `부족한 ${factoryStageLabel(stageId)}이(가) 없습니다. 모든 슬롯에 결과가 있습니다.`, factory);
+    saveLastWorkNow({ factory });
+    factoryRuntimeRenderWithOwnedDraft(factory);
+    return false;
+  }
   factory.stages[stageId].expectedItemCount = target;
+  const startMessage = onlyMissing
+    ? `부족한 ${isSizeStage ? '사이즈컷' : '이미지컷'} ${target}개만 생성 중`
+    : (isSizeStage
+      ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
+      : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`);
   factoryTouchImageStageRun(stageId, generationRunId, {
     status: 'running',
-    message: isSizeStage
-      ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
-      : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`,
+    message: startMessage,
     expectedItemCount: target,
     completedItemCount: 0,
     factory,
   });
-  factorySetStageStatus(stageId, 'running', isSizeStage
-    ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
-    : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`, factory);
+  factorySetStageStatus(stageId, 'running', startMessage, factory);
   const [progressBase, progressMax] = factoryStageGoalProgressRange(stageId);
   factorySetGoalRunProgress(progressBase, `${factoryStageLabel(stageId)} 생성 중`, `${factoryStageLabel(stageId)} ${target}개 생성을 시작합니다.`, 'info', { render: false, factory });
   saveLastWorkNow({ factory });
@@ -8570,8 +8588,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   const heartbeat = factoryStartGoalHeartbeat(`${factoryStageLabel(stageId)} 생성 중`, progressBase, Math.max(progressBase, progressMax - 2), 5000, { factory });
   try {
     const generated = isSizeStage
-      ? await generateAllSizeCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal })
-      : await generateAllCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal });
+      ? await generateAllSizeCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal, onlyMissing })
+      : await generateAllCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal, onlyMissing });
     requireCurrent();
     factoryStopGoalHeartbeat(heartbeat);
     if (!generated) throw new Error(state.error || '이미지 생성 결과가 없습니다.');
@@ -9293,6 +9311,8 @@ async function factoryRunStage(stageId, options = {}) {
       factory,
       operationToken: options.operationToken,
       operationSignal: options.operationSignal,
+      // "나머지 N개만 생성": 결과 없는 슬롯만 채운다.
+      onlyMissing: options.onlyMissing === true,
     };
     if (stageId === 'hero') return factoryGenerateImageCutsBackedStage('hero', generationOptions);
     if (stageId === 'size') return factoryGenerateImageCutsBackedStage('size', generationOptions);
@@ -30518,12 +30538,19 @@ async function generateAllCuts(options = {}) {
     c.runBusy = false;
     return cutsSetBlockingError('선택된 이미지 모델에 필요한 연결 정보가 없습니다. 모델 설정/API 연결을 확인해주세요.');
   }
+  // onlyMissing("나머지 N개만 생성"): 결과가 없거나 낡은 슬롯만 고른다. 실측 2026-09-06:
+  // 새로고침으로 3장 중 1장만 남았을 때 "재생성" 은 멀쩡한 1장까지 다시 만들어 요금을 다시 썼다.
+  // (검사 하네스가 이 함수만 잘라 쓰므로 바깥 도우미 없이 여기서 바로 거른다.)
+  const onlyMissing = options.onlyMissing === true;
   const targets = (c.prompts || [])
     .map((p, i) => ({ p, i }))
-    .filter(item => String(item.p?.prompt || '').trim());
+    .filter(item => String(item.p?.prompt || '').trim())
+    .filter(item => !onlyMissing || !item.p?.result || item.p?.staleResult === true);
   if (!targets.length) {
     c.runBusy = false;
-    return cutsSetBlockingError('생성할 프롬프트가 없습니다. 이미지컷 지시칸에 프롬프트를 입력해주세요.');
+    return cutsSetBlockingError(options.onlyMissing === true
+      ? '부족한 이미지컷이 없습니다. 모든 슬롯에 결과가 있습니다.'
+      : '생성할 프롬프트가 없습니다. 이미지컷 지시칸에 프롬프트를 입력해주세요.');
   }
   let ownedStageRunId = '';
   let generationRunId = '';
@@ -31354,9 +31381,12 @@ async function generateAllSizeCuts(options = {}) {
   if (!lockedPart?.base64) restoreCutImagePayloadsFromPreview(c);
   ensureSizeCutSourceChoice();
   c.sizePrompts = normalizeCutPrompts(c.sizePrompts, { count: c.sizePromptSlotCount || CUTS_DEFAULT_PROMPT_COUNT });
+  // onlyMissing("나머지 N개만 생성"): 결과가 없거나 낡은 슬롯만 고른다 (generateAllCuts 와 같은 규칙).
+  const onlyMissing = options.onlyMissing === true;
   const targets = c.sizePrompts
     .map((p, i) => ({ p, i }))
-    .filter(item => String(item.p?.prompt || '').trim());
+    .filter(item => String(item.p?.prompt || '').trim())
+    .filter(item => !onlyMissing || !item.p?.result || item.p?.staleResult === true);
   state.error = '';
   const readyPart = factorySourceImagePart('size', { preferStageInput: false });
   if (!readyPart?.base64 && !c.sourceBase64 && !c.workImageBase64) {
@@ -31369,7 +31399,9 @@ async function generateAllSizeCuts(options = {}) {
   }
   if (!targets.length) {
     c.sizeRunBusy = false;
-    return cutsSetBlockingError('생성할 사이즈컷 프롬프트가 없습니다. 사이즈컷 지시칸에 프롬프트를 입력해주세요.');
+    return cutsSetBlockingError(options.onlyMissing === true
+      ? '부족한 사이즈컷이 없습니다. 모든 슬롯에 결과가 있습니다.'
+      : '생성할 사이즈컷 프롬프트가 없습니다. 사이즈컷 지시칸에 프롬프트를 입력해주세요.');
   }
   let ownedStageRunId = '';
   let generationRunId = '';
@@ -33127,6 +33159,7 @@ async function factoryRunPreparedStageButton(btn, options = {}) {
       factory: currentFactory,
       operationToken,
       operationSignal: options.operationSignal,
+      onlyMissing: options.onlyMissing === true,
     });
     requireCurrent();
     const gracefullyStopped = stageId === 'detail' && state.sectionBatchRun?.status === 'stopped';
@@ -33184,6 +33217,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
   const stageId = btn?.dataset?.factoryRunStage || '';
   if (!btn || !stageId) return false;
   const label = factoryStageLabel(stageId);
+  // "나머지 N개만 생성" 버튼(data-factory-run-only-missing="1") 또는 브리지가 넘긴 옵션.
+  const onlyMissing = options.onlyMissing === true || btn?.dataset?.factoryRunOnlyMissing === '1';
   const actionName = 'factory/assets:handleRunStageButton';
   const store = factoryRuntimeRequireStore();
   // Keep the real runtime's lease-aware write path, while allowing the focused
@@ -33211,6 +33246,7 @@ async function factoryHandleRunStageButton(btn, options = {}) {
     if (!prepared.ready) return false;
     return factoryRunPreparedStageButton(btn, {
       ...options,
+      onlyMissing,
       stageId,
       label,
       standaloneGoalRun: prepared.standaloneGoalRun,
@@ -33243,6 +33279,7 @@ async function factoryHandleRunStageButton(btn, options = {}) {
       try {
         return await factoryRunPreparedStageButton(btn, {
           ...options,
+          onlyMissing,
           factory: workingFactory,
           stageId,
           label,

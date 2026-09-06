@@ -21,7 +21,13 @@ export function bindAssetsTab(root, fire) {
     const guide = eventTarget(event, '[data-factory-guide-action]');
     if (guide) { stop(event); fire('guideAction', guide.dataset?.factoryGuideAction || ''); return; }
     const run = eventTarget(event, '[data-factory-run-stage]');
-    if (run) { stop(event); fire('runStage', run.dataset?.factoryRunStage || ''); return; }
+    if (run) {
+      stop(event);
+      const stageId = run.dataset?.factoryRunStage || '';
+      // "나머지 N개만 생성" 은 같은 액션에 { stageId, onlyMissing } 로 실어 보낸다.
+      fire('runStage', run.dataset?.factoryRunOnlyMissing === '1' ? { stageId, onlyMissing: true } : stageId);
+      return;
+    }
     const size = eventTarget(event, '[data-factory-confirm-size-image]');
     if (size) { stop(event); fire('confirmSizeImage'); return; }
     const open = eventTarget(event, '[data-factory-open-optionsorter]');

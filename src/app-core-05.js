@@ -11513,6 +11513,9 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
         ${stageId === 'options'
           ? `<button class="btn-sm" data-factory-open-optionsorter>옵션분류기/색상이미지로 이동</button>`
           : `<button class="btn-sm" type="button" data-factory-run-stage="${escAttr(stageId)}" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>${runButtonLabel}</button>`}
+        ${interruptedNote && countStages.includes(stageId)
+          ? `<button class="btn-sm success" type="button" data-factory-run-stage="${escAttr(stageId)}" data-factory-run-only-missing="1" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>나머지 ${escapeHtml(String(Math.max(1, Number(stage.expectedItemCount) - assets.length)))}개만 생성</button>`
+          : ''}
         <button class="btn-sm" data-factory-guide-action="${escAttr(focusAction)}">컨베이어 카드로 이동</button>
       </div>
     </div>

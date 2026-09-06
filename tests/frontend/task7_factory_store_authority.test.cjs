@@ -2478,8 +2478,9 @@ test('B3 detail and cut generation source requires exact commands, stable identi
   assert.match(persistedCutWriter, /const factory = options\.factory \|\| factoryRuntimeReadFactory\(\)/);
   assert.match(persistedCutWriter, /factoryQueueLocalArchiveAsset\([\s\S]*?factory,[\s\S]*?operationToken: options\.operationToken/);
   assert.match(persistedCutWriter, /factoryRequireCurrentRunOperation\([\s\S]*?options\.operationSignal/);
-  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal \}\)/);
-  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal \}\)/);
+  // 2026-09-06: "나머지 N개만 생성" 이 onlyMissing 을 같은 소유 draft·토큰과 함께 넘긴다.
+  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
+  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
   assert.match(imageStageWriter, /factoryStopGoalHeartbeat\(heartbeat\);[\s\S]*?factoryRunOperationIsStale\(e\)/);
   for (const writer of [cutsWriter, sizeWriter]) {
     assert.doesNotMatch(writer, /(?:state|window|globalThis)\.factory/);

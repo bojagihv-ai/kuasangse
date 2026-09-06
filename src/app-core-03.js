@@ -13202,10 +13202,15 @@ function factoryRuntimeAssetsActions() {
       });
     },
     runFactoryStage(stageId, operationContext) {
-      const normalizedStageId = String(stageId || '').trim();
+      // 문자열(단계 id) 또는 { stageId, onlyMissing } - "나머지 N개만 생성" 버튼이 후자를 보낸다.
+      const request = stageId && typeof stageId === 'object' ? stageId : { stageId };
+      const normalizedStageId = String(request.stageId || '').trim();
       return factoryRuntimeWithOperationLease('factory/assets:runFactoryStage', operationContext, operation => (
         factoryHandleRunStageButton({
-          dataset: { factoryRunStage: normalizedStageId },
+          dataset: {
+            factoryRunStage: normalizedStageId,
+            factoryRunOnlyMissing: request.onlyMissing === true ? '1' : '',
+          },
           disabled: false,
         }, {
           operationToken: operation.operationToken,
