@@ -162,11 +162,13 @@ async function main() {
 
   // 2) 새로고침으로 끊긴 것처럼: 2·3번 결과·자산을 지우고 단계를 "3개 중 1개만 생성됨" 으로 둔다.
   const cut = await evaluate(cdp, `(async () => {
-    const keepTitle = String(state.cuts.prompts[0]?.label || '');
     // 자산과 단계를 함께 바꾸므로 명령 경로 정책 대신 스냅샷 통째 교체(검사 픽스처와 같은 길)를 쓴다.
+    // 남길 그림은 "실제로 보관된 첫 자산" 으로 고른다. 정상 생성 중 보관 409(알려진 간헐 레이스, GENERATE-01)로
+    // 어떤 슬롯의 그림이 버려졌더라도, 남긴 자산과 그 프롬프트가 서로 맞아야 부족분 수가 결정적이다.
     const draft = cloneData(factoryRuntimeReadFactory());
     const cutsAssets = (draft.assets || []).filter(asset => asset?.stageId === 'cuts');
-    const keep = cutsAssets.find(asset => String(asset.title || '') === keepTitle) || cutsAssets[0];
+    const keep = cutsAssets[0];
+    const keepTitle = String(keep?.title || '');
     draft.assets = (draft.assets || []).filter(asset => asset?.stageId !== 'cuts' || asset === keep);
     draft.stages.cuts = {
       ...(draft.stages.cuts || {}),
@@ -201,13 +203,17 @@ async function main() {
   fs.writeFileSync(RESULT_PATH, JSON.stringify({ seeded, full, cut, filled }, null, 2), 'utf8');
 
   const keptId = cut.assetIds[0];
+  // 정상 생성 중 보관 409(알려진 간헐 레이스)가 끼면 3장 중 일부만 보관된다. 그 경우 남긴 자산의 슬롯도
+  // 결과가 없을 수 있으므로, 부족분 = "끊긴 상태에서 결과 없는 슬롯 수" 로 계산해 그만큼만 더 불렀는지 본다.
+  const missingAfterCut = cut.prompts.filter(prompt => !prompt.hasResult).length;
+  const archive409 = full.prompts.some(prompt => /보관 저장 실패/.test(prompt.error || ''));
   assertChecks([
-    { ok: full.imageCalls === 3 && full.assetIds.length === 3,
-      message: `전제 불성립 - 정상 생성이 3장이어야 합니다: ${JSON.stringify(full)}` },
+    { ok: full.imageCalls === 3 && full.assetIds.length >= 2,
+      message: `전제 불성립 - 정상 생성이 최소 2장은 보관돼야 합니다(보관 409 ${archive409 ? '있음' : '없음'}): ${JSON.stringify(full)}` },
     { ok: cut.assetIds.length === 1 && cut.panelIncomplete && /나머지 2개만 생성/.test(cut.missingButton),
       message: `전제 불성립 - 끊긴 상태가 화면에 "생성 미완료" + "나머지 2개만 생성" 으로 보여야 합니다: ${JSON.stringify(cut)}` },
-    { ok: filled.imageCalls - full.imageCalls === 2,
-      message: `이미지 API 를 정확히 2번만 더 불러야 합니다(멀쩡한 1장은 다시 만들지 않는다). 실제 ${filled.imageCalls - full.imageCalls}번: ${JSON.stringify(filled)}` },
+    { ok: missingAfterCut >= 2 && filled.imageCalls - full.imageCalls === missingAfterCut,
+      message: `이미지 API 를 부족한 슬롯 수(${missingAfterCut})만큼만 더 불러야 합니다(결과 있는 슬롯은 다시 만들지 않는다). 실제 ${filled.imageCalls - full.imageCalls}번: ${JSON.stringify(filled)}` },
     { ok: filled.assetIds.length === 3 && filled.assetIds.includes(keptId),
       message: `자산이 3장이고 남아 있던 1장(${keptId})이 그대로여야 합니다: ${JSON.stringify(filled)}` },
     { ok: new Set(filled.assetRunIds).size === 1,

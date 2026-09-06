@@ -5516,6 +5516,69 @@ async function factoryEnsureCurrentProductImageAnalysisForOneClick(options = {})
   }
 }
 
+// 주인님 2026-09-06/07: "첫 화면의 AI 분석도 조립공장 시작 버튼을 눌렀을 때 같이 돌게".
+// 첫 화면 startAnalysis 는 이미지 판독 → DB 매칭 → 유사 제품 분석(llm.searchSimilarProducts) 뒤에
+// 섹션 화면으로 옮긴다. 시작 버튼은 앞의 둘은 이미 하지만 유사 제품 분석이 빠져 있어서
+// 통합버전 섹션이 참고하는 state.competitorData 가 비어 있었다.
+// 여기서는 **빠진 유사 제품 분석만** 채우고 화면은 옮기지 않는다(주인님 확인 2026-09-07 "응 그렇게 해").
+// 실패해도 나머지 실행을 막지 않는다(첫 화면에서도 건너뛰는 항목이다).
+async function factoryEnsureSimilarProductAnalysisForOneClick(options = {}) {
+  const factory = options.factory;
+  if (!factory) throw new Error('factory similar product analysis requires an owned draft');
+  const store = factoryRuntimeRequireStore();
+  const operationToken = options.operationToken || store.getOperationToken();
+  const requireCurrent = () => {
+    if (!store.isOperationCurrent(operationToken)) {
+      throw factoryRuntimeStaleActionError('factory/db:runCurrentProductAnalysisOnly');
+    }
+  };
+  requireCurrent();
+  const label = '유사 제품 분석';
+  const existingCount = Array.isArray(state.competitorData?.similar_products)
+    ? state.competitorData.similar_products.length
+    : 0;
+  if (existingCount > 0) {
+    factoryLog(`${label} 재사용: 이미 기록된 유사 제품 ${existingCount}개를 그대로 씁니다.`, 'info', factory);
+    return { ok: true, reused: true, count: existingCount, label };
+  }
+  const analysis = state.analysis || factory.product?.analysis || {};
+  const productName = cleanDbSearchTerm(
+    factory.product?.productName || state.productName || analysis.product_name || analysis.product_name_en || '',
+  );
+  const category = analysis.category || analysis.product_category || analysis.category_guess || '상품';
+  if (!productName) {
+    factoryLog(`${label} 건너뜀: 제품명이 없습니다.`, 'warn', factory);
+    return { ok: true, skipped: true, label, reason: '제품명 없음' };
+  }
+  let llm;
+  try {
+    const settings = getAnalysisMatchSettings();
+    llm = getAnalysisEngineClient(settings.imageInferenceEngine, settings);
+  } catch (_) {
+    llm = getLLMClient();
+  }
+  factoryLog(`${label} 시작: ${productName} · ${category} (첫 화면 AI 분석과 같은 경로, 화면은 옮기지 않습니다)`, 'info', factory);
+  if (typeof pushAnalysisLog === 'function') {
+    pushAnalysisLog('유사 제품/시장 맥락 확인 중...', 'LLM 학습 데이터 기반 유사 상품과 상세페이지 방향을 추론합니다. 실시간 검색은 아닙니다.', 30);
+  }
+  try {
+    const competitors = await llm.searchSimilarProducts(productName, category);
+    requireCurrent();
+    state.competitorData = competitors;
+    const count = Array.isArray(competitors?.similar_products) ? competitors.similar_products.length : 0;
+    if (typeof pushAnalysisLog === 'function') pushAnalysisLog('유사 제품 분석 완료', `${count}개 후보와 권장 전략을 기록했습니다.`, 34);
+    factoryLog(`${label} 완료: ${count}개 후보와 권장 전략을 기록했습니다.`, 'ok', factory);
+    saveLastWorkNow();
+    render();
+    return { ok: true, count, label };
+  } catch (e) {
+    if (e?.code === 'STALE_FACTORY_RUNTIME_ACTION') throw e;
+    factoryLog(`${label} 실패: ${e.message || e}. 제품 분석과 나머지 실행은 그대로 이어갑니다.`, 'warn', factory);
+    if (typeof pushAnalysisLog === 'function') pushAnalysisLog('유사 제품 분석 건너뜀', e.message || '유사 제품 분석 중 오류가 발생했습니다.', 34);
+    return { ok: true, skipped: true, label, reason: e.message || String(e) };
+  }
+}
+
 async function factoryRunCurrentProductImageAnalysisOnly(options = {}) {
   const store = factoryRuntimeRequireStore();
   const operationToken = options.operationToken || store.getOperationToken();
@@ -5778,7 +5841,12 @@ async function factoryRunDbCompetitorHeroCutsFlow(options = {}) {
       operationSignal: options.operationSignal,
     }));
     const tasks = [
-      startTask('현재 이미지 AI 분석', () => factoryEnsureCurrentProductImageAnalysisForOneClick({ factory, operationToken }), 0),
+      startTask('현재 이미지 AI 분석', async () => {
+        const analysisResult = await factoryEnsureCurrentProductImageAnalysisForOneClick({ factory, operationToken });
+        // 첫 화면 AI 분석의 "유사 제품 분석" 도 여기서 이어 돈다 (주인님 2026-09-07: 화면 이동 없이 빠진 것만 채운다).
+        await factoryEnsureSimilarProductAnalysisForOneClick({ factory, operationToken });
+        return analysisResult;
+      }, 0),
       startTask('DB 후보 수집', dbTask, 0),
       startTask('VM 경쟁사 후보 수집', vmTask, 0),
       startTask('대표이미지·이미지컷 생성', imageTask, 0),
