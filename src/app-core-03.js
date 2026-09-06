@@ -11337,6 +11337,9 @@ function factoryRuntimeCreateCommandPolicies() {
     'factory/cafe24:collect-additional-cafe24-candidates',
     'factory/cafe24:run-candidate-additional-search',
     'factory/cafe24:run-candidate-search-only',
+    // 신화사DB 추가검색 (Cafe24 추가검색과 같은 후보 수집 경로·같은 부분을 쓴다)
+    'factory/sinhwa:collect-additional-db-candidates',
+    'factory/sinhwa:run-candidate-additional-search',
   ], 'cafe24', candidateCollectionWorkflow);
   add([
     'factory/cafe24:apply-db-candidate',
@@ -11471,6 +11474,7 @@ function factoryRuntimeCreateCommandPolicies() {
 
   add([
     'factory/db:rerunDbQuery', 'factory/db:rerunCafe24Query', 'factory/db:appendCafe24Query',
+    'factory/db:appendDbQuery',
     'factory/db:resetDbQuery',
     'factory/db:setDbSearchQuery', 'factory/db:commitDbSearchQuery',
     'factory/db:applyDbCandidate', 'factory/db:applyCafe24Candidate',
@@ -12208,6 +12212,19 @@ function factoryRuntimeDbActions() {
         factoryRuntimeRequireCurrentFollowupReceipt('factory/db:appendCafe24Query', receipt);
         if (!receipt.value) return receipt;
         const result = await factoryRunCafe24CandidateAdditionalSearch({ operationToken: receipt.operationToken });
+        return factoryRuntimeFollowupCommandReceipt(receipt, result);
+      });
+    },
+    // 신화사DB 추가검색 - Cafe24 추가검색과 같은 길 (주인님 2026-09-06: "카페24 추가검색하는 것처럼")
+    appendDbQuery(value, operationContext) {
+      const transaction = factoryRuntimeBridgeAction('factory/db:appendDbQuery', operationContext, draft => {
+        const query = factoryApplyWizardDbSearchQuery(value, { factory: draft });
+        return !!query;
+      });
+      return Promise.resolve(transaction).then(async receipt => {
+        factoryRuntimeRequireCurrentFollowupReceipt('factory/db:appendDbQuery', receipt);
+        if (!receipt.value) return receipt;
+        const result = await factoryRunSinhwaCandidateAdditionalSearch({ operationToken: receipt.operationToken });
         return factoryRuntimeFollowupCommandReceipt(receipt, result);
       });
     },

@@ -6200,6 +6200,37 @@ function factoryFilterNewCafe24Candidates(incoming = [], existing = []) {
   return out;
 }
 
+// 신화사DB 추가검색용 비교 키 (Cafe24 의 factoryCafe24CandidateCompareKeys 와 같은 역할).
+// 주인님 2026-09-06: "신화사db 중에 사실 저게 있거든? ... 카페24 추가검색하는 것처럼 추가검색하려고 했는데 버튼이 없네".
+function factorySinhwaCandidateCompareKeys(candidate) {
+  if (!candidate || typeof candidate !== 'object') return [];
+  const name = factoryCandidateName(candidate, 'sinhwa');
+  return uniqueApiKeys([
+    factorySinhwaCandidateKey(candidate),
+    candidate.jcode ? `jcode:${candidate.jcode}` : '',
+    candidate.id ? `id:${candidate.id}` : '',
+    name && name !== '신화사DB 후보' ? `name:${normalizeTextForScore(name)}` : '',
+  ].map(value => String(value || '').trim()).filter(Boolean));
+}
+
+function factorySinhwaCandidateKeySet(candidates = []) {
+  const keys = new Set();
+  candidates.forEach(candidate => factorySinhwaCandidateCompareKeys(candidate).forEach(key => keys.add(key)));
+  return keys;
+}
+
+function factoryFilterNewSinhwaCandidates(incoming = [], existing = []) {
+  const seen = factorySinhwaCandidateKeySet(existing);
+  const out = [];
+  factoryDedupeSinhwaCandidates(incoming).forEach(candidate => {
+    const keys = factorySinhwaCandidateCompareKeys(candidate);
+    if (keys.some(key => seen.has(key))) return;
+    keys.forEach(key => seen.add(key));
+    out.push(candidate);
+  });
+  return out;
+}
+
 async function factorySearchSinhwaReviewCandidates(terms = [], limit = 20, options = {}) {
   if (!terms.length) return [];
   const preferredJcode = Number(options.preferredJcode);
@@ -8222,6 +8253,139 @@ async function factoryRunCafe24CandidateAdditionalSearch(options = {}) {
     current.automation.candidateSearchProgress = {
       running: false,
       kind: 'append-cafe24',
+      message: current.product.candidateReviewStatus,
+      updatedAt: Date.now(),
+    };
+    factorySetStageStatus('db', 'error', current.product.candidateReviewStatus, current);
+    factoryLog(current.product.candidateReviewStatus, 'error', current);
+    return false;
+  }
+}
+
+// ── 신화사DB 추가검색 (Cafe24 추가검색과 같은 규칙) ─────────────────────────────
+// 지금 보이는 신화사DB 후보는 지우지 않고, 같은 jcode/id/상품명은 제외한 새 후보만 맨 위에 붙인다.
+async function factoryCollectAdditionalSinhwaCandidatesForReview(options = {}) {
+  if (!options.factory) {
+    const receipt = await factoryRuntimeUpdateOwnedFactory(
+      'factory/sinhwa:collect-additional-db-candidates',
+      'cafe24',
+      draft => factoryCollectAdditionalSinhwaCandidatesForReview({ ...options, factory: draft, render: false }),
+    );
+    saveLastWorkNow({ sync: false });
+    if (options.render !== false) render();
+    return receipt.result;
+  }
+  const factory = options.factory;
+  const terms = factoryCandidateSearchTerms(factory);
+  if (!terms.length) throw new Error('신화사DB 추가검색에 사용할 제품명을 먼저 입력해주세요.');
+  const existing = [
+    ...(Array.isArray(factory.product.pendingDbCandidates) ? factory.product.pendingDbCandidates : []),
+    ...(Array.isArray(factory.product.dbCandidates) ? factory.product.dbCandidates : []),
+  ];
+  factory.product.candidateReviewStatus = `신화사DB 추가검색 중: ${terms.join(' / ')}`;
+  factory.automation = factory.automation || {};
+  factory.automation.candidateSearchProgress = {
+    running: true,
+    kind: 'append-sinhwa',
+    message: `신화사DB 추가검색 중입니다. 기존 후보 ${existing.length}건은 유지하고 새 후보만 찾고 있습니다.`,
+    updatedAt: Date.now(),
+  };
+  factoryLog(`신화사DB 추가검색 진행: 검색어 ${terms.join(' / ')} · 기존 후보 ${existing.length}건 제외`, 'info', factory);
+  factoryUpdateFinalDbFromFields(factory);
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  const candidates = await factorySearchSinhwaReviewCandidates(terms, 40);
+  factoryLog(`신화사DB 추가검색 진행: 후보 ${candidates.length}건을 받았습니다. 기존 후보와 중복을 걸러냅니다.`, 'info', factory);
+  const additions = factoryFilterNewSinhwaCandidates(candidates, existing);
+  const addedAt = Date.now();
+  const taggedAdditions = additions.map(candidate => ({
+    ...candidate,
+    factory_recent_append: true,
+    factory_append_label: '이번 추가검색',
+    factory_appended_at: addedAt,
+  }));
+  const current = factory;
+  const basePending = Array.isArray(current.product.pendingDbCandidates) ? current.product.pendingDbCandidates : [];
+  const baseSaved = Array.isArray(current.product.dbCandidates) ? current.product.dbCandidates : [];
+  const visibleBase = basePending.length ? basePending : baseSaved;
+  current.product.pendingDbCandidates = factorySlimReviewCandidateList([
+    ...taggedAdditions,
+    ...visibleBase,
+  ], 'sinhwa', 40, current);
+  current.product.sinhwaDbProgramStatus = null;
+  current.product.candidateReviewStatus = additions.length
+    ? `신화사DB 추가검색 완료: 기존 후보 ${existing.length}건 제외, 새 후보 ${additions.length}건을 목록 맨 위에 추가.`
+    : `신화사DB 추가검색 완료: 기존 후보 ${existing.length}건과 다른 새 후보를 찾지 못했습니다. 검색어를 더 넓게 바꿔보세요.`;
+  current.automation = current.automation || {};
+  current.automation.candidateSearchProgress = {
+    running: false,
+    kind: 'append-sinhwa',
+    message: additions.length
+      ? `신화사DB 추가검색 완료: 새 후보 ${additions.length}건을 목록 맨 위에 붙였습니다.`
+      : '신화사DB 추가검색 완료: 기존 후보와 다른 새 후보가 없습니다.',
+    updatedAt: Date.now(),
+  };
+  factoryUpdateCandidateReviewStageStatus(current);
+  return { addedCount: additions.length, totalCount: current.product.pendingDbCandidates.length, terms };
+}
+
+async function factoryRunSinhwaCandidateAdditionalSearch(options = {}) {
+  if (!options.factory) {
+    const receipt = await factoryRuntimeUpdateOwnedFactory(
+      'factory/sinhwa:run-candidate-additional-search',
+      'cafe24',
+      draft => factoryRunSinhwaCandidateAdditionalSearch({ ...options, factory: draft, render: false }),
+    );
+    await saveLastWorkNow({ sync: false, factory: receipt.snapshot.factory });
+    if (options.render !== false) render();
+    return receipt.result;
+  }
+  const factory = options.factory;
+  factoryUpdateFromInputs(factory);
+  factoryApplyProductToApp(factory);
+  if (!cleanDbSearchTerm(factory.product.productName || state.productName || factory.product.naturalHint || '')) {
+    factorySetStageStatus('db', 'blocked', '신화사DB 추가검색 전에 제품명을 먼저 입력해주세요.', factory);
+    factoryLog('신화사DB 추가검색 중단: 제품명 직접 입력이 필요합니다.', 'error', factory);
+    return false;
+  }
+  factorySetStageStatus('db', 'running', '기존 신화사DB 후보를 제외하고 추가 후보를 수집합니다.', factory);
+  factoryLog('신화사DB 추가검색 시작: 현재 화면 후보는 유지하고, 같은 jcode/상품명 후보는 제외합니다.', 'info', factory);
+  factory.automation = factory.automation || {};
+  factory.automation.candidateSearchProgress = {
+    running: true,
+    kind: 'append-sinhwa',
+    message: '신화사DB 추가검색을 시작했습니다. 후보 목록은 유지한 채 새 후보를 찾습니다.',
+    updatedAt: Date.now(),
+  };
+  await new Promise(resolve => setTimeout(resolve, 30));
+  try {
+    state.step = 'factory';
+    const result = await factoryCollectAdditionalSinhwaCandidatesForReview({ factory, render: false });
+    const current = factory;
+    factorySetStageStatus(
+      'db',
+      'review',
+      result.addedCount
+        ? `신화사DB 새 후보 ${result.addedCount}건 추가 · 후보 확인 필요`
+        : '신화사DB 추가검색 완료 · 새 후보 없음',
+      current,
+    );
+    factoryLog(
+      result.addedCount
+        ? `신화사DB 추가검색 완료: 새 후보 ${result.addedCount}건을 목록 맨 위에 추가, 화면 후보 총 ${result.totalCount}건`
+        : '신화사DB 추가검색 완료: 기존 후보와 다른 새 후보를 찾지 못했습니다.',
+      result.addedCount ? 'ok' : 'warn',
+      current,
+    );
+    return true;
+  } catch(e) {
+    state.step = 'factory';
+    const current = factory;
+    current.product.candidateReviewStatus = `신화사DB 추가검색 실패: ${e.message || e}`;
+    current.automation = current.automation || {};
+    current.automation.candidateSearchProgress = {
+      running: false,
+      kind: 'append-sinhwa',
       message: current.product.candidateReviewStatus,
       updatedAt: Date.now(),
     };

@@ -6,7 +6,7 @@ import {
 const READ = 'product-db:read';
 const WRITE = 'product-db:write';
 const GUIDE_ACTIONS = Object.freeze([
-  'go-tab:fields', 'rerun-db-query', 'rerun-cafe24-query', 'append-cafe24-query',
+  'go-tab:fields', 'rerun-db-query', 'rerun-cafe24-query', 'append-cafe24-query', 'append-db-query',
   'reset-db-query', 'rerun-db-vm-only', 'run-db', 'start-sinhwa-db-and-rerun',
   'start-cafe24-control-and-rerun', 'cafe24-oauth-start',
   'cafe24-oauth-status-refresh-and-rerun', 'focus-size',
@@ -14,6 +14,7 @@ const GUIDE_ACTIONS = Object.freeze([
 const ACTION_ALIASES = Object.freeze({
   'go-tab:fields': 'goToFields', 'rerun-db-query': 'rerunDbQuery',
   'rerun-cafe24-query': 'rerunCafe24Query', 'append-cafe24-query': 'appendCafe24Query',
+  'append-db-query': 'appendDbQuery',
   'reset-db-query': 'resetDbQuery', 'rerun-db-vm-only': 'rerunDbVmOnly', 'run-db': 'runDb',
   'start-sinhwa-db-and-rerun': 'startSinhwaDbAndRerun',
   'start-cafe24-control-and-rerun': 'startCafe24ControlAndRerun',
@@ -68,10 +69,11 @@ function renderDb(snapshot, helpers) {
   const busy = !!progress.running;
   const busyAttr = busy ? ' disabled' : '';
   const appendLabel = busy && progress.kind === 'append-cafe24' ? 'Cafe24 추가검색 중...' : '기존 후보 제외 Cafe24 추가검색';
+  const appendDbLabel = busy && progress.kind === 'append-sinhwa' ? '신화사DB 추가검색 중...' : '기존 후보 제외 신화사DB 추가검색';
   const status = progress.message ? `<div class="factory-small" style="margin-top:10px;padding:9px 10px;border:1px solid ${busy ? 'rgba(245,158,11,.55)' : 'rgba(34,197,94,.45)'};border-radius:8px;background:${busy ? 'rgba(245,158,11,.10)' : 'rgba(34,197,94,.09)'};color:${busy ? '#fbbf24' : '#86efac'}">${busy ? '진행 중: ' : '최근 결과: '}${escape(progress.message)}</div>` : '';
   const ready = dbReady ? `<div class="factory-card" style="margin:12px 0;padding:12px;border-color:rgba(34,197,94,.40);background:rgba(16,185,129,.08)"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><div><div style="font-size:13px;font-weight:950;color:var(--ok)">현재 확정 상품이 준비됐습니다.</div><div class="factory-small" style="margin-top:4px">재검색은 보조 기능으로 두고, 다음 필수값 검수로 이어가면 됩니다.</div></div><button class="btn-primary" data-factory-guide-action="go-tab:fields">필수값 검수로 이동</button></div></div>` : '';
   const review = candidateReview(factory) || '';
-  return `<div class="factory-automation-grid"><div class="factory-automation-panel"><h4>2. DB 확정</h4><p>신화사DB와 Cafe24 후보 중 실제 상품이 맞는 것을 고르면 완성 DB 기준값으로 모입니다. 선택 전에는 자동 확정하지 않습니다.</p>${ready}<div class="factory-card" style="margin:12px 0;padding:12px"><div style="font-size:13px;font-weight:950;color:var(--text);margin-bottom:6px">후보가 안 보이면 바로 다시 검색</div><p style="margin:0 0 10px;color:var(--text-m);font-size:12px;line-height:1.45">검색어를 줄이거나 색상/수량/수식어를 빼고 다시 검색할 수 있습니다. 추가검색은 지금 보이는 Cafe24 후보를 지우지 않고, 이미 뜬 상품번호/상품코드/상품명은 제외한 새 후보만 붙입니다.</p><label class="field" style="margin:0"><span>DB/Cafe24 재검색어</span><input class="input" data-factory-db-search-query value="${attr(query)}" placeholder="예: 크리스탈보자기, 보자기, 선물포장 보자기"></label><div class="factory-automation-actions" style="margin-top:10px"><button class="${dbReady ? 'btn-sm' : 'btn-primary'}" data-factory-guide-action="rerun-db-query"${busyAttr}><span class="material-icons-outlined" style="font-size:16px">manage_search</span>${escape(busy ? '검색 작업 진행 중' : '이 검색어로 DB/Cafe24 다시 검색')}</button><button class="btn-sm" data-factory-guide-action="rerun-cafe24-query"${busyAttr}>${escape(busy ? '검색 작업 진행 중' : 'Cafe24만 다시 검색')}</button><button class="btn-sm" data-factory-guide-action="append-cafe24-query"${busyAttr}>${escape(appendLabel)}</button><button class="btn-sm" data-factory-guide-action="reset-db-query">현재 제품명으로 되돌리기</button></div>${status}</div>${checklist(tasks, 'db')}<div class="factory-automation-actions"><button class="btn-sm" data-factory-guide-action="rerun-db-vm-only">DB/VM 후보만 다시 수집</button><button class="btn-sm" data-factory-guide-action="run-db">전체 시작 다시 실행</button><button class="btn-sm" data-factory-guide-action="go-tab:fields">필수값 검수로 이동</button></div></div><div class="factory-automation-panel factory-candidate-automation-panel"><h4>후보 선택</h4>${review || '<div class="factory-small">아직 후보가 없습니다. 시작 탭에서 제품명을 확인하고 수집 버튼을 눌러주세요.</div>'}</div></div>`;
+  return `<div class="factory-automation-grid"><div class="factory-automation-panel"><h4>2. DB 확정</h4><p>신화사DB와 Cafe24 후보 중 실제 상품이 맞는 것을 고르면 완성 DB 기준값으로 모입니다. 선택 전에는 자동 확정하지 않습니다.</p>${ready}<div class="factory-card" style="margin:12px 0;padding:12px"><div style="font-size:13px;font-weight:950;color:var(--text);margin-bottom:6px">후보가 안 보이면 바로 다시 검색</div><p style="margin:0 0 10px;color:var(--text-m);font-size:12px;line-height:1.45">검색어를 줄이거나 색상/수량/수식어를 빼고 다시 검색할 수 있습니다. 추가검색은 지금 보이는 Cafe24 후보를 지우지 않고, 이미 뜬 상품번호/상품코드/상품명은 제외한 새 후보만 붙입니다.</p><label class="field" style="margin:0"><span>DB/Cafe24 재검색어</span><input class="input" data-factory-db-search-query value="${attr(query)}" placeholder="예: 크리스탈보자기, 보자기, 선물포장 보자기"></label><div class="factory-automation-actions" style="margin-top:10px"><button class="${dbReady ? 'btn-sm' : 'btn-primary'}" data-factory-guide-action="rerun-db-query"${busyAttr}><span class="material-icons-outlined" style="font-size:16px">manage_search</span>${escape(busy ? '검색 작업 진행 중' : '이 검색어로 DB/Cafe24 다시 검색')}</button><button class="btn-sm" data-factory-guide-action="rerun-cafe24-query"${busyAttr}>${escape(busy ? '검색 작업 진행 중' : 'Cafe24만 다시 검색')}</button><button class="btn-sm" data-factory-guide-action="append-cafe24-query"${busyAttr}>${escape(appendLabel)}</button><button class="btn-sm" data-factory-guide-action="append-db-query"${busyAttr}>${escape(appendDbLabel)}</button><button class="btn-sm" data-factory-guide-action="reset-db-query">현재 제품명으로 되돌리기</button></div>${status}</div>${checklist(tasks, 'db')}<div class="factory-automation-actions"><button class="btn-sm" data-factory-guide-action="rerun-db-vm-only">DB/VM 후보만 다시 수집</button><button class="btn-sm" data-factory-guide-action="run-db">전체 시작 다시 실행</button><button class="btn-sm" data-factory-guide-action="go-tab:fields">필수값 검수로 이동</button></div></div><div class="factory-automation-panel factory-candidate-automation-panel"><h4>후보 선택</h4>${review || '<div class="factory-small">아직 후보가 없습니다. 시작 탭에서 제품명을 확인하고 수집 버튼을 눌러주세요.</div>'}</div></div>`;
 }
 
 function actionFn(actions, names) {
@@ -135,7 +137,7 @@ export function createDbFactoryTab(capabilities = {}) {
         if (!inside(node)) return;
         event.preventDefault?.(); event.stopPropagation?.();
         const guide = node.dataset?.factoryGuideAction;
-        if (guide) { const value = ['rerun-db-query', 'rerun-cafe24-query', 'append-cafe24-query'].includes(guide) ? readQuery() : undefined; invoke(Object.prototype.hasOwnProperty.call(commands, guide) ? guide : 'guide-action', value); return; }
+        if (guide) { const value = ['rerun-db-query', 'rerun-cafe24-query', 'append-cafe24-query', 'append-db-query'].includes(guide) ? readQuery() : undefined; invoke(Object.prototype.hasOwnProperty.call(commands, guide) ? guide : 'guide-action', value); return; }
         if (node.dataset?.factoryApplyDbCandidate !== undefined) { invoke('apply-db-candidate', { index: Number(node.dataset.factoryApplyDbCandidate) }); return; }
         if (node.dataset?.factoryApplyCafe24Candidate !== undefined) { invoke('apply-cafe24-candidate', { index: Number(node.dataset.factoryApplyCafe24Candidate) }); return; }
         if (node.dataset?.factoryConfirmNoDbCandidate !== undefined) { invoke('confirm-no-db-candidate'); return; }

@@ -134,6 +134,7 @@ function factoryCandidateMetaItems(candidate, type = '') {
     ].filter(Boolean);
   }
   return [
+    candidate?.factory_recent_append ? (candidate.factory_append_label || '이번 추가검색') : '',
     candidate?.jcode ? `코드 ${candidate.jcode}` : '',
     candidate?.dimensions || candidate?.size || '',
     candidate?.sale_price ? `판매가 ${candidate.sale_price}` : '',
