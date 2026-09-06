@@ -20430,6 +20430,7 @@ function factoryAssetVisualValidationState(asset = {}, factory = factoryRuntimeR
 function factoryRefreshStageAfterVisualValidation(stageId = '', factory) {
   const normalizedStage = String(stageId || '');
   if (!['hero', 'size', 'cuts'].includes(normalizedStage)) return;
+  if (factoryStageRunAliveInThisPage(normalizedStage)) return;
   const stage = factory?.stages?.[normalizedStage] || {};
   const rawStatus = String(stage.status || '').toLowerCase();
   if (!['running', 'done', 'idle', 'error'].includes(rawStatus)) return;
@@ -20446,11 +20447,12 @@ function factoryRefreshStageAfterVisualValidation(stageId = '', factory) {
   if (pending) return;
   const usableCount = factoryUsableAssetsForStage(normalizedStage, factory).length;
   if (usableCount > 0) {
+    const display = factoryStageDisplayAfterRestore(stage, usableCount);
     if (typeof factorySetStageStatus === 'function') {
-      factorySetStageStatus(normalizedStage, 'done', `${usableCount}개 후보 표시 완료`, factory);
+      factorySetStageStatus(normalizedStage, display.status, display.message, factory);
     } else if (factory.stages?.[normalizedStage]) {
-      factory.stages[normalizedStage].status = 'done';
-      factory.stages[normalizedStage].message = `${usableCount}개 후보 표시 완료`;
+      factory.stages[normalizedStage].status = display.status;
+      factory.stages[normalizedStage].message = display.message;
       factory.stages[normalizedStage].updatedAt = Date.now();
     }
     return;
@@ -20518,13 +20520,19 @@ function factoryScheduleAssetVisualValidation(asset = {}, factory = factoryRunti
         } else if (liveAsset.currentProductHidden) {
           liveAsset.currentProductHidden = false;
         }
-        if (liveAsset.stageId && liveFactory.stages?.[liveAsset.stageId]?.status === 'running') {
+        if (
+          liveAsset.stageId
+          && liveFactory.stages?.[liveAsset.stageId]?.status === 'running'
+          && !factoryStageRunAliveInThisPage(liveAsset.stageId)
+        ) {
+          // 'running' 인데 이 화면에 실행이 없다 = 새로고침으로 끊긴 실행이다.
           const visibleCount = typeof factoryUsableAssetsForStage === 'function'
             ? factoryUsableAssetsForStage(liveAsset.stageId, liveFactory).length
             : 1;
           if (visibleCount > 0) {
-            liveFactory.stages[liveAsset.stageId].status = 'done';
-            liveFactory.stages[liveAsset.stageId].message = `${visibleCount}개 후보 표시 완료`;
+            const display = factoryStageDisplayAfterRestore(liveFactory.stages[liveAsset.stageId], visibleCount);
+            liveFactory.stages[liveAsset.stageId].status = display.status;
+            liveFactory.stages[liveAsset.stageId].message = display.message;
             liveFactory.stages[liveAsset.stageId].updatedAt = Date.now();
           }
         }
@@ -20583,6 +20591,32 @@ function factoryScheduleAssetVisualValidation(asset = {}, factory = factoryRunti
   validationRecord.promise = validationPromise;
   factoryVisualValidationPromises.set(jobKey, validationRecord);
   return validationPromise;
+}
+
+// 이 화면에 살아 있는 실행이 없을 때, 단계에 무엇이라 적을지 정한다.
+//
+// 실측 2026-09-06: 사이즈컷 3장 생성 중 새로고침 → 1장만 남았는데 색상 검수가 끝나며
+// "1개 후보 표시 완료 · 완료" 로 굳혔다. 나머지 2장이 빠진 사실이 그대로 숨겨졌다.
+// 기대 개수(expectedItemCount)보다 적으면 '완료' 라 하지 않고 솔직하게 적는다.
+// (위 검수 완료 경로 두 곳이 쓴다. 검사 하네스가 factoryScheduleAssetVisualValidation 부터
+//  factoryHasDeclaredProductImage 앞까지를 잘라 쓰므로 이 자리에 둔다 - 선언은 호이스팅된다.)
+function factoryStageDisplayAfterRestore(stage = {}, visibleCount = 0) {
+  const expected = Math.max(0, Number(stage?.expectedItemCount) || 0);
+  const visible = Math.max(0, Number(visibleCount) || 0);
+  if (expected > visible && visible > 0) {
+    return {
+      status: 'review',
+      message: `${expected}개 중 ${visible}개만 생성됨 · 나머지 ${expected - visible}개는 만들어지지 않았습니다. 다시 생성해주세요.`,
+    };
+  }
+  return { status: 'done', message: `${visible}개 후보 표시 완료` };
+}
+
+// 전체 생성 루프가 이 화면에서 아직 돌고 있으면 상태는 루프가 정한다.
+// 색상 검수는 그림마다 따로 끝나므로, 첫 장 검수가 끝났다고 '완료' 로 바꾸면 거짓말이 된다.
+function factoryStageRunAliveInThisPage(stageId = '') {
+  return typeof factoryImageStageHasAnyActiveKey === 'function'
+    && factoryImageStageHasAnyActiveKey(stageId) === true;
 }
 
 function factoryHasDeclaredProductImage(factory = factoryRuntimeReadFactory()) {

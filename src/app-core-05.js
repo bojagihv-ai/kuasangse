@@ -11413,10 +11413,19 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
         ? (allAssets.length ? 'missing-image' : 'wait-select')
         : rawStatus;
   const rawStatusMessage = String(stage.message || '').trim();
+  // 끊긴 생성(새로고침 등)은 "선택 대기 · 후보 1개" 로 덮지 않고 몇 개가 빠졌는지 먼저 말한다.
+  // 실측 2026-09-06: 사이즈컷 3장 중 1장만 남았는데 화면은 "선택 완료" 였다 - 사장님이 물어야 알았다.
+  const interruptedNote = (
+    rawStatus === 'review'
+    && Number(stage.expectedItemCount) > assets.length
+    && /만 생성됨/.test(rawStatusMessage)
+  ) ? rawStatusMessage : '';
   const selectedStatusMessage = stageId === 'hero'
     ? `사용할 ${label} ${selected}개를 선택했습니다. 상품 메인/썸네일용으로만 보관하고 상세페이지 섹션에는 자동 배치하지 않습니다.`
     : `사용할 ${label} ${selected}개를 선택했습니다. 아래 선택본이 상세페이지에 들어갑니다.`;
-  const statusMessage = selected > 0
+  const statusMessage = interruptedNote
+    ? (selected > 0 ? `${interruptedNote} ${selectedStatusMessage}` : `${interruptedNote} 남은 후보는 아래에서 고를 수 있습니다.`)
+    : selected > 0
     ? selectedStatusMessage
     : hasSelectableImages
       ? `생성 후보 ${assets.length}개가 있습니다. 아래 후보 중 쓸 이미지를 골라 '사용'을 눌러주세요.`
@@ -11431,7 +11440,9 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
               : `생성 기록은 ${allAssets.length}개 있지만 이미지 원본이 없어 고를 수 없습니다. 재생성이 필요합니다.`))
           : '완료로 볼 선택 이미지가 아직 없습니다. 재생성을 눌러 결과를 만들어주세요.')
         : rawStatusMessage;
-  const statusLabel = status === 'running'
+  const statusLabel = interruptedNote && status !== 'done'
+    ? '생성 미완료'
+    : status === 'running'
     ? '생성 중'
     : status === 'done'
       ? '선택 완료'
@@ -11446,21 +11457,21 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
               : status === 'idle'
                 ? '대기'
                 : '상태 없음';
-  const statusColor = status === 'running'
+  const statusColor = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'var(--warn)'
     : status === 'done'
       ? 'var(--ok)'
       : (status === 'error' || status === 'blocked' || status === 'missing-image')
         ? 'var(--danger)'
         : 'var(--text-m)';
-  const statusBorder = status === 'running'
+  const statusBorder = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'rgba(245,158,11,.50)'
     : status === 'done'
       ? 'rgba(34,197,94,.45)'
       : (status === 'error' || status === 'blocked' || status === 'missing-image')
         ? 'rgba(239,68,68,.48)'
         : 'rgba(99,102,241,.28)';
-  const statusBg = status === 'running'
+  const statusBg = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'rgba(245,158,11,.08)'
     : status === 'done'
       ? 'rgba(16,185,129,.08)'

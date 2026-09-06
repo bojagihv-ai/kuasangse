@@ -28888,6 +28888,21 @@ function factoryMarkImageStageRunInactive(stageId = '', runId = '') {
   factoryActiveImageStageRunKeys.delete(factoryImageStageRunKey(stageId, runId));
 }
 
+// 로더(app-loader.js)가 "지금 새 빌드 창을 띄워도 되나" 물을 때 답한다.
+// 실측 2026-09-06: 사이즈컷 3장 생성 중 번들이 바뀌어 새 빌드 창 → 새로고침 → 2장 유실.
+// 단계 실행 키(전체 생성 루프가 도는 내내 유지) · 진행 중인 이미지 API 요청 ·
+// 조립공장 자동 실행, 셋 중 하나라도 있으면 바쁘다.
+function factoryImageGenerationBusy() {
+  if (factoryActiveImageStageRunKeys.size > 0 || factoryActiveImageRequestKeys.size > 0) return true;
+  try {
+    const factory = typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null;
+    return factory?.goalRun?.running === true;
+  } catch (_) {
+    return false;
+  }
+}
+if (typeof window !== 'undefined') window.kuasangseImageGenerationBusy = factoryImageGenerationBusy;
+
 function factoryImageStageHasActiveRun(stageId = '', stage = {}) {
   const runIds = uniqueApiKeys([
     stage?.latestGenerationRunId,
