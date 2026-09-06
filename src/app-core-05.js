@@ -11313,28 +11313,46 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
   const hasDeclaredProductImage = typeof factoryHasDeclaredProductImage === 'function'
     ? factoryHasDeclaredProductImage(factory)
     : false;
+  // 기준은 **작업파일**이다 (주인님 2026-09-06: "kuasangse 작업파일명을 기준으로 한다던가").
+  //
+  // 여기서 실행 번호(runId)까지 요구하면 안 된다. 실행 번호는 단계마다 새로 발급되고
+  // (app-core-06.js:7727-7731 은 stage.currentRunId 가 이미 있으면 그걸 쓰고 없으면 새로 만든다)
+  // 누가 먼저 쓰느냐에 따라 값이 갈린다. 그래서 "주기적으로" 어긋난다.
+  //
+  // 실측 2026-09-06 (사장님 저장본):
+  //   자산 3장  workspaceId/productKey/inputImageFingerprint/stageId 전부 일치
+  //             currentRunId = factory_hero_run_...   <- 이것만 다름
+  //   제품/단계 currentRunId = factory_work_run_...
+  //   자산의 isolatedAt 은 None - 데이터는 멀쩡했고 **화면 필터만** 숨겼다.
+  // 그래서 진행률은 "3/3 대표이미지 생성 완료 100%" 인데 화면은 "이전 제품 격리 3개" 였다.
+  //
+  // 실행 번호는 여기서 **거르는 데 쓰지 않고**, 아래 scopedCurrentRunAssets 에서
+  // "최신 실행을 먼저 보여 준다" 는 **우선순위**로만 쓴다. 거기에는 이미
+  // 최신 실행 자산이 없으면 물러서는 대비책이 있다(latestAssets -> activeFallbackAssets -> baseAssets).
+  // 제품명이나 입력 사진을 바꾸면 여전히 격리된다 - 지켜야 할 것은 그대로 지킨다.
   const scopeOptions = {
     identityKey,
     currentInputKey,
     hasDeclaredProductImage,
     allowHtml: false,
     strictScope: true,
-    strictRunId: true,
+    strictRunId: false,
     requireExpectedProductKey: true,
     requireExpectedInputFingerprint: true,
-    requireExpectedRunId: true,
+    requireExpectedRunId: false,
     requireExpectedStageId: true,
   };
   const scopedAssets = rawStageAssets.filter(asset => {
     if (typeof factoryAssetCompatibleWithCurrentProduct === 'function' && !factoryAssetCompatibleWithCurrentProduct(asset, identityKey)) return false;
     if (typeof factoryAssetCompatibleWithCurrentInputImage === 'function' && !factoryAssetCompatibleWithCurrentInputImage(asset, factory, scopeOptions)) return false;
     if (typeof factoryAssetMatchesCurrentJob === 'function') {
+      // 위 scopeOptions 와 같은 기준을 쓴다. 실행 번호는 거르는 조건이 아니다.
       const jobCheck = factoryAssetMatchesCurrentJob(asset, stageId, factory, {
         strictScope: true,
-        strictRunId: true,
+        strictRunId: false,
         requireExpectedProductKey: true,
         requireExpectedInputFingerprint: true,
-        requireExpectedRunId: true,
+        requireExpectedRunId: false,
         requireExpectedStageId: true,
       });
       if (!jobCheck.ok) return false;

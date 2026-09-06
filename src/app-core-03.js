@@ -21556,12 +21556,15 @@ function factoryAssetHasCurrentProductPayload(asset, factory = factoryRuntimeRea
     }
   }
   if (['hero', 'size', 'cuts', 'detail', 'options'].includes(stageId) && factoryCurrentStageRunId(stageId, factory)) {
+    // 기준은 **작업파일**이다 - 부르는 쪽이 정한 기준을 그대로 따른다.
+    // 예전에는 여기서 실행 번호를 하드코딩으로 강제해, 부르는 쪽이 느슨하게 줘도 소용이 없었다.
+    // 같은 규칙이 두 군데에 다르게 박혀 있어서 한쪽만 고치면 안 고쳐진다(실측 2026-09-06).
     const job = factoryAssetMatchesCurrentJob(asset, stageId, factory, {
       strictScope: true,
-      strictRunId: true,
+      strictRunId: options.strictRunId === true,
       requireExpectedProductKey: true,
       requireExpectedInputFingerprint: true,
-      requireExpectedRunId: true,
+      requireExpectedRunId: options.requireExpectedRunId === true,
       requireExpectedStageId: true,
     });
     if (!job.ok) return false;
@@ -21576,28 +21579,52 @@ function factoryAssetHasCurrentProductPayload(asset, factory = factoryRuntimeRea
 }
 
 function factoryUsableAssetsForStage(stageId, factory = factoryRuntimeReadFactory()) {
-  const identityKey = factoryIdentityKey(factory) || factoryNormalizeIdentityText(factory?.product?.productName || state.productName || '');
-  const currentInputKey = factoryCurrentInputImageFingerprint(factory);
-  const hasDeclaredProductImage = factoryHasDeclaredProductImage(factory);
   const latestRunId = factoryStageLatestGenerationRunId(stageId, factory);
-  const baseOptions = {
-    allowHtml: stageId === 'detail',
-    identityKey,
-    currentInputKey,
-    hasDeclaredProductImage,
-    strictScope: true,
-    strictRunId: true,
-    requireExpectedProductKey: true,
-    requireExpectedInputFingerprint: true,
-    requireExpectedRunId: true,
-    requireExpectedStageId: true,
-  };
+  // 화면과 **같은 기준**을 쓴다. 진행률이 화면보다 후하게 세면
+  // "3/3 완료" 인데 화면은 비어 있는 일이 생긴다.
+  const baseOptions = factoryWorkfileAssetScopeOptions(factory, { allowHtml: stageId === 'detail' });
   const baseAssets = factoryAssetsForStage(stageId, factory).filter(asset => factoryAssetHasCurrentProductPayload(asset, factory, baseOptions));
   if (!latestRunId) return baseAssets.filter(asset => !factoryAssetSupersededRunId(asset));
   const latestAssets = baseAssets.filter(asset => factoryAssetGenerationRunId(asset) === latestRunId);
   if (latestAssets.length) return latestAssets;
   const activeFallback = baseAssets.filter(asset => !factoryAssetSupersededRunId(asset));
   return activeFallback.length ? activeFallback : baseAssets;
+}
+
+// ── 생성 이미지가 "이 작업의 것" 인지 가르는 **하나의 기준** ──────────────
+//
+// 주인님 2026-09-06: "뭔가 기준이 있으면 좋을것같은데 ... kuasangse 작업파일명을 기준으로 한다던가"
+//
+// 기준은 **작업파일**이다. 작업파일(workspaceId) + 제품(productKey) +
+// 입력사진(inputImageFingerprint) + 단계(stageId) 가 같으면 이 작업의 그림이다.
+//
+// 실행 번호(runId)는 **거르는 조건이 아니다.** 단계마다 새로 발급되고
+// (app-core-06.js:7727-7731 은 stage.currentRunId 가 이미 있으면 그걸 쓰고 없으면 새로 만든다)
+// 누가 먼저 쓰느냐에 따라 값이 갈려 "주기적으로" 어긋난다.
+// 실행 번호는 "최신 실행을 먼저 보여 준다" 는 **우선순위**로만 쓴다(아래 latestAssets).
+//
+// 왜 한 곳에 모았나: 같은 규칙이 세 군데에 제각각 박혀 있었다.
+//   (1) 화면 후보 필터 (app-core-05.js 의 scopeOptions)
+//   (2) factoryAssetHasCurrentProductPayload 안의 하드코딩
+//   (3) factoryUsableAssetsForStage 의 baseOptions  <- 진행률이 세는 잣대
+// 그래서 (1)만 고쳤을 때 화면은 "격리 0" 이 됐는데도 여전히 "선택 가능 0개" 였고,
+// 진행률은 "3/3 완료" 라고 말했다. 잣대가 다르면 화면과 숫자가 서로 다른 말을 한다.
+// 실측 2026-09-06: 사장님 화면이 정확히 그랬다.
+function factoryWorkfileAssetScopeOptions(factory = factoryRuntimeReadFactory(), overrides = {}) {
+  return {
+    identityKey: factoryIdentityKey(factory)
+      || factoryNormalizeIdentityText(factory?.product?.productName || state.productName || ''),
+    currentInputKey: factoryCurrentInputImageFingerprint(factory),
+    hasDeclaredProductImage: factoryHasDeclaredProductImage(factory),
+    strictScope: true,
+    requireExpectedProductKey: true,
+    requireExpectedInputFingerprint: true,
+    requireExpectedStageId: true,
+    // 실행 번호는 기준에서 뺀다.
+    strictRunId: false,
+    requireExpectedRunId: false,
+    ...overrides,
+  };
 }
 
 function factorySelectedAssets(stageId, factory = factoryRuntimeReadFactory()) {

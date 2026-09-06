@@ -326,3 +326,52 @@ test('workspace mutations are serialized and a rejected mutation does not poison
   assert.equal(await second, 'ok');
   assert.deepEqual(order, ['first-start', 'first-end', 'second']);
 });
+
+
+// ── 반납은 쓰기 큐에 서지 않는다 ────────────────────────────────────────
+//
+// 이 사실 하나가 지금 이 시스템에 교착이 없는 **유일한 근거**인데,
+// 코드 어디에도 계약으로 박혀 있지 않았다.
+//
+// 2026-08-31 에 누군가(나였다) release 를 mutationQueue 에 세웠다가
+// 회귀 SAVE-04 가 깨져 커밋 eab33d7 로 되돌렸다. 되돌렸다는 사실만 남고
+// "왜 그러면 안 되는지" 는 아무 데도 안 남아, 다음 사람이 같은 수정을 또 할 수 있다.
+//
+// 더 나쁜 것은 교착이다: 보관 쓰기는 archive-adapter 가 runMutation 으로 큐에 세운다.
+// release 도 그 큐에 세우면, runMutation 안에서 release 를 기다리는 코드가
+// 하나라도 생기는 순간 **영원히 안 풀린다.**
+// 지금 호출부 다섯 곳이 전부 큐 밖인 것은 우연이지 계약이 아니었다 - 이제 계약이다.
+//
+// (2026-09-04 적대적 검증에서 409 경합 수정안 다섯 개 중 이것만 3인 만장일치로 살아남았다.)
+
+test('반납(release)은 쓰기 큐(runMutation)를 거치지 않는다 - 교착 방지', async () => {
+  const fs = require('node:fs');
+  const source = fs.readFileSync(LOCK_PATH, 'utf8');
+
+  // (1) 소스 계약: 반환 객체가 transitions.release 를 그대로 내보낸다.
+  assert.match(source, /release:\s*transitions\.release/,
+    'release 가 runMutation 같은 것으로 감싸였습니다.\n'
+    + '보관 쓰기는 runMutation 으로 같은 큐에 섭니다. release 를 그 큐에 세우면\n'
+    + 'runMutation 안에서 release 를 기다리는 코드가 하나라도 생기는 순간 영구 교착입니다.\n'
+    + '2026-08-31 에 같은 수정으로 회귀 SAVE-04 가 깨져 eab33d7 로 되돌렸습니다.');
+
+  // (2) 동작 계약: 진행 중인 쓰기가 안 끝나도 반납은 나간다.
+  const { root, requests } = harness();
+  const { createWorkspaceLockCoordinator } = await loadLock();
+  const lock = createWorkspaceLockCoordinator({ root });
+
+  let releaseWrite = null;
+  const blocked = lock.runMutation(() => new Promise(resolve => { releaseWrite = resolve; }));
+  // 쓰기가 큐에서 멈춰 있는 동안 반납을 부른다.
+  const released = lock.release();
+  const settled = await Promise.race([
+    released.then(() => 'released'),
+    new Promise(resolve => setTimeout(() => resolve('stuck'), 500)),
+  ]);
+  assert.equal(settled, 'released',
+    '진행 중인 쓰기가 안 끝났는데 반납이 막혔습니다 - release 가 쓰기 큐에 선 것입니다');
+
+  releaseWrite?.();
+  await blocked.catch(() => {});
+  assert.ok(Array.isArray(requests), '하네스가 요청을 기록해야 합니다');
+});
