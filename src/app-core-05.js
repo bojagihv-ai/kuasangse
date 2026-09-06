@@ -8765,9 +8765,57 @@ function renderFactoryWorkspacePanel(factory = factoryRuntimeReadFactory()) {
             : `<div class="factory-small factory-recent-workfile-empty">${state.projectsLoaded ? '아직 저장된 조립공장 작업이 없습니다.' : '저장 목록을 불러오는 중입니다.'}</div>`}
         </div>
       </div>
+      ${renderFactoryTowerJobsCard()}
     </div>
     ${renderFactoryLocalArchiveMiniPanel(factory)}
   </section>`;
+}
+
+// 관제탑(생산관제) 작업 목록. 주인님 2026-09-06: 관제탑에서 멈춰 있는 작업들이 앱에서 보이고
+// 어떤 것이든 불러올 수 있어야 한다. 관제탑 원본은 두고 **복사본** 으로 불러온다.
+function renderFactoryTowerJobsCard() {
+  const tower = state.factoryTowerJobs && typeof state.factoryTowerJobs === 'object'
+    ? state.factoryTowerJobs
+    : { items: [], fetchedAt: 0, loading: false, error: '' };
+  const items = Array.isArray(tower.items) ? tower.items : [];
+  const summaries = items.map(job => ({ job, summary: factoryTowerJobSummary(job) }));
+  const order = { warn: 0, danger: 1, muted: 2, ok: 3 };
+  summaries.sort((a, b) => (order[a.summary.tone] ?? 9) - (order[b.summary.tone] ?? 9));
+  const waitingCount = summaries.filter(item => item.summary.waiting).length;
+  const fetched = tower.fetchedAt ? new Date(tower.fetchedAt).toLocaleTimeString('ko-KR') : '';
+  const toneColor = { warn: 'var(--warn)', danger: 'var(--danger)', ok: 'var(--ok)', muted: 'var(--text-m)' };
+  const shown = summaries.slice(0, 12);
+  return `<div class="factory-card" data-factory-tower-jobs>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div>
+        <h4 style="margin:0">관제탑(생산관제) 작업 ${items.length}개${waitingCount ? ` · 사람 선택 대기 ${waitingCount}개` : ''}</h4>
+        <div class="factory-small" style="margin-top:3px">관제탑이 쥔 작업은 그대로 두고, 여기서는 <b>복사본</b>으로 불러와 이어서 작업합니다.${fetched ? ` · ${escapeHtml(fetched)} 조회` : ''}</div>
+      </div>
+      <button class="btn-sm" type="button" data-factory-tower-jobs-refresh ${disabledAttr(tower.loading === true, '조회 중입니다.')}>${tower.loading ? '조회 중...' : '관제탑 새로고침'}</button>
+    </div>
+    ${tower.error ? `<div class="factory-guide-note warn" style="margin-bottom:8px">${escapeHtml(tower.error)}</div>` : ''}
+    ${!tower.error && !items.length ? `<div class="factory-small factory-recent-workfile-empty">${tower.fetchedAt ? '관제탑에 등록된 작업이 없습니다.' : (tower.loading ? '관제탑 작업을 조회하는 중입니다.' : '아직 조회하지 않았습니다. 관제탑 새로고침을 눌러주세요.')}</div>` : ''}
+    ${shown.map(({ job, summary }) => {
+      const jobId = String(job.jobId || '');
+      const loadingThis = tower.loadingJobId && tower.loadingJobId === jobId;
+      const meta = [
+        summary.stageLabel ? `단계 ${summary.stageLabel}` : '',
+        Number(job.imageCount || 0) ? `이미지 ${job.imageCount}장` : '',
+        job.workfileName ? String(job.workfileName) : '',
+      ].filter(Boolean).join(' · ');
+      return `<article class="factory-recent-workfile-card" data-factory-tower-job="${escAttr(jobId)}" style="margin-bottom:6px">
+        <div class="factory-recent-workfile-body">
+          <div class="factory-recent-workfile-title">${escapeHtml(String(job.productName || jobId))}
+            <span class="factory-pill" style="margin-left:6px;color:${toneColor[summary.tone] || 'var(--text-m)'}">${escapeHtml(summary.label)}</span>
+          </div>
+          ${meta ? `<div class="factory-recent-workfile-meta">${escapeHtml(meta)}</div>` : ''}
+          ${summary.message ? `<div class="factory-recent-workfile-meta">${escapeHtml(summary.message.slice(0, 90))}</div>` : ''}
+        </div>
+        <button class="btn-sm" type="button" data-factory-tower-job-load="${escAttr(jobId)}" ${disabledAttr(!!tower.loadingJobId, '다른 작업을 불러오는 중입니다.')}>${loadingThis ? '불러오는 중...' : '복사본으로 불러오기'}</button>
+      </article>`;
+    }).join('')}
+    ${summaries.length > shown.length ? `<div class="factory-small">나머지 ${summaries.length - shown.length}개는 관제탑 화면에서 보세요.</div>` : ''}
+  </div>`;
 }
 
 const FACTORY_AUTOMATION_TABS = [

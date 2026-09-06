@@ -33375,6 +33375,229 @@ async function factoryHandleRunStageButton(btn, options = {}) {
   }
 }
 
+// ── 관제탑(생산관제) 작업을 상세페이지 앱에서 보고 불러오기 ─────────────────────
+//
+// 주인님 2026-09-06: "생산관제에서 작업중인(아직 A컷 선택 안 해서 멈춰 있는) 작업파일 리스트도
+// 상세페이지 프로그램에서 보이고 어떤 것이든 불러올 수 있어야 하는데 ... 두 프로그램이 완전 단절된 것 같아"
+//
+// 관제탑 쪽은 **읽기 API 만** 쓴다(GET /api/factory/jobs). 관제탑 화면·백엔드는 고치지 않는다.
+// 관제탑 워커가 만든 문서는 앱 백엔드의 범위별 저장소에 `project:batch:<jobId>` 로 남아 있다
+// (실측 2026-09-07: 워커의 문서 범위는 batch:<jobId>, 저장 범위는 그 앞에 project: 가 붙는다).
+// 그것을 서버에서 읽어 **새 작업파일(복사본)** 로 만든다. 관제탑 원본 문서는 건드리지 않는다 -
+// 워커가 쥔 편집권과 충돌하지 않고, 사람이 고친 것이 관제탑 큐를 몰래 바꾸지도 않는다.
+const FACTORY_CONTROL_TOWER_BASES = Object.freeze(['http://127.0.0.1:41009', 'http://127.0.0.1:5062']);
+
+function factoryControlTowerBases() {
+  const overrides = [];
+  try {
+    const param = new URL(window.location.href).searchParams.get('controlTowerBase');
+    if (param) overrides.push(String(param));
+  } catch (_) {}
+  try {
+    const stored = String(localStorage.getItem('control_tower_base') || '').trim();
+    if (stored) overrides.push(stored);
+  } catch (_) {}
+  return [...new Set([...overrides, ...FACTORY_CONTROL_TOWER_BASES].map(base => String(base || '').trim().replace(/\/+$/, '')).filter(Boolean))];
+}
+
+function factoryTowerJobsState() {
+  if (!state.factoryTowerJobs || typeof state.factoryTowerJobs !== 'object') {
+    state.factoryTowerJobs = { items: [], fetchedAt: 0, loading: false, error: '', base: '' };
+  }
+  return state.factoryTowerJobs;
+}
+
+// 관제탑 작업 한 줄을 사람 말로. 상태 값은 관제탑 factory-product-job:v1 그대로 받는다.
+function factoryTowerJobSummary(job = {}) {
+  const status = String(job?.status || '').trim();
+  const stageKey = String(job?.stageKey || '').trim();
+  const pending = job?.pendingSelection && typeof job.pendingSelection === 'object';
+  const stageLabels = {
+    representative: '대표이미지', hero: '대표이미지', size: '사이즈', cuts: '이미지컷', general: '이미지컷',
+    option_color: '옵션 색상', final_detail: '상세페이지', cafe24: 'Cafe24 등록', db: 'DB',
+  };
+  const waiting = pending || status === 'waiting_manual';
+  let label = status || '상태 없음';
+  let tone = 'muted';
+  if (waiting) { label = '사람 선택 대기'; tone = 'warn'; }
+  else if (status === 'blocked') { label = '막힘 · 확인 필요'; tone = 'danger'; }
+  else if (status === 'running' || job?.dispatched === true) { label = '진행 중'; tone = 'warn'; }
+  else if (status === 'completed' || status === 'done') { label = '완료'; tone = 'ok'; }
+  else if (status === 'queued' || status === 'pending') { label = '대기열'; tone = 'muted'; }
+  else if (status === 'failed' || status === 'error') { label = '실패'; tone = 'danger'; }
+  return {
+    label,
+    tone,
+    waiting,
+    stageLabel: stageLabels[stageKey] || stageKey,
+    message: String(job?.message || '').trim(),
+  };
+}
+
+async function factoryTowerJobsRefresh(options = {}) {
+  const tower = factoryTowerJobsState();
+  if (tower.loading) return tower;
+  tower.loading = true;
+  if (options.render !== false) render();
+  const bases = factoryControlTowerBases();
+  let lastError = '';
+  let loaded = false;
+  for (const base of bases) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 6000) : null;
+    try {
+      const response = await fetch(`${base}/api/factory/jobs`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: controller?.signal,
+      });
+      if (!response.ok) { lastError = `${base} HTTP ${response.status}`; continue; }
+      const data = await response.json();
+      const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      tower.items = jobs.filter(job => job && typeof job === 'object').map(job => ({ ...job }));
+      tower.base = base;
+      tower.fetchedAt = Date.now();
+      tower.error = '';
+      loaded = true;
+      break;
+    } catch (error) {
+      lastError = error?.name === 'AbortError' ? `${base} 6초 안에 응답 없음` : `${base} ${error?.message || error}`;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  if (!loaded) {
+    tower.error = `관제탑에 연결하지 못했습니다 (${lastError || bases.join(', ')})`;
+    if (options.quiet !== true && typeof factoryLog === 'function') factoryLog(`관제탑 작업 목록 조회 실패: ${tower.error}`, 'warn');
+  }
+  tower.loading = false;
+  if (options.render !== false) render();
+  return tower;
+}
+
+function factoryTowerJobDocumentScope(jobId = '') {
+  return workspacePersistenceApi().normalizeProjectScope(factoryRuntimeControlCheckpointProjectId(jobId));
+}
+
+// 서버에 남은 관제탑 문서(lightweight + assets)를 **새 작업파일 payload** 로 바꾼다.
+// 모든 문서 표식(currentProjectId · workspaceScope · factory.workspace · workIdentity · branch)을
+// 새 id 로 다시 묶는다. 하나라도 옛 범위를 가리키면 작업파일 신원 검사(validateWorkspaceSnapshotIdentity)가
+// "범위 충돌" 로 막는다. 자산의 workspaceId 는 불러온 뒤 factoryEnsureCurrentProjectIdentityForFile 이
+// force 로 새 id 로 다시 찍는다(previousWorkspaceId === id).
+function factoryTowerJobCopyPayload(snapshot, identity = {}) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const lightweight = source.lightweight && typeof source.lightweight === 'object' ? source.lightweight : null;
+  const assets = source.assets && typeof source.assets === 'object' ? source.assets : null;
+  const payload = cloneData(lightweight || (assets ? {} : source));
+  if (assets) payload.assetPayload = cloneData(assets);
+  if (!payload.productImageBackup && source.productImageBackup) payload.productImageBackup = cloneData(source.productImageBackup);
+  const id = String(identity.id || uid('towercopy')).trim();
+  const name = String(identity.name || '').trim() || '관제탑 복사본';
+  const createdAt = Number(identity.createdAt || Date.now()) || Date.now();
+  const origin = identity.origin && typeof identity.origin === 'object' ? cloneData(identity.origin) : null;
+  const rebind = target => {
+    if (!target || typeof target !== 'object') return;
+    target.currentProjectId = id;
+    target.currentProjectName = name;
+    target.currentProjectCreatedAt = createdAt;
+    delete target.workIdentity;
+    delete target.workspaceBranch;
+    // 여기의 factory 는 서버 문서를 복제한 **분리된 사본** 이다(소유 draft 가 아니다).
+    const copyFactory = target.factory && typeof target.factory === 'object' ? target.factory : null;
+    if (!copyFactory) return;
+    const workspace = copyFactory.workspace && typeof copyFactory.workspace === 'object' ? copyFactory.workspace : {};
+    // 관제탑이 넣어 준 원본 파일 표식(workfileName·Sha256·Bytes·Source)은 복사본의 것이 아니므로 빼고 담는다.
+    const { workfileName: _wfName, workfileSha256: _wfSha, workfileBytes: _wfBytes, workfileSource: _wfSource, ...workspaceRest } = workspace;
+    copyFactory.workspace = { ...workspaceRest, id, name, createdAt, updatedAt: Date.now() };
+    copyFactory.currentProjectId = id;
+    copyFactory.currentProjectName = name;
+    copyFactory.workIdentity = undefined;
+    delete copyFactory.workIdentity;
+    // 자산(assets·previousAssets·보관함·경쟁사)의 workspaceId 도 지금 새 id 로 찍는다.
+    // 실측 2026-09-07: 불러오기 도중 옛 범위(batch:…) 자산이 "이전 작업 3개" 로 밀려 화면에서 사라졌다 -
+    // 신원 재도장(factoryEnsureCurrentProjectIdentityForFile)은 불러오기 뒤에 오므로 늦다.
+    const previousWorkspaceId = String(workspace.id || '').trim();
+    if (typeof factoryStampFactoryItemsWorkspaceIdentity === 'function') {
+      factoryStampFactoryItemsWorkspaceIdentity(copyFactory, id, { previousWorkspaceId, force: true });
+    }
+    if (origin) {
+      copyFactory.automation = copyFactory.automation && typeof copyFactory.automation === 'object' ? copyFactory.automation : {};
+      copyFactory.automation.controlTowerOrigin = cloneData(origin);
+    }
+  };
+  rebind(payload);
+  rebind(payload.assetPayload);
+  projectWorkspaceSnapshotForDocument(payload, id);
+  return { payload, id, name, createdAt, origin };
+}
+
+function factoryTowerJobCopyBundle(snapshot, job = {}, identity = {}) {
+  const jobId = String(job?.jobId || identity.jobId || '').trim();
+  const productName = String(job?.productName || snapshot?.lightweight?.currentProjectName || snapshot?.assets?.factory?.product?.productName || '').trim();
+  const copy = factoryTowerJobCopyPayload(snapshot, {
+    id: identity.id,
+    createdAt: identity.createdAt,
+    name: identity.name || `${productName || '관제탑 작업'} (관제탑 복사본)`,
+    origin: {
+      kind: 'control-tower-job',
+      jobId,
+      scopeId: jobId ? factoryTowerJobDocumentScope(jobId) : '',
+      productName,
+      copiedAt: Date.now(),
+    },
+  });
+  const manifest = factoryProjectFileBuildManifest(copy.payload, { id: copy.id, name: copy.name });
+  copy.payload.projectFileManifest = manifest;
+  return {
+    format: KUASANGSE_PROJECT_FILE_FORMAT,
+    version: KUASANGSE_PROJECT_FILE_VERSION,
+    manifest,
+    exportedAt: Date.now(),
+    app: 'kuasangse',
+    workspaceId: copy.id,
+    currentProjectId: copy.id,
+    controlTowerOrigin: copy.origin,
+    project: { id: copy.id, name: copy.name, createdAt: copy.createdAt, updatedAt: Date.now(), payload: copy.payload },
+  };
+}
+
+async function factoryLoadTowerJobCopy(jobId = '') {
+  const tower = factoryTowerJobsState();
+  const job = tower.items.find(item => String(item?.jobId || '') === String(jobId || ''));
+  const label = String(job?.productName || jobId || '관제탑 작업');
+  if (!job) {
+    state.error = `관제탑 작업 ${jobId} 을(를) 목록에서 찾지 못했습니다. 새로고침 후 다시 눌러주세요.`;
+    render();
+    return null;
+  }
+  if (typeof confirm === 'function' && !confirm(`관제탑 작업 "${label}" 의 복사본을 이 탭에 새 작업파일로 불러옵니다.\n관제탑 원본과 큐는 그대로 둡니다. 계속할까요?`)) return null;
+  tower.loadingJobId = String(jobId);
+  render();
+  try {
+    const scopeId = factoryTowerJobDocumentScope(jobId);
+    const restored = await workspacePersistenceApi().restore({ scopeId, sources: ['server'] });
+    if (!restored?.snapshot) throw new Error(`서버에 관제탑 작업 문서가 없습니다 (${scopeId}). 워커가 아직 저장하지 않았거나 지워졌습니다.`);
+    const bundle = factoryTowerJobCopyBundle(restored.snapshot, job);
+    const imported = await importFactoryProjectFileBundle(bundle, {
+      fileName: `${bundle.project.name}.kuasangse`,
+    });
+    if (imported) {
+      if (typeof factoryLog === 'function') factoryLog(`관제탑 작업 "${label}" 의 복사본을 불러왔습니다 (${scopeId} → ${bundle.project.id}).`, 'ok');
+      if (typeof setUiNotice === 'function') setUiNotice(`관제탑 작업 "${label}" 복사본을 불러왔습니다. 관제탑 원본은 그대로입니다.`, 'ok');
+    }
+    return imported;
+  } catch (error) {
+    const message = error?.message || String(error);
+    state.error = `관제탑 작업 복사본 불러오기 실패: ${message}`;
+    if (typeof factoryLog === 'function') factoryLog(state.error, 'error');
+    render();
+    return null;
+  } finally {
+    tower.loadingJobId = '';
+    render();
+  }
+}
+
 // ── bindEvents 확장 (조립공장) ──
 registerBindEventExtension(function bindFactoryLightImageHydration() {
   // render() already schedules scoped hydration after binding events.
@@ -34508,6 +34731,12 @@ registerBindEventExtension(function bindFactoryEvents() {
   });
   const factoryRefreshWorkspaceList = document.getElementById('factoryRefreshWorkspaceList');
   if (factoryRefreshWorkspaceList) factoryRefreshWorkspaceList.onclick = () => refreshWorkspaceLists(true);
+  document.querySelectorAll('[data-factory-tower-jobs-refresh]').forEach(btn => {
+    btn.onclick = () => { void factoryTowerJobsRefresh({ render: true }); };
+  });
+  document.querySelectorAll('[data-factory-tower-job-load]').forEach(btn => {
+    btn.onclick = () => { void factoryLoadTowerJobCopy(btn.dataset.factoryTowerJobLoad || ''); };
+  });
   const factoryRefreshRegistrationHistory = document.getElementById('factoryRefreshRegistrationHistory');
   if (factoryRefreshRegistrationHistory) factoryRefreshRegistrationHistory.onclick = () => loadFactoryRegistrationHistory(true);
   const factoryRecordCurrentRegistrationHistory = document.getElementById('factoryRecordCurrentRegistrationHistory');

@@ -4494,6 +4494,10 @@ async function refreshWorkspaceLists(renderAfter = true) {
     state.factoryRegistrationHistory = factoryRegistrationHistoryItems(registrationHistoryRecord);
     state.factoryRegistrationHistoryLoaded = true;
     state.projectsLoaded = true;
+    // 관제탑 작업 목록도 같이 새로 읽는다 (사람 탭만 - 워커 탭은 제 작업만 보면 된다). 기다리지 않는다.
+    if (!classicRuntimeBatchWorkerMode && typeof factoryTowerJobsRefresh === 'function') {
+      void factoryTowerJobsRefresh({ render: renderAfter, quiet: true });
+    }
     const startupProject = await maybeRestoreLatestSavedProjectOnStartup(state.projects);
     if (startupProject) {
       state.snapshots = snapshots
