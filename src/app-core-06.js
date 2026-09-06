@@ -33472,7 +33472,108 @@ async function factoryTowerJobsRefresh(options = {}) {
   }
   tower.loading = false;
   if (options.render !== false) render();
+  // 목록을 한 번 읽었으면 그때부터 실시간으로 듣는다 (통합 4단계).
+  if (loaded && options.live !== false) void factoryTowerLiveConnect({ render: options.render !== false });
   return tower;
+}
+
+// ── 관제탑 실시간 연결 (SSE) ─────────────────────────────────────────────────
+// 주인님 2026-09-06: "작업중인게 실시간으로 동기화로 볼 수 있어야 하는데".
+// 관제탑이 바뀌면(작업 투입·A컷 선택·단계 완료·체크포인트) 목록을 다시 읽는다. 관제탑 화면과 같은 이벤트를 듣는다.
+// 관제탑 화면의 실측(2026-08-28)을 따른다: cursor=0 으로 붙으면 쌓인 이벤트 수천 건이 한꺼번에 쏟아져
+// 크롬의 호스트당 연결이 바닥난다. 방금 읽은 상태의 eventCursor 부터 듣는다.
+// 이벤트 스트림은 관제탑 세션 쿠키를 요구한다(GET /api/session 이 발급, SameSite 는 같은 호스트라 통과).
+const FACTORY_TOWER_EVENT_TYPES = Object.freeze([
+  'factory.snapshot',
+  'factory.product.queued',
+  'factory.product.updated',
+  'factory.product.checkpoint.rebound',
+  'factory.a_cut.selected',
+  'factory.stage.updated',
+  'factory.workfile.hydrated',
+  'factory.session.disconnected',
+  'factory.worker.failed',
+  'factory.publication.receipt',
+]);
+const FACTORY_TOWER_EVENT_REFRESH_DELAY_MS = 1200;
+const FACTORY_TOWER_RECONNECT_DELAY_MS = 30000;
+let factoryTowerEventSource = null;
+let factoryTowerEventRefreshTimer = null;
+let factoryTowerReconnectTimer = null;
+
+// 화면에 보이는 것만 state 에 둔다. EventSource 자체는 state 밖에 - state 는 structuredClone 으로 복제된다.
+function factoryTowerLiveState() {
+  const tower = factoryTowerJobsState();
+  if (!tower.live || typeof tower.live !== 'object') {
+    tower.live = { connected: false, since: 0, lastEventAt: 0, lastEventType: '', attempts: 0, error: '', cursor: '' };
+  }
+  return tower.live;
+}
+
+function factoryTowerScheduleRefresh(reason = '') {
+  const live = factoryTowerLiveState();
+  live.lastEventAt = Date.now();
+  live.lastEventType = String(reason || '');
+  if (factoryTowerEventRefreshTimer) clearTimeout(factoryTowerEventRefreshTimer);
+  factoryTowerEventRefreshTimer = setTimeout(() => {
+    factoryTowerEventRefreshTimer = null;
+    void factoryTowerJobsRefresh({ render: true, quiet: true, live: false });
+  }, FACTORY_TOWER_EVENT_REFRESH_DELAY_MS);
+}
+
+function factoryTowerScheduleReconnect(options = {}) {
+  if (factoryTowerReconnectTimer) return;
+  factoryTowerReconnectTimer = setTimeout(() => {
+    factoryTowerReconnectTimer = null;
+    void factoryTowerLiveConnect(options);
+  }, FACTORY_TOWER_RECONNECT_DELAY_MS);
+}
+
+async function factoryTowerLiveConnect(options = {}) {
+  if (typeof EventSource !== 'function') return false;
+  if (factoryTowerEventSource) return true;
+  const tower = factoryTowerJobsState();
+  const live = factoryTowerLiveState();
+  const base = String(tower.base || factoryControlTowerBases()[0] || '').replace(/\/+$/, '');
+  if (!base) return false;
+  live.attempts += 1;
+  try {
+    const session = await fetch(`${base}/api/session`, { credentials: 'include', headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!session.ok) throw new Error(`session HTTP ${session.status}`);
+    const stateResponse = await fetch(`${base}/api/factory/state`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    const towerState = stateResponse.ok ? await stateResponse.json() : {};
+    const cursor = String(towerState?.eventCursor ?? towerState?.cursor ?? '0').trim() || '0';
+    live.cursor = cursor;
+    if (factoryTowerEventSource) return true;
+    const source = new EventSource(`${base}/api/factory/events?cursor=${encodeURIComponent(cursor)}`, { withCredentials: true });
+    factoryTowerEventSource = source;
+    source.onopen = () => {
+      const changed = live.connected !== true;
+      live.connected = true;
+      live.since = Date.now();
+      live.error = '';
+      if (changed && options.render !== false) render();
+    };
+    FACTORY_TOWER_EVENT_TYPES.forEach(type => source.addEventListener(type, () => factoryTowerScheduleRefresh(type)));
+    source.onerror = () => {
+      const changed = live.connected === true;
+      live.connected = false;
+      live.error = '관제탑 실시간 연결이 끊겨 다시 잇는 중입니다.';
+      // readyState 2 = 브라우저가 재시도를 포기함. 30초 뒤 처음부터 다시 잇는다.
+      if (source.readyState === 2) {
+        if (factoryTowerEventSource === source) factoryTowerEventSource = null;
+        factoryTowerScheduleReconnect(options);
+      }
+      if (changed && options.render !== false) render();
+    };
+    return true;
+  } catch (error) {
+    live.connected = false;
+    live.error = `관제탑 실시간 연결 실패: ${error?.message || error}`;
+    factoryTowerEventSource = null;
+    factoryTowerScheduleReconnect(options);
+    return false;
+  }
 }
 
 function factoryTowerJobDocumentScope(jobId = '') {

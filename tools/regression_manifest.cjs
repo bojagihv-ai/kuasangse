@@ -296,6 +296,8 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('START-SIMILAR-02', '5 조립공장', '유사 제품 분석 단계 계약 (재사용·실패 비차단·화면 유지·시작 작업에 연결)', 'tests/frontend/start_runs_similar_product_analysis.test.cjs', 'fast'),
     nodeFile('TOWER-JOBS-01', '9 관제탑 연동', '관제탑 작업이 앱에 보이고 복사본으로 불러오면 새 작업파일이 된다 (실제 앱, 관제탑·문서만 가짜)', 'tools/verify_control_tower_jobs_in_app_v1.cjs'),
     nodeFile('TOWER-JOBS-02', '9 관제탑 연동', '관제탑 작업 목록·복사본 payload 계약', 'tests/frontend/control_tower_jobs_in_app.test.cjs', 'fast'),
+    nodeFile('TOWER-LIVE-01', '9 관제탑 연동', '앱이 관제탑 이벤트 스트림에 붙고 이벤트가 오면 목록을 다시 읽는다 (실제 앱, 스트림만 가짜)', 'tools/verify_control_tower_live_events_v1.cjs'),
+    nodeFile('TOWER-LIVE-02', '9 관제탑 연동', '관제탑 실시간 연결 계약 (세션 쿠키·지금 커서·재연결·표시)', 'tests/frontend/control_tower_live_events.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-01', '공통/검사', '회귀 제목이 약속한 것을 그 검사가 실제로 한다', 'tests/frontend/regression_titles_match_what_they_check.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-02', '공통/검사', '소스 슬라이스 도우미가 줄 끝과 무관하게 같은 결과를 낸다', 'tests/frontend/source_slice_utils.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-03', '공통/검사', '흔들린 검사와 최근 흔들림 이력이 보고서에 남는다', 'tests/frontend/regression_report_shows_flakes.test.cjs', 'fast'),

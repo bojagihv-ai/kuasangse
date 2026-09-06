@@ -8785,11 +8785,15 @@ function renderFactoryTowerJobsCard() {
   const fetched = tower.fetchedAt ? new Date(tower.fetchedAt).toLocaleTimeString('ko-KR') : '';
   const toneColor = { warn: 'var(--warn)', danger: 'var(--danger)', ok: 'var(--ok)', muted: 'var(--text-m)' };
   const shown = summaries.slice(0, 12);
+  const live = tower.live && typeof tower.live === 'object' ? tower.live : null;
+  const livePill = live?.connected
+    ? `<span class="factory-pill" data-factory-tower-live="on" style="color:var(--ok)">실시간 연결</span>`
+    : (live?.error ? `<span class="factory-pill" data-factory-tower-live="off" style="color:var(--warn)" title="${escAttr(live.error)}">실시간 끊김</span>` : '');
   return `<div class="factory-card" data-factory-tower-jobs>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
       <div>
-        <h4 style="margin:0">관제탑(생산관제) 작업 ${items.length}개${waitingCount ? ` · 사람 선택 대기 ${waitingCount}개` : ''}</h4>
-        <div class="factory-small" style="margin-top:3px">관제탑이 쥔 작업은 그대로 두고, 여기서는 <b>복사본</b>으로 불러와 이어서 작업합니다.${fetched ? ` · ${escapeHtml(fetched)} 조회` : ''}</div>
+        <h4 style="margin:0">관제탑(생산관제) 작업 ${items.length}개${waitingCount ? ` · 사람 선택 대기 ${waitingCount}개` : ''} ${livePill}</h4>
+        <div class="factory-small" style="margin-top:3px">관제탑이 쥔 작업은 그대로 두고, 여기서는 <b>복사본</b>으로 불러와 이어서 작업합니다.${fetched ? ` · ${escapeHtml(fetched)} 조회` : ''}${live?.connected ? ' · 관제탑이 바뀌면 자동으로 다시 읽습니다' : ''}</div>
       </div>
       <button class="btn-sm" type="button" data-factory-tower-jobs-refresh ${disabledAttr(tower.loading === true, '조회 중입니다.')}>${tower.loading ? '조회 중...' : '관제탑 새로고침'}</button>
     </div>
