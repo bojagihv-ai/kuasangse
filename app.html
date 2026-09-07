@@ -1860,6 +1860,13 @@ body:has(.work-identity-float.is-authority-dock) .main{padding-right:var(--work-
   .workfile-report-source>div{grid-template-columns:1fr}
 }
 .container{padding-bottom:var(--shell-bottom-safe-space)}
+/* 작은 화면(높이 720px 이하)에서만 공정 진행 카드와 로그에 안쪽 스크롤을 허용한다.
+   주인님 결정 2026-09-07: "작은 화면에서 박스 안 스크롤, 그건 가능하게끔 하자".
+   큰 화면에서는 위 기본 규칙대로 카드가 아래로 늘어난다(개별 박스 내부 스크롤 금지 원칙). */
+@media (max-height:720px){
+  .factory-run-status-card{max-height:40vh;overflow:auto}
+  .factory-run-status-card [data-factory-goal-log-list]{max-height:26vh;overflow-y:auto;min-height:0}
+}
 </style>
 </head>
 <body>

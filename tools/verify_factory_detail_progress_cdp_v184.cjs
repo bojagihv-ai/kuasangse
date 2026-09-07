@@ -1,13 +1,16 @@
-// !! 이 검사는 2026-09-04 현재 **아직 실패한다.** 5건이 남아 있다:
-//    heartbeat stage is not still running / VM detail completion mismatch /
-//    small viewport layout mismatch / failure state is not visibly closed as an error /
-//    status API failure was not preserved through an empty result
+// 계약: **상세페이지 수집의 진행 표시는 시작·진행 중·완료·실패를 화면에 그대로 보여준다.**
 //
-// 그 전에는 7건이 실패했는데, 그중 2건은 원인이 이 검사 밖에 있었다 -
-// 앱이 연결자를 안 거치고 스크래퍼(43000)로 직접 나가는 경로가 하나 있어서
-// 격리 환경에서 CORS 로 막혔고, "제품스크래퍼 API에 연결하지 못했습니다" 가
-// 진짜 원인을 덮고 있었다. 그 한 경로를 아래에서 막았다.
-// 남은 5건은 화면 상태 전이 자체의 문제이므로, 이어서 볼 사람은 거기서 시작하면 된다.
+// 2026-09-07: 남아 있던 5건의 실패 원인.
+//   앱의 VM 상세수집은 이제 연결자(compMarketInvokeV1)가 아니라 앱 백엔드의 VM 브리지
+//   (compMarketFetchVmCandidateBridge → /api/vm-detail-capture, 2초 폴링)로 나간다. 이 검사는 연결자만
+//   가짜로 바꿔 두어서, 격리 환경의 진짜 브리지가 즉시 끝나 버렸다 — 그래서 '진행 중' 이 안 보이고
+//   (heartbeat), 상태 호출이 0번이고(completion), 실패 모드가 먹지 않았다(failure / status-failure).
+//   이제 브리지도 같은 몸통으로 가짜로 바꾼다. 검사가 보는 것은 **화면 상태 전이**이지 VM 과의 대화가 아니다.
+//   작은 화면(1100x620)의 안쪽 스크롤은 주인님 결정(2026-09-07 "가능하게끔 하자")으로 app.html 에
+//   @media (max-height:720px) 예외를 두어 허용한다. 큰 화면에서는 여전히 카드가 아래로 늘어난다.
+//
+// 2026-09-04: 그 전 7건 중 2건은 앱이 연결자를 안 거치고 스크래퍼(43000)로 직접 나가는 경로
+//   (compMarketFetchJson('/api/scrape_details')) 가 격리 환경에서 CORS 로 막혀 생긴 것이었다. 그 경로도 아래에서 막는다.
 const fs = require('fs');
 const path = require('path');
 const { assertChecks, connectCdp, ensureCdp, evaluate, waitFor } = require('./factory_cdp_test_utils.cjs');
@@ -22,6 +25,24 @@ const SMALL_SCREENSHOT = path.join(OUT_DIR, 'factory-detail-progress-small-v184.
 const FAILURE_SCREENSHOT = path.join(OUT_DIR, 'factory-detail-progress-failure-v184.png');
 const STATUS_FAILURE_SCREENSHOT = path.join(OUT_DIR, 'factory-detail-progress-status-failure-v184.png');
 const RESULT_PATH = path.join(OUT_DIR, 'factory-detail-progress-v184.json');
+
+// 상세수집은 작업 사본(workingFactory)에서 돌고 저장소로 발행된다. 화면이 읽는 순서대로 거울을 본다:
+// 저장소 정본(competitors.compPage) → 공장 보기(factory.competitors.compPage) → 공장 compPage → 화면 상태(state.compPage).
+const MARKET_MIRRORS_SNIPPET = `
+      const snapshot = (typeof window.factoryRuntimeRequireStore === 'function') ? (window.factoryRuntimeRequireStore().getSnapshot() || {}) : {};
+      const mirrors = {
+        canonical: snapshot.competitors?.compPage?.marketScrape || {},
+        factoryView: snapshot.factory?.competitors?.compPage?.marketScrape || {},
+        factoryCompPage: snapshot.factory?.compPage?.marketScrape || {},
+        live: window.state?.compPage?.marketScrape || {},
+      };
+      const market = Object.values(mirrors).find(item => item?.detailOperation?.status) || mirrors.canonical;
+      const mirrorSummary = Object.fromEntries(Object.entries(mirrors).map(([key, item]) => [key, {
+        status: item?.detailOperation?.status || '',
+        images: Array.isArray(item?.scrapedImages) ? item.scrapedImages.length : 0,
+        current: Number(item?.detailOperation?.currentImageCount || 0),
+      }]));
+`;
 
 const readGoal = cdp => evaluate(cdp, `(() => {
   const node = document.querySelector('[data-factory-goal-status="automation"]');
@@ -187,6 +208,49 @@ async function main() {
       };
       let statusCalls = 0;
       const endpointCalls = [];
+      // 2026-09-07: VM 상세수집의 실제 경로 - 앱 백엔드 VM 브리지. POST 로 작업을 만들고 GET 으로 2초마다 상태를 본다.
+      // 연결자 스텁과 같은 몸통: 3번은 running, 4번째에 completed(+result). 실패 모드는 상태가 failed 로 끝난다.
+      const nativeBridgeV184 = window.compMarketFetchVmCandidateBridge;
+      const bridgeImage = {
+        id: 'vm_image_ui_v184',
+        base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        mime: 'image/png',
+        candidateId: candidate.id,
+        productUrl: candidate.product_url,
+      };
+      window.compMarketFetchVmCandidateBridge = async (path, options, timeoutMs) => {
+        const bridgePath = String(path || '');
+        endpointCalls.push('bridge:' + bridgePath);
+        if (bridgePath === '/api/vm-detail-capture' && String(options?.method || 'GET').toUpperCase() === 'POST') {
+          return { ok: true, job_id: 'detail_job_ui_v184', status: 'queued' };
+        }
+        if (bridgePath.startsWith('/api/vm-detail-capture/')) {
+          statusCalls += 1;
+          if (window.__detailProgressModeV184 === 'status-failure') {
+            // 상태 API 는 실패라고 말하는데 결과 본문은 비어 있다 - 실패가 빈 결과에 묻히면 안 된다.
+            return { ok: true, job_id: 'detail_job_ui_v184', status: 'failed', completed: 0, failed: 1, total: 1, message: '검증용 상태 API 실패', result: {} };
+          }
+          if (window.__detailProgressModeV184 === 'failure') {
+            return {
+              ok: true, job_id: 'detail_job_ui_v184', status: 'failed', completed: 0, failed: 1, total: 1, message: '검증용 상세수집 실패',
+              result: { status: 'error', completed: 0, failed: 1, total: 1, message: '검증용 상세수집 실패' },
+            };
+          }
+          if (statusCalls < 4) return { ok: true, job_id: 'detail_job_ui_v184', status: 'running', completed: 0, failed: 0, total: 1 };
+          return {
+            ok: true, job_id: 'detail_job_ui_v184', status: 'completed', completed: 1, failed: 0, total: 1,
+            result: {
+              status: 'completed', completed: 1, failed: 0, total: 1,
+              currentRunId: scope.currentRunId, productKey: scope.productKey, inputImageFingerprint: scope.inputImageFingerprint, stageId: scope.stageId,
+              results: [{
+                id: candidate.id, candidateId: candidate.id, status: 'success', title: candidate.title, platform: candidate.platform, product_url: candidate.product_url,
+                images: [bridgeImage],
+              }],
+            },
+          };
+        }
+        return nativeBridgeV184 ? nativeBridgeV184(path, options, timeoutMs) : {};
+      };
       window.compMarketInvokeV1 = async endpointId => {
         endpointCalls.push(String(endpointId || ''));
         if (endpointId === window.JEPUM_MARKET_API?.endpoints?.createDetail || String(endpointId).includes('detail-captures_b')) {
@@ -277,8 +341,9 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 120));
     const done = await readGoal(cdp);
     const finalState = await evaluate(cdp, `(() => {
-      const market = window.state.compPage.marketScrape || {};
+      ${MARKET_MIRRORS_SNIPPET}
       return {
+        mirrors: mirrorSummary,
         statusCalls: window.__detailProgressStatusCallsV184?.() || 0,
         detailStatus: market.detailOperation?.status || '',
         detailImageCount: Array.isArray(market.scrapedImages) ? market.scrapedImages.length : 0,
@@ -336,7 +401,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 120));
     const failure = await readGoal(cdp);
     const failureState = await evaluate(cdp, `(() => {
-      const market = window.state.compPage.marketScrape || {};
+      ${MARKET_MIRRORS_SNIPPET}
       const factory = window.factoryState();
       return {
         detailStatus: market.detailOperation?.status || '',
@@ -360,7 +425,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 120));
     const statusFailure = await readGoal(cdp);
     const statusFailureState = await evaluate(cdp, `(() => {
-      const market = window.state.compPage.marketScrape || {};
+      ${MARKET_MIRRORS_SNIPPET}
       const factory = window.factoryState();
       return {
         detailStatus: market.detailOperation?.status || '',
