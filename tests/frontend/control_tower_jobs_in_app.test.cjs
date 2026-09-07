@@ -168,6 +168,9 @@ test('화면·연결 계약: 목록 카드, 새로고침·불러오기 버튼, �
   assert.match(panel, /data-factory-tower-jobs-refresh/);
   assert.match(panel, /data-factory-tower-job-load="\$\{escAttr\(jobId\)\}"/);
   assert.match(panel, /복사본으로 불러오기/);
+  // 행은 [썸네일 52px][본문] 격자(.factory-recent-workfile-card)다 - 본문을 첫 칸에 넣으면 52px 로 짜부라진다 (실측 2026-09-07).
+  assert.match(panel, /<article class="factory-recent-workfile-card"[^>]*>\s*<div class="factory-recent-workfile-thumb"/, '첫 칸은 썸네일');
+  assert.match(panel, /class="btn-sm factory-recent-workfile-open" type="button" data-factory-tower-job-load=/, '버튼은 두 칸을 다 쓴다');
   assert.match(core05, /\$\{renderFactoryTowerJobsCard\(\)\}/, '최근 작업파일 카드 옆에 붙는다');
   const refresh = sourceSlice(core03, 'async function refreshWorkspaceLists(', '\nlet startupProjectRestoreAttempted');
   assert.match(refresh, /if \(!classicRuntimeBatchWorkerMode && typeof factoryTowerJobsRefresh === 'function'\)/);

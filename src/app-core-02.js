@@ -6956,6 +6956,13 @@ async function saveSessionAssetsToDbOnce(reconcileAttempted = false) {
     }
     await workspacePutSessionAssets(payload);
     markSessionAssetFingerprintSaved();
+    // 내용이 생긴 초안만 '마지막 초안' 표식을 받는다 (빈 탭은 받지 않는다).
+    {
+      const savedScope = getCurrentLastWorkWorkspaceScope();
+      if (savedScope.startsWith('draft:') && workspacePersistenceApi().draftSessionAssetsHaveContent(payload)) {
+        void rememberLastDraftWorkspaceScope(savedScope);
+      }
+    }
     await Promise.all([
       workspaceSessionRemoveItem('pdp_session_img'),
       workspaceSessionRemoveItem('pdp_session_imgs'),
@@ -8627,6 +8634,10 @@ const DRAFT_HEARTBEAT_KEY_PREFIX = 'kuasangse_draft_beat_v1:';
 const DRAFT_HEARTBEAT_INTERVAL_MS = 15000;
 const DRAFT_ORPHAN_AFTER_MS = 60000;
 let draftHeartbeatTimer = null;
+// 표식을 마지막으로 적은 초안 번호 - 같은 번호를 저장할 때마다 다시 적지 않기 위한 것.
+let lastRememberedDraftScope = '';
+// 표식이 기억하는 '놓아준 초안' 개수 상한. 주인님이 "새 작업" 을 누른 초안만 여기 들어간다.
+const RELEASED_DRAFT_SCOPES_MAX = 30;
 
 function writeDraftHeartbeat(scopeId) {
   const scope = String(scopeId || '').trim();
@@ -8665,15 +8676,37 @@ function startDraftHeartbeat(scopeId) {
   } catch (_) {}
 }
 
+async function readLastDraftScopeRecord() {
+  try {
+    const record = await workspacePersistenceApi().loadPreference(LAST_DRAFT_SCOPE_PREFERENCE_ID);
+    return record && typeof record === 'object' ? record : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function releasedDraftScopesOf(record) {
+  return Array.isArray(record?.releasedScopes)
+    ? record.releasedScopes.map(item => String(item || '').trim()).filter(Boolean)
+    : [];
+}
+
+// 표식은 **내용이 있는** 초안만 가리킨다. 실측 2026-09-07: 강종 뒤 열린 빈 새 탭이 표식을
+// 자기 번호로 덮어써서, 어젯밤 작업(팔각자개상자)이 IndexedDB 에 멀쩡히 있는데도
+// 부팅이 빈 초안만 이어받았다. 그래서 부팅에서는 내용이 있을 때만, 저장에서는 내용이 생길 때 적는다.
 async function rememberLastDraftWorkspaceScope(scopeId) {
   const scope = String(scopeId || '').trim();
   if (!scope.startsWith('draft:')) return false;
+  if (scope === lastRememberedDraftScope) return true;
   try {
+    const previous = await readLastDraftScopeRecord();
     await workspacePersistenceApi().savePreference({
       id: LAST_DRAFT_SCOPE_PREFERENCE_ID,
       scopeId: scope,
       savedAt: Date.now(),
+      releasedScopes: releasedDraftScopesOf(previous).filter(item => item !== scope),
     });
+    lastRememberedDraftScope = scope;
     return true;
   } catch (error) {
     console.warn('마지막 초안 번호를 적어 두지 못했습니다:', error);
@@ -8681,13 +8714,46 @@ async function rememberLastDraftWorkspaceScope(scopeId) {
   }
 }
 
-async function readLastDraftWorkspaceScope() {
+// 주인님이 "새 작업" 을 누른 초안은 놓아준다 - 이후 새 탭이 그 초안을 되살리지 않는다.
+// 내용은 지우지 않는다. 주인님 규칙 "새 작업 누르기 전에는 아무것도 안 날아간다" 의 '전까지' 다.
+async function releaseDraftWorkspaceScope(scopeId) {
+  const scope = String(scopeId || '').trim();
+  if (!scope.startsWith('draft:')) return false;
   try {
-    const record = await workspacePersistenceApi().loadPreference(LAST_DRAFT_SCOPE_PREFERENCE_ID);
-    return String(record?.scopeId || '').trim();
-  } catch (_) {
-    return '';
+    const previous = await readLastDraftScopeRecord();
+    const previousScope = String(previous?.scopeId || '').trim();
+    await workspacePersistenceApi().savePreference({
+      id: LAST_DRAFT_SCOPE_PREFERENCE_ID,
+      scopeId: previousScope === scope ? '' : previousScope,
+      savedAt: Date.now(),
+      releasedScopes: [scope, ...releasedDraftScopesOf(previous).filter(item => item !== scope)]
+        .slice(0, RELEASED_DRAFT_SCOPES_MAX),
+    });
+    if (lastRememberedDraftScope === scope) lastRememberedDraftScope = '';
+    return true;
+  } catch (error) {
+    console.warn('초안을 놓아주지 못했습니다:', error);
+    return false;
   }
+}
+
+async function readLastDraftWorkspaceScope() {
+  const record = await readLastDraftScopeRecord();
+  return String(record?.scopeId || '').trim();
+}
+
+// 표식이 틀렸을 때(빈 탭이 덮어썼거나 놓아준 초안을 가리킬 때) 내용 있는 초안 중 가장 최근 것을 고른다.
+// 살아 있는 탭의 초안(심장박동 60초 이내)과 놓아준 초안, 지금 탭 자신은 제외한다. 순수 함수라 시험이 쉽다.
+function chooseOrphanDraftForAdoption(candidates, options = {}) {
+  const branchScope = String(options.branchScope || '').trim();
+  const released = new Set((options.releasedScopes || []).map(item => String(item || '').trim()));
+  const heartbeatAge = typeof options.heartbeatAge === 'function' ? options.heartbeatAge : readDraftHeartbeatAge;
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter(item => item && typeof item === 'object' && String(item.scopeId || '').startsWith('draft:'))
+    .filter(item => item.scopeId !== branchScope && !released.has(item.scopeId))
+    .filter(item => item.hasContent === true)
+    .filter(item => heartbeatAge(item.scopeId) >= DRAFT_ORPHAN_AFTER_MS)
+    .sort((a, b) => (Number(b.savedAt) || 0) - (Number(a.savedAt) || 0))[0] || null;
 }
 
 // 새 탭이 빈손일 때, 직전 초안의 내용을 **현재 가지로 옮겨** 온다.
@@ -8698,12 +8764,35 @@ async function adoptPreviousDraftSessionAssets(branchScopeId, options = {}) {
   if (!branchScope.startsWith('draft:')) return null;
   const requestIsCurrent = () => typeof options.isCurrent !== 'function' || options.isCurrent() !== false;
   if (!requestIsCurrent()) return null;
-  const previousScope = await readLastDraftWorkspaceScope();
-  if (!previousScope || previousScope === branchScope) return null;
+  const pointer = await readLastDraftScopeRecord();
+  const releasedScopes = releasedDraftScopesOf(pointer);
+  const pointerScope = String(pointer?.scopeId || '').trim();
   if (!requestIsCurrent()) return null;
-  const source = await workspacePersistenceApi().loadDraftSessionAssetsForRecovery(previousScope);
-  if (!source || !requestIsCurrent()) return null;
-  // 그 탭이 아직 살아 있으면 손대지 않는다. 살아 있는 탭의 초안을 가져오면 내용이 갈린다.
+  let previousScope = '';
+  let source = null;
+  if (pointerScope && pointerScope !== branchScope && !releasedScopes.includes(pointerScope)) {
+    // 그 탭이 아직 살아 있으면 손대지 않는다. 살아 있는 탭의 초안을 가져오면 내용이 갈린다.
+    // 이때는 후순위 탐색도 하지 않는다 - 일하는 탭 옆에 일부러 연 새 탭은 새 탭이어야 한다.
+    if (readDraftHeartbeatAge(pointerScope) < DRAFT_ORPHAN_AFTER_MS) return null;
+    const candidate = await workspacePersistenceApi().loadDraftSessionAssetsForRecovery(pointerScope);
+    if (candidate && workspacePersistenceApi().draftSessionAssetsHaveContent(candidate)) {
+      previousScope = pointerScope;
+      source = candidate;
+    }
+  }
+  if (!source) {
+    // 표식이 없거나 틀렸다 (빈 새 탭이 덮어썼거나, 놓아준 초안을 가리킨다).
+    // 실측 2026-09-07: 강종 뒤 열린 빈 탭 두 개가 표식을 덮어써 어젯밤 작업이 버려졌다.
+    // 내용 있는 초안 중 가장 최근 것을 찾아 이어받는다.
+    if (!requestIsCurrent()) return null;
+    const candidates = await workspacePersistenceApi().listDraftSessionAssetsForRecovery().catch(() => []);
+    const chosen = chooseOrphanDraftForAdoption(candidates, { branchScope, releasedScopes });
+    if (!chosen || !requestIsCurrent()) return null;
+    source = await workspacePersistenceApi().loadDraftSessionAssetsForRecovery(chosen.scopeId);
+    if (!source) return null;
+    previousScope = chosen.scopeId;
+  }
+  if (!requestIsCurrent()) return null;
   const beatAge = readDraftHeartbeatAge(previousScope);
   if (beatAge < DRAFT_ORPHAN_AFTER_MS) return null;
   const adopted = bindWorkspaceSnapshotToCurrentBranch(cloneData(source), {
@@ -8803,7 +8892,10 @@ async function hydratePersistentSessionAssets(options = {}) {
     }
     if (hydrateScopeId.startsWith('draft:')) {
       startDraftHeartbeat(hydrateScopeId);
-      void rememberLastDraftWorkspaceScope(hydrateScopeId);
+      // 빈 새 탭은 표식을 덮어쓰지 않는다 - 내용이 생기면 saveSessionAssetsToDbOnce 가 적는다.
+      if (assets && workspacePersistenceApi().draftSessionAssetsHaveContent(assets)) {
+        void rememberLastDraftWorkspaceScope(hydrateScopeId);
+      }
     }
     if (assets?.productImageBackup && typeof hydrateWorkspacePayloadImageBackup === 'function') {
       assets = await hydrateWorkspacePayloadImageBackup(assets);

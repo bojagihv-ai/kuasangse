@@ -14,6 +14,18 @@ import {
 export { createBrowserIndexedDbDriver };
 export { scopedSessionAssetId, sessionAssetRecordMatchesAuthority };
 
+// '내용이 있는 초안' 의 기준. 제품명·제품 사진·분석·조립공장 자산 중 하나라도 있으면 내용이다.
+// 빈 새 탭(아무것도 없음)은 이어받을 것도 없고, '마지막 초안' 표식을 덮어쓸 자격도 없다.
+export function draftSessionAssetsHaveContent(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (String(record.productName || record.factory?.product?.productName || '').trim()) return true;
+  if (String(record.inputImageFingerprint || '').trim()) return true;
+  if (record.imageBase64 || record.imagePreview || record.productImageBackup?.primary) return true;
+  if (record.analysis && typeof record.analysis === 'object' && Object.keys(record.analysis).length) return true;
+  if (Array.isArray(record.factory?.assets) && record.factory.assets.length) return true;
+  return false;
+}
+
 const SHARED_GLOBAL_STORES = new Set(['appSettings']);
 
 function workspaceEnvelopeId(scopeId) {
@@ -178,6 +190,23 @@ export function createIndexedDbPersistenceAdapter({ driver } = {}) {
       if (!scopeId.startsWith('draft:')) return null;
       return getSessionAssets(scopeId);
     },
+    // 표식(lastDraftWorkspaceScope)이 틀렸을 때의 후순위 탐색용 목록.
+    // 실측 2026-09-07: 강종 뒤 새로 열린 **빈** 탭들이 표식을 자기 번호로 덮어써서,
+    // 어젯밤 작업(팔각자개상자)이 IndexedDB 에 멀쩡히 있는데도 부팅이 빈 초안만 이어받았다.
+    // 본문은 주지 않는다 - 고른 뒤에 getDraftSessionAssetsForRecovery 로 읽는다.
+    async listDraftSessionAssetsForRecovery() {
+      const records = await recordDriver.getAll('sessionAssets');
+      return (Array.isArray(records) ? records : [])
+        .map(record => ({ record, scopeId: String(record?.scopeId || legacyScope(record) || '').trim() }))
+        .filter(({ scopeId }) => scopeId.startsWith('draft:'))
+        .map(({ record, scopeId }) => ({
+          scopeId,
+          savedAt: Number(record.savedAt) || 0,
+          productName: String(record.productName || record.factory?.product?.productName || '').trim(),
+          hasContent: draftSessionAssetsHaveContent(record),
+        }));
+    },
+    draftSessionAssetsHaveContent,
     async getDocumentSessionAssetsForBranchMigration(projectId) {
       const scopeId = normalizeProjectScope(projectId);
       const scoped = await getSessionAssets(scopeId);

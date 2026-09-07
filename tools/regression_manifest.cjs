@@ -300,6 +300,8 @@ function buildRegressionSteps(pythonExe) {
     nodeFile('TOWER-LIVE-02', '9 관제탑 연동', '관제탑 실시간 연결 계약 (세션 쿠키·지금 커서·재연결·표시)', 'tests/frontend/control_tower_live_events.test.cjs', 'fast'),
     nodeFile('DB-APPEND-01', '2 DB 확정', '신화사DB 추가검색은 보이는 후보를 두고 새 후보만 맨 위에 붙인다 (실제 앱, 검색만 가짜)', 'tools/verify_sinhwa_db_additional_search_v1.cjs'),
     nodeFile('DB-APPEND-02', '2 DB 확정', '신화사DB 추가검색 계약 (중복 제외·표식·버튼→브리지→정책)', 'tests/frontend/sinhwa_db_additional_search.test.cjs', 'fast'),
+    nodeFile('DRAFT-ADOPT-01', '공통/실행 기준', '강종 뒤 빈 탭이 표식을 덮어써도 내용 있는 초안을 이어받고, 빈 새 탭은 표식을 덮어쓰지 않는다 (실제 Chrome)', 'tools/verify_orphan_draft_adoption_v1.cjs'),
+    nodeFile('DRAFT-ADOPT-02', '공통/실행 기준', '초안 이어받기 후순위 탐색·표식 자격·새 작업 놓아주기 계약', 'tests/frontend/orphan_draft_adoption_fallback.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-01', '공통/검사', '회귀 제목이 약속한 것을 그 검사가 실제로 한다', 'tests/frontend/regression_titles_match_what_they_check.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-02', '공통/검사', '소스 슬라이스 도우미가 줄 끝과 무관하게 같은 결과를 낸다', 'tests/frontend/source_slice_utils.test.cjs', 'fast'),
     nodeFile('TEST-HONEST-03', '공통/검사', '흔들린 검사와 최근 흔들림 이력이 보고서에 남는다', 'tests/frontend/regression_report_shows_flakes.test.cjs', 'fast'),

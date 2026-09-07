@@ -7457,9 +7457,16 @@ async function resetActiveWorkspaceDocumentCore() {
   if (typeof clearFactoryProjectFileLocationForBlankWork === 'function') {
     clearFactoryProjectFileLocationForBlankWork();
   }
+  // 주인님이 "새 작업" 을 눌렀으니 지금까지의 초안은 놓아준다 - 이후 새 탭이 되살리지 않는다.
+  // (내용은 지우지 않는다. 주인님 규칙 "새 작업 누르기 전에는 아무것도 안 날아간다" 의 '전까지'.)
+  const releasedDraftScope = getCurrentLastWorkWorkspaceScope();
   const draftScope = typeof rotateLastWorkDraftScope === 'function'
     ? rotateLastWorkDraftScope()
     : getCurrentLastWorkWorkspaceScope();
+  if (releasedDraftScope.startsWith('draft:') && releasedDraftScope !== draftScope
+    && typeof releaseDraftWorkspaceScope === 'function') {
+    void releaseDraftWorkspaceScope(releasedDraftScope);
+  }
   if (typeof settleLastWorkDraftScopePersistence === 'function') {
     await settleLastWorkDraftScopePersistence(draftScope);
   }

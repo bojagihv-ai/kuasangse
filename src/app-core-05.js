@@ -8809,6 +8809,7 @@ function renderFactoryTowerJobsCard() {
         job.workfileName ? String(job.workfileName) : '',
       ].filter(Boolean).join(' · ');
       return `<article class="factory-recent-workfile-card" data-factory-tower-job="${escAttr(jobId)}" style="margin-bottom:6px">
+        <div class="factory-recent-workfile-thumb" aria-hidden="true"><span class="material-icons-outlined">precision_manufacturing</span></div>
         <div class="factory-recent-workfile-body">
           <div class="factory-recent-workfile-title">${escapeHtml(String(job.productName || jobId))}
             <span class="factory-pill" style="margin-left:6px;color:${toneColor[summary.tone] || 'var(--text-m)'}">${escapeHtml(summary.label)}</span>
@@ -8816,7 +8817,7 @@ function renderFactoryTowerJobsCard() {
           ${meta ? `<div class="factory-recent-workfile-meta">${escapeHtml(meta)}</div>` : ''}
           ${summary.message ? `<div class="factory-recent-workfile-meta">${escapeHtml(summary.message.slice(0, 90))}</div>` : ''}
         </div>
-        <button class="btn-sm" type="button" data-factory-tower-job-load="${escAttr(jobId)}" ${disabledAttr(!!tower.loadingJobId, '다른 작업을 불러오는 중입니다.')}>${loadingThis ? '불러오는 중...' : '복사본으로 불러오기'}</button>
+        <button class="btn-sm factory-recent-workfile-open" type="button" data-factory-tower-job-load="${escAttr(jobId)}" ${disabledAttr(!!tower.loadingJobId, '다른 작업을 불러오는 중입니다.')}>${loadingThis ? '불러오는 중...' : '복사본으로 불러오기'}</button>
       </article>`;
     }).join('')}
     ${summaries.length > shown.length ? `<div class="factory-small">나머지 ${summaries.length - shown.length}개는 관제탑 화면에서 보세요.</div>` : ''}
