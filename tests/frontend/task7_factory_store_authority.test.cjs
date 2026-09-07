@@ -372,6 +372,7 @@ test('DB candidate rerun commands allow the DB navigation state written by searc
     'factory/db:rerunDbQuery',
     'factory/db:rerunCafe24Query',
     'factory/db:appendCafe24Query',
+    'factory/db:appendDbQuery',
   ]) {
     const factoryPaths = createRuntimePolicies()[command].parts
       .filter(part => part.owner === 'factory')
@@ -436,6 +437,7 @@ test('Cafe24 후보 재검색 명령은 소유 draft를 닫은 뒤 현재 operat
 
   assert.match(dbActions, /rerunCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateSearchOnly\(\{ operationToken: receipt\.operationToken \}\)/);
   assert.match(dbActions, /appendCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateAdditionalSearch\(\{ operationToken: receipt\.operationToken \}\)/);
+  assert.match(dbActions, /appendDbQuery[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunSinhwaCandidateAdditionalSearch\(\{ operationToken: receipt\.operationToken \}\)/);
 });
 
 test('visual validation completion does not retain a revoked factory draft asset proxy', async () => {
@@ -655,7 +657,8 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(runtimeDbActions, /factoryBeginCandidateProgramStart\('cafe24', draft\)[\s\S]*factoryStartCafe24ControlAndRerunCandidates\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryBeginCafe24OAuthStatusCheck\(draft\)[\s\S]*factoryRefreshCafe24OAuthStatus\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryOpenCafe24OAuthLogin\(\{[\s\S]*factory: draft,[\s\S]*operationToken/);
-  assert.equal((runtimeDbActions.match(/factoryRuntimeRequireCurrentFollowupReceipt\(/g) || []).length, 6);
+  // 2026-09-07: appendDbQuery(신화사DB 추가검색)가 같은 후속 영수증 규칙으로 한 자리 늘었다 (6 → 7).
+  assert.equal((runtimeDbActions.match(/factoryRuntimeRequireCurrentFollowupReceipt\(/g) || []).length, 7);
   assert.doesNotMatch(runtimeDbActions, /draft => factory(?:StartSinhwaDbAndRerunCandidates|StartCafe24ControlAndRerunCandidates|RefreshCafe24OAuthStatus)\(/);
   for (const command of [
     'factory/db:runCandidatesForSelection',
@@ -2478,8 +2481,9 @@ test('B3 detail and cut generation source requires exact commands, stable identi
   assert.match(persistedCutWriter, /const factory = options\.factory \|\| factoryRuntimeReadFactory\(\)/);
   assert.match(persistedCutWriter, /factoryQueueLocalArchiveAsset\([\s\S]*?factory,[\s\S]*?operationToken: options\.operationToken/);
   assert.match(persistedCutWriter, /factoryRequireCurrentRunOperation\([\s\S]*?options\.operationSignal/);
-  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal \}\)/);
-  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal \}\)/);
+  // 2026-09-06: "나머지 N개만 생성" 이 onlyMissing 을 같은 소유 draft·토큰과 함께 넘긴다.
+  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
+  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
   assert.match(imageStageWriter, /factoryStopGoalHeartbeat\(heartbeat\);[\s\S]*?factoryRunOperationIsStale\(e\)/);
   for (const writer of [cutsWriter, sizeWriter]) {
     assert.doesNotMatch(writer, /(?:state|window|globalThis)\.factory/);

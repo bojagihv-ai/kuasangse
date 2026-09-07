@@ -218,6 +218,7 @@ async function startIntegrationHarness(options = {}) {
     'renderFactoryAutomationTaskChecklist', 'renderFactoryCandidateReviewPanels',
     'factoryApplyWizardDbSearchQuery', 'factoryRunDbCandidatesForSelection',
     'factoryRunCafe24CandidateSearchOnly', 'factoryRunCafe24CandidateAdditionalSearch',
+    'factoryRunSinhwaCandidateAdditionalSearch',
     'factoryRunDbVmCandidatesOnlyFlow', 'factoryStartSinhwaDbAndRerunCandidates',
     'factoryStartCafe24ControlAndRerunCandidates', 'factoryOpenCafe24OAuthLogin',
     'factoryRefreshCafe24OAuthStatus', 'factoryApplyDbCandidateFromReview',
@@ -339,6 +340,7 @@ async function startIntegrationHarness(options = {}) {
     },
     () => { dbCalls.push('rerunCafe24Query'); return Promise.resolve(true); },
     () => { dbCalls.push('appendCafe24Query'); return Promise.resolve(true); },
+    () => { dbCalls.push('appendDbQuery'); return Promise.resolve(true); },
     () => { dbCalls.push('rerunDbVmOnly'); return Promise.resolve(true); },
     () => { dbCalls.push('startSinhwaDbAndRerun'); return Promise.resolve(true); },
     () => { dbCalls.push('startCafe24ControlAndRerun'); return Promise.resolve(true); },
@@ -812,7 +814,7 @@ test('Task 7 DB installs its explicit allowlists and drives the real DOM contrac
     'isOperationCurrent', 'renderHelpers', 'reportError',
   ]);
   assert.deepEqual(Object.keys(capabilities.actions), [
-    'goToFields', 'rerunDbQuery', 'rerunCafe24Query', 'appendCafe24Query',
+    'goToFields', 'rerunDbQuery', 'rerunCafe24Query', 'appendCafe24Query', 'appendDbQuery',
     'resetDbQuery', 'rerunDbVmOnly', 'runDb', 'startSinhwaDbAndRerun',
     'startCafe24ControlAndRerun', 'cafe24OauthStart',
     'cafe24OauthStatusRefreshAndRerun', 'focusSize', 'setDbSearchQuery',

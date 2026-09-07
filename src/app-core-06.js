@@ -5516,6 +5516,69 @@ async function factoryEnsureCurrentProductImageAnalysisForOneClick(options = {})
   }
 }
 
+// 주인님 2026-09-06/07: "첫 화면의 AI 분석도 조립공장 시작 버튼을 눌렀을 때 같이 돌게".
+// 첫 화면 startAnalysis 는 이미지 판독 → DB 매칭 → 유사 제품 분석(llm.searchSimilarProducts) 뒤에
+// 섹션 화면으로 옮긴다. 시작 버튼은 앞의 둘은 이미 하지만 유사 제품 분석이 빠져 있어서
+// 통합버전 섹션이 참고하는 state.competitorData 가 비어 있었다.
+// 여기서는 **빠진 유사 제품 분석만** 채우고 화면은 옮기지 않는다(주인님 확인 2026-09-07 "응 그렇게 해").
+// 실패해도 나머지 실행을 막지 않는다(첫 화면에서도 건너뛰는 항목이다).
+async function factoryEnsureSimilarProductAnalysisForOneClick(options = {}) {
+  const factory = options.factory;
+  if (!factory) throw new Error('factory similar product analysis requires an owned draft');
+  const store = factoryRuntimeRequireStore();
+  const operationToken = options.operationToken || store.getOperationToken();
+  const requireCurrent = () => {
+    if (!store.isOperationCurrent(operationToken)) {
+      throw factoryRuntimeStaleActionError('factory/db:runCurrentProductAnalysisOnly');
+    }
+  };
+  requireCurrent();
+  const label = '유사 제품 분석';
+  const existingCount = Array.isArray(state.competitorData?.similar_products)
+    ? state.competitorData.similar_products.length
+    : 0;
+  if (existingCount > 0) {
+    factoryLog(`${label} 재사용: 이미 기록된 유사 제품 ${existingCount}개를 그대로 씁니다.`, 'info', factory);
+    return { ok: true, reused: true, count: existingCount, label };
+  }
+  const analysis = state.analysis || factory.product?.analysis || {};
+  const productName = cleanDbSearchTerm(
+    factory.product?.productName || state.productName || analysis.product_name || analysis.product_name_en || '',
+  );
+  const category = analysis.category || analysis.product_category || analysis.category_guess || '상품';
+  if (!productName) {
+    factoryLog(`${label} 건너뜀: 제품명이 없습니다.`, 'warn', factory);
+    return { ok: true, skipped: true, label, reason: '제품명 없음' };
+  }
+  let llm;
+  try {
+    const settings = getAnalysisMatchSettings();
+    llm = getAnalysisEngineClient(settings.imageInferenceEngine, settings);
+  } catch (_) {
+    llm = getLLMClient();
+  }
+  factoryLog(`${label} 시작: ${productName} · ${category} (첫 화면 AI 분석과 같은 경로, 화면은 옮기지 않습니다)`, 'info', factory);
+  if (typeof pushAnalysisLog === 'function') {
+    pushAnalysisLog('유사 제품/시장 맥락 확인 중...', 'LLM 학습 데이터 기반 유사 상품과 상세페이지 방향을 추론합니다. 실시간 검색은 아닙니다.', 30);
+  }
+  try {
+    const competitors = await llm.searchSimilarProducts(productName, category);
+    requireCurrent();
+    state.competitorData = competitors;
+    const count = Array.isArray(competitors?.similar_products) ? competitors.similar_products.length : 0;
+    if (typeof pushAnalysisLog === 'function') pushAnalysisLog('유사 제품 분석 완료', `${count}개 후보와 권장 전략을 기록했습니다.`, 34);
+    factoryLog(`${label} 완료: ${count}개 후보와 권장 전략을 기록했습니다.`, 'ok', factory);
+    saveLastWorkNow();
+    render();
+    return { ok: true, count, label };
+  } catch (e) {
+    if (e?.code === 'STALE_FACTORY_RUNTIME_ACTION') throw e;
+    factoryLog(`${label} 실패: ${e.message || e}. 제품 분석과 나머지 실행은 그대로 이어갑니다.`, 'warn', factory);
+    if (typeof pushAnalysisLog === 'function') pushAnalysisLog('유사 제품 분석 건너뜀', e.message || '유사 제품 분석 중 오류가 발생했습니다.', 34);
+    return { ok: true, skipped: true, label, reason: e.message || String(e) };
+  }
+}
+
 async function factoryRunCurrentProductImageAnalysisOnly(options = {}) {
   const store = factoryRuntimeRequireStore();
   const operationToken = options.operationToken || store.getOperationToken();
@@ -5778,7 +5841,12 @@ async function factoryRunDbCompetitorHeroCutsFlow(options = {}) {
       operationSignal: options.operationSignal,
     }));
     const tasks = [
-      startTask('현재 이미지 AI 분석', () => factoryEnsureCurrentProductImageAnalysisForOneClick({ factory, operationToken }), 0),
+      startTask('현재 이미지 AI 분석', async () => {
+        const analysisResult = await factoryEnsureCurrentProductImageAnalysisForOneClick({ factory, operationToken });
+        // 첫 화면 AI 분석의 "유사 제품 분석" 도 여기서 이어 돈다 (주인님 2026-09-07: 화면 이동 없이 빠진 것만 채운다).
+        await factoryEnsureSimilarProductAnalysisForOneClick({ factory, operationToken });
+        return analysisResult;
+      }, 0),
       startTask('DB 후보 수집', dbTask, 0),
       startTask('VM 경쟁사 후보 수집', vmTask, 0),
       startTask('대표이미지·이미지컷 생성', imageTask, 0),
@@ -8510,7 +8578,13 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   requireCurrent();
   if (!ready) return false;
   const factory = commandFactory;
-  const generationRunId = uid(`factory_${stageId}_run`);
+  // "나머지 N개만 생성": 남아 있는 결과와 같은 실행 번호를 이어 쓴다. 새 번호를 발급하면
+  // 화면이 "최신 실행" 만 앞세워 멀쩡한 1장이 "이전 생성" 으로 밀려난다.
+  const onlyMissing = options.onlyMissing === true;
+  const resumedRunId = onlyMissing
+    ? String(commandFactory.stages?.[stageId]?.latestGenerationRunId || commandFactory.stages?.[stageId]?.currentRunId || '').trim()
+    : '';
+  const generationRunId = resumedRunId || uid(`factory_${stageId}_run`);
   factoryMarkImageStageRunActive(stageId, generationRunId);
   const previousSelectedAssetIds = Array.isArray(factory.stages?.[stageId]?.selectedAssetIds)
     ? factory.stages[stageId].selectedAssetIds.slice()
@@ -8534,12 +8608,14 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   stagePrompts.forEach(cut => {
     if (!cut) return;
     const hasPrompt = String(cut.prompt || '').trim();
-    cut.generating = !!hasPrompt;
-    cut.generationStartedAt = hasPrompt ? queuedAt : null;
-    cut.generationPageSessionId = hasPrompt ? FACTORY_IMAGE_GENERATION_PAGE_SESSION_ID : '';
+    // 부족한 것만 채울 때는 결과가 있는 슬롯을 건드리지 않는다 (generateAllCuts 와 같은 규칙).
+    const willGenerate = !!hasPrompt && (!onlyMissing || !cut.result || cut.staleResult === true);
+    cut.generating = willGenerate;
+    cut.generationStartedAt = willGenerate ? queuedAt : null;
+    cut.generationPageSessionId = willGenerate ? FACTORY_IMAGE_GENERATION_PAGE_SESSION_ID : '';
     cut.error = '';
     cut.warning = '';
-    cut.pendingGenerationRunId = generationRunId;
+    if (willGenerate) cut.pendingGenerationRunId = generationRunId;
     if (!cut.result) {
       cut.staleResult = false;
       cut.staleResultReason = '';
@@ -8549,20 +8625,30 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
       stampCutPromptSource(cut, stageId, factory);
     }
   });
-  const target = stagePrompts.length;
+  const target = onlyMissing
+    ? stagePrompts.filter(cut => String(cut?.prompt || '').trim() && (!cut?.result || cut?.staleResult === true)).length
+    : stagePrompts.length;
+  if (onlyMissing && target === 0) {
+    factoryMarkImageStageRunInactive(stageId, generationRunId);
+    factorySetStageStatus(stageId, 'review', `부족한 ${factoryStageLabel(stageId)}이(가) 없습니다. 모든 슬롯에 결과가 있습니다.`, factory);
+    saveLastWorkNow({ factory });
+    factoryRuntimeRenderWithOwnedDraft(factory);
+    return false;
+  }
   factory.stages[stageId].expectedItemCount = target;
+  const startMessage = onlyMissing
+    ? `부족한 ${isSizeStage ? '사이즈컷' : '이미지컷'} ${target}개만 생성 중`
+    : (isSizeStage
+      ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
+      : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`);
   factoryTouchImageStageRun(stageId, generationRunId, {
     status: 'running',
-    message: isSizeStage
-      ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
-      : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`,
+    message: startMessage,
     expectedItemCount: target,
     completedItemCount: 0,
     factory,
   });
-  factorySetStageStatus(stageId, 'running', isSizeStage
-    ? `기존 사이즈컷 전용 엔진으로 ${target}개 생성 중`
-    : `기존 이미지컷 생성 엔진으로 ${target}개 생성 중`, factory);
+  factorySetStageStatus(stageId, 'running', startMessage, factory);
   const [progressBase, progressMax] = factoryStageGoalProgressRange(stageId);
   factorySetGoalRunProgress(progressBase, `${factoryStageLabel(stageId)} 생성 중`, `${factoryStageLabel(stageId)} ${target}개 생성을 시작합니다.`, 'info', { render: false, factory });
   saveLastWorkNow({ factory });
@@ -8570,8 +8656,8 @@ async function factoryGenerateImageCutsBackedStage(stageId, options = {}) {
   const heartbeat = factoryStartGoalHeartbeat(`${factoryStageLabel(stageId)} 생성 중`, progressBase, Math.max(progressBase, progressMax - 2), 5000, { factory });
   try {
     const generated = isSizeStage
-      ? await generateAllSizeCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal })
-      : await generateAllCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal });
+      ? await generateAllSizeCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal, onlyMissing })
+      : await generateAllCuts({ factory, operationToken: options.operationToken, operationSignal: options.operationSignal, onlyMissing });
     requireCurrent();
     factoryStopGoalHeartbeat(heartbeat);
     if (!generated) throw new Error(state.error || '이미지 생성 결과가 없습니다.');
@@ -9293,6 +9379,8 @@ async function factoryRunStage(stageId, options = {}) {
       factory,
       operationToken: options.operationToken,
       operationSignal: options.operationSignal,
+      // "나머지 N개만 생성": 결과 없는 슬롯만 채운다.
+      onlyMissing: options.onlyMissing === true,
     };
     if (stageId === 'hero') return factoryGenerateImageCutsBackedStage('hero', generationOptions);
     if (stageId === 'size') return factoryGenerateImageCutsBackedStage('size', generationOptions);
@@ -28888,6 +28976,21 @@ function factoryMarkImageStageRunInactive(stageId = '', runId = '') {
   factoryActiveImageStageRunKeys.delete(factoryImageStageRunKey(stageId, runId));
 }
 
+// 로더(app-loader.js)가 "지금 새 빌드 창을 띄워도 되나" 물을 때 답한다.
+// 실측 2026-09-06: 사이즈컷 3장 생성 중 번들이 바뀌어 새 빌드 창 → 새로고침 → 2장 유실.
+// 단계 실행 키(전체 생성 루프가 도는 내내 유지) · 진행 중인 이미지 API 요청 ·
+// 조립공장 자동 실행, 셋 중 하나라도 있으면 바쁘다.
+function factoryImageGenerationBusy() {
+  if (factoryActiveImageStageRunKeys.size > 0 || factoryActiveImageRequestKeys.size > 0) return true;
+  try {
+    const factory = typeof factoryRuntimeReadFactory === 'function' ? factoryRuntimeReadFactory() : null;
+    return factory?.goalRun?.running === true;
+  } catch (_) {
+    return false;
+  }
+}
+if (typeof window !== 'undefined') window.kuasangseImageGenerationBusy = factoryImageGenerationBusy;
+
 function factoryImageStageHasActiveRun(stageId = '', stage = {}) {
   const runIds = uniqueApiKeys([
     stage?.latestGenerationRunId,
@@ -30503,12 +30606,19 @@ async function generateAllCuts(options = {}) {
     c.runBusy = false;
     return cutsSetBlockingError('선택된 이미지 모델에 필요한 연결 정보가 없습니다. 모델 설정/API 연결을 확인해주세요.');
   }
+  // onlyMissing("나머지 N개만 생성"): 결과가 없거나 낡은 슬롯만 고른다. 실측 2026-09-06:
+  // 새로고침으로 3장 중 1장만 남았을 때 "재생성" 은 멀쩡한 1장까지 다시 만들어 요금을 다시 썼다.
+  // (검사 하네스가 이 함수만 잘라 쓰므로 바깥 도우미 없이 여기서 바로 거른다.)
+  const onlyMissing = options.onlyMissing === true;
   const targets = (c.prompts || [])
     .map((p, i) => ({ p, i }))
-    .filter(item => String(item.p?.prompt || '').trim());
+    .filter(item => String(item.p?.prompt || '').trim())
+    .filter(item => !onlyMissing || !item.p?.result || item.p?.staleResult === true);
   if (!targets.length) {
     c.runBusy = false;
-    return cutsSetBlockingError('생성할 프롬프트가 없습니다. 이미지컷 지시칸에 프롬프트를 입력해주세요.');
+    return cutsSetBlockingError(options.onlyMissing === true
+      ? '부족한 이미지컷이 없습니다. 모든 슬롯에 결과가 있습니다.'
+      : '생성할 프롬프트가 없습니다. 이미지컷 지시칸에 프롬프트를 입력해주세요.');
   }
   let ownedStageRunId = '';
   let generationRunId = '';
@@ -31339,9 +31449,12 @@ async function generateAllSizeCuts(options = {}) {
   if (!lockedPart?.base64) restoreCutImagePayloadsFromPreview(c);
   ensureSizeCutSourceChoice();
   c.sizePrompts = normalizeCutPrompts(c.sizePrompts, { count: c.sizePromptSlotCount || CUTS_DEFAULT_PROMPT_COUNT });
+  // onlyMissing("나머지 N개만 생성"): 결과가 없거나 낡은 슬롯만 고른다 (generateAllCuts 와 같은 규칙).
+  const onlyMissing = options.onlyMissing === true;
   const targets = c.sizePrompts
     .map((p, i) => ({ p, i }))
-    .filter(item => String(item.p?.prompt || '').trim());
+    .filter(item => String(item.p?.prompt || '').trim())
+    .filter(item => !onlyMissing || !item.p?.result || item.p?.staleResult === true);
   state.error = '';
   const readyPart = factorySourceImagePart('size', { preferStageInput: false });
   if (!readyPart?.base64 && !c.sourceBase64 && !c.workImageBase64) {
@@ -31354,7 +31467,9 @@ async function generateAllSizeCuts(options = {}) {
   }
   if (!targets.length) {
     c.sizeRunBusy = false;
-    return cutsSetBlockingError('생성할 사이즈컷 프롬프트가 없습니다. 사이즈컷 지시칸에 프롬프트를 입력해주세요.');
+    return cutsSetBlockingError(options.onlyMissing === true
+      ? '부족한 사이즈컷이 없습니다. 모든 슬롯에 결과가 있습니다.'
+      : '생성할 사이즈컷 프롬프트가 없습니다. 사이즈컷 지시칸에 프롬프트를 입력해주세요.');
   }
   let ownedStageRunId = '';
   let generationRunId = '';
@@ -33112,6 +33227,7 @@ async function factoryRunPreparedStageButton(btn, options = {}) {
       factory: currentFactory,
       operationToken,
       operationSignal: options.operationSignal,
+      onlyMissing: options.onlyMissing === true,
     });
     requireCurrent();
     const gracefullyStopped = stageId === 'detail' && state.sectionBatchRun?.status === 'stopped';
@@ -33169,6 +33285,8 @@ async function factoryHandleRunStageButton(btn, options = {}) {
   const stageId = btn?.dataset?.factoryRunStage || '';
   if (!btn || !stageId) return false;
   const label = factoryStageLabel(stageId);
+  // "나머지 N개만 생성" 버튼(data-factory-run-only-missing="1") 또는 브리지가 넘긴 옵션.
+  const onlyMissing = options.onlyMissing === true || btn?.dataset?.factoryRunOnlyMissing === '1';
   const actionName = 'factory/assets:handleRunStageButton';
   const store = factoryRuntimeRequireStore();
   // Keep the real runtime's lease-aware write path, while allowing the focused
@@ -33196,6 +33314,7 @@ async function factoryHandleRunStageButton(btn, options = {}) {
     if (!prepared.ready) return false;
     return factoryRunPreparedStageButton(btn, {
       ...options,
+      onlyMissing,
       stageId,
       label,
       standaloneGoalRun: prepared.standaloneGoalRun,
@@ -33228,6 +33347,7 @@ async function factoryHandleRunStageButton(btn, options = {}) {
       try {
         return await factoryRunPreparedStageButton(btn, {
           ...options,
+          onlyMissing,
           factory: workingFactory,
           stageId,
           label,
@@ -33252,6 +33372,330 @@ async function factoryHandleRunStageButton(btn, options = {}) {
     return result;
   } finally {
     lease.release();
+  }
+}
+
+// ── 관제탑(생산관제) 작업을 상세페이지 앱에서 보고 불러오기 ─────────────────────
+//
+// 주인님 2026-09-06: "생산관제에서 작업중인(아직 A컷 선택 안 해서 멈춰 있는) 작업파일 리스트도
+// 상세페이지 프로그램에서 보이고 어떤 것이든 불러올 수 있어야 하는데 ... 두 프로그램이 완전 단절된 것 같아"
+//
+// 관제탑 쪽은 **읽기 API 만** 쓴다(GET /api/factory/jobs). 관제탑 화면·백엔드는 고치지 않는다.
+// 관제탑 워커가 만든 문서는 앱 백엔드의 범위별 저장소에 `project:batch:<jobId>` 로 남아 있다
+// (실측 2026-09-07: 워커의 문서 범위는 batch:<jobId>, 저장 범위는 그 앞에 project: 가 붙는다).
+// 그것을 서버에서 읽어 **새 작업파일(복사본)** 로 만든다. 관제탑 원본 문서는 건드리지 않는다 -
+// 워커가 쥔 편집권과 충돌하지 않고, 사람이 고친 것이 관제탑 큐를 몰래 바꾸지도 않는다.
+const FACTORY_CONTROL_TOWER_BASES = Object.freeze(['http://127.0.0.1:41009', 'http://127.0.0.1:5062']);
+
+function factoryControlTowerBases() {
+  const overrides = [];
+  try {
+    const param = new URL(window.location.href).searchParams.get('controlTowerBase');
+    if (param) overrides.push(String(param));
+  } catch (_) {}
+  try {
+    const stored = String(localStorage.getItem('control_tower_base') || '').trim();
+    if (stored) overrides.push(stored);
+  } catch (_) {}
+  return [...new Set([...overrides, ...FACTORY_CONTROL_TOWER_BASES].map(base => String(base || '').trim().replace(/\/+$/, '')).filter(Boolean))];
+}
+
+function factoryTowerJobsState() {
+  if (!state.factoryTowerJobs || typeof state.factoryTowerJobs !== 'object') {
+    state.factoryTowerJobs = { items: [], fetchedAt: 0, loading: false, error: '', base: '' };
+  }
+  return state.factoryTowerJobs;
+}
+
+// 관제탑 작업 한 줄을 사람 말로. 상태 값은 관제탑 factory-product-job:v1 그대로 받는다.
+function factoryTowerJobSummary(job = {}) {
+  const status = String(job?.status || '').trim();
+  const stageKey = String(job?.stageKey || '').trim();
+  const pending = job?.pendingSelection && typeof job.pendingSelection === 'object';
+  const stageLabels = {
+    representative: '대표이미지', hero: '대표이미지', size: '사이즈', cuts: '이미지컷', general: '이미지컷',
+    option_color: '옵션 색상', final_detail: '상세페이지', cafe24: 'Cafe24 등록', db: 'DB',
+  };
+  const waiting = pending || status === 'waiting_manual';
+  let label = status || '상태 없음';
+  let tone = 'muted';
+  if (waiting) { label = '사람 선택 대기'; tone = 'warn'; }
+  else if (status === 'blocked') { label = '막힘 · 확인 필요'; tone = 'danger'; }
+  else if (status === 'running' || job?.dispatched === true) { label = '진행 중'; tone = 'warn'; }
+  else if (status === 'completed' || status === 'done') { label = '완료'; tone = 'ok'; }
+  else if (status === 'queued' || status === 'pending') { label = '대기열'; tone = 'muted'; }
+  else if (status === 'failed' || status === 'error') { label = '실패'; tone = 'danger'; }
+  return {
+    label,
+    tone,
+    waiting,
+    stageLabel: stageLabels[stageKey] || stageKey,
+    message: String(job?.message || '').trim(),
+  };
+}
+
+async function factoryTowerJobsRefresh(options = {}) {
+  const tower = factoryTowerJobsState();
+  if (tower.loading) return tower;
+  tower.loading = true;
+  if (options.render !== false) render();
+  const bases = factoryControlTowerBases();
+  let lastError = '';
+  let loaded = false;
+  for (const base of bases) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), 6000) : null;
+    try {
+      const response = await fetch(`${base}/api/factory/jobs`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: controller?.signal,
+      });
+      if (!response.ok) { lastError = `${base} HTTP ${response.status}`; continue; }
+      const data = await response.json();
+      const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      tower.items = jobs.filter(job => job && typeof job === 'object').map(job => ({ ...job }));
+      tower.base = base;
+      tower.fetchedAt = Date.now();
+      tower.error = '';
+      loaded = true;
+      break;
+    } catch (error) {
+      lastError = error?.name === 'AbortError' ? `${base} 6초 안에 응답 없음` : `${base} ${error?.message || error}`;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  if (!loaded) {
+    tower.error = `관제탑에 연결하지 못했습니다 (${lastError || bases.join(', ')})`;
+    if (options.quiet !== true && typeof factoryLog === 'function') factoryLog(`관제탑 작업 목록 조회 실패: ${tower.error}`, 'warn');
+  }
+  tower.loading = false;
+  if (options.render !== false) render();
+  // 목록을 한 번 읽었으면 그때부터 실시간으로 듣는다 (통합 4단계).
+  if (loaded && options.live !== false) void factoryTowerLiveConnect({ render: options.render !== false });
+  return tower;
+}
+
+// ── 관제탑 실시간 연결 (SSE) ─────────────────────────────────────────────────
+// 주인님 2026-09-06: "작업중인게 실시간으로 동기화로 볼 수 있어야 하는데".
+// 관제탑이 바뀌면(작업 투입·A컷 선택·단계 완료·체크포인트) 목록을 다시 읽는다. 관제탑 화면과 같은 이벤트를 듣는다.
+// 관제탑 화면의 실측(2026-08-28)을 따른다: cursor=0 으로 붙으면 쌓인 이벤트 수천 건이 한꺼번에 쏟아져
+// 크롬의 호스트당 연결이 바닥난다. 방금 읽은 상태의 eventCursor 부터 듣는다.
+// 이벤트 스트림은 관제탑 세션 쿠키를 요구한다(GET /api/session 이 발급, SameSite 는 같은 호스트라 통과).
+const FACTORY_TOWER_EVENT_TYPES = Object.freeze([
+  'factory.snapshot',
+  'factory.product.queued',
+  'factory.product.updated',
+  'factory.product.checkpoint.rebound',
+  'factory.a_cut.selected',
+  'factory.stage.updated',
+  'factory.workfile.hydrated',
+  'factory.session.disconnected',
+  'factory.worker.failed',
+  'factory.publication.receipt',
+]);
+const FACTORY_TOWER_EVENT_REFRESH_DELAY_MS = 1200;
+const FACTORY_TOWER_RECONNECT_DELAY_MS = 30000;
+let factoryTowerEventSource = null;
+let factoryTowerEventRefreshTimer = null;
+let factoryTowerReconnectTimer = null;
+
+// 화면에 보이는 것만 state 에 둔다. EventSource 자체는 state 밖에 - state 는 structuredClone 으로 복제된다.
+function factoryTowerLiveState() {
+  const tower = factoryTowerJobsState();
+  if (!tower.live || typeof tower.live !== 'object') {
+    tower.live = { connected: false, since: 0, lastEventAt: 0, lastEventType: '', attempts: 0, error: '', cursor: '' };
+  }
+  return tower.live;
+}
+
+function factoryTowerScheduleRefresh(reason = '') {
+  const live = factoryTowerLiveState();
+  live.lastEventAt = Date.now();
+  live.lastEventType = String(reason || '');
+  if (factoryTowerEventRefreshTimer) clearTimeout(factoryTowerEventRefreshTimer);
+  factoryTowerEventRefreshTimer = setTimeout(() => {
+    factoryTowerEventRefreshTimer = null;
+    void factoryTowerJobsRefresh({ render: true, quiet: true, live: false });
+  }, FACTORY_TOWER_EVENT_REFRESH_DELAY_MS);
+}
+
+function factoryTowerScheduleReconnect(options = {}) {
+  if (factoryTowerReconnectTimer) return;
+  factoryTowerReconnectTimer = setTimeout(() => {
+    factoryTowerReconnectTimer = null;
+    void factoryTowerLiveConnect(options);
+  }, FACTORY_TOWER_RECONNECT_DELAY_MS);
+}
+
+async function factoryTowerLiveConnect(options = {}) {
+  if (typeof EventSource !== 'function') return false;
+  if (factoryTowerEventSource) return true;
+  const tower = factoryTowerJobsState();
+  const live = factoryTowerLiveState();
+  const base = String(tower.base || factoryControlTowerBases()[0] || '').replace(/\/+$/, '');
+  if (!base) return false;
+  live.attempts += 1;
+  try {
+    const session = await fetch(`${base}/api/session`, { credentials: 'include', headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!session.ok) throw new Error(`session HTTP ${session.status}`);
+    const stateResponse = await fetch(`${base}/api/factory/state`, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    const towerState = stateResponse.ok ? await stateResponse.json() : {};
+    const cursor = String(towerState?.eventCursor ?? towerState?.cursor ?? '0').trim() || '0';
+    live.cursor = cursor;
+    if (factoryTowerEventSource) return true;
+    const source = new EventSource(`${base}/api/factory/events?cursor=${encodeURIComponent(cursor)}`, { withCredentials: true });
+    factoryTowerEventSource = source;
+    source.onopen = () => {
+      const changed = live.connected !== true;
+      live.connected = true;
+      live.since = Date.now();
+      live.error = '';
+      if (changed && options.render !== false) render();
+    };
+    FACTORY_TOWER_EVENT_TYPES.forEach(type => source.addEventListener(type, () => factoryTowerScheduleRefresh(type)));
+    source.onerror = () => {
+      const changed = live.connected === true;
+      live.connected = false;
+      live.error = '관제탑 실시간 연결이 끊겨 다시 잇는 중입니다.';
+      // readyState 2 = 브라우저가 재시도를 포기함. 30초 뒤 처음부터 다시 잇는다.
+      if (source.readyState === 2) {
+        if (factoryTowerEventSource === source) factoryTowerEventSource = null;
+        factoryTowerScheduleReconnect(options);
+      }
+      if (changed && options.render !== false) render();
+    };
+    return true;
+  } catch (error) {
+    live.connected = false;
+    live.error = `관제탑 실시간 연결 실패: ${error?.message || error}`;
+    factoryTowerEventSource = null;
+    factoryTowerScheduleReconnect(options);
+    return false;
+  }
+}
+
+function factoryTowerJobDocumentScope(jobId = '') {
+  return workspacePersistenceApi().normalizeProjectScope(factoryRuntimeControlCheckpointProjectId(jobId));
+}
+
+// 서버에 남은 관제탑 문서(lightweight + assets)를 **새 작업파일 payload** 로 바꾼다.
+// 모든 문서 표식(currentProjectId · workspaceScope · factory.workspace · workIdentity · branch)을
+// 새 id 로 다시 묶는다. 하나라도 옛 범위를 가리키면 작업파일 신원 검사(validateWorkspaceSnapshotIdentity)가
+// "범위 충돌" 로 막는다. 자산의 workspaceId 는 불러온 뒤 factoryEnsureCurrentProjectIdentityForFile 이
+// force 로 새 id 로 다시 찍는다(previousWorkspaceId === id).
+function factoryTowerJobCopyPayload(snapshot, identity = {}) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const lightweight = source.lightweight && typeof source.lightweight === 'object' ? source.lightweight : null;
+  const assets = source.assets && typeof source.assets === 'object' ? source.assets : null;
+  const payload = cloneData(lightweight || (assets ? {} : source));
+  if (assets) payload.assetPayload = cloneData(assets);
+  if (!payload.productImageBackup && source.productImageBackup) payload.productImageBackup = cloneData(source.productImageBackup);
+  const id = String(identity.id || uid('towercopy')).trim();
+  const name = String(identity.name || '').trim() || '관제탑 복사본';
+  const createdAt = Number(identity.createdAt || Date.now()) || Date.now();
+  const origin = identity.origin && typeof identity.origin === 'object' ? cloneData(identity.origin) : null;
+  const rebind = target => {
+    if (!target || typeof target !== 'object') return;
+    target.currentProjectId = id;
+    target.currentProjectName = name;
+    target.currentProjectCreatedAt = createdAt;
+    delete target.workIdentity;
+    delete target.workspaceBranch;
+    // 여기의 factory 는 서버 문서를 복제한 **분리된 사본** 이다(소유 draft 가 아니다).
+    const copyFactory = target.factory && typeof target.factory === 'object' ? target.factory : null;
+    if (!copyFactory) return;
+    const workspace = copyFactory.workspace && typeof copyFactory.workspace === 'object' ? copyFactory.workspace : {};
+    // 관제탑이 넣어 준 원본 파일 표식(workfileName·Sha256·Bytes·Source)은 복사본의 것이 아니므로 빼고 담는다.
+    const { workfileName: _wfName, workfileSha256: _wfSha, workfileBytes: _wfBytes, workfileSource: _wfSource, ...workspaceRest } = workspace;
+    copyFactory.workspace = { ...workspaceRest, id, name, createdAt, updatedAt: Date.now() };
+    copyFactory.currentProjectId = id;
+    copyFactory.currentProjectName = name;
+    copyFactory.workIdentity = undefined;
+    delete copyFactory.workIdentity;
+    // 자산(assets·previousAssets·보관함·경쟁사)의 workspaceId 도 지금 새 id 로 찍는다.
+    // 실측 2026-09-07: 불러오기 도중 옛 범위(batch:…) 자산이 "이전 작업 3개" 로 밀려 화면에서 사라졌다 -
+    // 신원 재도장(factoryEnsureCurrentProjectIdentityForFile)은 불러오기 뒤에 오므로 늦다.
+    const previousWorkspaceId = String(workspace.id || '').trim();
+    if (typeof factoryStampFactoryItemsWorkspaceIdentity === 'function') {
+      factoryStampFactoryItemsWorkspaceIdentity(copyFactory, id, { previousWorkspaceId, force: true });
+    }
+    if (origin) {
+      copyFactory.automation = copyFactory.automation && typeof copyFactory.automation === 'object' ? copyFactory.automation : {};
+      copyFactory.automation.controlTowerOrigin = cloneData(origin);
+    }
+  };
+  rebind(payload);
+  rebind(payload.assetPayload);
+  projectWorkspaceSnapshotForDocument(payload, id);
+  return { payload, id, name, createdAt, origin };
+}
+
+function factoryTowerJobCopyBundle(snapshot, job = {}, identity = {}) {
+  const jobId = String(job?.jobId || identity.jobId || '').trim();
+  const productName = String(job?.productName || snapshot?.lightweight?.currentProjectName || snapshot?.assets?.factory?.product?.productName || '').trim();
+  const copy = factoryTowerJobCopyPayload(snapshot, {
+    id: identity.id,
+    createdAt: identity.createdAt,
+    name: identity.name || `${productName || '관제탑 작업'} (관제탑 복사본)`,
+    origin: {
+      kind: 'control-tower-job',
+      jobId,
+      scopeId: jobId ? factoryTowerJobDocumentScope(jobId) : '',
+      productName,
+      copiedAt: Date.now(),
+    },
+  });
+  const manifest = factoryProjectFileBuildManifest(copy.payload, { id: copy.id, name: copy.name });
+  copy.payload.projectFileManifest = manifest;
+  return {
+    format: KUASANGSE_PROJECT_FILE_FORMAT,
+    version: KUASANGSE_PROJECT_FILE_VERSION,
+    manifest,
+    exportedAt: Date.now(),
+    app: 'kuasangse',
+    workspaceId: copy.id,
+    currentProjectId: copy.id,
+    controlTowerOrigin: copy.origin,
+    project: { id: copy.id, name: copy.name, createdAt: copy.createdAt, updatedAt: Date.now(), payload: copy.payload },
+  };
+}
+
+async function factoryLoadTowerJobCopy(jobId = '') {
+  const tower = factoryTowerJobsState();
+  const job = tower.items.find(item => String(item?.jobId || '') === String(jobId || ''));
+  const label = String(job?.productName || jobId || '관제탑 작업');
+  if (!job) {
+    state.error = `관제탑 작업 ${jobId} 을(를) 목록에서 찾지 못했습니다. 새로고침 후 다시 눌러주세요.`;
+    render();
+    return null;
+  }
+  if (typeof confirm === 'function' && !confirm(`관제탑 작업 "${label}" 의 복사본을 이 탭에 새 작업파일로 불러옵니다.\n관제탑 원본과 큐는 그대로 둡니다. 계속할까요?`)) return null;
+  tower.loadingJobId = String(jobId);
+  render();
+  try {
+    const scopeId = factoryTowerJobDocumentScope(jobId);
+    const restored = await workspacePersistenceApi().restore({ scopeId, sources: ['server'] });
+    if (!restored?.snapshot) throw new Error(`서버에 관제탑 작업 문서가 없습니다 (${scopeId}). 워커가 아직 저장하지 않았거나 지워졌습니다.`);
+    const bundle = factoryTowerJobCopyBundle(restored.snapshot, job);
+    const imported = await importFactoryProjectFileBundle(bundle, {
+      fileName: `${bundle.project.name}.kuasangse`,
+    });
+    if (imported) {
+      if (typeof factoryLog === 'function') factoryLog(`관제탑 작업 "${label}" 의 복사본을 불러왔습니다 (${scopeId} → ${bundle.project.id}).`, 'ok');
+      if (typeof setUiNotice === 'function') setUiNotice(`관제탑 작업 "${label}" 복사본을 불러왔습니다. 관제탑 원본은 그대로입니다.`, 'ok');
+    }
+    return imported;
+  } catch (error) {
+    const message = error?.message || String(error);
+    state.error = `관제탑 작업 복사본 불러오기 실패: ${message}`;
+    if (typeof factoryLog === 'function') factoryLog(state.error, 'error');
+    render();
+    return null;
+  } finally {
+    tower.loadingJobId = '';
+    render();
   }
 }
 
@@ -34388,6 +34832,12 @@ registerBindEventExtension(function bindFactoryEvents() {
   });
   const factoryRefreshWorkspaceList = document.getElementById('factoryRefreshWorkspaceList');
   if (factoryRefreshWorkspaceList) factoryRefreshWorkspaceList.onclick = () => refreshWorkspaceLists(true);
+  document.querySelectorAll('[data-factory-tower-jobs-refresh]').forEach(btn => {
+    btn.onclick = () => { void factoryTowerJobsRefresh({ render: true }); };
+  });
+  document.querySelectorAll('[data-factory-tower-job-load]').forEach(btn => {
+    btn.onclick = () => { void factoryLoadTowerJobCopy(btn.dataset.factoryTowerJobLoad || ''); };
+  });
   const factoryRefreshRegistrationHistory = document.getElementById('factoryRefreshRegistrationHistory');
   if (factoryRefreshRegistrationHistory) factoryRefreshRegistrationHistory.onclick = () => loadFactoryRegistrationHistory(true);
   const factoryRecordCurrentRegistrationHistory = document.getElementById('factoryRecordCurrentRegistrationHistory');

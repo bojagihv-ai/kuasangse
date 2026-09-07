@@ -124,6 +124,13 @@ export function createBrowserWorkspacePersistence(root) {
     loadDraftSessionAssetsForRecovery(scopeId) {
       return adapters.indexeddb.getDraftSessionAssetsForRecovery(normalizeWorkspaceScope(scopeId));
     },
+    // 표식이 틀렸을 때 내용 있는 초안을 찾기 위한 목록(본문 없음)과 '내용이 있는가' 판정.
+    listDraftSessionAssetsForRecovery() {
+      return adapters.indexeddb.listDraftSessionAssetsForRecovery();
+    },
+    draftSessionAssetsHaveContent(record) {
+      return adapters.indexeddb.draftSessionAssetsHaveContent(record);
+    },
     loadDocumentSessionAssetsForBranchMigration(scopeId) {
       const documentScopeId = normalizeProjectScope(scopeId);
       return adapters.indexeddb.getDocumentSessionAssetsForBranchMigration(documentScopeId);

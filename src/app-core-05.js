@@ -134,6 +134,7 @@ function factoryCandidateMetaItems(candidate, type = '') {
     ].filter(Boolean);
   }
   return [
+    candidate?.factory_recent_append ? (candidate.factory_append_label || '이번 추가검색') : '',
     candidate?.jcode ? `코드 ${candidate.jcode}` : '',
     candidate?.dimensions || candidate?.size || '',
     candidate?.sale_price ? `판매가 ${candidate.sale_price}` : '',
@@ -8765,9 +8766,62 @@ function renderFactoryWorkspacePanel(factory = factoryRuntimeReadFactory()) {
             : `<div class="factory-small factory-recent-workfile-empty">${state.projectsLoaded ? '아직 저장된 조립공장 작업이 없습니다.' : '저장 목록을 불러오는 중입니다.'}</div>`}
         </div>
       </div>
+      ${renderFactoryTowerJobsCard()}
     </div>
     ${renderFactoryLocalArchiveMiniPanel(factory)}
   </section>`;
+}
+
+// 관제탑(생산관제) 작업 목록. 주인님 2026-09-06: 관제탑에서 멈춰 있는 작업들이 앱에서 보이고
+// 어떤 것이든 불러올 수 있어야 한다. 관제탑 원본은 두고 **복사본** 으로 불러온다.
+function renderFactoryTowerJobsCard() {
+  const tower = state.factoryTowerJobs && typeof state.factoryTowerJobs === 'object'
+    ? state.factoryTowerJobs
+    : { items: [], fetchedAt: 0, loading: false, error: '' };
+  const items = Array.isArray(tower.items) ? tower.items : [];
+  const summaries = items.map(job => ({ job, summary: factoryTowerJobSummary(job) }));
+  const order = { warn: 0, danger: 1, muted: 2, ok: 3 };
+  summaries.sort((a, b) => (order[a.summary.tone] ?? 9) - (order[b.summary.tone] ?? 9));
+  const waitingCount = summaries.filter(item => item.summary.waiting).length;
+  const fetched = tower.fetchedAt ? new Date(tower.fetchedAt).toLocaleTimeString('ko-KR') : '';
+  const toneColor = { warn: 'var(--warn)', danger: 'var(--danger)', ok: 'var(--ok)', muted: 'var(--text-m)' };
+  const shown = summaries.slice(0, 12);
+  const live = tower.live && typeof tower.live === 'object' ? tower.live : null;
+  const livePill = live?.connected
+    ? `<span class="factory-pill" data-factory-tower-live="on" style="color:var(--ok)">실시간 연결</span>`
+    : (live?.error ? `<span class="factory-pill" data-factory-tower-live="off" style="color:var(--warn)" title="${escAttr(live.error)}">실시간 끊김</span>` : '');
+  return `<div class="factory-card" data-factory-tower-jobs>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div>
+        <h4 style="margin:0">관제탑(생산관제) 작업 ${items.length}개${waitingCount ? ` · 사람 선택 대기 ${waitingCount}개` : ''} ${livePill}</h4>
+        <div class="factory-small" style="margin-top:3px">관제탑이 쥔 작업은 그대로 두고, 여기서는 <b>복사본</b>으로 불러와 이어서 작업합니다.${fetched ? ` · ${escapeHtml(fetched)} 조회` : ''}${live?.connected ? ' · 관제탑이 바뀌면 자동으로 다시 읽습니다' : ''}</div>
+      </div>
+      <button class="btn-sm" type="button" data-factory-tower-jobs-refresh ${disabledAttr(tower.loading === true, '조회 중입니다.')}>${tower.loading ? '조회 중...' : '관제탑 새로고침'}</button>
+    </div>
+    ${tower.error ? `<div class="factory-guide-note warn" style="margin-bottom:8px">${escapeHtml(tower.error)}</div>` : ''}
+    ${!tower.error && !items.length ? `<div class="factory-small factory-recent-workfile-empty">${tower.fetchedAt ? '관제탑에 등록된 작업이 없습니다.' : (tower.loading ? '관제탑 작업을 조회하는 중입니다.' : '아직 조회하지 않았습니다. 관제탑 새로고침을 눌러주세요.')}</div>` : ''}
+    ${shown.map(({ job, summary }) => {
+      const jobId = String(job.jobId || '');
+      const loadingThis = tower.loadingJobId && tower.loadingJobId === jobId;
+      const meta = [
+        summary.stageLabel ? `단계 ${summary.stageLabel}` : '',
+        Number(job.imageCount || 0) ? `이미지 ${job.imageCount}장` : '',
+        job.workfileName ? String(job.workfileName) : '',
+      ].filter(Boolean).join(' · ');
+      return `<article class="factory-recent-workfile-card" data-factory-tower-job="${escAttr(jobId)}" style="margin-bottom:6px">
+        <div class="factory-recent-workfile-thumb" aria-hidden="true"><span class="material-icons-outlined">precision_manufacturing</span></div>
+        <div class="factory-recent-workfile-body">
+          <div class="factory-recent-workfile-title">${escapeHtml(String(job.productName || jobId))}
+            <span class="factory-pill" style="margin-left:6px;color:${toneColor[summary.tone] || 'var(--text-m)'}">${escapeHtml(summary.label)}</span>
+          </div>
+          ${meta ? `<div class="factory-recent-workfile-meta">${escapeHtml(meta)}</div>` : ''}
+          ${summary.message ? `<div class="factory-recent-workfile-meta">${escapeHtml(summary.message.slice(0, 90))}</div>` : ''}
+        </div>
+        <button class="btn-sm factory-recent-workfile-open" type="button" data-factory-tower-job-load="${escAttr(jobId)}" ${disabledAttr(!!tower.loadingJobId, '다른 작업을 불러오는 중입니다.')}>${loadingThis ? '불러오는 중...' : '복사본으로 불러오기'}</button>
+      </article>`;
+    }).join('')}
+    ${summaries.length > shown.length ? `<div class="factory-small">나머지 ${summaries.length - shown.length}개는 관제탑 화면에서 보세요.</div>` : ''}
+  </div>`;
 }
 
 const FACTORY_AUTOMATION_TABS = [
@@ -11313,28 +11367,46 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
   const hasDeclaredProductImage = typeof factoryHasDeclaredProductImage === 'function'
     ? factoryHasDeclaredProductImage(factory)
     : false;
+  // 기준은 **작업파일**이다 (주인님 2026-09-06: "kuasangse 작업파일명을 기준으로 한다던가").
+  //
+  // 여기서 실행 번호(runId)까지 요구하면 안 된다. 실행 번호는 단계마다 새로 발급되고
+  // (app-core-06.js:7727-7731 은 stage.currentRunId 가 이미 있으면 그걸 쓰고 없으면 새로 만든다)
+  // 누가 먼저 쓰느냐에 따라 값이 갈린다. 그래서 "주기적으로" 어긋난다.
+  //
+  // 실측 2026-09-06 (사장님 저장본):
+  //   자산 3장  workspaceId/productKey/inputImageFingerprint/stageId 전부 일치
+  //             currentRunId = factory_hero_run_...   <- 이것만 다름
+  //   제품/단계 currentRunId = factory_work_run_...
+  //   자산의 isolatedAt 은 None - 데이터는 멀쩡했고 **화면 필터만** 숨겼다.
+  // 그래서 진행률은 "3/3 대표이미지 생성 완료 100%" 인데 화면은 "이전 제품 격리 3개" 였다.
+  //
+  // 실행 번호는 여기서 **거르는 데 쓰지 않고**, 아래 scopedCurrentRunAssets 에서
+  // "최신 실행을 먼저 보여 준다" 는 **우선순위**로만 쓴다. 거기에는 이미
+  // 최신 실행 자산이 없으면 물러서는 대비책이 있다(latestAssets -> activeFallbackAssets -> baseAssets).
+  // 제품명이나 입력 사진을 바꾸면 여전히 격리된다 - 지켜야 할 것은 그대로 지킨다.
   const scopeOptions = {
     identityKey,
     currentInputKey,
     hasDeclaredProductImage,
     allowHtml: false,
     strictScope: true,
-    strictRunId: true,
+    strictRunId: false,
     requireExpectedProductKey: true,
     requireExpectedInputFingerprint: true,
-    requireExpectedRunId: true,
+    requireExpectedRunId: false,
     requireExpectedStageId: true,
   };
   const scopedAssets = rawStageAssets.filter(asset => {
     if (typeof factoryAssetCompatibleWithCurrentProduct === 'function' && !factoryAssetCompatibleWithCurrentProduct(asset, identityKey)) return false;
     if (typeof factoryAssetCompatibleWithCurrentInputImage === 'function' && !factoryAssetCompatibleWithCurrentInputImage(asset, factory, scopeOptions)) return false;
     if (typeof factoryAssetMatchesCurrentJob === 'function') {
+      // 위 scopeOptions 와 같은 기준을 쓴다. 실행 번호는 거르는 조건이 아니다.
       const jobCheck = factoryAssetMatchesCurrentJob(asset, stageId, factory, {
         strictScope: true,
-        strictRunId: true,
+        strictRunId: false,
         requireExpectedProductKey: true,
         requireExpectedInputFingerprint: true,
-        requireExpectedRunId: true,
+        requireExpectedRunId: false,
         requireExpectedStageId: true,
       });
       if (!jobCheck.ok) return false;
@@ -11395,10 +11467,19 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
         ? (allAssets.length ? 'missing-image' : 'wait-select')
         : rawStatus;
   const rawStatusMessage = String(stage.message || '').trim();
+  // 끊긴 생성(새로고침 등)은 "선택 대기 · 후보 1개" 로 덮지 않고 몇 개가 빠졌는지 먼저 말한다.
+  // 실측 2026-09-06: 사이즈컷 3장 중 1장만 남았는데 화면은 "선택 완료" 였다 - 사장님이 물어야 알았다.
+  const interruptedNote = (
+    rawStatus === 'review'
+    && Number(stage.expectedItemCount) > assets.length
+    && /만 생성됨/.test(rawStatusMessage)
+  ) ? rawStatusMessage : '';
   const selectedStatusMessage = stageId === 'hero'
     ? `사용할 ${label} ${selected}개를 선택했습니다. 상품 메인/썸네일용으로만 보관하고 상세페이지 섹션에는 자동 배치하지 않습니다.`
     : `사용할 ${label} ${selected}개를 선택했습니다. 아래 선택본이 상세페이지에 들어갑니다.`;
-  const statusMessage = selected > 0
+  const statusMessage = interruptedNote
+    ? (selected > 0 ? `${interruptedNote} ${selectedStatusMessage}` : `${interruptedNote} 남은 후보는 아래에서 고를 수 있습니다.`)
+    : selected > 0
     ? selectedStatusMessage
     : hasSelectableImages
       ? `생성 후보 ${assets.length}개가 있습니다. 아래 후보 중 쓸 이미지를 골라 '사용'을 눌러주세요.`
@@ -11413,7 +11494,9 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
               : `생성 기록은 ${allAssets.length}개 있지만 이미지 원본이 없어 고를 수 없습니다. 재생성이 필요합니다.`))
           : '완료로 볼 선택 이미지가 아직 없습니다. 재생성을 눌러 결과를 만들어주세요.')
         : rawStatusMessage;
-  const statusLabel = status === 'running'
+  const statusLabel = interruptedNote && status !== 'done'
+    ? '생성 미완료'
+    : status === 'running'
     ? '생성 중'
     : status === 'done'
       ? '선택 완료'
@@ -11428,21 +11511,21 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
               : status === 'idle'
                 ? '대기'
                 : '상태 없음';
-  const statusColor = status === 'running'
+  const statusColor = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'var(--warn)'
     : status === 'done'
       ? 'var(--ok)'
       : (status === 'error' || status === 'blocked' || status === 'missing-image')
         ? 'var(--danger)'
         : 'var(--text-m)';
-  const statusBorder = status === 'running'
+  const statusBorder = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'rgba(245,158,11,.50)'
     : status === 'done'
       ? 'rgba(34,197,94,.45)'
       : (status === 'error' || status === 'blocked' || status === 'missing-image')
         ? 'rgba(239,68,68,.48)'
         : 'rgba(99,102,241,.28)';
-  const statusBg = status === 'running'
+  const statusBg = (status === 'running' || (interruptedNote && status !== 'done'))
     ? 'rgba(245,158,11,.08)'
     : status === 'done'
       ? 'rgba(16,185,129,.08)'
@@ -11484,6 +11567,9 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
         ${stageId === 'options'
           ? `<button class="btn-sm" data-factory-open-optionsorter>옵션분류기/색상이미지로 이동</button>`
           : `<button class="btn-sm" type="button" data-factory-run-stage="${escAttr(stageId)}" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>${runButtonLabel}</button>`}
+        ${interruptedNote && countStages.includes(stageId)
+          ? `<button class="btn-sm success" type="button" data-factory-run-stage="${escAttr(stageId)}" data-factory-run-only-missing="1" ${disabledAttr(status === 'running', `${label} 생성이 진행 중입니다.`)}>나머지 ${escapeHtml(String(Math.max(1, Number(stage.expectedItemCount) - assets.length)))}개만 생성</button>`
+          : ''}
         <button class="btn-sm" data-factory-guide-action="${escAttr(focusAction)}">컨베이어 카드로 이동</button>
       </div>
     </div>

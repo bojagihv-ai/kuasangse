@@ -215,6 +215,7 @@
 
   function showRuntimeStaleGate(currentBuildId, nextBuildId) {
     if (document.getElementById('kuasangseRuntimeStaleGate')) return;
+    document.getElementById('kuasangseRuntimeStaleDeferred')?.remove();
     document.documentElement.dataset.kuasangseRuntimeStale = '1';
     const gate = document.createElement('div');
     gate.id = 'kuasangseRuntimeStaleGate';
@@ -249,6 +250,37 @@
     applyButton?.focus();
   }
 
+  // 생성이 돌고 있는 동안에는 새 빌드 창을 띄우지 않는다.
+  //
+  // 실측 2026-09-06: 사이즈컷 3장을 만드는 도중 번들이 바뀌자 이 창이 떠서 새로고침됐고,
+  // 1장만 남고 2장은 API 요청조차 나가지 못했다(실행 로그의 마지막 줄이 "사이즈컷 2 생성 시작").
+  // 이미지컷도 같은 무늬로 3장 중 1장만 남았다. 창은 사장님이 눌러야 뜨지만 화면 전체를
+  // 가리므로 결국 누르게 된다 - 그러면 돌던 생성이 통째로 죽는다.
+  //
+  // 그래서 런타임(app-core-06.js 의 window.kuasangseImageGenerationBusy)이 "지금 생성 중" 이라
+  // 답하면 창을 미루고 작은 표시만 남긴다. 생성이 끝나면 다음 확인 때 창이 뜬다.
+  // 생성 표시가 잘못 남아 영영 바쁘다고 하는 경우를 막기 위해 미루는 시간에 상한을 둔다.
+  const RUNTIME_STALE_DEFER_MAX_MS = 30 * 60 * 1000;
+
+  function runtimeGenerationBusy(windowObject) {
+    try {
+      return typeof windowObject.kuasangseImageGenerationBusy === 'function'
+        && windowObject.kuasangseImageGenerationBusy() === true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function showRuntimeStaleDeferredNotice(currentBuildId, nextBuildId) {
+    if (document.getElementById('kuasangseRuntimeStaleDeferred')) return;
+    const notice = document.createElement('div');
+    notice.id = 'kuasangseRuntimeStaleDeferred';
+    notice.setAttribute('role', 'status');
+    notice.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483646;max-width:360px;padding:10px 13px;border:1px solid rgba(99,102,241,.55);border-radius:10px;background:#11131f;color:#c7d2fe;font:13px/1.5 system-ui,\'Malgun Gothic\',sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.45);pointer-events:none';
+    notice.textContent = `새 빌드(${nextBuildId})가 준비됐습니다. 진행 중인 생성이 끝나면 적용 창을 띄웁니다. (지금 ${currentBuildId})`;
+    document.body.appendChild(notice);
+  }
+
   // currentSignature 를 주면 내용 지문까지 비교한다. 주지 않으면 buildId 만 보던
   // 예전 동작 그대로다(하위 호환).
   function installRuntimeBuildFreshnessGuard(currentBuildId, options = {}, currentSignature = '') {
@@ -256,10 +288,14 @@
     const documentObject = options.documentObject || document;
     const read = options.readManifest || readManifest;
     const onStale = options.onStale || showRuntimeStaleGate;
+    const onDeferred = options.onDeferred || showRuntimeStaleDeferredNotice;
+    const isBusy = options.isBusy || (() => runtimeGenerationBusy(windowObject));
+    const deferMaxMs = Math.max(0, Number(options.deferMaxMs ?? RUNTIME_STALE_DEFER_MAX_MS) || 0);
     const intervalMs = Math.max(1000, Number(options.intervalMs || RUNTIME_BUILD_CHECK_INTERVAL_MS));
     let disposed = false;
     let checking = false;
     let stale = false;
+    let deferredSince = 0;
     const checkNow = async () => {
       if (disposed || stale || checking) return stale;
       checking = true;
@@ -271,6 +307,13 @@
         const baseline = currentSignature || currentBuildId;
         const nextSignature = currentSignature ? runtimeBuildSignature(nextManifest) : nextBuildId;
         if (nextSignature === baseline) return false;
+        if (isBusy()) {
+          if (!deferredSince) deferredSince = Date.now();
+          if (Date.now() - deferredSince < deferMaxMs) {
+            onDeferred(currentBuildId, nextBuildId);
+            return false;
+          }
+        }
         stale = true;
         onStale(currentBuildId, nextBuildId);
         return true;

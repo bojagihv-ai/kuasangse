@@ -46,6 +46,16 @@ CONSUMERS = [
     ("사쵸상세", r"C:\Users\kua\Documents\Playground\sachyosangse\apps\api\.local\vertex-config.json"),
 ]
 
+# ── 설정 파일이 비었을 때 쓰이는 **대체값** ─────────────────────────────
+# backend/config.py 가 .env 의 GOOGLE_CLOUD_PROJECT 를 읽고,
+# routes/api_shared.py:143 이 vertex-config.json 의 project 가 비면 그 값으로 떨어진다.
+# 여기를 옛 프로젝트로 남겨 두면, 설정 파일이 사라지거나 비는 날 조용히 죽은 프로젝트로
+# 되돌아가 이미지 생성이 통째로 막힌다(실측 2026-09-04: 크레딧 끝난 프로젝트가 그대로 남아 있었다).
+# .env 에는 키가 들어 있으므로 **이 한 줄만** 바꾸고 다른 줄은 읽지도 쓰지도 않는다.
+ENV_FALLBACKS = [
+    ("상세페이지 .env", r"C:\Users\kua\Documents\GitHub\kuasangse\backend\.env", "GOOGLE_CLOUD_PROJECT"),
+]
+
 BACKEND_BASE = os.environ.get("KUASANGSE_BACKEND_BASE", "http://127.0.0.1:5050")
 IMAGE_MODEL = os.environ.get("KUASANGSE_IMAGE_MODEL", "gemini-3.1-flash-image")
 TINY_PNG = (
@@ -175,6 +185,41 @@ def write_consumer(path: str, project: str, location: str) -> str:
         return f"{error.__class__.__name__}: {error}"
 
 
+def write_env_fallback(path: str, key: str, project: str) -> str:
+    """.env 의 지정한 키 한 줄만 바꾼다. 다른 줄은 손대지 않는다.
+
+    바꾼 뒤 줄 수와 '바뀐 줄이 정확히 그 한 줄인지' 를 확인하고, 아니면 되돌린다.
+    키가 파일에 없으면 새로 만들지 않는다 - .env 는 사람이 관리하는 파일이다.
+    """
+    try:
+        with io.open(path, encoding="utf-8", newline="") as handle:
+            original = handle.read()
+    except OSError as error:
+        return f"읽지 못함: {error.__class__.__name__}"
+
+    lines = original.split("\n")
+    hits = [index for index, line in enumerate(lines) if line.startswith(key + "=")]
+    if len(hits) != 1:
+        return f"{key} 줄을 정확히 1개 찾지 못했습니다({len(hits)}개)"
+    if lines[hits[0]] == f"{key}={project}":
+        return ""
+    updated = list(lines)
+    updated[hits[0]] = f"{key}={project}"
+    if len(updated) != len(lines):
+        return "줄 수가 달라졌습니다"
+    try:
+        with io.open(path + ".switching.tmp", "w", encoding="utf-8", newline="") as handle:
+            handle.write("\n".join(updated))
+        os.replace(path + ".switching.tmp", path)
+    except OSError as error:
+        try:
+            os.remove(path + ".switching.tmp")
+        except OSError:
+            pass
+        return f"{error.__class__.__name__}: {error}"
+    return ""
+
+
 def project_number(token: str, project_id: str) -> tuple[str, str]:
     status, data = api_get(f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}", token)
     if status != 200:
@@ -209,6 +254,13 @@ def print_state(state: dict) -> None:
             f" ({backend.get('gemini_route') or '?'})")
     else:
         say(f"  백엔드가 쓰는 것: (응답 없음 - {BACKEND_BASE} 가 꺼져 있습니다)")
+    for label, path, key in ENV_FALLBACKS:
+        try:
+            with io.open(path, encoding="utf-8", newline="") as handle:
+                found = [l.split("=", 1)[1] for l in handle.read().split("\n") if l.startswith(key + "=")]
+            say(f"  {pad(label)}: {found[0] if found else '(항목 없음)'}  ← 설정이 비면 쓰이는 대체값")
+        except OSError:
+            say(f"  {pad(label)}: (읽지 못함)")
     for label, path, config in state["consumers"]:
         if config:
             say(f"  {pad(label)}: {config.get('project') or '?'} / {config.get('location') or '?'}")
@@ -370,6 +422,10 @@ def main() -> int:
             if config:
                 write_consumer(path, str(config.get("project") or ""), str(config.get("location") or "global"))
         return 1
+
+    for label, path, key in ENV_FALLBACKS:
+        error = write_env_fallback(path, key, project)
+        say(f"  {pad(label)}: {'맞춤 완료' if not error else '건너뜀 - ' + error}")
 
     if options.no_verify:
         say("")

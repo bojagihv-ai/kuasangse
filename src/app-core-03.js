@@ -4510,6 +4510,10 @@ async function refreshWorkspaceLists(renderAfter = true) {
     state.factoryRegistrationHistory = factoryRegistrationHistoryItems(registrationHistoryRecord);
     state.factoryRegistrationHistoryLoaded = true;
     state.projectsLoaded = true;
+    // 관제탑 작업 목록도 같이 새로 읽는다 (사람 탭만 - 워커 탭은 제 작업만 보면 된다). 기다리지 않는다.
+    if (!classicRuntimeBatchWorkerMode && typeof factoryTowerJobsRefresh === 'function') {
+      void factoryTowerJobsRefresh({ render: renderAfter, quiet: true });
+    }
     const startupProject = await maybeRestoreLatestSavedProjectOnStartup(state.projects);
     if (startupProject) {
       state.snapshots = snapshots
@@ -7469,9 +7473,16 @@ async function resetActiveWorkspaceDocumentCore() {
   if (typeof clearFactoryProjectFileLocationForBlankWork === 'function') {
     clearFactoryProjectFileLocationForBlankWork();
   }
+  // 주인님이 "새 작업" 을 눌렀으니 지금까지의 초안은 놓아준다 - 이후 새 탭이 되살리지 않는다.
+  // (내용은 지우지 않는다. 주인님 규칙 "새 작업 누르기 전에는 아무것도 안 날아간다" 의 '전까지'.)
+  const releasedDraftScope = getCurrentLastWorkWorkspaceScope();
   const draftScope = typeof rotateLastWorkDraftScope === 'function'
     ? rotateLastWorkDraftScope()
     : getCurrentLastWorkWorkspaceScope();
+  if (releasedDraftScope.startsWith('draft:') && releasedDraftScope !== draftScope
+    && typeof releaseDraftWorkspaceScope === 'function') {
+    void releaseDraftWorkspaceScope(releasedDraftScope);
+  }
   if (typeof settleLastWorkDraftScopePersistence === 'function') {
     await settleLastWorkDraftScopePersistence(draftScope);
   }
@@ -11349,6 +11360,9 @@ function factoryRuntimeCreateCommandPolicies() {
     'factory/cafe24:collect-additional-cafe24-candidates',
     'factory/cafe24:run-candidate-additional-search',
     'factory/cafe24:run-candidate-search-only',
+    // 신화사DB 추가검색 (Cafe24 추가검색과 같은 후보 수집 경로·같은 부분을 쓴다)
+    'factory/sinhwa:collect-additional-db-candidates',
+    'factory/sinhwa:run-candidate-additional-search',
   ], 'cafe24', candidateCollectionWorkflow);
   add([
     'factory/cafe24:apply-db-candidate',
@@ -11483,6 +11497,7 @@ function factoryRuntimeCreateCommandPolicies() {
 
   add([
     'factory/db:rerunDbQuery', 'factory/db:rerunCafe24Query', 'factory/db:appendCafe24Query',
+    'factory/db:appendDbQuery',
     'factory/db:resetDbQuery',
     'factory/db:setDbSearchQuery', 'factory/db:commitDbSearchQuery',
     'factory/db:applyDbCandidate', 'factory/db:applyCafe24Candidate',
@@ -12220,6 +12235,19 @@ function factoryRuntimeDbActions() {
         factoryRuntimeRequireCurrentFollowupReceipt('factory/db:appendCafe24Query', receipt);
         if (!receipt.value) return receipt;
         const result = await factoryRunCafe24CandidateAdditionalSearch({ operationToken: receipt.operationToken });
+        return factoryRuntimeFollowupCommandReceipt(receipt, result);
+      });
+    },
+    // 신화사DB 추가검색 - Cafe24 추가검색과 같은 길 (주인님 2026-09-06: "카페24 추가검색하는 것처럼")
+    appendDbQuery(value, operationContext) {
+      const transaction = factoryRuntimeBridgeAction('factory/db:appendDbQuery', operationContext, draft => {
+        const query = factoryApplyWizardDbSearchQuery(value, { factory: draft });
+        return !!query;
+      });
+      return Promise.resolve(transaction).then(async receipt => {
+        factoryRuntimeRequireCurrentFollowupReceipt('factory/db:appendDbQuery', receipt);
+        if (!receipt.value) return receipt;
+        const result = await factoryRunSinhwaCandidateAdditionalSearch({ operationToken: receipt.operationToken });
         return factoryRuntimeFollowupCommandReceipt(receipt, result);
       });
     },
@@ -13218,10 +13246,15 @@ function factoryRuntimeAssetsActions() {
       });
     },
     runFactoryStage(stageId, operationContext) {
-      const normalizedStageId = String(stageId || '').trim();
+      // 문자열(단계 id) 또는 { stageId, onlyMissing } - "나머지 N개만 생성" 버튼이 후자를 보낸다.
+      const request = stageId && typeof stageId === 'object' ? stageId : { stageId };
+      const normalizedStageId = String(request.stageId || '').trim();
       return factoryRuntimeWithOperationLease('factory/assets:runFactoryStage', operationContext, operation => (
         factoryHandleRunStageButton({
-          dataset: { factoryRunStage: normalizedStageId },
+          dataset: {
+            factoryRunStage: normalizedStageId,
+            factoryRunOnlyMissing: request.onlyMissing === true ? '1' : '',
+          },
           disabled: false,
         }, {
           operationToken: operation.operationToken,
@@ -20455,6 +20488,7 @@ function factoryAssetVisualValidationState(asset = {}, factory = factoryRuntimeR
 function factoryRefreshStageAfterVisualValidation(stageId = '', factory) {
   const normalizedStage = String(stageId || '');
   if (!['hero', 'size', 'cuts'].includes(normalizedStage)) return;
+  if (factoryStageRunAliveInThisPage(normalizedStage)) return;
   const stage = factory?.stages?.[normalizedStage] || {};
   const rawStatus = String(stage.status || '').toLowerCase();
   if (!['running', 'done', 'idle', 'error'].includes(rawStatus)) return;
@@ -20471,11 +20505,12 @@ function factoryRefreshStageAfterVisualValidation(stageId = '', factory) {
   if (pending) return;
   const usableCount = factoryUsableAssetsForStage(normalizedStage, factory).length;
   if (usableCount > 0) {
+    const display = factoryStageDisplayAfterRestore(stage, usableCount);
     if (typeof factorySetStageStatus === 'function') {
-      factorySetStageStatus(normalizedStage, 'done', `${usableCount}개 후보 표시 완료`, factory);
+      factorySetStageStatus(normalizedStage, display.status, display.message, factory);
     } else if (factory.stages?.[normalizedStage]) {
-      factory.stages[normalizedStage].status = 'done';
-      factory.stages[normalizedStage].message = `${usableCount}개 후보 표시 완료`;
+      factory.stages[normalizedStage].status = display.status;
+      factory.stages[normalizedStage].message = display.message;
       factory.stages[normalizedStage].updatedAt = Date.now();
     }
     return;
@@ -20543,13 +20578,19 @@ function factoryScheduleAssetVisualValidation(asset = {}, factory = factoryRunti
         } else if (liveAsset.currentProductHidden) {
           liveAsset.currentProductHidden = false;
         }
-        if (liveAsset.stageId && liveFactory.stages?.[liveAsset.stageId]?.status === 'running') {
+        if (
+          liveAsset.stageId
+          && liveFactory.stages?.[liveAsset.stageId]?.status === 'running'
+          && !factoryStageRunAliveInThisPage(liveAsset.stageId)
+        ) {
+          // 'running' 인데 이 화면에 실행이 없다 = 새로고침으로 끊긴 실행이다.
           const visibleCount = typeof factoryUsableAssetsForStage === 'function'
             ? factoryUsableAssetsForStage(liveAsset.stageId, liveFactory).length
             : 1;
           if (visibleCount > 0) {
-            liveFactory.stages[liveAsset.stageId].status = 'done';
-            liveFactory.stages[liveAsset.stageId].message = `${visibleCount}개 후보 표시 완료`;
+            const display = factoryStageDisplayAfterRestore(liveFactory.stages[liveAsset.stageId], visibleCount);
+            liveFactory.stages[liveAsset.stageId].status = display.status;
+            liveFactory.stages[liveAsset.stageId].message = display.message;
             liveFactory.stages[liveAsset.stageId].updatedAt = Date.now();
           }
         }
@@ -20608,6 +20649,32 @@ function factoryScheduleAssetVisualValidation(asset = {}, factory = factoryRunti
   validationRecord.promise = validationPromise;
   factoryVisualValidationPromises.set(jobKey, validationRecord);
   return validationPromise;
+}
+
+// 이 화면에 살아 있는 실행이 없을 때, 단계에 무엇이라 적을지 정한다.
+//
+// 실측 2026-09-06: 사이즈컷 3장 생성 중 새로고침 → 1장만 남았는데 색상 검수가 끝나며
+// "1개 후보 표시 완료 · 완료" 로 굳혔다. 나머지 2장이 빠진 사실이 그대로 숨겨졌다.
+// 기대 개수(expectedItemCount)보다 적으면 '완료' 라 하지 않고 솔직하게 적는다.
+// (위 검수 완료 경로 두 곳이 쓴다. 검사 하네스가 factoryScheduleAssetVisualValidation 부터
+//  factoryHasDeclaredProductImage 앞까지를 잘라 쓰므로 이 자리에 둔다 - 선언은 호이스팅된다.)
+function factoryStageDisplayAfterRestore(stage = {}, visibleCount = 0) {
+  const expected = Math.max(0, Number(stage?.expectedItemCount) || 0);
+  const visible = Math.max(0, Number(visibleCount) || 0);
+  if (expected > visible && visible > 0) {
+    return {
+      status: 'review',
+      message: `${expected}개 중 ${visible}개만 생성됨 · 나머지 ${expected - visible}개는 만들어지지 않았습니다. 다시 생성해주세요.`,
+    };
+  }
+  return { status: 'done', message: `${visible}개 후보 표시 완료` };
+}
+
+// 전체 생성 루프가 이 화면에서 아직 돌고 있으면 상태는 루프가 정한다.
+// 색상 검수는 그림마다 따로 끝나므로, 첫 장 검수가 끝났다고 '완료' 로 바꾸면 거짓말이 된다.
+function factoryStageRunAliveInThisPage(stageId = '') {
+  return typeof factoryImageStageHasAnyActiveKey === 'function'
+    && factoryImageStageHasAnyActiveKey(stageId) === true;
 }
 
 function factoryHasDeclaredProductImage(factory = factoryRuntimeReadFactory()) {
@@ -21581,12 +21648,15 @@ function factoryAssetHasCurrentProductPayload(asset, factory = factoryRuntimeRea
     }
   }
   if (['hero', 'size', 'cuts', 'detail', 'options'].includes(stageId) && factoryCurrentStageRunId(stageId, factory)) {
+    // 기준은 **작업파일**이다 - 부르는 쪽이 정한 기준을 그대로 따른다.
+    // 예전에는 여기서 실행 번호를 하드코딩으로 강제해, 부르는 쪽이 느슨하게 줘도 소용이 없었다.
+    // 같은 규칙이 두 군데에 다르게 박혀 있어서 한쪽만 고치면 안 고쳐진다(실측 2026-09-06).
     const job = factoryAssetMatchesCurrentJob(asset, stageId, factory, {
       strictScope: true,
-      strictRunId: true,
+      strictRunId: options.strictRunId === true,
       requireExpectedProductKey: true,
       requireExpectedInputFingerprint: true,
-      requireExpectedRunId: true,
+      requireExpectedRunId: options.requireExpectedRunId === true,
       requireExpectedStageId: true,
     });
     if (!job.ok) return false;
@@ -21601,28 +21671,52 @@ function factoryAssetHasCurrentProductPayload(asset, factory = factoryRuntimeRea
 }
 
 function factoryUsableAssetsForStage(stageId, factory = factoryRuntimeReadFactory()) {
-  const identityKey = factoryIdentityKey(factory) || factoryNormalizeIdentityText(factory?.product?.productName || state.productName || '');
-  const currentInputKey = factoryCurrentInputImageFingerprint(factory);
-  const hasDeclaredProductImage = factoryHasDeclaredProductImage(factory);
   const latestRunId = factoryStageLatestGenerationRunId(stageId, factory);
-  const baseOptions = {
-    allowHtml: stageId === 'detail',
-    identityKey,
-    currentInputKey,
-    hasDeclaredProductImage,
-    strictScope: true,
-    strictRunId: true,
-    requireExpectedProductKey: true,
-    requireExpectedInputFingerprint: true,
-    requireExpectedRunId: true,
-    requireExpectedStageId: true,
-  };
+  // 화면과 **같은 기준**을 쓴다. 진행률이 화면보다 후하게 세면
+  // "3/3 완료" 인데 화면은 비어 있는 일이 생긴다.
+  const baseOptions = factoryWorkfileAssetScopeOptions(factory, { allowHtml: stageId === 'detail' });
   const baseAssets = factoryAssetsForStage(stageId, factory).filter(asset => factoryAssetHasCurrentProductPayload(asset, factory, baseOptions));
   if (!latestRunId) return baseAssets.filter(asset => !factoryAssetSupersededRunId(asset));
   const latestAssets = baseAssets.filter(asset => factoryAssetGenerationRunId(asset) === latestRunId);
   if (latestAssets.length) return latestAssets;
   const activeFallback = baseAssets.filter(asset => !factoryAssetSupersededRunId(asset));
   return activeFallback.length ? activeFallback : baseAssets;
+}
+
+// ── 생성 이미지가 "이 작업의 것" 인지 가르는 **하나의 기준** ──────────────
+//
+// 주인님 2026-09-06: "뭔가 기준이 있으면 좋을것같은데 ... kuasangse 작업파일명을 기준으로 한다던가"
+//
+// 기준은 **작업파일**이다. 작업파일(workspaceId) + 제품(productKey) +
+// 입력사진(inputImageFingerprint) + 단계(stageId) 가 같으면 이 작업의 그림이다.
+//
+// 실행 번호(runId)는 **거르는 조건이 아니다.** 단계마다 새로 발급되고
+// (app-core-06.js:7727-7731 은 stage.currentRunId 가 이미 있으면 그걸 쓰고 없으면 새로 만든다)
+// 누가 먼저 쓰느냐에 따라 값이 갈려 "주기적으로" 어긋난다.
+// 실행 번호는 "최신 실행을 먼저 보여 준다" 는 **우선순위**로만 쓴다(아래 latestAssets).
+//
+// 왜 한 곳에 모았나: 같은 규칙이 세 군데에 제각각 박혀 있었다.
+//   (1) 화면 후보 필터 (app-core-05.js 의 scopeOptions)
+//   (2) factoryAssetHasCurrentProductPayload 안의 하드코딩
+//   (3) factoryUsableAssetsForStage 의 baseOptions  <- 진행률이 세는 잣대
+// 그래서 (1)만 고쳤을 때 화면은 "격리 0" 이 됐는데도 여전히 "선택 가능 0개" 였고,
+// 진행률은 "3/3 완료" 라고 말했다. 잣대가 다르면 화면과 숫자가 서로 다른 말을 한다.
+// 실측 2026-09-06: 사장님 화면이 정확히 그랬다.
+function factoryWorkfileAssetScopeOptions(factory = factoryRuntimeReadFactory(), overrides = {}) {
+  return {
+    identityKey: factoryIdentityKey(factory)
+      || factoryNormalizeIdentityText(factory?.product?.productName || state.productName || ''),
+    currentInputKey: factoryCurrentInputImageFingerprint(factory),
+    hasDeclaredProductImage: factoryHasDeclaredProductImage(factory),
+    strictScope: true,
+    requireExpectedProductKey: true,
+    requireExpectedInputFingerprint: true,
+    requireExpectedStageId: true,
+    // 실행 번호는 기준에서 뺀다.
+    strictRunId: false,
+    requireExpectedRunId: false,
+    ...overrides,
+  };
 }
 
 function factorySelectedAssets(stageId, factory = factoryRuntimeReadFactory()) {

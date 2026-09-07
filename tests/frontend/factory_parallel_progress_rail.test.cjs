@@ -219,3 +219,16 @@ test('공정 진행표와 로그는 내부 높이 제한 없이 앱의 오른쪽
   assert.match(html, /\.factory-run-status-card \[data-factory-goal-log-list\]\{[^}]*max-height:none[^}]*overflow:visible/);
   assert.doesNotMatch(html, /\.factory-run-status-card\{[^}]*overflow-y:auto/);
 });
+
+test('작은 화면(높이 720px 이하)에서만 공정 진행 카드와 로그에 안쪽 스크롤을 허용한다', () => {
+  // 주인님 결정 2026-09-07: "작은 화면에서 박스 안 스크롤, 그건 가능하게끔 하자" (FULL-10 의 1100x620 검사).
+  // 큰 화면의 기본 규칙(위 검사: max-height:none · overflow:visible)은 그대로다 - 예외는 미디어 쿼리 하나뿐이다.
+  const html = source('app.html');
+  const small = /@media \(max-height:720px\)\{([^@]*)\}/.exec(html);
+  assert.ok(small, '작은 화면 예외 미디어 쿼리가 없습니다.');
+  assert.match(small[1], /\.factory-run-status-card\{max-height:40vh;overflow:auto\}/);
+  assert.match(small[1], /\.factory-run-status-card \[data-factory-goal-log-list\]\{max-height:26vh;overflow-y:auto;min-height:0\}/);
+  const smallAt = html.indexOf('@media (max-height:720px)');
+  const stackedAt = html.lastIndexOf('.factory-run-status-card{max-height:none;overflow:visible}');
+  assert.ok(smallAt > stackedAt, '예외는 기본 규칙들 뒤에 와야 작은 화면에서 이긴다.');
+});

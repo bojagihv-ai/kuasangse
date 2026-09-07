@@ -117,14 +117,60 @@ ${conflictHelp}`, { sourceMode });
 
   // 켜져 있는 것과 쓸 수 있는 것은 다르다 - 전수 진단 #5·#16.
   // 백엔드가 usable:false 를 주면(예: 호스트 스크래퍼는 떠 있는데 VM 안 watcher 가 죽었거나,
-  // Cafe24 Control Tower 는 떠 있는데 OAuth 토큰이 만료됐거나) 실행을 켜라고 물어도 소용없다.
-  // 그건 이미 켜져 있기 때문이다. 무엇이 막혔는지 그대로 보여 주고 멈춘다.
+  // Cafe24 Control Tower 는 떠 있는데 OAuth 토큰이 만료됐거나) 그 자리에서 멈춘다.
   // usable 이 null 이면 모르는 것이므로 막지 않는다.
   const unusable = checked.filter(item => item.status?.running === true && item.status?.usable === false);
   if (unusable.length) {
     const detail = unusable
       .map(item => responseMessage(item.status, `${item.service.label}를 지금 쓸 수 없습니다.`))
       .join('\n');
+
+    // **그런데 켤 수 있는 것이 남아 있을 수 있다.**
+    //
+    // 처음 이 갈래를 만들 때(2026-09-02) "이미 켜져 있으니 켜라고 물어도 소용없다" 고 적었다.
+    // 그 판단이 좁았다. 실측 2026-09-06: 호스트 스크래퍼는 포트 43000 에서 멀쩡히 돌고 있었지만
+    // **VM 이 통째로 꺼져 있어** watcher 가 35시간 응답이 없었다. 화면은
+    // "VM 안에서 watcher 를 다시 실행해주세요" 라고만 했다 - 들어갈 VM 이 꺼져 있는데.
+    //
+    // 그래서 백엔드가 "지금 켤 수 있는 것이 있다"(canStartVm) 고 알려 주면 사람에게 묻는다.
+    // 주인님 상시 규칙: 필수 의존 서비스는 수동 기동만 시키지 말고 자동 기동을 먼저 권한다.
+    const startable = unusable.filter(item => item.status?.canStartVm === true);
+    if (startable.length) {
+      const labels = startable.map(item => item.service.label).join(', ');
+      const agreed = runtime.window?.confirm?.(
+        `${detail}\n\nVM 이 꺼져 있습니다. 지금 켤까요?`
+        + '\n(켜고 나서 후보 수집 준비까지 1~3분쯤 걸립니다)',
+      ) === true;
+      if (agreed) {
+        logFactory(runtime, factory, `VM 실행 요청: ${labels}`, 'info');
+        setPreflightState(runtime, factory, 'starting', 'VM 을 켜고 있습니다. 부팅과 준비까지 1~3분쯤 걸립니다.', { sourceMode });
+        const started = await Promise.all(startable.map(async item => {
+          try {
+            return await requestLocalService(runtime, base, item.service.startPath, 'POST', 180000);
+          } catch (error) {
+            return { ok: false, message: responseMessage(error, 'VM 실행 요청이 실패했습니다.') };
+          }
+        }));
+        const failed = started.filter(result => result?.ok === false);
+        if (failed.length) {
+          const reason = failed.map(result => responseMessage(result, 'VM 을 켜지 못했습니다.')).join('\n');
+          logFactory(runtime, factory, `VM 실행 실패: ${reason}`, 'error');
+          setPreflightState(runtime, factory, 'failed', reason, { sourceMode });
+          return false;
+        }
+        // 부팅을 여기서 기다리지 않는다. 기다리면 화면이 몇 분 동안 굳는다.
+        // 준비되면 다시 시작 버튼을 누르시면 된다고 분명히 말한다.
+        const waitMessage = 'VM 을 켰습니다. 부팅과 후보 수집 준비까지 1~3분쯤 걸립니다.'
+          + ' 준비되면 시작 버튼을 다시 눌러주세요.';
+        logFactory(runtime, factory, waitMessage, 'ok');
+        setPreflightState(runtime, factory, 'failed', waitMessage, { sourceMode });
+        return false;
+      }
+      logFactory(runtime, factory, `VM 실행 취소: ${labels}`, 'warn');
+      setPreflightState(runtime, factory, 'cancelled', `${detail}\n\nVM 실행을 취소했습니다.`, { sourceMode });
+      return false;
+    }
+
     logFactory(runtime, factory, `필수 프로그램을 쓸 수 없음: ${detail}`, 'error');
     setPreflightState(runtime, factory, 'failed', detail, { sourceMode });
     return false;
