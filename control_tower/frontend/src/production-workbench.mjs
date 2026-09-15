@@ -8,23 +8,23 @@ import {
   reconcileFactoryProjectionForSameWork,
 } from './factory-sync-model.mjs?selectedId=5';
 import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
-import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=4';
+import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=5';
 import { createFactoryOperatorControls, readFactoryOperatorControls, factoryWorkfileExportBlocker } from './factory-operator-controls.mjs?operator=3';
 import { renderFactoryDbControls, renderFactoryCompetitorControls, renderFactoryFieldControls } from './factory-operator-source-panels.mjs?operator=4';
 import { renderFactorySectionControls } from './factory-operator-section-panel.mjs?operator=3';
 // 사람 말로 옮긴 사유 표는 보드 모델이 들고 있다. 화면마다 따로 두면 한쪽만 번역되어
 // 같은 코드가 어떤 화면에서는 한국어로, 어떤 화면에서는 원시 코드로 뜬다.
-import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=45';
+import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=46';
 // 개요 첫 화면은 새 사실을 만들지 않는다. 보드가 이미 만든 파생을 사람이 할 일 순서로만 다시 세운다.
 import { buildNextActionInbox, inboxHeadline } from './next-action-model.mjs?nextAction=3';
-import { deriveAssemblyWorkbench, followAssemblyWorkbenchStep, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=5';
+import { deriveAssemblyWorkbench, followAssemblyWorkbenchStep, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=6';
 import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
 import {
   createWorkfileJobTabRegistry,
   workfileIdentityMatches,
   workfileTargetIdentityMatches,
   workfileTabIdentity,
-} from './workfile-job-tabs-model.mjs?workfileTabs=6';
+} from './workfile-job-tabs-model.mjs?workfileTabs=7';
 
 export {
   buildCandidateReviewActions,
@@ -35,7 +35,7 @@ export {
   normalizeJobs,
   reviewPayloadSignature,
   resolveCandidateAsset,
-} from './production-workbench-model.mjs?currentProductTruth=5';
+} from './production-workbench-model.mjs?currentProductTruth=6';
 export {
   applyFactoryDelta,
   buildACutSelectionCommand,
@@ -44,7 +44,7 @@ export {
   reconcileFactoryProjectionForSameWork,
 } from './factory-sync-model.mjs?selectedId=5';
 export { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
-export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=6';
+export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=7';
 
 const STAGE_LABELS = Object.freeze({
   representative: '대표이미지',

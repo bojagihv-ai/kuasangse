@@ -7,17 +7,25 @@
     "token": "intakeCategories=1",
     "digest": "067609b9e33089a0"
   },
+  "automation-policy-model.mjs": {
+    "token": "automationPolicy=5",
+    "digest": "8e43de985fc6d3e7"
+  },
+  "bulk-intake-source.mjs": {
+    "token": "bulkIntakeSource=1",
+    "digest": "29f58cf7f54f76e0"
+  },
   "factory-operator-controls.mjs": {
     "token": "operator=3",
     "digest": "4f82bf7e5ef95506"
   },
   "production-workbench-model.mjs": {
-    "token": "currentProductTruth=5",
-    "digest": "9bef245e92570489"
+    "token": "currentProductTruth=6",
+    "digest": "1b6b729f7663ac19"
   },
   "production-board-model.mjs": {
-    "token": "parallelBoard=45",
-    "digest": "dd72cacc66e9d1b5"
+    "token": "parallelBoard=46",
+    "digest": "c42e4ccdec3b2e54"
   },
   "factory-sync-model.mjs": {
     "token": "selectedId=5",
@@ -28,8 +36,8 @@
     "digest": "98e78924051c27f9"
   },
   "operator-queue-model.mjs": {
-    "token": "batchList=4",
-    "digest": "7e7b4b4b1bde8335"
+    "token": "batchList=5",
+    "digest": "75a87c0b1305c9fa"
   },
   "factory-operator-source-panels.mjs": {
     "token": "operator=4",
@@ -48,8 +56,8 @@
     "digest": "ad9cd83f376aa8cc"
   },
   "workfile-job-tabs-model.mjs": {
-    "token": "workfileTabs=6",
-    "digest": "01ea593e25d6b726"
+    "token": "workfileTabs=7",
+    "digest": "857ca53e8bbdaae5"
   },
   "workfile-identity-model.mjs": {
     "token": "actualB=1",

@@ -75,3 +75,6 @@ output.csv
 .debug-journal*
 *~
 .design/
+
+# 도구가 남기는 일회성 디버그 덤프 (tools/.tmp-cafe24-*.json 등)
+.tmp-*

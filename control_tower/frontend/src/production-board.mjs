@@ -15,8 +15,8 @@ import {
   REQUIRED_VALUE_PASTE_KEYS,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=45';
-import { resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=5';
+} from './production-board-model.mjs?parallelBoard=46';
+import { resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=6';
 import { buildACutSelectionCommand } from './factory-sync-model.mjs?selectedId=5';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서

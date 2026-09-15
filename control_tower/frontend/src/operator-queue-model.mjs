@@ -1,4 +1,4 @@
-import { deriveAssemblyWorkbench } from './production-workbench-model.mjs?currentProductTruth=5';
+import { deriveAssemblyWorkbench } from './production-workbench-model.mjs?currentProductTruth=6';
 const text = value => String(value ?? '').trim();
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
