@@ -1495,7 +1495,11 @@ test('200개 durable job과 후보 24개 상한을 실제 DOM에서 유지한다
   await openQueuePanel(page);
   await page.waitForFunction(() => document.querySelectorAll('#product-list .operator-job-row').length === 200);
   const renderMs = Date.now() - startedAt;
-  assert.equal(await page.locator('#operator-queue-total').innerText(), '200건');
+  // 기본 필터 '실행 대상' 은 막힌·완료 기록을 접어 둔다. 이 검사가 보는 것은 200건을
+  // 실제 DOM 에 올려도 버티는가이므로, 전부 펼치는 '전체' 에서 센다 — 실측 2026-09-16.
+  await page.locator('[data-queue-filter="all"]').click();
+  await page.waitForFunction(() => document.querySelector('#operator-queue-total')?.textContent?.includes('전부'));
+  assert.equal(await page.locator('#operator-queue-total').innerText(), '200건 전부');
   assert.equal(await page.locator('#product-list .operator-job-row').count(), 200);
   assert.equal(await page.locator('#workfile-job-tabs .workfile-job-tab').count(), 200);
   assert.ok(await page.locator('#a-cut-contact-sheet .a-cut-candidate').count() <= 24);

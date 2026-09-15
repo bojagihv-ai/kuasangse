@@ -131,16 +131,20 @@ test('operator queue declares accessible status filters beside its heading', () 
   const console = html.match(/class="section operator-console-shell"[\s\S]*?<\/section>\s*<\/section>/u)?.[0] || '';
 
   for (const [value, label] of [
+    ['actionable', '실행 대상'],
     ['all', '전체'],
     ['selection', '선택 대기만'],
+    ['approval', '승인 필요'],
     ['blocked', '차단만'],
     ['running', '진행 중'],
     ['completed', '완료'],
   ]) {
     assert.match(console, new RegExp(`data-queue-filter="${value}"[^>]*>${label}<`));
   }
-  assert.equal((console.match(/data-queue-filter=/g) || []).length, 5);
-  assert.match(console, /data-queue-filter="all"[^>]*aria-pressed="true"/u);
+  assert.equal((console.match(/data-queue-filter=/g) || []).length, 7);
+  // 기본은 ‘실행 대상’ 이다. ‘전체’ 가 기본이면서 행을 숨기면 이름이 거짓말이 된다
+  // — 실측 2026-09-16, 큐 15건 중 3건만 보이는데 눌린 버튼은 "전체" 였다.
+  assert.match(console, /data-queue-filter="actionable"[^>]*aria-pressed="true"/u);
 });
 
 test('1024px operator console stacks queue and current work while desktop keeps list-detail', () => {

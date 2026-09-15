@@ -880,8 +880,20 @@ export function operatorQueueState(jobValue) {
   return Object.freeze({ key: 'running', label: '진행 중' });
 }
 
+/**
+ * 'all' 과 'actionable' 은 둘 다 모든 작업을 그린다. 다른 점은 그린 뒤다 —
+ * 'actionable' 에서만 이전 차단·완료 기록을 CSS 로 접어 둔다(renderQueue 의 data-historical).
+ *
+ * 실측 2026-09-16: 예전에는 'all'(이름은 "전체")이 그 접기를 했다. 그래서 큐 15건 중 3건만
+ * 보이는데 버튼은 "전체" 가 눌린 상태였고, 같은 순간 개요 "내 차례" 는 그 숨은 11건을
+ * "손댈 일" 1순위로 세우고 있었다. 한 화면이 1순위라 부르는 것을 다른 화면이 "이전 기록"
+ * 으로 숨기면 안 된다. 이름과 동작을 맞춘다.
+ */
+export const QUEUE_FILTER_SHOWS_EVERY_JOB = Object.freeze(['all', 'actionable']);
+
 export function queueFilterMatches(jobValue, filter = 'all') {
-  return filter === 'all' || operatorQueueState(jobValue).key === filter;
+  return QUEUE_FILTER_SHOWS_EVERY_JOB.includes(filter)
+    || operatorQueueState(jobValue).key === filter;
 }
 
 export function reconcileOperatorQueueRefresh(previousJobs, responseValue, errorValue = '') {
@@ -1634,7 +1646,7 @@ export function mountProductionWorkbench({
   const workBundleRenders = new WeakMap();
   let productJobs = [];
   let recentlyCreatedJobIds = new Set();
-  let queueFilter = 'all';
+  let queueFilter = 'actionable';
   let operatorStep = { jobId: '', key: '', manual: false };
   let operatorCutStep = { jobId: '', key: '', manual: false };
   const workfileTabs = createWorkfileJobTabRegistry();
@@ -4551,21 +4563,23 @@ export function mountProductionWorkbench({
       const hiddenHistoryCount = historicalBlockedCount + historicalCompletedCount;
       const visibleJobCount = Math.max(0, filteredJobs.length - hiddenHistoryCount);
       if (roots.queueTotal) roots.queueTotal.replaceChildren(document.createTextNode(
-        queueFilter === 'all'
+        queueFilter === 'actionable'
           ? hiddenHistoryCount ? `실행 대상 ${visibleJobCount}건` : `${filteredJobs.length}건`
-          : `${filteredJobs.length}/${productJobs.length}건`,
+          : queueFilter === 'all'
+            ? `${filteredJobs.length}건 전부`
+            : `${filteredJobs.length}/${productJobs.length}건`,
       ));
       root.dataset.historicalBlockedCount = String(historicalBlockedCount);
       root.dataset.historicalCompletedCount = String(historicalCompletedCount);
-      if (queueFilter === 'all' && hiddenHistoryCount) {
+      if (queueFilter === 'actionable' && hiddenHistoryCount) {
         const historyLabels = [
-          historicalBlockedCount ? `이전 차단 기록 ${historicalBlockedCount}건은 ‘차단만’` : '',
-          historicalCompletedCount ? `완료 기록 ${historicalCompletedCount}건은 ‘완료’` : '',
+          historicalBlockedCount ? `막힌 작업 ${historicalBlockedCount}건` : '',
+          historicalCompletedCount ? `완료 ${historicalCompletedCount}건` : '',
         ].filter(Boolean).join(' · ');
         const hint = element(
           'p',
           'operator-queue-history-hint',
-          `${historyLabels}에서 확인할 수 있습니다 · 실행 대상 ${visibleJobCount}건만 표시 중입니다.`,
+          `${historyLabels}은 ‘전체’ 에서 볼 수 있습니다 · 지금은 실행 대상 ${visibleJobCount}건만 표시 중입니다.`,
         );
         hint.setAttribute('role', 'status');
         root.append(hint);

@@ -530,5 +530,6 @@ test('non-current waiting job exposes an explicit resume action and keeps stale 
   assert.ok(app.requests.some(request => request.method === 'POST' && request.url.endsWith('/resume')));
   assert.match(content(queue), /오래된 기록/);
   assert.equal(queue.dataset.historicalBlockedCount, '1');
-  assert.match(content(queue), /이전 차단 기록 1건/);
+  assert.match(content(queue), /막힌 작업 1건/);
+  assert.match(content(queue), /‘전체’ 에서 볼 수 있습니다/u);
 });

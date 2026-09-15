@@ -255,8 +255,16 @@ test('factory workbench exposes one compact API-driven master-detail surface', (
   assert.match(html, /src=["']\.\/src\/production-workbench\.mjs(?:\?[^"']*)?["']/);
   assert.match(html, /production-workbench\.mjs\?[^"']*imageLoading=1/);
   assert.match(html, /production-workbench\.mjs\?[^"']*currentProductTruth=4/);
-  assert.equal((workbench.match(/production-workbench-model\.mjs\?currentProductTruth=5/g) || []).length, 2);
-  assert.doesNotMatch(workbench, /production-workbench-model\.mjs\?currentProductTruth=2/);
+  // 번호를 통째로 박아 두면 정당한 캐시 번호 올림마다 이 검사가 깨진다 — 실측 2026-09-16,
+  // 5→6 으로 올리자 0 !== 2 로 실패했다. 지켜야 할 불변식은 "몇 번인가" 가 아니라
+  // "부르는 곳이 모두 같은 번호를 쓴다" 이다(다르면 verify:control-tower 가 막는다).
+  const workbenchModelTokens = (workbench.match(/production-workbench-model\.mjs\?currentProductTruth=(\d+)/g) || []);
+  assert.equal(workbenchModelTokens.length, 2);
+  assert.equal(new Set(workbenchModelTokens).size, 1, '같은 모듈을 서로 다른 캐시 번호로 부르고 있다');
+  assert.ok(
+    Number(workbenchModelTokens[0].match(/=(\d+)$/)[1]) >= 5,
+    '캐시 번호가 되감겼다 — 같은 번호 다른 내용이 되면 브라우저 가드가 침묵한다',
+  );
   assert.match(html, /<main\s+class=["']page["']\s+id=["']app["']/);
   assert.match(html, /main\.page\s*\{[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s);
   assert.match(html, /const API_BASE = localOrigin\("apiBase", "http:\/\/localhost:41009"\)/);

@@ -8,7 +8,11 @@
   <title>생산관제</title>
   <link href="/factory-native/src/factory-theme.css" rel="stylesheet">
   <link href="./src/bulk-intake.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+  <!-- 바깥 CDN 폰트는 쓰지 않는다. 이 화면은 127.0.0.1 에서만 도는 작업 도구라 인터넷이
+       끊기면 글자가 늦게 뜨고, 조립공장 검사도 "외부 요청 0건" 을 계약으로 못박고 있다.
+       실측 2026-09-16: 3780cf6 이 넣은 cdn.jsdelivr.net pretendard.css 때문에
+       workfile-tabs 검사 3건이 externalRequests 로 실패했다. 글꼴은 아래 대체 계열로 내려간다.
+       Pretendard 를 그대로 쓰려면 CDN 이 아니라 저장소에 넣고 @font-face 로 부를 것. -->
   <style>
 
     * {
@@ -3409,9 +3413,9 @@
       box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
     }
 
-    /* 기본 목록은 지금 손댈 수 있는 작업에 집중한다. 저장된 차단 기록은 데이터는 보존하고
-       ‘차단만’ 필터에서 다시 열 수 있게 숨긴다. */
-    .operator-queue-list[data-queue-view-filter="all"] .operator-job-row[data-historical="true"] {
+    /* ‘실행 대상’ 은 지금 손댈 수 있는 작업에 집중한다. 막힌·완료 기록은 데이터를 보존한 채
+       접어 두고, ‘전체’ 와 각 상태 필터에서 그대로 볼 수 있다. ‘전체’ 는 전체를 보여야 한다. */
+    .operator-queue-list[data-queue-view-filter="actionable"] .operator-job-row[data-historical="true"] {
       display: none;
     }
 
@@ -4272,7 +4276,8 @@
               <span class="factory-pill" id="operator-queue-total">0건</span>
             </div>
             <div class="operator-queue-filters" role="group" aria-label="제품 대기열 상태 필터">
-              <button class="button-secondary" type="button" data-queue-filter="all" aria-pressed="true">전체</button>
+              <button class="button-secondary" type="button" data-queue-filter="actionable" aria-pressed="true">실행 대상</button>
+              <button class="button-secondary" type="button" data-queue-filter="all" aria-pressed="false">전체</button>
               <button class="button-secondary" type="button" data-queue-filter="selection" aria-pressed="false">선택 대기만</button>
               <button class="button-secondary" type="button" data-queue-filter="approval" aria-pressed="false">승인 필요</button>
               <button class="button-secondary" type="button" data-queue-filter="blocked" aria-pressed="false">차단만</button>
@@ -4813,7 +4818,7 @@
       window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=33&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1&amp;staleInbox=1&amp;currentProductTruth=4&amp;resumeHistory=2&amp;storedResultCopy=1&amp;queueCountCopy=1"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=33&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1&amp;staleInbox=1&amp;queueShowsAll=1&amp;currentProductTruth=4&amp;resumeHistory=2&amp;storedResultCopy=1&amp;queueCountCopy=1"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
     import { mountProductIntake } from "./src/product-intake.mjs?productIntake=9";

@@ -49,6 +49,10 @@ async function openQueue(t, { apiPort, frontendPort }) {
   await page.goto(url, { waitUntil: 'networkidle' });
   await page.locator('#menu-tab-queue').click();
   await page.waitForSelector('#product-list .operator-job-row');
+  // 지울 수 있는 작업은 대개 막힌·완료 작업인데, 기본 필터 '실행 대상' 은 그것을 접어 둔다.
+  // 사람이 지우러 갈 때 밟는 경로 그대로 '전체' 를 눌러 펼친 뒤 본다 — 실측 2026-09-16.
+  await page.locator('[data-queue-filter="all"]').click();
+  await page.waitForSelector('#product-list .operator-job-row[data-job-id="job-qa-3102"]:visible');
   return page;
 }
 

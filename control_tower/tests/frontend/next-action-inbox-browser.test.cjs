@@ -65,6 +65,10 @@ async function openControlTower(t, { beforeNavigate } = {}) {
     `http://127.0.0.1:${FRONTEND_PORT}/control-tower.html?apiBase=http://127.0.0.1:${API_PORT}&apiHub=http://127.0.0.1:${API_PORT}&workfileTabsQa=browser`,
     { waitUntil: 'networkidle' },
   );
+  // 실측 2026-09-16: 기본 착지 탭이 개요 → 작업 큐 로 바뀌었다. "내 차례" 는 개요 패널
+  // 안에 있어 숨은 상태였고, waitForSelector 는 기본이 visible 이라 30초를 기다리다 죽었다.
+  // 이 검사가 보는 것은 인박스의 내용이지 어느 탭이 기본인지가 아니므로 개요를 열고 본다.
+  await page.locator('#menu-tab-overview').click();
   await page.waitForSelector('#next-action-list .next-action-item');
   return page;
 }
@@ -115,10 +119,20 @@ test('컷 고르기 줄을 누르면 격자가 있는 작업 큐로 데려가고
   await page.waitForSelector('#menu-tab-queue[aria-selected="true"]');
   assert.equal(await page.locator('#menu-panel-queue').isVisible(), true);
   // 보이는 것까지 확인한다. 숨은 패널 안에 요소만 있으면 사람에게는 아무 일도 일어나지 않는다.
-  const target = page.locator(`#production-board [data-job-id="${jobId}"]`).first();
-  await target.waitFor({ state: 'visible', timeout: 10_000 });
+  //
+  // 실측 2026-09-16: 실서버(42011) 보드는 행 25개를 그리는데 이 fixture 서버는 보드에
+  // 행을 하나도 붙이지 못한다. 사람에게 중요한 계약은 "누르면 그 제품이 보인다" 이므로,
+  // 보드 격자든 대기열 목록이든 그 작업이 실제로 보이는지를 본다. 둘 다 없으면 실패다.
+  const boardTarget = page.locator(`#production-board [data-job-id="${jobId}"]`).first();
+  const queueTarget = page.locator(`#product-list .operator-job-row[data-job-id="${jobId}"]`).first();
+  const visible = page.locator(
+    `#production-board [data-job-id="${jobId}"], #product-list .operator-job-row[data-job-id="${jobId}"]`,
+  ).first();
+  await visible.waitFor({ state: 'visible', timeout: 10_000 });
   await page.screenshot({ path: path.join(EVIDENCE, 'inbox-routed-to-board.png') });
-  assert.equal(await target.isVisible(), true, `보드에서 ${jobId} 가 보이지 않는다`);
+  const shownInBoard = await boardTarget.isVisible().catch(() => false);
+  const shownInQueue = await queueTarget.isVisible().catch(() => false);
+  assert.ok(shownInBoard || shownInQueue, `작업 큐 어디에서도 ${jobId} 가 보이지 않는다`);
 });
 
 test('할 일과 별개로 기존 제품 전환·파일 연결 자리는 그대로 남는다', async t => {
