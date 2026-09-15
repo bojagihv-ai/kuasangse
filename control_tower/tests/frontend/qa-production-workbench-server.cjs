@@ -39,12 +39,19 @@ const stage1Intake = {
 const disconnectedFactoryFixture = process.env.CONTROL_TOWER_QA_FACTORY_STATE === 'disconnected';
 let requestedFixtureCount = 0;
 const decisionIds = [
-  'sinhwa_db_product', 'cafe24_product',
+  'sinhwa_db_product', 'cafe24_product', 'competitor_product',
   'competitor_coupang', 'competitor_smartstore', 'competitor_gmarket',
   'competitor_auction', 'competitor_elevenst', 'required_field_candidate',
   'representative_image', 'size_image', 'option_image', 'general_image',
   'section_variant', 'final_detail',
 ];
+
+const policyPresets = Object.fromEntries(Object.entries({
+  full_auto: [],
+  representative_manual: ['representative_image'],
+  representative_and_size_manual: ['representative_image', 'size_image'],
+  all_images_manual: ['representative_image', 'size_image', 'option_image', 'general_image'],
+}).map(([name, manual]) => [name, Object.fromEntries(decisionIds.map(id => [id, manual.includes(id) ? 'manual' : 'auto']))]));
 
 const stage = (key, selectedId, count = 4) => ({
   key,
@@ -446,9 +453,7 @@ const api = http.createServer(async (request, response) => {
       defaultPreset: 'full_auto',
       decisionPointIds: decisionIds,
       competitorMarkets: ['coupang', 'smartstore', 'gmarket', 'auction', 'elevenst'],
-      presets: {
-        full_auto: Object.fromEntries(decisionIds.map(id => [id, 'auto'])),
-      },
+      presets: policyPresets,
       precedence: ['stage', 'product', 'batch', 'batch_preset', 'auto_default'],
     });
   }
@@ -466,6 +471,7 @@ const api = http.createServer(async (request, response) => {
         payload.stageOverride?.[id]
           || payload.productOverride?.[id]
           || payload.batchOverride?.[id]
+          || policyPresets[payload.preset]?.[id]
           || 'auto',
       ])),
       effectiveSources: Object.fromEntries(decisionIds.map(id => [
@@ -1021,12 +1027,14 @@ const api = http.createServer(async (request, response) => {
 const types = {
   '.html': 'text/html; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
 };
 const frontend = http.createServer((request, response) => {
   const url = new URL(request.url, `http://127.0.0.1:${FRONTEND_PORT}`);
   const relative = url.pathname === '/' ? 'control-tower.html' : url.pathname.replace(/^\/+/, '');
-  const file = path.resolve(FRONTEND, relative);
-  if (!file.startsWith(FRONTEND) || !fs.existsSync(file)) {
+  const sharedTheme = url.pathname === '/factory-native/src/factory-theme.css';
+  const file = sharedTheme ? path.resolve(FRONTEND, '../../src/factory-theme.css') : path.resolve(FRONTEND, relative);
+  if ((!sharedTheme && !file.startsWith(FRONTEND)) || !fs.existsSync(file)) {
     response.writeHead(404);
     response.end('not found');
     return;

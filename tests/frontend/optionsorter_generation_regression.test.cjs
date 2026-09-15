@@ -32,14 +32,14 @@ test('옵션 원본 아카이브 큐는 마지막 작업에서만 전체 렌더�
 });
 
 test('옵션표 생성은 중복 실행을 단일 비행으로 차단한다', () => {
-  const generation = sourceSlice(optionSource, 'async function optGenerateOptionImages()', 'function optDownloadOptionResult(');
+  const generation = sourceSlice(optionSource, 'async function optGenerateOptionImages(', 'function optDownloadOptionResult(');
   assert.match(generation, /ensureOptionSorterDefaults\(os\);\s*if \(os\.optionGenRunning\) return;/);
 });
 
 test('옵션표 생성은 로컬 아카이브 URL 원본을 AI 입력 payload로 복원한다', () => {
   const imagePart = sourceSlice(optionSource, 'async function optImageDataPart(', 'function optHasImagePayload(');
   assert.match(imagePart, /factoryLocalArchiveAssetImagePart/);
-  const generation = sourceSlice(optionSource, 'async function optGenerateOptionImages()', 'function optDownloadOptionResult(');
+  const generation = sourceSlice(optionSource, 'async function optGenerateOptionImages(', 'function optDownloadOptionResult(');
   assert.ok(generation.includes('await optImageDataPart(sheet.pairs[0].img)'));
   assert.ok(generation.includes('await optImageDataPart(pair.img)'));
 });

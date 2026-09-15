@@ -26,6 +26,8 @@ def _cors_origins():
         "http://localhost:8080",
         "http://127.0.0.1:8081",
         "http://localhost:8081",
+        "http://127.0.0.1:42011",
+        "http://localhost:42011",
     ]
     raw = os.getenv("KUASANGSE_CORS_ORIGINS", "")
     extra = [item.strip() for item in raw.split(",") if item.strip()]

@@ -190,6 +190,42 @@ test('작업파일은 이름이 아니라 exact identity 한 건일 때만 연�
   assert.deepEqual([...ambiguous.matches].sort(), ['job-exact', 'job-other']);
 });
 
+test('초기 작업대는 첫 차단 이력보다 실행 가능 작업을 먼저 연다', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?workfile-tabs-focus=${Date.now()}`);
+  const registry = workbench.createWorkfileJobTabRegistry();
+  registry.syncJobs([
+    { jobId: 'blocked-first', productName: '오래된 차단 이력', status: 'blocked' },
+    { jobId: 'waiting-next', productName: '선택 대기 작업', status: 'waiting_manual' },
+  ], {
+    schema: 'factory-control-projection:v1',
+    connected: false,
+    session: { revision: 0 },
+    inputs: [],
+    stages: [],
+    progress: {},
+    registration: {},
+  });
+  assert.equal(registry.active().jobId, 'waiting-next');
+});
+
+test('초기 작업대는 최근 저장한 실행 가능 작업을 먼저 연다', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?workfile-tabs-recent=${Date.now()}`);
+  const registry = workbench.createWorkfileJobTabRegistry();
+  registry.syncJobs([
+    { jobId: 'waiting-old', productName: '오래된 선택 대기', status: 'waiting_manual', checkpoint: { savedAt: 10 } },
+    { jobId: 'waiting-recent', productName: '최근 선택 대기', status: 'waiting_manual', checkpoint: { savedAt: 20 } },
+  ], {
+    schema: 'factory-control-projection:v1',
+    connected: false,
+    session: { revision: 0 },
+    inputs: [],
+    stages: [],
+    progress: {},
+    registration: {},
+  });
+  assert.equal(registry.active().jobId, 'waiting-recent');
+});
+
 test('unlinked 파일은 exact SHA revision run durable job만 새 작업 탭으로 승격한다', async () => {
   const workbench = await import(`${pathToFileURL(MODULE).href}?workfile-fork=${Date.now()}`);
   const identity = {
@@ -298,6 +334,26 @@ test('명시적 rebind와 resume만 현재 checkpoint CAS를 exact payload로 �
     () => workbench.buildWorkfileRebindPayload({ job, projection: projection(job.jobId, current), workfile: { ...privateFile, file: null } }),
     error => error?.code === 'workfile_reselect_required',
   );
+});
+
+test('워커 재시작 뒤 재개는 같은 제품의 서버 이력 CAS를 읽고 다른 제품 이력을 거절한다', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?resume-history=${Date.now()}`);
+  const job = { jobId: 'job-b', checkpointAvailable: true };
+  const current = projection('job-b', { workspaceId: 'batch:job-b', runId: '', revision: 0 });
+  const history = { workBundle: { id: 'history:job-b' }, history: { workspaceId: 'batch:job-b', runId: 'saved-run-b', revision: 66 } };
+  assert.deepEqual(workbench.buildFactoryResumePayload({ job, projection: current, history }), {
+    expectedCheckpointRevision: 66, expectedCheckpointRunId: 'saved-run-b',
+  });
+  const live = projection('job-b', { workspaceId: 'batch:job-b', runId: 'saved-run-b', revision: 90 });
+  assert.deepEqual(workbench.buildFactoryResumePayload({ job, projection: live, history }), {
+    expectedCheckpointRevision: 66, expectedCheckpointRunId: 'saved-run-b',
+  });
+  assert.deepEqual(workbench.buildFactoryResumePayload({ job, history }), {
+    expectedCheckpointRevision: 66, expectedCheckpointRunId: 'saved-run-b',
+  });
+  assert.throws(() => workbench.buildFactoryResumePayload({ job, projection: current, history: {
+    ...history, history: { ...history.history, workspaceId: 'batch:other-job' },
+  } }), error => error.code === 'factory_product_checkpoint_invalid');
 });
 
 test('productId 없는 실제 B 파일은 명시적으로 선택한 exact job에만 연결 승인을 허용한다', async () => {

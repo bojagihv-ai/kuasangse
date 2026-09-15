@@ -149,3 +149,22 @@ def test_pending_order_is_not_replaced_by_a_new_one(tmp_path: Path) -> None:
     assert bridge.has_pending() is True
     assert bridge.has_pending() is True
     assert len(bridge._executions) == before
+
+
+def test_phantom_running_job_without_an_order_allows_the_next_queued_job() -> None:
+    # Given: a stale running status with no worker order or execution ahead of a queued job.
+    bridge = FactorySyncBridge()
+    phantom_id = str(bridge.queue_product(_manual_product_job_payload(suffix="phantom"))["jobId"])
+    queued_id = str(bridge.queue_product(_manual_product_job_payload(suffix="queued"))["jobId"])
+    bridge._product_jobs[phantom_id].status = "running"
+    assert bridge._executions == {}
+
+    # When: a worker reconnects and asks for the next product.
+    bridge.hello(_hello())
+    claimed = bridge.claim(_live_worker())
+
+    # Then: the phantom is reconciled and cannot consume the queue slot.
+    assert bridge._product_jobs[phantom_id].status == "blocked"
+    assert bridge._product_jobs[phantom_id].current_order_id == ""
+    assert claimed["order"] is not None
+    assert claimed["order"]["command"]["payload"]["jobId"] == queued_id

@@ -25,9 +25,24 @@ console.log(`CONTROL_TOWER_HTML_SCRIPTS_OK ${scripts.length}`);
 // 모서리가 각지고 글자 크기가 상속되는데, 화면을 열어 보지 않으면 알 수 없다.
 // 실측 2026-08-26: 이어붙여 보기 창의 배경이 통째로 투명했고 원인은 없는 토큰 이름이었다.
 {
-  const defined = new Set([...html.matchAll(/(--[a-z0-9-]+)\s*:/g)].map(match => match[1]));
+  const styles = [html];
+  for (const [tag] of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/\brel=["']stylesheet["']/i.test(tag)) continue;
+    const href = tag.match(/\bhref=["']([^"']+)["']/i)?.[1];
+    if (!href) continue;
+    const url = new URL(href, 'http://control-tower.local/');
+    if (url.origin !== 'http://control-tower.local') continue;
+    const relative = url.pathname.startsWith('/factory-native/')
+      ? url.pathname.slice('/factory-native/'.length)
+      : `control_tower/frontend${url.pathname}`;
+    const file = path.resolve(root, decodeURIComponent(relative));
+    if (!file.startsWith(`${root}${path.sep}`)) throw new Error('stylesheet_outside_workspace');
+    styles.push(fs.readFileSync(file, 'utf8'));
+  }
+  const styleSource = styles.join('\n');
+  const defined = new Set([...styleSource.matchAll(/(--[a-z0-9-]+)\s*:/g)].map(match => match[1]));
   const used = new Map();
-  for (const match of html.matchAll(/var\((--[a-z0-9-]+)/g)) {
+  for (const match of styleSource.matchAll(/var\((--[a-z0-9-]+)/g)) {
     used.set(match[1], (used.get(match[1]) || 0) + 1);
   }
   const missing = [...used.keys()].filter(name => !defined.has(name)).sort();
@@ -51,6 +66,11 @@ console.log(`CONTROL_TOWER_HTML_SCRIPTS_OK ${scripts.length}`);
   for (const file of fs.readdirSync(srcDir).filter(name => name.endsWith('.mjs'))) {
     const body = fs.readFileSync(path.join(srcDir, file), 'utf8');
     for (const match of body.matchAll(/'\.\/([a-z0-9-]+\.mjs)\?([^']+)'/g)) {
+      const previous = imports.get(match[1]);
+      if (previous && previous !== match[2]) {
+        console.error(`같은 모듈의 캐시 번호가 다릅니다: ${match[1]} (${previous}, ${match[2]})`);
+        process.exit(1);
+      }
       imports.set(match[1], match[2]);
     }
   }

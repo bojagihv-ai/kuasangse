@@ -372,7 +372,6 @@ test('DB candidate rerun commands allow the DB navigation state written by searc
     'factory/db:rerunDbQuery',
     'factory/db:rerunCafe24Query',
     'factory/db:appendCafe24Query',
-    'factory/db:appendDbQuery',
   ]) {
     const factoryPaths = createRuntimePolicies()[command].parts
       .filter(part => part.owner === 'factory')
@@ -437,7 +436,6 @@ test('Cafe24 후보 재검색 명령은 소유 draft를 닫은 뒤 현재 operat
 
   assert.match(dbActions, /rerunCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateSearchOnly\(\{ operationToken: receipt\.operationToken \}\)/);
   assert.match(dbActions, /appendCafe24Query[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunCafe24CandidateAdditionalSearch\(\{ operationToken: receipt\.operationToken \}\)/);
-  assert.match(dbActions, /appendDbQuery[\s\S]*Promise\.resolve\(transaction\)\.then\(async receipt =>[\s\S]*factoryRunSinhwaCandidateAdditionalSearch\(\{ operationToken: receipt\.operationToken \}\)/);
 });
 
 test('visual validation completion does not retain a revoked factory draft asset proxy', async () => {
@@ -657,8 +655,21 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(runtimeDbActions, /factoryBeginCandidateProgramStart\('cafe24', draft\)[\s\S]*factoryStartCafe24ControlAndRerunCandidates\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryBeginCafe24OAuthStatusCheck\(draft\)[\s\S]*factoryRefreshCafe24OAuthStatus\(\{[\s\S]*operationToken: receipt\.operationToken/);
   assert.match(runtimeDbActions, /factoryOpenCafe24OAuthLogin\(\{[\s\S]*factory: draft,[\s\S]*operationToken/);
-  // 2026-09-07: appendDbQuery(신화사DB 추가검색)가 같은 후속 영수증 규칙으로 한 자리 늘었다 (6 → 7).
-  assert.equal((runtimeDbActions.match(/factoryRuntimeRequireCurrentFollowupReceipt\(/g) || []).length, 7);
+  assert.deepEqual(
+    Array.from(
+      runtimeDbActions.matchAll(/factoryRuntimeRequireCurrentFollowupReceipt\('([^']+)'/g),
+      match => match[1],
+    ).sort(),
+    [
+      'factory/db:appendCafe24Query',
+      'factory/db:appendDbQuery',
+      'factory/db:cafe24OauthStatusRefreshAndRerun',
+      'factory/db:rerunCafe24Query',
+      'factory/db:rerunDbQuery',
+      'factory/db:startCafe24ControlAndRerun',
+      'factory/db:startSinhwaDbAndRerun',
+    ].sort(),
+  );
   assert.doesNotMatch(runtimeDbActions, /draft => factory(?:StartSinhwaDbAndRerunCandidates|StartCafe24ControlAndRerunCandidates|RefreshCafe24OAuthStatus)\(/);
   for (const command of [
     'factory/db:runCandidatesForSelection',
@@ -1091,7 +1102,7 @@ test('B3 production action bridge commits through the owned store draft transact
   assert.match(selectedAssetPlacementWriter, /function factoryApplySelectedAssetsToSections\(factory\)[\s\S]*requires an owned draft/);
   assert.match(detailStageWriter, /const detailFactory = options\.factory;[\s\S]*factoryApplySelectedAssetsToSections\(detailFactory\)/);
   assert.doesNotMatch(detailStageWriter, /factoryMarkImageStageRunInactive\(stageId, generationRunId\)/);
-  assert.match(factoryCore, /if \(stageId === 'detail'\) return factoryGenerateDetailStage\(\{ factory \}\)/);
+  assert.match(factoryCore, /if \(stageId === 'detail'\) return factoryGenerateDetailStage\(\{[\s\S]*factory,[\s\S]*operationToken/);
   for (const legacyName of ['factoryGenerateImageStage', 'factoryGenerateCutsStage']) {
     const occurrences = [...factoryCore.matchAll(new RegExp(`\\b${legacyName}\\s*\\(`, 'g'))].length;
     assert.equal(occurrences, 1, `${legacyName} must remain definition-only until a separate deletion decision`);
@@ -2481,9 +2492,9 @@ test('B3 detail and cut generation source requires exact commands, stable identi
   assert.match(persistedCutWriter, /const factory = options\.factory \|\| factoryRuntimeReadFactory\(\)/);
   assert.match(persistedCutWriter, /factoryQueueLocalArchiveAsset\([\s\S]*?factory,[\s\S]*?operationToken: options\.operationToken/);
   assert.match(persistedCutWriter, /factoryRequireCurrentRunOperation\([\s\S]*?options\.operationSignal/);
-  // 2026-09-06: "나머지 N개만 생성" 이 onlyMissing 을 같은 소유 draft·토큰과 함께 넘긴다.
-  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
-  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal, onlyMissing \}\)/);
+  // `onlyMissing` is an execution mode; the command owner and fencing inputs stay exact.
+  assert.match(imageStageWriter, /generateAllSizeCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal(?:, onlyMissing)? \}\)/);
+  assert.match(imageStageWriter, /generateAllCuts\(\{ factory, operationToken: options\.operationToken, operationSignal: options\.operationSignal(?:, onlyMissing)? \}\)/);
   assert.match(imageStageWriter, /factoryStopGoalHeartbeat\(heartbeat\);[\s\S]*?factoryRunOperationIsStale\(e\)/);
   for (const writer of [cutsWriter, sizeWriter]) {
     assert.doesNotMatch(writer, /(?:state|window|globalThis)\.factory/);
@@ -6069,6 +6080,10 @@ test('fresh resumed worker acquires exact product authority before server candid
     'function factoryRuntimeControlProvidedColorOptionValues(',
     'function factoryRuntimeControlWaitingStage(',
   );
+  const restoreInputsSource = [
+    sourceSlice(core, 'function factoryImagePayloadFingerprint(', 'function factoryImageFingerprintLooksUsable('),
+    sourceSlice(core, 'function factoryRuntimeControlRestoreInputPayloads(', 'function factoryRuntimeControlProvidedColorOptionValues('),
+  ].join('\n');
   const prepareProductSource = sourceSlice(
     core,
     'async function factoryRuntimeControlPrepareProduct(',
@@ -6312,7 +6327,7 @@ test('fresh resumed worker acquires exact product authority before server candid
       }),
     });
     vm.runInContext(
-      `${checkpointProjectSource}\n${providedOptionsSource}\n${prepareProductSource}\n${runProductSource}\n`
+      `${checkpointProjectSource}\n${providedOptionsSource}\n${restoreInputsSource}\n${prepareProductSource}\n${runProductSource}\n`
       + 'globalThis.runProduct = factoryRuntimeControlRunProduct;',
       context,
     );
@@ -6391,9 +6406,12 @@ test('fresh resumed worker acquires exact product authority before server candid
   assert.deepEqual(runtime.events.slice(0, 1), [`authority:${workspaceScopeId}`]);
 });
 
-test('Product B checkpoint refreshes stale project authority before preserving the selected size A-cut', async () => {
+test('Product B checkpoint preserves the selected size A-cut and saved document revision after restoring draft authority', async () => {
   const core = source('src/app-core-03.js');
   const checkpointSource = [
+    sourceSlice(core, 'function factoryRuntimeAuthoritativeWorkspaceRevision(', 'async function factoryRuntimeSha256Text('),
+    sourceSlice(core, 'async function factoryRuntimeControlProjection(', 'function factoryRuntimeControlAssertSelection('),
+    sourceSlice(core, 'function factoryRuntimeControlCheckpointFromProjection(', 'function factoryRuntimeControlProjectionMatchesCheckpoint('),
     // 저장 경로가 쓰는 프로젝트 확정 헬퍼까지 함께 평가해야 실제 scope 계산을 검증한다.
     sourceSlice(
       core,
@@ -6421,16 +6439,29 @@ test('Product B checkpoint refreshes stale project authority before preserving t
   const state = {
     currentProjectId: '',
     error: '',
-    factory: { workspace: { id: projectId } },
+    factory: { workspace: { id: projectId }, batchJobId: jobId },
   };
   let authorityRevision = 91;
-  let activeAuthorityScope = 'draft:batch-worker';
+  const draftScope = 'draft:batch-worker';
+  const draftRevision = 211;
+  let activeAuthorityScope = draftScope;
+  let savedDocument;
   const serverRevision = 103;
   const context = vm.createContext({
     state,
+    window: { __KUASANGSE_WORKSPACE_LOCK__: { snapshot: () => ({
+      mode: 'editing', scopeId: activeAuthorityScope,
+      revision: activeAuthorityScope === draftScope ? draftRevision : authorityRevision,
+    }) } },
+    getCurrentLastWorkWorkspaceScope: () => draftScope,
     getCurrentDocumentWorkspaceScope: currentProjectId => (
       `project:${currentProjectId || state.factory.workspace.id}`
     ),
+    currentWorkspaceRevision: requestedScope => {
+      assert.equal(requestedScope, scopeId, 'projection must read the saved project, not the active draft');
+      assert.ok(savedDocument, 'the document must be saved before its revision is read');
+      return savedDocument.workspaceRevision;
+    },
     ensureWorkspaceEditAuthority: async (requestedScope, options) => {
       assert.equal(requestedScope, scopeId);
       assert.deepEqual({ ...options }, { force: true, confirmedTakeover: true });
@@ -6445,23 +6476,39 @@ test('Product B checkpoint refreshes stale project authority before preserving t
         state.error = '작업 저장 실패: server persistence rejected (409)';
         return false;
       }
-      if (options?.retainProjectAuthority !== true) activeAuthorityScope = 'draft:batch-worker';
+      savedDocument = {
+        workspaceRevision: { scopeId, counter: serverRevision + 1 },
+        selectedIds: [...selectedInputs.keys()],
+        results: structuredClone([...resultMap.values()]),
+      };
+      if (options?.retainProjectAuthority !== true) activeAuthorityScope = draftScope;
       return true;
     },
-    factoryRuntimeControlProjection: async () => ({
-      session: { workspaceId: projectId },
-      stages: {
-        size: {
-          selectedIds: [...selectedInputs.keys()],
-          results: [...resultMap.values()],
-        },
-      },
+    saveLastWorkNow: async () => {
+      assert.equal(activeAuthorityScope, draftScope, 'draft persistence must not inherit project authority');
+      events.push(`flush:${draftScope}`);
+    },
+    factoryRuntimeReadViewSnapshot: () => ({ factory: state.factory }),
+    factoryCurrentProductKey: () => 'product-b',
+    factoryCurrentWorkflowRunId: () => 'run-product-b',
+    factoryCurrentInputImageFingerprint: () => 'image-product-b',
+    factoryRuntimeRequireStore: () => ({ getOperationToken: () => ({ revision: 305, fence: 1 }) }),
+    factoryCafe24TargetInfo: () => ({}),
+    factoryControlPreflightCache: { read: (_key, read) => read() },
+    factoryRuntimeInspectBatchCafe24Registration: async () => ({}),
+    factoryControlAssetStage: (_factory, key, stageId) => ({
+      key,
+      candidates: stageId === 'size' ? [...selectedInputs.values()] : [],
+      selectedIds: stageId === 'size' ? [...selectedInputs.keys()] : [],
+      results: stageId === 'size' ? [...resultMap.values()] : [],
     }),
-    factoryRuntimeControlCheckpointFromProjection: (_payload, projection, status, stageKey) => ({
-      projectId: projection.session.workspaceId,
-      status,
-      stageKey,
-    }),
+    factoryControlSectionStage: () => ({ key: 'sections', candidates: [], selectedIds: [] }),
+    factoryProjectFileImageFingerprint: value => value,
+    factoryRuntimeBatchCafe24BindingMatches: () => false,
+    factoryControlProjectionSequence: 0,
+    factoryControlInputGroups: () => [],
+    factoryControlProgress: () => ({}),
+    factoryRuntimeDetachedValue: structuredClone,
     factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
   });
   vm.runInContext(`${checkpointSource}\nthis.saveCheckpoint = factoryRuntimeControlSaveProductCheckpoint;`, context);
@@ -6469,12 +6516,20 @@ test('Product B checkpoint refreshes stale project authority before preserving t
   const receipt = await context.saveCheckpoint({ jobId }, 'waiting_manual', 'size');
 
   assert.equal(authorityRevision, 103, 'stale revision 91 must rebase once to server revision 103');
-  assert.equal(activeAuthorityScope, scopeId, 'selected A-cut checkpoint must keep its project authority after saving');
-  assert.deepEqual(events, ['authority:91->103', 'commit:103:true']);
+  assert.equal(activeAuthorityScope, draftScope, 'saving must restore the original draft authority');
+  assert.deepEqual(events, ['authority:91->103', 'commit:103:false', `flush:${draftScope}`]);
+  assert.equal(receipt.projection.session.revision, 104, 'project revision must differ from draft 211 and store 305');
+  assert.equal(receipt.checkpoint.revision, 104, 'checkpoint must use the saved document revision');
+  assert.equal(receipt.checkpoint.projectId, projectId);
+  assert.equal(receipt.checkpoint.status, 'waiting_manual');
+  assert.equal(receipt.checkpoint.stageKey, 'size');
+  assert.deepEqual(savedDocument.selectedIds, before.selectedIds);
+  assert.deepEqual(savedDocument.results, [...resultMap.values()]);
   assert.deepEqual([...selectedInputs.keys()], before.selectedIds);
   assert.deepEqual([...resultMap.values()].map(result => result.id), before.resultIds);
-  assert.deepEqual([...receipt.projection.stages.size.selectedIds], [candidateId]);
-  assert.deepEqual(Array.from(receipt.projection.stages.size.results, result => result.id), [resultId]);
+  const size = receipt.projection.stages.find(stage => stage.key === 'size');
+  assert.deepEqual([...size.selectedIds], [candidateId]);
+  assert.deepEqual(Array.from(size.results, result => result.id), [resultId]);
 });
 
 test('생산관제 직접 입력 색상과 사진은 옵션분류기 슬롯에 중복 없이 이어진다', () => {
@@ -6544,4 +6599,51 @@ test('생산관제 직접 입력 색상과 사진은 옵션분류기 슬롯에 �
   assert.deepEqual(Array.from(state.optionSorter.slots, slot => Array.from(slot.imgIds)), [['color-1'], ['color-2']]);
   assert.equal(second.ok, true);
   assert.equal(state.optionSorter.images.length, 2);
+});
+
+test('DB 재검색어는 제품 정체성·입력·색상 옵션을 바꾸지 않는다', () => {
+  const implementation = sourceSlice(source('src/app-core-06.js'),
+    'function factoryApplyWizardDbSearchQuery(', 'function factoryWizardDbSearchQueryFromInput(');
+  const termsImplementation = sourceSlice(source('src/cafe24-sync.js'),
+    'function factoryCandidateSearchTerms(', 'function factoryDedupeSinhwaCandidates(');
+  for (const hasIdentitySetter of [true, false]) {
+    for (const owned of [true, false]) {
+      const factory = {
+        product: { productName: '시험 C', productKey: 'trial-c', selectedDbCandidateKey: '818',
+          colorImages: [{ id: 'color-1', color: '색동 1' }, { id: 'color-2', color: '색동 2' }],
+          finalDb: { width_mm: '150', depth_mm: '80', stock: '99' } },
+        automation: { optionMode: 'provided' },
+        assets: [{ id: 'keep-image', sourceImageKey: 'input-c' }],
+        goalRun: { jobId: 'trial-c', currentRunId: 'run-c' },
+      };
+      const state = { productName: '시험 C', imageBase64: 'input-c' };
+      const before = JSON.parse(JSON.stringify({ product: factory.product, state, assets: factory.assets, goalRun: factory.goalRun }));
+      let identityWrites = 0;
+      const context = vm.createContext({ state,
+        factoryLog() {}, render() {}, saveLastWorkNow() {},
+        cleanDbSearchTerm: value => String(value).trim(),
+        factoryAddSearchTerm: (terms, value) => { if (value && !terms.includes(value)) terms.push(value); },
+        factoryAddSearchTermVariants() {},
+        document: { getElementById: () => null, querySelector: () => null },
+        factoryRuntimeUpdateOwnedFactory(command, owner, mutate) {
+          assert.equal(command, 'factory/db:applyWizardSearchQuery');
+          assert.equal(owner, 'product-db');
+          return { result: mutate(factory) };
+        },
+        ...(hasIdentitySetter ? { factorySetCurrentProductIdentity() { identityWrites++; } } : {}),
+      });
+      vm.runInContext(implementation + '\n' + termsImplementation, context);
+      assert.equal(context.factoryApplyWizardDbSearchQuery('  색동  ', owned ? { factory } : {}), '색동');
+      assert.equal(identityWrites, 0, '검색어 변경은 제품 교체를 호출하면 안 된다');
+      assert.equal(factory.automation.dbSearchQuery, '색동');
+      assert.equal(factory.automation.optionMode, 'provided');
+      assert.equal(factory.automation.activeTab, 'db');
+      assert.deepEqual({ product: factory.product, state, assets: factory.assets, goalRun: factory.goalRun }, before);
+      assert.deepEqual(Array.from(context.factoryCandidateSearchTerms(factory)), ['색동']);
+      assert.deepEqual(Array.from(context.factoryCandidateSearchTerms(factory, { query: '단독' })), ['단독']);
+      const afterQuery = JSON.stringify(factory);
+      assert.equal(context.factoryApplyWizardDbSearchQuery('  ', { factory }), '');
+      assert.equal(JSON.stringify(factory), afterQuery, '빈 검색어는 기존 상태를 그대로 둔다');
+    }
+  }
 });

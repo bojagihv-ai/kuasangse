@@ -35,7 +35,7 @@ Next
 
 If chrome <> "" Then
     profile = fileSystem.BuildPath(localAppData, "kuasangse-api-docs-chrome")
-    shell.Run """" & chrome & """ --user-data-dir=""" & profile & """ --app=http://127.0.0.1:5050/api/v1/docs", 1, False
+    shell.Run """" & chrome & """ --user-data-dir=""" & profile & """ --app=http://127.0.0.1:43030/api/v1/docs", 1, False
 Else
-    shell.Run "http://127.0.0.1:5050/api/v1/docs", 1, False
+    shell.Run "http://127.0.0.1:43030/api/v1/docs", 1, False
 End If

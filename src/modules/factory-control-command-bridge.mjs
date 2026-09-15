@@ -9,6 +9,7 @@ import {
   hydrationPayload,
   record,
   selectionPayload,
+  tabCommandPayload,
   text,
 } from './factory-control-payloads.mjs';
 
@@ -17,6 +18,7 @@ export {
   FACTORY_CONTROL_COMMAND_VERSION,
   FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION,
   FactoryControlCommandError,
+  tabCommandPayload,
 };
 
 function productRunPayload(value) {
@@ -53,6 +55,29 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     if (!record(result) || result.schema !== 'factory-a-cut-receipt:v1') {
       throw new FactoryControlCommandError('factory_a_cut_receipt_invalid');
     }
+    return Object.freeze(result);
+  }
+
+  async function invokeFactoryTabCommand(payloadValue) {
+    const payload = tabCommandPayload(payloadValue);
+    const result = await requestClassicRuntime(Object.freeze({
+      capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION, command: 'invokeFactoryTabCommand', payload,
+    }));
+    const invalid = () => { throw new FactoryControlCommandError('factory_tab_command_receipt_invalid'); };
+    if (!record(result) || result.schema !== 'factory-tab-command-receipt:v1' || result.status !== 'applied'
+      || ['jobId', 'tabId', 'action'].some(key => result[key] !== payload[key])
+      || result.projection?.schema !== 'factory-control-projection:v1') invalid();
+    const checkpoint = validateProductCheckpoint(result.checkpoint, payload.jobId);
+    const session = result.projection.session || {};
+    if (session.workspaceId !== payload.expectedWorkspaceId || result.projection.registration?.jobId !== payload.jobId
+      || checkpoint.projectId !== session.workspaceId
+      || ['productId', 'productKey', 'runId', 'inputFingerprint', 'revision'].some(key => checkpoint[key] !== session[key])
+      || session.productKey !== payload.productKey || session.runId !== payload.expectedRunId
+      || session.inputFingerprint !== payload.expectedInputFingerprint
+      || (!['apply-db-candidate', 'apply-cafe24-candidate', 'confirm-no-cafe24-candidate', 'clear-cafe24-candidate', 'restore-detached-db'].includes(payload.action)
+        && session.productId !== payload.productId)
+      || !Number.isSafeInteger(session.revision) || session.revision < payload.expectedRevision
+      || !Number.isSafeInteger(session.storeRevision) || session.storeRevision < payload.expectedStoreRevision) invalid();
     return Object.freeze(result);
   }
 
@@ -137,11 +162,8 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
   }
 
   async function registerCafe24(payloadValue) {
-    const payload = record(payloadValue) ? payloadValue : {};
-    if (!text(payload.jobId)) throw new FactoryControlCommandError('factory_control_field_missing:jobId');
-    const result = await requestClassicRuntime(Object.freeze({ capabilityVersion: FACTORY_CONTROL_COMMAND_VERSION, command: 'registerFactoryCafe24', payload }));
-    if (!record(result) || result.schema !== 'factory-cafe24-registration-receipt:v1') throw new FactoryControlCommandError('factory_cafe24_receipt_invalid');
-    return Object.freeze(result);
+    void payloadValue;
+    throw new FactoryControlCommandError('factory_cafe24_approval_required');
   }
 
   /** 사람이 적은 프롬프트로 그 단계의 컷을 새로 만들라고 고전 런타임에 넘긴다. */
@@ -191,6 +213,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     if (name === 'registerFactoryCafe24') return registerCafe24(payload);
     if (name === 'composeFactoryCut') return composeCut(payload);
     if (name === 'recoverFactoryProduct') return recoverProduct(payload);
+    if (name === 'invokeFactoryTabCommand') return invokeFactoryTabCommand(payload);
     throw new FactoryControlCommandError('factory_control_command_unsupported');
   }
 
@@ -202,6 +225,7 @@ export function createFactoryControlCommandBridge({ requestClassicRuntime, hydra
     selectACut,
     composeCut,
     recoverProduct,
+    invokeFactoryTabCommand,
     run,
   });
 }

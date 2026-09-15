@@ -6244,7 +6244,7 @@ function factoryRegistrationDetailImageRefs(factory = factoryRuntimeReadFactory(
     if (refs.some(item => (item.src || `${item.label}|${item.source}|${item.storedLarge}`) === key)) return;
     refs.push(ref);
   };
-  const sections = typeof orderedSections === 'function' ? orderedSections({ includeHidden: true, includeAutoExcluded: true }) : [];
+  const sections = typeof orderedSections === 'function' ? orderedSections() : [];
   sections.forEach(section => {
     if (refs.length >= limit) return;
     const image = state.sectionImages?.[section.id];
@@ -6482,6 +6482,20 @@ function factoryCafe24BuildRegistrationReceiptPreflight(factory = factoryRuntime
     version: 1,
     status: 'preflight',
     capturedAt: Date.now(),
+    identity: Object.freeze({
+      jobId: String(factory.goalRun?.jobId || factory.batchJobId || '').trim(),
+      workspaceId: String(factory.workspace?.id || factory.currentProjectId || '').trim(),
+      productKey: String(typeof factoryCurrentProductKey === 'function'
+        ? factoryCurrentProductKey(factory) : factory.product?.currentProductKey || '').trim(),
+      runId: String(typeof factoryCurrentWorkflowRunId === 'function'
+        ? factoryCurrentWorkflowRunId(factory) : factory.automation?.currentRunId || '').trim(),
+      inputFingerprint: String(typeof factoryCurrentInputImageFingerprint === 'function'
+        ? factoryCurrentInputImageFingerprint(factory) : factory.product?.inputImageFingerprint || '').trim(),
+      targetProductNo: String(options.productNo || '').trim(),
+    }),
+    mallId: String(typeof factoryCafe24TargetInfo === 'function'
+      ? factoryCafe24TargetInfo(factory)?.mallId || '' : '').trim(),
+    sourceWorkfileName: String(factory.workspace?.workfileName || '').trim(),
     mode: String(options.mode || settings.cafe24RegistrationMode || '').trim(),
     productNo: String(options.productNo || '').trim(),
     productName: String(basicInfo.productName || '').trim(),
@@ -6529,7 +6543,8 @@ function factoryCafe24CompareRegistrationReadback(preflight = {}, detail = null,
     : String(left ?? '').trim() === String(right ?? '').trim();
   const dimensionTokens = value => [...String(value ?? '').matchAll(/(\d+(?:\.\d+)?)\s*(mm|cm|㎜|㎝)?/gi)]
     .map(match => {
-      const unit = String(match[2] || '').toLowerCase().replace('㎜', 'mm').replace('㎝', 'cm');
+      const unit = String(match[2] || String(value ?? '').match(/(mm|cm|㎜|㎝)\s*$/i)?.[1] || '')
+        .toLowerCase().replace('㎜', 'mm').replace('㎝', 'cm');
       return String(Number((Number(match[1]) * (unit === 'cm' ? 10 : 1)).toFixed(6)));
     });
   const dimensionsEqual = (left, right) => {
@@ -6577,7 +6592,7 @@ function factoryCafe24CompareRegistrationReadback(preflight = {}, detail = null,
     ['공급가', !preflight.supplyPrice || roughlyEqual(preflight.supplyPrice, raw.supply_price)],
     ['진열 상태', !preflight.display || preflight.display === String(raw.display || '').trim().toUpperCase()],
     ['판매 상태', !preflight.selling || preflight.selling === String(raw.selling || '').trim().toUpperCase()],
-    ['대표이미지', !Number(preflight.representativeImageCount || 0) || actualRepresentativeImageCount > 0],
+    ['대표이미지', !Number(preflight.representativeImageCount || 0) || actualRepresentativeImageCount >= Number(preflight.representativeImageCount || 0)],
     ['상세이미지', !Number(preflight.detailImageCount || 0) || actualDetailImageCount >= Number(preflight.detailImageCount || 0)],
     ['옵션값', expectedOptionValues.length === actualOptionValues.length && expectedOptionValues.every((value, index) => value === actualOptionValues[index])],
     ['품목 수', Number(preflight.variantCount || 0) === actualVariants.length],
@@ -6695,8 +6710,46 @@ async function factoryCafe24FinalizeRegistrationReceipt(factory, options = {}) {
   return receipt;
 }
 
+function factoryCafe24ReceiptForDisplay(factory = {}) {
+  const receipt = factory.product?.cafe24RegistrationReceipt;
+  const publication = factory.product?.cafe24PublicationReceipt;
+  if (!receipt || !publication || publication.schema !== 'kuasangse.cafe24-publication-receipt') return receipt;
+  const productNo = String(publication.productNo || '').trim();
+  const targetProductNo = String(
+    factory.product?.finalDb?.product_no || factory.product?.finalDb?.cafe24_product_no || '',
+  ).trim();
+  const receiptProductNo = String(receipt.productNo || '').trim();
+  const publicationAt = Number(publication.registeredAt || 0);
+  const receiptAt = Math.max(
+    Number(receipt.capturedAt || 0),
+    Number(receipt.verifiedAt || 0),
+    Number(factory.openMarketSync?.finalRegistrationUpdatedAt || 0),
+  );
+  const checksMatch = Array.isArray(receipt.comparisons)
+    && receipt.comparisons.length > 0
+    && receipt.comparisons.every(check => check?.matched === true)
+    && Array.isArray(receipt.mismatches)
+    && receipt.mismatches.length === 0;
+  if (
+    receipt.status === 'verified'
+    || !productNo
+    || (targetProductNo && targetProductNo !== productNo)
+    || receiptProductNo !== productNo
+    || !Number.isFinite(publicationAt)
+    || publicationAt <= receiptAt
+    || !checksMatch
+  ) return receipt;
+  return Object.freeze({
+    ...receipt,
+    status: 'verified',
+    mode: publication.registrationMode || receipt.mode,
+    verifiedAt: publicationAt,
+    error: '',
+  });
+}
+
 function renderFactoryCafe24RegistrationReceipt(factory = factoryRuntimeReadFactory()) {
-  const storedReceipt = factory.product?.cafe24RegistrationReceipt;
+  const storedReceipt = factoryCafe24ReceiptForDisplay(factory);
   const currentDetail = !storedReceipt && typeof factoryCafe24CurrentScopedDetailHtml === 'function'
     ? factoryCafe24CurrentScopedDetailHtml(factory)
     : null;
@@ -6973,34 +7026,16 @@ async function factoryPrepareFinalRegistrationLocalAssets(options = {}) {
   const currentDetailImageCount = typeof factoryRegistrationDetailImageRefs === 'function'
     ? factoryRegistrationDetailImageRefs(factory, { includeTransferSrc: true }).length
     : 0;
+  let restored = { ok: false, restored: 0 };
   if (previewStatus?.generated > currentDetailImageCount
     && typeof factoryRecoverPreviewSectionsFromLocalArchive === 'function') {
     const recovery = await factoryRecoverPreviewSectionsFromLocalArchive({ render: false, persist: false });
     if (recovery?.restored) {
+      restored = recovery;
       emit(`현재 상세 이미지 로컬 보관본 복구 완료: ${recovery.restored}/${recovery.total || recovery.restored}개`, 5, 'ok');
     }
   }
-
-  let restored = { ok: false, restored: 0, total: 0 };
-  if (options.restoreCurrentWork === true && typeof factoryRestoreLocalArchiveToCurrentWork === 'function') {
-    const targets = typeof factoryLocalArchiveRestoreTargets === 'function'
-      ? factoryLocalArchiveRestoreTargets(factory)
-      : [];
-    if (targets.length) {
-      emit(`로컬 보관 이미지를 현재 작업에 복원합니다: ${targets.length}개`, 5, 'info');
-      restored = await factoryRestoreLocalArchiveToCurrentWork({
-        limit: Number(options.restoreLimit || 24),
-        factory,
-        silent: true,
-        render: false,
-      });
-      emit(`로컬 보관 이미지 복원 완료: ${restored.restored || 0}/${restored.total || targets.length}개`, 7, restored.restored ? 'ok' : 'warn');
-    } else {
-      emit('현재 작업에 이미 연결된 로컬 보관 이미지가 있는지 확인했습니다.', 6, 'info');
-    }
-  } else {
-    emit('최종등록에는 필요한 대표이미지 원본만 연결하고, 보관함 전체 후보 복원은 건너뜁니다.', 6, 'info');
-  }
+  emit('선택한 컷은 그대로 유지하고 등록에 필요한 원본만 연결합니다.', 6, 'info');
 
   let hydrated = { ok: false, hydrated: 0 };
   if (typeof factoryHydrateCafe24ImagesFromLocalArchive === 'function') {
@@ -7128,7 +7163,7 @@ async function factoryRunFinalRegistration(options = {}) {
   // 그 탓에 새로 올린 #3021 이 9색 전부 0(품절)으로 등록됐다.
   // 부르는 쪽이 수량을 못박았으면 그 값이 우선이다. 기존 상품 수정 경로는 이 값을 받지
   // 않으므로, 스토어에 이미 있는 재고를 이 기본값이 덮어쓰지 않는다.
-  const dbInventoryQuantity = String(factory.product?.finalDb?.quantity ?? '').trim();
+  const dbInventoryQuantity = String(factory.product?.finalDb?.quantity ?? factory.product?.finalDb?.stock ?? '').trim();
   const forceInventoryQuantity = /^\d+$/.test(inventoryQuantityInput)
     ? inventoryQuantityInput
     : (/^\d+$/.test(dbInventoryQuantity) ? dbInventoryQuantity : '');
@@ -7280,7 +7315,7 @@ async function factoryRunFinalRegistration(options = {}) {
       const presentationPlan = typeof factoryCafe24CreatePostSyncPlan === 'function'
         ? factoryCafe24CreatePostSyncPlan(factory, { forceInventory, forceInventoryQuantity })
         : { imageSlotCount: 0, readyActions: [] };
-      const requiredPresentationKeys = forceInventory
+      const requiredPresentationKeys = forceInventory || presentationPlan.optionPlan?.optionImagesTouched
         ? ['images', 'category', 'options']
         : ['images', 'category'];
       const requiredPresentationActions = (presentationPlan.readyActions || [])
@@ -10061,10 +10096,8 @@ function factoryAutomationFieldValue(factory, fieldId, aliases = []) {
   return { value: '', source: '' };
 }
 
-function factoryAutomationFieldReviewItems(factory, counts) {
-  const auto = factory.automation || {};
-  const product = factory.product || {};
-  const defs = [
+function factoryAutomationFieldReviewDefinitions() {
+  return [
     { id: 'product_name', label: '제품명', group: '상품등록 필수', required: true, placeholder: '예: 크리스탈보자기', aliases: ['상품명', '제품명', 'name'] },
     { id: 'sale_price', label: '판매가', group: '상품등록 필수', required: true, placeholder: '예: 12000', aliases: ['price', 'selling_price', '판매가격'] },
     { id: 'purchase_price', label: '공급가/원가', group: '상품등록 필수', required: false, placeholder: '예: 5000', aliases: ['supply_price', 'cost', '원가'] },
@@ -10076,6 +10109,12 @@ function factoryAutomationFieldReviewItems(factory, counts) {
     { id: 'material', label: '소재', group: '생성 필수', required: true, placeholder: '예: 크리스탈 원단, 폴리', aliases: ['fabric', '재질'] },
     { id: 'usage', label: '사용용도', group: '생성 필수', required: true, placeholder: '예: 선물 포장, 답례품, 행사용', aliases: ['use_case', 'purpose', '용도', '활용', '사용처'] },
   ];
+}
+
+function factoryAutomationFieldReviewItems(factory, counts) {
+  const auto = factory.automation || {};
+  const product = factory.product || {};
+  const defs = factoryAutomationFieldReviewDefinitions();
   const items = defs.map(def => {
     const picked = factoryAutomationFieldValue(factory, def.id, def.aliases);
     return {
@@ -11367,29 +11406,19 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
   const hasDeclaredProductImage = typeof factoryHasDeclaredProductImage === 'function'
     ? factoryHasDeclaredProductImage(factory)
     : false;
-  // 기준은 **작업파일**이다 (주인님 2026-09-06: "kuasangse 작업파일명을 기준으로 한다던가").
-  //
-  // 여기서 실행 번호(runId)까지 요구하면 안 된다. 실행 번호는 단계마다 새로 발급되고
-  // (app-core-06.js:7727-7731 은 stage.currentRunId 가 이미 있으면 그걸 쓰고 없으면 새로 만든다)
-  // 누가 먼저 쓰느냐에 따라 값이 갈린다. 그래서 "주기적으로" 어긋난다.
-  //
-  // 실측 2026-09-06 (사장님 저장본):
-  //   자산 3장  workspaceId/productKey/inputImageFingerprint/stageId 전부 일치
-  //             currentRunId = factory_hero_run_...   <- 이것만 다름
-  //   제품/단계 currentRunId = factory_work_run_...
-  //   자산의 isolatedAt 은 None - 데이터는 멀쩡했고 **화면 필터만** 숨겼다.
-  // 그래서 진행률은 "3/3 대표이미지 생성 완료 100%" 인데 화면은 "이전 제품 격리 3개" 였다.
-  //
-  // 실행 번호는 여기서 **거르는 데 쓰지 않고**, 아래 scopedCurrentRunAssets 에서
-  // "최신 실행을 먼저 보여 준다" 는 **우선순위**로만 쓴다. 거기에는 이미
-  // 최신 실행 자산이 없으면 물러서는 대비책이 있다(latestAssets -> activeFallbackAssets -> baseAssets).
-  // 제품명이나 입력 사진을 바꾸면 여전히 격리된다 - 지켜야 할 것은 그대로 지킨다.
   const scopeOptions = {
     identityKey,
     currentInputKey,
     hasDeclaredProductImage,
     allowHtml: false,
     strictScope: true,
+    // 기준은 **작업파일**이다 (주인님 2026-09-06: "kuasangse 작업파일명을 기준으로 한다던가").
+    // 실행 번호(runId)는 단계마다 새로 발급되고 누가 먼저 쓰느냐에 따라 갈린다
+    // (app-core-06.js:7727-7731). 그래서 거르는 조건으로 쓰면 "주기적으로" 어긋난다.
+    // 실측 2026-09-06: 작업파일·제품·입력사진·단계가 전부 같은데 실행 번호만 달라
+    // 방금 만든 대표이미지 3장이 "이전 제품 격리" 로 숨겨졌다. 자산의 isolatedAt 은 None -
+    // 데이터는 멀쩡했고 화면 필터만 숨긴 것이다. 그러면서 진행률은 "3/3 완료" 라고 했다.
+    // 실행 번호는 아래 scopedCurrentRunAssets 에서 "최신 실행 먼저" 우선순위로만 쓴다.
     strictRunId: false,
     requireExpectedProductKey: true,
     requireExpectedInputFingerprint: true,
@@ -11400,7 +11429,7 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
     if (typeof factoryAssetCompatibleWithCurrentProduct === 'function' && !factoryAssetCompatibleWithCurrentProduct(asset, identityKey)) return false;
     if (typeof factoryAssetCompatibleWithCurrentInputImage === 'function' && !factoryAssetCompatibleWithCurrentInputImage(asset, factory, scopeOptions)) return false;
     if (typeof factoryAssetMatchesCurrentJob === 'function') {
-      // 위 scopeOptions 와 같은 기준을 쓴다. 실행 번호는 거르는 조건이 아니다.
+      // 위 scopeOptions 와 같은 기준. 실행 번호는 거르는 조건이 아니다.
       const jobCheck = factoryAssetMatchesCurrentJob(asset, stageId, factory, {
         strictScope: true,
         strictRunId: false,
@@ -11691,19 +11720,19 @@ function renderFactoryAutomationAssetChooser(factory, stageId, label, desc) {
  */
 function renderDraftRecoveryPanel() {
   const scopeId = typeof getCurrentLastWorkWorkspaceScope === 'function'
-    ? String(getCurrentLastWorkWorkspaceScope() || '')
+    ? String((typeof getCurrentDocumentWorkspaceScope === 'function' && getCurrentDocumentWorkspaceScope()) || getCurrentLastWorkWorkspaceScope() || '')
     : '';
   // 저장 전(draft:) 작업에는 항상 보여 준다 - 정상 저장 경로가 아예 없기 때문이다.
-  // 저장된 작업(project:)에는 평소엔 숨기고, **서버가 저장을 거절해 사본이 쌓이는 동안에만** 보여 준다.
+  // 저장된 작업(project:)에는 저장 거절이나 이미지 원본 복원이 필요할 때 보여 준다.
   // 그때가 사본이 유일한 그물인 순간이다(실측 2026-09-02: 낙지발노리개 54건 연속 거절).
   const refused = String(state.storageWarningDismissKey || '') === 'protected-save-refused';
-  const savedWorkNeedsNet = scopeId.startsWith('project:') && (refused || !!state.draftRecovery?.opened);
+  const savedWorkNeedsNet = scopeId.startsWith('project:') && (refused || !!state.draftRecovery?.opened || String(state.storageWarning || '').includes('저장된 이미지 복원'));
   if (!scopeId.startsWith('draft:') && !savedWorkNeedsNet) return '';
   const view = state.draftRecovery || {};
   // 앱 껍데기에 붙는 떠 있는 칸이다. 본문 흐름을 밀지 않게 오른쪽 아래에 고정한다.
   const shell = value => `<aside class="draft-recovery-float" aria-label="저장 전 작업 복구본">${value}</aside>`;
   if (!view.opened) {
-    return shell(`<button class="btn-sm" data-draft-recovery-action="list">${refused ? '저장이 보류된 이 작업의 복구본' : '저장 안 한 이 작업의 복구본'}</button>`);
+    return shell(`<button class="btn-sm" data-draft-recovery-action="list">${refused ? '저장이 보류된 이 작업의 복구본' : (scopeId.startsWith('project:') ? '이미지 원본 복구본 보기' : '저장 안 한 이 작업의 복구본')}</button>`);
   }
   if (view.loading) {
     return shell('<div class="factory-small">복구본을 찾는 중입니다...</div>');
@@ -17965,7 +17994,7 @@ function factoryLog(message, type = 'info', factory = null, options = {}) {
     inputImageFingerprint,
     stageId,
     scopeKey,
-  }, ...(factory.logs || [])].slice(0, 80);
+  }, ...(factory.logs || [])];
   factory.logStageId = '';
   if (options.patchGoalRun !== false && typeof factoryPatchGoalRunStatusInPlace === 'function') {
     try { factoryPatchGoalRunStatusInPlace(factory, { fromLog: true }); } catch(e) {}

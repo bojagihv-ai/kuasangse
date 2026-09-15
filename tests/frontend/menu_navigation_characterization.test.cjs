@@ -302,7 +302,7 @@ test('현재 top workfile strip은 최상단에서 모든 작업파일 명령과
   assert.ok(shellMarkupSource.indexOf('renderGlobalDbSyncStatusStrip') < shellMarkupSource.indexOf('renderApiStatusStrip'));
 });
 
-test('작업파일 제목은 마지막 공백 토큰과 확장자를 하나의 줄바꿈 금지 tail로 렌더한다', () => {
+test('작업파일 제목은 마지막 공백 토큰과 확장자를 하나의 tail로 묶어 렌더한다', () => {
   const stripSource = extractFunction(source(CORE_02), 'renderGlobalDbSyncStatusStrip');
   const state = { currentProjectName: '수동 A컷 검증 미니 데스크 오거나이저 B 20260817' };
   const renderStrip = Function(
@@ -349,10 +349,13 @@ test('작업파일 제목은 마지막 공백 토큰과 확장자를 하나의 �
   assert.match(noSpaceMarkup, /class="db-workfile-name-tail db-workfile-name-tail-wrap">매우긴무공백작업파일이름&#8288;<span class="db-workfile-name-ext">\.kuasangse<\/span>/);
 });
 
-test('작업파일 제목 tail의 일반·무공백 CSS 계약은 atomic과 줄바꿈 가능 fallback을 함께 보장한다', () => {
+test('작업파일 제목 tail과 ID는 폭 안에 줄바꿈하고 확장자 자체는 한 덩어리로 보존한다', () => {
   const html = source(APP_HTML);
-  assert.match(html, /\.db-workfile-name-tail\{display:inline-block;white-space:nowrap\}/);
+  assert.match(html, /\.db-workfile-name-tail\{display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere\}/);
   assert.match(html, /\.db-workfile-name-tail-wrap\{display:inline;white-space:normal;overflow-wrap:break-word;word-break:keep-all\}/);
+  assert.match(html, /\.db-workfile-name-ext\{white-space:nowrap\}/);
+  assert.match(html, /\.db-workfile-meta span\{[^}]*max-width:100%;[^}]*white-space:normal;overflow-wrap:anywhere\}/);
+  assert.match(html, /\.factory-local-archive-panel \.factory-small\{overflow-wrap:anywhere\}/);
 });
 
 test('새 작업 뒤 현재 작업파일 제목과 보관함 기준은 canonical factory runtime을 읽는다', () => {

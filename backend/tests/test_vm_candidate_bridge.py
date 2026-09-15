@@ -24,7 +24,12 @@ class _FakeWorkerServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self) -> None:
-        super().__init__(("127.0.0.1", 0), _FakeWorkerHandler)
+        port = int(os.environ.get("KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT", "0"))
+        if os.environ.get("KUASANGSE_CDP_BASE_PORT_STRICT") == "1" and not 1 <= port <= 65535:
+            raise pytest.UsageError(
+                "KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT must be explicitly set to 1..65535 in strict mode",
+            )
+        super().__init__(("127.0.0.1", port), _FakeWorkerHandler)
         self.authenticated_requests = 0
         self.post_keywords: list[str] = []
         self.slow_post_started = threading.Event()
@@ -84,6 +89,62 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: str) -> None:
         return
+
+
+@pytest.mark.parametrize(
+    ("strict", "raw_port"),
+    [(None, None), (None, "0"), ("0", "41026"), ("1", "1"), ("1", "41026"), ("1", "65535")],
+)
+def test_fake_worker_fixture_port_passes_configured_port_before_listen(
+    strict: str | None,
+    raw_port: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: only the superclass boundary is stubbed; no socket is created.
+    if strict is None:
+        monkeypatch.delenv("KUASANGSE_CDP_BASE_PORT_STRICT", raising=False)
+    else:
+        monkeypatch.setenv("KUASANGSE_CDP_BASE_PORT_STRICT", strict)
+    if raw_port is None:
+        monkeypatch.delenv("KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT", raising=False)
+    else:
+        monkeypatch.setenv("KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT", raw_port)
+    bindings: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        ThreadingHTTPServer,
+        "__init__",
+        lambda _server, address, _handler: bindings.append(address),
+    )
+
+    # When
+    _FakeWorkerServer()
+
+    # Then
+    assert bindings == [("127.0.0.1", int(raw_port or "0"))]
+
+
+@pytest.mark.parametrize("raw_port", [None, "", "0", "-1", "65536", "invalid", "1.5", " "])
+def test_fake_worker_fixture_port_rejects_invalid_strict_port_before_listen(
+    raw_port: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    monkeypatch.setenv("KUASANGSE_CDP_BASE_PORT_STRICT", "1")
+    if raw_port is None:
+        monkeypatch.delenv("KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT", raising=False)
+    else:
+        monkeypatch.setenv("KUASANGSE_TEST_VM_WORKER_FIXTURE_PORT", raw_port)
+    bindings: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        ThreadingHTTPServer,
+        "__init__",
+        lambda _server, address, _handler: bindings.append(address),
+    )
+
+    # When / Then: reject before reaching the server initializer.
+    with pytest.raises((ValueError, pytest.UsageError)):
+        _FakeWorkerServer()
+    assert bindings == []
 
 
 @dataclass(frozen=True, slots=True)

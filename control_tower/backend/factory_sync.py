@@ -24,6 +24,32 @@ from .runtime_cache import JsonObject, JsonValue
 
 COMMAND_KIND = "factory-control"
 COMMAND_VERSION = "factory-control-command:v1"
+TAB_COMMAND_NAME = "invokeFactoryTabCommand"
+TAB_COMMAND_MAX_BYTES = 64 * 1024
+TAB_COMMAND_ACTIONS = {
+    "workfile": frozenset({"export-current", "save-checkpoint"}),
+    "db": frozenset({
+        "search", "apply-db-candidate", "apply-cafe24-candidate",
+        "confirm-no-db-candidate", "confirm-no-cafe24-candidate",
+        "clear-db-candidate", "clear-cafe24-candidate", "restore-detached-db",
+    }),
+    "fields": frozenset({"commitField", "commitAllFields"}),
+    "assets": frozenset({"toggleAssetUse"}),
+    "competitor": frozenset({"guideAction", "marketAction"}),
+    "sections": frozenset({
+        "updateSectionInstruction", "updateSectionAssemblySource",
+        "updateSectionAssemblyCutUsage", "updateSectionAssemblyCut",
+        "updateSectionAssemblyNote", "saveManualSection", "applySectionVariant",
+        "generateSection", "setSectionBasisMode", "setSectionGenerationMode",
+        "updateSectionOrder", "setSectionEnabled",
+    }),
+}
+TAB_FIELD_VALUE_KEYS = {
+    "category": "category", "material": "material", "origin": "originCountry",
+    "size": "size", "sale_price": "salePrice", "stock": "stock", "usage": "usage",
+    "width_mm": "widthMm", "depth_mm": "depthMm", "purchase_price": "supplyPrice",
+    "display_status": "displayStatus", "selling_status": "sellingStatus",
+}
 WORK_ORDER_VERSION = "control-work-order:v1"
 WORKER_CAPABILITY_VERSION = "batch-control-worker:v1"
 WORKFILE_COMMAND_KIND = "factory-workfile"
@@ -86,6 +112,7 @@ PRODUCT_OPTIONAL_VALUE_KEYS = frozenset(
         # 작업파일 재연결이 전부 막힌다(아래 rebind 게이트).
         "widthMm",
         "depthMm",
+        "weight",
     }
 )
 PRODUCT_VALUE_KEYS = PRODUCT_REQUIRED_VALUE_KEYS | PRODUCT_OPTIONAL_VALUE_KEYS
@@ -252,10 +279,24 @@ def _product_progress_snapshot(projection: Mapping[str, JsonValue] | None) -> Js
     raw_progress = projection.get("progress")
     progress = raw_progress if isinstance(raw_progress, Mapping) else {}
     percent = progress.get("percent")
+    raw_trace = progress.get("trace")
+    trace: JsonObject = {}
+    if isinstance(raw_trace, Mapping):
+        for key in (
+            "schema", "correlationId", "jobId", "workspaceId", "runId", "phase",
+            "request", "sectionId", "sectionName", "errorCode",
+        ):
+            value = raw_trace.get(key)
+            if isinstance(value, str) and value.strip():
+                trace[key] = value.strip()
+        for key in ("revision", "at", "requestTimeoutMs"):
+            value = raw_trace.get(key)
+            if isinstance(value, int) and value >= 0:
+                trace[key] = value
     raw_registration = projection.get("registration")
     registration = raw_registration if isinstance(raw_registration, Mapping) else {}
     blockers = registration.get("blockers")
-    return {
+    snapshot: JsonObject = {
         "schema": PRODUCT_PROGRESS_SCHEMA,
         "stageKey": str(progress.get("stageKey") or "").strip(),
         "percent": percent if isinstance(percent, int) and 0 <= percent <= 100 else 0,
@@ -273,6 +314,9 @@ def _product_progress_snapshot(projection: Mapping[str, JsonValue] | None) -> Js
             ],
         },
     }
+    if trace:
+        snapshot["trace"] = trace
+    return snapshot
 
 
 PRODUCT_TIMING_SCHEMA = "factory-product-timing:v1"
@@ -335,6 +379,9 @@ class _Execution:
     # 관측용 값이라 상태 동등성 비교에서는 제외한다. 포함하면 실패한 연산이 상태를
     # 바꾸지 않았는지 확인하는 계약이 시각 차이만으로 깨진다.
     last_seen: float = field(default=0.0, compare=False)
+    tab_context: JsonObject | None = None
+    receipt: JsonObject | None = None
+    error: str = ""
 
 
 @dataclass(slots=True)
@@ -380,6 +427,7 @@ class _MutableStateSnapshot:
     events: list[JsonObject]
     event_sequence: int
     product_jobs: dict[str, _ProductJob]
+    pause_after_current: bool
 
 
 class FactorySyncBridge:
@@ -416,7 +464,11 @@ class FactorySyncBridge:
             raise FactorySyncError("factory_worker_build_invalid")
         # 기동 때 읽지 못한 작업을 여기 모은다. 조용히 사라지면 사람이 왜 없어졌는지 모른다.
         self._skipped_product_jobs: list[JsonObject] = []
-        self._product_jobs, recovered_startup_orphan = self._load_product_jobs()
+        (
+            self._product_jobs,
+            recovered_startup_orphan,
+            self._pause_after_current,
+        ) = self._load_product_jobs()
         for skipped in self._skipped_product_jobs:
             print(
                 f"[factory-sync] 작업 {skipped['jobId']} 을(를) 읽지 못해 건너뜁니다: {skipped['reason']}",
@@ -527,6 +579,12 @@ class FactorySyncBridge:
             self._expire_session_locked()
             current = self._factory_session
             previous = current or self._last_factory_session
+            if (
+                payload.get("replaceExistingSession") is False
+                and current is not None
+                and current.session_id != session.session_id
+            ):
+                raise FactorySyncError("factory_worker_already_connected")
             if previous is not None:
                 if session.session_id == previous.session_id:
                     if current is None:
@@ -540,6 +598,8 @@ class FactorySyncBridge:
                 if previous is not None and previous.session_id != session.session_id
                 else ""
             )
+            if not replaced_session_id:
+                self._assert_no_active_tab_command_locked()
             self._factory_session = session
             self._last_factory_session = session
             self._projection = _preserve_terminal_publication_receipt(self._projection, projection)
@@ -597,6 +657,7 @@ class FactorySyncBridge:
         normalized = _validate_projection(projection_value)
         with self._condition:
             session = self._require_current_session_locked(payload)
+            self._assert_no_active_tab_command_locked()
             previous = self._projection
             _assert_projection_is_fresh(previous, normalized)
             normalized = _preserve_terminal_publication_receipt(previous, normalized)
@@ -639,6 +700,7 @@ class FactorySyncBridge:
     def accept_projection(self, projection: Mapping[str, JsonValue]) -> JsonObject:
         normalized = _validate_projection(projection)
         with self._condition:
+            self._assert_no_active_tab_command_locked()
             previous = self._projection
             _assert_projection_is_fresh(previous, normalized)
             normalized = _preserve_terminal_publication_receipt(previous, normalized)
@@ -891,6 +953,27 @@ class FactorySyncBridge:
         with self._lock:
             return [self._public_product_job(job) for job in self._product_jobs.values()]
 
+    def product_queue_state(self) -> JsonObject:
+        with self._lock:
+            jobs = [self._public_product_job(job) for job in self._product_jobs.values()]
+            return {
+                "jobs": jobs,
+                "total": len(jobs),
+                "pauseAfterCurrent": self._pause_after_current,
+            }
+
+    def set_pause_after_current(self, enabled: bool) -> JsonObject:
+        if type(enabled) is not bool:
+            raise FactorySyncError("request_invalid")
+        with self._condition:
+            with self._product_state_transaction_locked():
+                self._pause_after_current = enabled
+                if not enabled:
+                    self._dispatch_next_product_locked()
+                self._persist_product_jobs_locked()
+            self._condition.notify_all()
+            return self.product_queue_state()
+
     def product_job_context(self, job_id: str) -> JsonObject:
         with self._lock:
             job = self._product_jobs.get(job_id)
@@ -1013,12 +1096,22 @@ class FactorySyncBridge:
         image_model: str | None = None,
         expected_checkpoint_revision: int | None = None,
         expected_checkpoint_run_id: str | None = None,
+        restore_only: bool = False,
     ) -> JsonObject:
         with self._condition:
             job = self._product_jobs.get(job_id)
             if job is None:
                 raise FactorySyncError("factory_product_job_not_found")
             self._require_admitted_runtime_build_locked()
+            if type(restore_only) is not bool:
+                raise FactorySyncError("request_invalid")
+            if restore_only and (
+                any(item.current_order_id or item.status in {"queued", "running"} for item in self._product_jobs.values())
+                or any(item.status in {"pending", "claimed", "acknowledged", "running"} for item in self._executions.values())
+            ):
+                raise FactorySyncError("factory_worker_busy")
+            if restore_only and (job.pending_selection is not None or job.auto_resume_pending):
+                raise FactorySyncError("factory_selection_pending")
             if image_model is not None and image_model not in PRODUCT_IMAGE_MODELS:
                 raise FactorySyncError("factory_product_image_model_invalid")
             if job.status not in {"waiting_manual", "blocked", "completed"}:
@@ -1072,7 +1165,7 @@ class FactorySyncBridge:
                 and int(current_session["revision"]) > checkpoint_revision
             )
             restart_fresh = job.status == "blocked" and job.checkpoint is None
-            restore_only = (
+            restore_only = restore_only or (
                 job.status == "blocked"
                 and job.checkpoint is not None
                 and not resume_live_checkpoint
@@ -1243,6 +1336,8 @@ class FactorySyncBridge:
         if job is None:
             return
         if job.pending_selection is not None:
+            if not job.stage_key:
+                job.stage_key = _required_text(job.pending_selection, "stageKey")
             job.pending_selection = None
             self._persist_product_jobs_locked()
         if not job.auto_resume_pending or job.status != "waiting_manual":
@@ -1385,6 +1480,7 @@ class FactorySyncBridge:
         ):
             return None
         queue_payload: JsonObject = {
+            "jobId": job.job_id,
             "productId": session["productId"],
             "productKey": session["productKey"],
             "stageKey": stage_key,
@@ -1468,6 +1564,123 @@ class FactorySyncBridge:
         }
         self._queue(order)
         return _copy(order)
+
+    def queue_tab_command(self, job_id: str, payload: Mapping[str, JsonValue]) -> JsonObject:
+        normalized = _validate_tab_command_payload(payload, job_id)
+        with self._condition:
+            self._expire_session_locked()
+            self._require_admitted_runtime_build_locked()
+            current = self._factory_session
+            if current is None or self._projection is None or self._projection.get("connected") is not True:
+                raise FactorySyncError("factory_session_missing")
+            for execution in self._executions.values():
+                if execution.order.get("idempotencyKey") != normalized["idempotencyKey"]:
+                    continue
+                command = execution.order.get("command")
+                existing_payload = command.get("payload") if isinstance(command, dict) else None
+                if not isinstance(command, dict) or command.get("name") != TAB_COMMAND_NAME or not isinstance(existing_payload, dict) or _json_digest(existing_payload) != _json_digest(normalized):
+                    raise FactorySyncError("idempotency_conflict")
+                return _copy(execution.order)
+            job = self._product_jobs.get(job_id)
+            if job is None:
+                raise FactorySyncError("factory_product_job_not_found")
+            if job.status not in {"waiting_manual", "blocked", "completed"} or job.pending_selection is not None:
+                raise FactorySyncError("factory_product_job_not_editable")
+            if normalized["tabId"] == "workfile" and normalized["action"] == "export-current" and job.status == "blocked":
+                raise FactorySyncError("factory_workfile_export_blocked")
+            if any(item.current_order_id or item.status == "running" for item in self._product_jobs.values()) or any(
+                item.status in {"pending", "claimed", "acknowledged", "running"}
+                for item in self._executions.values()
+            ):
+                raise FactorySyncError("factory_worker_busy")
+            _assert_tab_command_target(self._projection, normalized)
+            if job.checkpoint is None:
+                raise FactorySyncError("factory_product_checkpoint_missing")
+            if any(job.checkpoint.get(key) != normalized.get(expected) for key, expected in (
+                ("productId", "productId"), ("productKey", "productKey"),
+                ("runId", "expectedRunId"), ("inputFingerprint", "expectedInputFingerprint"),
+            )) or job.checkpoint["revision"] > normalized["expectedRevision"]:
+                raise FactorySyncError("stale_product_checkpoint")
+            marker = uuid4().hex
+            order: JsonObject = {
+                "orderId": f"factory-tab-{marker}", "contractVersion": WORK_ORDER_VERSION,
+                "capabilityVersion": WORKER_CAPABILITY_VERSION, "batchId": job.payload["batchId"],
+                "productId": normalized["productId"], "productKey": normalized["productKey"],
+                "currentRunId": normalized["expectedRunId"], "stageId": job.stage_key or normalized["tabId"],
+                "operationToken": f"factory-tab:{marker}", "idempotencyKey": normalized["idempotencyKey"],
+                "expectedWorkfileRevision": normalized["expectedRevision"],
+                "workerSessionId": current.session_id, "targetWorkerId": current.worker_id,
+                "workerHttpSessionId": current.http_session_id,
+                "command": {"kind": COMMAND_KIND, "version": COMMAND_VERSION,
+                            "name": TAB_COMMAND_NAME, "payload": normalized},
+            }
+            with self._product_state_transaction_locked():
+                self._queue(order)
+                self._executions[str(order["orderId"])].tab_context = {
+                    "jobId": job_id, "status": job.status, "stageKey": job.stage_key,
+                    "message": job.message, "projection": _copy(self._projection),
+                    "checkpointDigest": _json_digest(job.checkpoint),
+                }
+                job.status = "running"
+                job.current_order_id = str(order["orderId"])
+                job.auto_resume_pending = False
+                job.message = "조립공장 탭 명령 처리 중"
+                self._append_event("factory.product.updated", {"job": self._public_product_job(job)})
+                self._persist_product_jobs_locked()
+            self._condition.notify_all()
+            return _copy(order)
+
+    def tab_command_execution(self, job_id: str, order_id: str) -> JsonObject:
+        with self._condition:
+            self._expire_session_locked()
+            self._expire_stale_orders_locked()
+            execution = self._executions.get(order_id)
+            if execution is None or execution.tab_context is None or execution.tab_context.get("jobId") != job_id:
+                raise FactorySyncError("work_order_not_found")
+            status = {"acknowledged": "running", "superseded": "failed"}.get(execution.status, execution.status)
+            return {"jobId": job_id, "orderId": order_id, "status": status,
+                    "error": execution.error, "receipt": _copy(execution.receipt)}
+
+    def command_receipt(self, job_id: str, idempotency_key: str) -> JsonObject:
+        with self._condition:
+            self._expire_session_locked()
+            self._expire_stale_orders_locked()
+            for execution in self._executions.values():
+                command = execution.order.get("command")
+                if not isinstance(command, dict) or command.get("name") not in {"invokeFactoryTabCommand", "selectFactoryACut"}:
+                    continue
+                payload = command.get("payload")
+                if not isinstance(payload, dict) or payload.get("jobId") != job_id or payload.get("idempotencyKey") != idempotency_key:
+                    continue
+                return {"jobId": job_id, "orderId": execution.order["orderId"], "idempotencyKey": idempotency_key,
+                        "requestDigest": _json_digest(payload), "commandName": command["name"],
+                        "status": {"acknowledged": "running", "superseded": "failed"}.get(execution.status, execution.status),
+                        "error": execution.error, "receipt": _copy(execution.receipt)}
+            raise FactorySyncError("work_order_not_found")
+
+    def _finish_tab_command_locked(self, execution: _Execution) -> None:
+        context = execution.tab_context
+        if context is None:
+            return
+        job = self._product_jobs.get(str(context["jobId"]))
+        if job is None or job.current_order_id != execution.order.get("orderId"):
+            raise FactorySyncError("stale_fencing_token")
+        job.status = str(context["status"])
+        job.stage_key = str(context["stageKey"])
+        job.message = str(context["message"])
+        job.current_order_id = ""
+        job.auto_resume_pending = False
+        if execution.receipt is None:
+            baseline = context.get("projection")
+            if isinstance(baseline, dict):
+                job.progress = _product_progress_snapshot(baseline)
+        self._append_event("factory.product.updated", {"job": self._public_product_job(job)})
+
+    def _assert_no_active_tab_command_locked(self) -> None:
+        if any(execution.tab_context is not None and execution.status in {
+            "pending", "claimed", "acknowledged", "running",
+        } for execution in self._executions.values()):
+            raise FactorySyncError("factory_tab_command_pending")
 
     def update_product_values(
         self,
@@ -1762,96 +1975,41 @@ class FactorySyncBridge:
         job_id: str,
         cafe24: Mapping[str, JsonValue] | None = None,
     ) -> JsonObject:
-        """완성된 작업을 Cafe24 에 등록하도록 조립공장에 지시한다.
+        """승인 없는 legacy Cafe24 워커 큐 등록을 항상 차단한다.
 
-        등록 대상 값(분류·판매가·진열)을 함께 실어 보낸다. 조립공장에는 등록 화면이 없어
-        이 값을 주지 않으면 등록이 빈 값으로 어긋난다.
+        Cafe24 등록은 승인 게이트를 거친 전용 경로만 허용하며, 이 legacy 경로는
+        승인 여부와 관계없이 주문을 만들지 않고 승인 필요 오류를 발생시킨다.
         """
+        raise FactorySyncError("factory_cafe24_approval_required")
+
+    def save_cafe24_registration_values(
+        self,
+        job_id: str,
+        cafe24: Mapping[str, JsonValue] | None = None,
+    ) -> JsonObject:
+        """승인 전 Cafe24 등록값을 이 작업의 local pending 상태에만 저장한다."""
+        chosen = _normalize_cafe24_registration_values(cafe24)
+        if not chosen:
+            raise FactorySyncError("factory_cafe24_values_invalid")
         with self._condition:
             job = self._product_jobs.get(job_id)
             if job is None:
                 raise FactorySyncError("factory_product_job_not_found")
-            self._require_admitted_runtime_build_locked()
-            # 등록값이 없어 등록이 거절되면 작업은 차단으로 남는다. 생성은 이미 끝나
-            # 저장 지점이 완료로 남아 있으므로, 값을 채워 다시 지시하는 길을 막지 않는다.
-            declined_but_built = (
-                job.status == "blocked"
-                and isinstance(job.checkpoint, dict)
-                and job.checkpoint.get("status") == "completed"
-            )
-            if job.status != "completed" and not declined_but_built:
-                raise FactorySyncError("factory_cafe24_job_not_ready")
-            if job.current_order_id:
+            if job.status == "running" or job.current_order_id:
                 raise FactorySyncError("factory_product_job_busy")
-            session = (self._projection or {}).get("session")
-            if not isinstance(session, dict):
-                raise FactorySyncError("factory_session_missing")
-            registration = (self._projection or {}).get("registration")
-            on_target = isinstance(registration, dict) and registration.get("jobId") == job_id
-            # 워커가 지금 다른 제품을 물고 있어도, 저장해 둔 지점이 있으면 그것으로 이 작업을
-            # 열어서 등록한다. 여기서 막아버리면 완성된 제품이 워커의 현재 상태에 따라
-            # 등록되기도 하고 안 되기도 한다.
-            checkpoint = _copy(job.checkpoint) if isinstance(job.checkpoint, dict) else None
-            if not on_target and not checkpoint:
-                raise FactorySyncError("factory_cafe24_target_mismatch")
-            identity: Mapping[str, JsonValue] = session if on_target else (job.checkpoint or {})
-            values = {
-                **_cafe24_values_from_job(job.payload),
-                **_normalize_cafe24_registration_values(cafe24),
-            }
-            marker = uuid4().hex
-            worker_session_id = (
-                self._factory_session.session_id if self._factory_session is not None else ""
-            )
-            target_worker_id = (
-                self._factory_session.worker_id if self._factory_session is not None else ""
-            )
-            order: JsonObject = {
-                "orderId": f"factory-cafe24-{marker}",
-                "contractVersion": WORK_ORDER_VERSION,
-                "capabilityVersion": WORKER_CAPABILITY_VERSION,
-                "batchId": "factory-session",
-                "productId": str(identity.get("productId") or ""),
-                "productKey": str(identity.get("productKey") or ""),
-                "currentRunId": str(identity.get("runId") or ""),
-                "stageId": "cafe24",
-                "operationToken": f"factory-cafe24:{marker}",
-                "idempotencyKey": f"factory-cafe24:{job_id}:{marker}",
-                "expectedWorkfileRevision": identity.get("revision"),
-                "workerSessionId": worker_session_id,
-                "targetWorkerId": target_worker_id,
-                "command": {
-                    "kind": COMMAND_KIND,
-                    "version": COMMAND_VERSION,
-                    "name": "registerFactoryCafe24",
-                    "payload": {
-                        **_copy(job.payload),
-                        "jobId": job_id,
-                        "cafe24": values,
-                        **({"checkpoint": checkpoint} if checkpoint else {}),
-                    },
-                },
-            }
-            job.current_order_id = str(order["orderId"])
-            job.message = "Cafe24 등록을 조립공장에 지시했습니다."
-            # 사람이 이번에 정한 등록 방식·대상은 작업에 남긴다. 다음에 이 화면을 열었을 때
-            # 무엇으로 등록되는지가 지난번 선택과 같아야 한다.
-            chosen = _normalize_cafe24_registration_values(cafe24)
-            if chosen:
+            with self._product_state_transaction_locked():
                 previous = job.payload.get("cafe24Registration")
                 merged = dict(previous) if isinstance(previous, Mapping) else {}
                 merged.update(chosen)
-                # 새 상품으로 올리기로 했으면 예전에 찍어 둔 수정 대상은 함께 지운다.
                 if chosen.get("registrationMode") == "create":
                     merged.pop("targetProductNo", None)
                 job.payload["cafe24Registration"] = merged
-            self._persist_product_jobs_locked()
-            self._queue(order)
-            self._append_event(
-                "factory.product.updated",
-                {"job": self._public_product_job(job)},
-            )
-            return _copy(order)
+                job.message = "Cafe24 등록값을 저장했습니다. 승인 전에는 등록하지 않습니다."
+                public_job = self._public_product_job(job)
+                self._append_event("factory.product.updated", {"job": public_job})
+                self._persist_product_jobs_locked()
+            self._condition.notify_all()
+            return public_job
 
     def queue_workfile_hydration(
         self,
@@ -1985,6 +2143,7 @@ class FactorySyncBridge:
 
     def _queue(self, order: JsonObject) -> None:
         with self._lock:
+            self._assert_no_active_tab_command_locked()
             self._executions[str(order["orderId"])] = _Execution(
                 order=order,
                 session_id=str(order.get("workerSessionId") or ""),
@@ -2000,6 +2159,9 @@ class FactorySyncBridge:
                     event_sequence=execution.event_sequence,
                     session_id=execution.session_id,
                     last_seen=execution.last_seen,
+                    tab_context=_copy(execution.tab_context),
+                    receipt=_copy(execution.receipt),
+                    error=execution.error,
                 )
                 for order_id, execution in self._executions.items()
             },
@@ -2030,6 +2192,7 @@ class FactorySyncBridge:
                 )
                 for job_id, job in self._product_jobs.items()
             },
+            pause_after_current=self._pause_after_current,
         )
 
     def _restore_mutable_state_locked(self, snapshot: _MutableStateSnapshot) -> None:
@@ -2038,6 +2201,7 @@ class FactorySyncBridge:
         self._events = snapshot.events
         self._event_sequence = snapshot.event_sequence
         self._product_jobs = snapshot.product_jobs
+        self._pause_after_current = snapshot.pause_after_current
 
     @contextmanager
     def _product_state_transaction_locked(self) -> Iterator[None]:
@@ -2141,10 +2305,10 @@ class FactorySyncBridge:
         document["inputImages"] = restored
         return document
 
-    def _load_product_jobs(self) -> tuple[dict[str, _ProductJob], bool]:
+    def _load_product_jobs(self) -> tuple[dict[str, _ProductJob], bool, bool]:
         path = self._state_path
         if path is None or not path.exists():
-            return {}, False
+            return {}, False, False
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
@@ -2152,7 +2316,8 @@ class FactorySyncBridge:
         if not isinstance(document, dict) or document.get("schema") != PRODUCT_JOB_STATE_SCHEMA:
             raise FactorySyncError("factory_product_state_invalid")
         raw_jobs = document.get("jobs")
-        if not isinstance(raw_jobs, list):
+        pause_after_current = document.get("pauseAfterCurrent", False)
+        if not isinstance(raw_jobs, list) or type(pause_after_current) is not bool:
             raise FactorySyncError("factory_product_state_invalid")
         jobs: dict[str, _ProductJob] = {}
         recovered_startup_orphan = False
@@ -2247,7 +2412,7 @@ class FactorySyncBridge:
                 timing=raw["timing"] if isinstance(raw.get("timing"), dict) else None,
                 assets_missing=assets_missing or raw.get("assetsMissing") is True,
             )
-        return jobs, recovered_startup_orphan
+        return jobs, recovered_startup_orphan, pause_after_current
 
     def _persist_product_jobs_locked(self) -> None:
         path = self._state_path
@@ -2255,6 +2420,7 @@ class FactorySyncBridge:
             return
         document: JsonObject = {
             "schema": PRODUCT_JOB_STATE_SCHEMA,
+            "pauseAfterCurrent": self._pause_after_current,
             "jobs": [
                 {
                     "jobId": job.job_id,
@@ -2366,6 +2532,16 @@ class FactorySyncBridge:
         }
         recovered_product = False
         for execution in self._executions.values():
+            if execution.tab_context is not None and execution.session_id == replaced_session_id and execution.status in {
+                "pending", "claimed", "acknowledged", "running",
+            }:
+                with self._product_state_transaction_locked():
+                    execution.status = "superseded"
+                    execution.error = "stale_factory_session"
+                    self._finish_tab_command_locked(execution)
+                    self._persist_product_jobs_locked()
+                recovered_product = True
+                continue
             command = execution.order.get("command")
             if (
                 execution.session_id != replaced_session_id
@@ -2404,7 +2580,8 @@ class FactorySyncBridge:
         주문 기록은 메모리에만 있고 작업은 파일에 남는다. 관제탑을 다시 켜면 작업에는
         주문 번호가 적혀 있는데 그 주문은 어디에도 없다. 워커가 하나뿐이라 그런 작업
         하나가 뒤에 선 작업까지 전부 붙든다. 관제탑이 모르는 주문은 진행될 수 없으므로
-        되돌려 세운다. 저장해 둔 지점이 있어 다시 세워도 처음부터 하지 않는다.
+        되돌려 세운다. 단, 주문 번호도 없는 running 상태는 안전하게 재개할 근거가 없으니
+        차단해 뒤에 선 실제 대기 작업을 먼저 진행하게 한다.
         """
         released = False
         for job in self._product_jobs.values():
@@ -2417,8 +2594,12 @@ class FactorySyncBridge:
                 continue
             job.current_order_id = ""
             if job.status == "running":
-                job.status = "queued"
-                job.message = "관제탑이 다시 켜져 이 작업을 대기열에 다시 세웠습니다."
+                if order_id:
+                    job.status = "queued"
+                    job.message = "관제탑이 다시 켜져 이 작업을 대기열에 다시 세웠습니다."
+                else:
+                    job.status = "blocked"
+                    job.message = "실행 주문 없이 running 상태가 남아 작업자 재개가 필요합니다."
             released = True
             self._append_event(
                 "factory.product.updated",
@@ -2436,10 +2617,11 @@ class FactorySyncBridge:
         self._release_orphan_orders_locked()
         if any(
             job.current_order_id
-            or job.status == "running"
             for job in self._product_jobs.values()
             if job.status != "completed"
         ):
+            return
+        if self._pause_after_current:
             return
         job = next((item for item in self._product_jobs.values() if item.status == "queued"), None)
         if job is None:
@@ -2467,6 +2649,7 @@ class FactorySyncBridge:
                 "imageModel",
                 "requiredValues",
                 "inputImages",
+                "cafe24Registration",
             )
             if key in job.payload
         }
@@ -2474,6 +2657,13 @@ class FactorySyncBridge:
         if isinstance(policy_snapshot, dict):
             runtime_payload["decisionModes"] = _policy_decision_modes(policy_snapshot)
         source_kind = str(source.get("kind") or "")
+        restore_stages = job.progress.get("stages") if isinstance(job.progress, dict) else None
+        restore_baseline = [
+            {"key": stage["key"], "selectedIds": _copy(stage.get("selectedIds", [])),
+             "candidates": [{"id": candidate["id"], "digest": str(candidate.get("digest") or "")}
+                            for candidate in stage.get("candidates", [])]}
+            for stage in (restore_stages or [])
+        ]
         order: JsonObject = {
             "orderId": f"factory-product-{marker}",
             "contractVersion": WORK_ORDER_VERSION,
@@ -2504,10 +2694,15 @@ class FactorySyncBridge:
                     # 무조건 통과시키면 방금 고른 컷을 지우고 다시 만들어 버린다.
                     "regenerateStage": bool(
                         job.stage_key
-                        and job.status == "waiting_manual"
+                        and not job.restore_only
                         and not self._stage_has_candidates_locked(job.stage_key)
+                        and not self._stage_has_selection_locked(job.stage_key)
                     ),
                     "restoreOnly": job.restore_only,
+                    **({"restoreBaseline": restore_baseline} if len(restore_baseline) == 6
+                       and any(stage["candidates"] for stage in restore_baseline)
+                       and all(all(selected in [candidate["id"] for candidate in stage["candidates"]]
+                                   for selected in stage["selectedIds"]) for stage in restore_baseline) else {}),
                     "adoptHydratedWorkfile": source_kind == "workfile",
                     **(
                         {"hydratedRevision": job.payload["hydratedRevision"]}
@@ -2619,6 +2814,8 @@ class FactorySyncBridge:
             "imageCount": len(images) if isinstance(images, list) else 0,
             "attempts": job.attempts,
             "checkpointAvailable": job.checkpoint is not None,
+            "checkpointRevision": (job.checkpoint or {}).get("revision"),
+            "checkpointRunId": str((job.checkpoint or {}).get("runId") or ""),
             "dispatched": bool(job.current_order_id),
             "autoResumePending": job.auto_resume_pending,
             **({"timing": _copy(job.timing)} if job.timing is not None else {}),
@@ -2665,6 +2862,8 @@ class FactorySyncBridge:
                     execution.last_seen = self._clock()
                     for job in self._product_jobs.values():
                         if job.current_order_id == execution.order.get("orderId"):
+                            if execution.tab_context is not None:
+                                break
                             job.status = "running"
                             job.stage_started_at = self._clock()
                             job.message = (
@@ -2713,6 +2912,13 @@ class FactorySyncBridge:
             if execution.status not in {"claimed", "acknowledged", "running"}:
                 continue
             if not execution.last_seen or now - execution.last_seen <= self._order_timeout_seconds:
+                continue
+            if execution.tab_context is not None:
+                with self._product_state_transaction_locked():
+                    execution.status = "superseded"
+                    execution.error = "factory_tab_command_timeout"
+                    self._finish_tab_command_locked(execution)
+                    self._persist_product_jobs_locked()
                 continue
             execution.status = "superseded"
             order_id = str(execution.order.get("orderId") or "")
@@ -2773,6 +2979,9 @@ class FactorySyncBridge:
             execution = self._executions.get(order_id)
             if execution is None:
                 raise FactorySyncError("work_order_not_found")
+            if execution.tab_context is not None:
+                self._expire_session_locked()
+                self._expire_stale_orders_locked()
             if (
                 execution.session_id
                 and (
@@ -2822,9 +3031,40 @@ class FactorySyncBridge:
                         raise FactorySyncError("stale_event_sequence")
                     execution.status = "failed"
                     execution.event_sequence = max(sequence, execution.event_sequence)
-                    self._append_event("factory.worker.failed", {"error": str(payload.get("error") or "factory_worker_failed")})
-                    for job in self._product_jobs.values():
+                    if execution.tab_context is not None:
+                        execution.error = "factory_tab_command_failed"
+                        self._finish_tab_command_locked(execution)
+                    self._append_event("factory.worker.failed", {"error": execution.error or str(payload.get("error") or "factory_worker_failed")})
+                    for job in (() if execution.tab_context is not None else self._product_jobs.values()):
                         if job.current_order_id == order_id:
+                            terminal_projection = payload.get("terminalProjection")
+                            if isinstance(terminal_projection, dict):
+                                try:
+                                    normalized_terminal = _validate_projection(terminal_projection)
+                                    terminal_session = normalized_terminal.get("session")
+                                    terminal_registration = normalized_terminal.get("registration")
+                                    reference = job.checkpoint or (
+                                        self._projection.get("session")
+                                        if isinstance(self._projection, dict)
+                                        else None
+                                    )
+                                    if (
+                                        normalized_terminal.get("connected") is not True
+                                        or not isinstance(terminal_session, dict)
+                                        or not isinstance(terminal_registration, dict)
+                                        or terminal_registration.get("jobId") != job.job_id
+                                        or not isinstance(reference, dict)
+                                        or any(
+                                            terminal_session.get(field) != reference.get(field)
+                                            for field in ("productId", "productKey", "runId", "inputFingerprint")
+                                        )
+                                    ):
+                                        raise FactorySyncError("factory_terminal_projection_identity_mismatch")
+                                    _assert_projection_is_fresh(self._projection, normalized_terminal)
+                                except FactorySyncError:
+                                    normalized_terminal = None
+                                if normalized_terminal is not None:
+                                    self._projection = normalized_terminal
                             job.status = "blocked"
                             job.current_order_id = ""
                             job.restore_only = False
@@ -2845,6 +3085,44 @@ class FactorySyncBridge:
     def _accept_result(self, execution: _Execution, result: Mapping[str, JsonValue]) -> None:
         command = execution.order["command"]
         assert isinstance(command, dict)
+        if command["name"] == TAB_COMMAND_NAME:
+            context = execution.tab_context
+            payload = command.get("payload")
+            if context is None or not isinstance(payload, dict) or set(result) != {
+                "schema", "jobId", "tabId", "action", "status", "projection", "checkpoint",
+            } or result.get("schema") != "factory-tab-command-receipt:v1" or result.get("status") != "applied" or any(
+                result.get(key) != payload.get(key) for key in ("jobId", "tabId", "action")
+            ):
+                raise FactorySyncError("factory_tab_command_receipt_invalid")
+            job = self._product_jobs.get(str(payload["jobId"]))
+            if job is None or job.current_order_id != execution.order.get("orderId") or job.status != "running":
+                raise FactorySyncError("stale_fencing_token")
+            if job.checkpoint is None or _json_digest(job.checkpoint) != context["checkpointDigest"]:
+                raise FactorySyncError("stale_product_checkpoint")
+            projection = result.get("projection")
+            baseline = context.get("projection")
+            if not isinstance(projection, dict) or not isinstance(baseline, dict):
+                raise FactorySyncError("factory_projection_missing")
+            normalized = _validate_projection(projection)
+            if self._projection is None:
+                raise FactorySyncError("factory_session_missing")
+            _assert_tab_command_target(self._projection, payload)
+            _assert_tab_command_receipt_projection(normalized, payload)
+            _assert_projection_is_fresh(self._projection, normalized)
+            _assert_tab_command_preservation(baseline, normalized, payload)
+            checkpoint = _validate_product_checkpoint_receipt(
+                result.get("checkpoint"), job.job_id, normalized,
+                str(context["status"]), str(context["stageKey"]),
+            )
+            updated_payload = _tab_command_updated_product_payload(job.payload, baseline, normalized, payload)
+            self._projection = normalized
+            job.checkpoint = checkpoint
+            job.payload = updated_payload
+            job.checkpoint_rebind_receipt = None
+            execution.receipt = _copy(dict(result))
+            self._finish_tab_command_locked(execution)
+            self._condition.notify_all()
+            return
         if command["name"] == "getFactoryProjection":
             self.accept_projection(result)
             return
@@ -3257,6 +3535,7 @@ class FactorySyncBridge:
                     str(result.get("stageKey") or "").strip(),
                 )
                 self._persist_product_jobs_locked()
+        execution.receipt = _copy(dict(result))
         self._append_event("factory.a_cut.selected", {"receipt": dict(result), "projection": normalized})
         self._resume_after_selection_locked(normalized)
         self._condition.notify_all()
@@ -3353,6 +3632,277 @@ class FactorySyncBridge:
                 "connected": False,
             }
         return projection
+
+
+def _validate_tab_command_payload(payload: Mapping[str, JsonValue], job_id: str) -> JsonObject:
+    if set(payload) != {
+        "schema", "jobId", "tabId", "action", "value", "expectedWorkspaceId",
+        "productId", "productKey", "expectedRunId", "expectedInputFingerprint",
+        "expectedRevision", "expectedStoreRevision", "idempotencyKey",
+    } or payload.get("schema") != "factory-tab-command:v1":
+        raise FactorySyncError("factory_tab_command_invalid")
+    for key in set(payload) - {"value", "expectedRevision", "expectedStoreRevision"}:
+        text = payload[key]
+        if not isinstance(text, str) or not text.strip() or text != text.strip() or len(text) > 512:
+            raise FactorySyncError("factory_tab_command_invalid")
+    if payload["jobId"] != job_id or payload["expectedWorkspaceId"] != f"batch:{job_id}":
+        raise FactorySyncError("factory_tab_command_job_mismatch")
+    if payload["action"] not in TAB_COMMAND_ACTIONS.get(str(payload["tabId"]), ()):
+        raise FactorySyncError("factory_tab_command_action_invalid")
+    if payload["tabId"] == "workfile" and payload["value"] != {}:
+        raise FactorySyncError("factory_tab_command_invalid")
+    if payload["tabId"] == "assets" and (not isinstance(payload["value"], str) or not payload["value"].strip()):
+        raise FactorySyncError("factory_tab_command_invalid")
+    if payload["tabId"] == "fields" and payload["action"] == "commitAllFields":
+        value = payload["value"]
+        if not isinstance(value, dict) or set(value) - {"fields", "renderAfter"} or not isinstance(value.get("fields"), list):
+            raise FactorySyncError("factory_tab_command_fields_invalid")
+        if "renderAfter" in value and not isinstance(value["renderAfter"], bool):
+            raise FactorySyncError("factory_tab_command_fields_invalid")
+        for field in value["fields"]:
+            if (not isinstance(field, dict) or set(field) - {"fieldId", "value", "label"}
+                or not isinstance(field.get("fieldId"), str) or not field["fieldId"].strip()
+                or not isinstance(field.get("value"), str) or ("label" in field and not isinstance(field["label"], str))):
+                raise FactorySyncError("factory_tab_command_fields_invalid")
+    for key in ("expectedRevision", "expectedStoreRevision"):
+        if type(payload[key]) is not int or payload[key] < 0:
+            raise FactorySyncError("factory_control_revision_invalid")
+    try:
+        serialized = json.dumps(dict(payload), ensure_ascii=False, allow_nan=False)
+        if len(serialized.encode("utf-8")) > TAB_COMMAND_MAX_BYTES:
+            raise FactorySyncError("factory_tab_command_too_large")
+    except (TypeError, ValueError, RecursionError, UnicodeError) as error:
+        raise FactorySyncError("factory_tab_command_invalid") from error
+    pending = [(payload["value"], 0)]
+    while pending:
+        value, depth = pending.pop()
+        if depth > 12:
+            raise FactorySyncError("factory_tab_command_invalid")
+        if isinstance(value, dict):
+            if len(value) > 128 or any(
+                not isinstance(key, str) or len(key) > 128
+                or key in {"__proto__", "prototype", "constructor"}
+                for key in value
+            ):
+                raise FactorySyncError("factory_tab_command_invalid")
+            pending.extend((child, depth + 1) for child in value.values())
+        elif isinstance(value, list):
+            if len(value) > 1024:
+                raise FactorySyncError("factory_tab_command_invalid")
+            pending.extend((child, depth + 1) for child in value)
+    if _has_sensitive_product_field(dict(payload)) or _has_sensitive_product_value(dict(payload)):
+        raise FactorySyncError("factory_tab_command_invalid")
+    return json.loads(serialized)
+
+
+def _assert_tab_command_target(projection: Mapping[str, JsonValue], payload: Mapping[str, JsonValue]) -> None:
+    session = projection.get("session")
+    registration = projection.get("registration")
+    if not isinstance(session, dict) or not isinstance(registration, dict) or (
+        projection.get("connected") is not True
+        or session.get("workspaceId") != payload["expectedWorkspaceId"]
+        or registration.get("jobId") != payload["jobId"]
+    ):
+        raise FactorySyncError("factory_tab_command_job_mismatch")
+    _assert_selection_identity(session, payload)
+    if type(session.get("storeRevision")) is not int or session["storeRevision"] != payload["expectedStoreRevision"]:
+        raise FactorySyncError("stale_store_revision")
+
+
+def _assert_tab_command_receipt_projection(projection: JsonObject, payload: JsonObject) -> None:
+    session = projection.get("session")
+    registration = projection.get("registration")
+    storage = projection.get("storage")
+    if not isinstance(storage, dict) or storage.get("ok") is not True or storage.get("warning"):
+        raise FactorySyncError("factory_tab_command_save_unverified")
+    if not isinstance(session, dict) or not isinstance(registration, dict) or projection.get("connected") is not True or any(
+        session.get(key) != payload[expected] for key, expected in (
+            ("workspaceId", "expectedWorkspaceId"), ("productKey", "productKey"),
+            ("runId", "expectedRunId"), ("inputFingerprint", "expectedInputFingerprint"),
+        )
+    ) or registration.get("jobId") != payload["jobId"]:
+        raise FactorySyncError("factory_tab_command_job_mismatch")
+    if payload["tabId"] == "workfile" and payload["action"] == "export-current":
+        digest = session.get("workfileSha256")
+        filename = session.get("workfileName")
+        if (session.get("workfileSource") != "browser-download-requested"
+            or not isinstance(filename, str) or not filename.lower().endswith(".kuasangse")
+            or type(session.get("workfileBytes")) is not int or session["workfileBytes"] <= 0
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)):
+            raise FactorySyncError("factory_workfile_export_source_mismatch")
+    for actual, expected in (("revision", "expectedRevision"), ("storeRevision", "expectedStoreRevision")):
+        if type(session.get(actual)) is not int or session[actual] < payload[expected]:
+            raise FactorySyncError("stale_workfile_revision" if actual == "revision" else "stale_store_revision")
+    if session.get("productId") != payload["productId"]:
+        value = payload["value"]
+        identity = value.get("candidateIdentity") if isinstance(value, dict) else None
+        inputs = projection.get("inputs")
+        groups = inputs if isinstance(inputs, list) else []
+        product = next((item for group in groups if isinstance(group, dict) and group.get("key") == "product"
+                        for item in group.get("items", []) if isinstance(item, dict)), {})
+        selected_key = product.get("cafe24SelectedId")
+        action = payload["action"]
+        if action == "restore-detached-db":
+            identity = next((candidate.get("identity")
+                             for group in groups if isinstance(group, dict) and group.get("key") == "operator_controls"
+                             for controls in group.get("items", []) if isinstance(controls, dict) and isinstance(controls.get("db"), dict)
+                             for candidate in controls["db"].get("cafe24Candidates", [])
+                             if isinstance(candidate, dict) and candidate.get("id") == selected_key), None)
+        cafe24_selection = action in {"apply-cafe24-candidate", "restore-detached-db"} and (
+            isinstance(identity, dict) and identity.get("type") == "cafe24" and bool(selected_key)
+            and selected_key == identity.get("candidateKey")
+            and session["productId"] == f"cafe24:{identity.get('productNo')}"
+            and re.fullmatch(r"cafe24:[1-9][0-9]*", str(session["productId"])) is not None
+        )
+        local_selection = session["productId"] == f"factory:{payload['productKey']}" and selected_key == "" and (
+            action in {"clear-cafe24-candidate", "confirm-no-cafe24-candidate"}
+            or action == "restore-detached-db" and bool(product.get("dbSelectedId"))
+            or action == "apply-db-candidate" and isinstance(identity, dict) and identity.get("type") == "sinhwa"
+            and bool(identity.get("candidateKey")) and product.get("dbSelectedId") == identity["candidateKey"]
+        )
+        if payload["tabId"] != "db" or registration.get("productId") != session["productId"] or not (cafe24_selection or local_selection):
+            raise FactorySyncError("stale_run_fingerprint")
+
+
+def _tab_command_fields(projection: JsonObject) -> dict[str, str]:
+    for group in projection.get("inputs", []):
+        if not isinstance(group, dict) or group.get("key") != "operator_controls":
+            continue
+        for controls in group.get("items", []):
+            if not isinstance(controls, dict):
+                continue
+            fields = controls.get("fields", [])
+            if not isinstance(fields, list):
+                raise FactorySyncError("factory_tab_command_fields_invalid")
+            return {
+                item["fieldId"]: item["value"] for item in fields
+                if isinstance(item, dict) and isinstance(item.get("fieldId"), str) and isinstance(item.get("value"), str)
+            }
+    return {}
+
+
+def _tab_command_updated_product_payload(job_payload: JsonObject, baseline: JsonObject, incoming: JsonObject, command: JsonObject) -> JsonObject:
+    explicit_field = command["tabId"] == "fields"
+    checkpoint_only = command["tabId"] == "workfile" and command["action"] == "save-checkpoint"
+    db_selection = command["tabId"] == "db" and command["action"] in {
+        "apply-db-candidate", "apply-cafe24-candidate", "restore-detached-db",
+    }
+    if not explicit_field and not db_selection and not checkpoint_only:
+        return job_payload
+    before = _tab_command_fields(baseline)
+    after = _tab_command_fields(incoming)
+    updated_values: JsonObject = {}
+    if explicit_field:
+        value = command["value"]
+        if not isinstance(value, dict):
+            raise FactorySyncError("factory_tab_command_fields_invalid")
+        fields = value.get("fields") if command["action"] == "commitAllFields" else [value]
+        if not isinstance(fields, list):
+            raise FactorySyncError("factory_tab_command_fields_invalid")
+        requested: dict[str, str] = {}
+        for field in fields:
+            if not isinstance(field, dict) or not isinstance(field.get("fieldId"), str) or not isinstance(field.get("value"), str):
+                raise FactorySyncError("factory_tab_command_fields_invalid")
+            requested[field["fieldId"]] = field["value"]
+        if any(after.get(key) != text for key, text in requested.items()) or any(
+            after.get(key) != text for key, text in before.items() if key not in requested
+        ):
+            raise FactorySyncError("factory_tab_command_fields_invalid")
+        for field_id, text in requested.items():
+            target = TAB_FIELD_VALUE_KEYS.get(field_id)
+            if target:
+                if not text.strip():
+                    raise FactorySyncError("factory_tab_command_state_reduced")
+                updated_values[target] = after[field_id]
+    else:
+        if any(text.strip() and not after.get(key, "").strip() for key, text in before.items()):
+            raise FactorySyncError("factory_tab_command_state_reduced")
+        updated_values = {target: after[field_id] for field_id, target in TAB_FIELD_VALUE_KEYS.items()
+                          if after.get(field_id, "").strip()}
+    if not updated_values:
+        return job_payload
+    existing = job_payload.get("requiredValues")
+    updated = {**job_payload, "requiredValues": {**(existing if isinstance(existing, dict) else {}), **updated_values}}
+    if "category" in updated and "category" in updated_values:
+        updated["category"] = updated_values["category"]
+    return _normalize_product_job_payload(updated)
+
+
+def _assert_tab_command_preservation(baseline: JsonObject, incoming: JsonObject, payload: JsonObject) -> None:
+    before, after = _copy(baseline), _copy(incoming)
+    mutable_groups = {"operator_controls"}
+    if payload["tabId"] in {"db", "fields"}:
+        mutable_groups.update({"product", "requirements", "strategy"})
+    if payload["tabId"] == "sections":
+        mutable_groups.add("strategy")
+    for document in (before, after):
+        groups = document.get("inputs")
+        if not isinstance(groups, list):
+            raise FactorySyncError("factory_tab_command_state_reduced")
+        members: list[JsonValue] = []
+        for group in groups:
+            if not isinstance(group, dict):
+                raise FactorySyncError("factory_tab_command_state_reduced")
+            key = _required_text(group, "key")
+            members.append({"key": key})
+            if key in mutable_groups:
+                continue
+            items = group.get("items", [])
+            if not isinstance(items, list):
+                raise FactorySyncError("factory_tab_command_state_reduced")
+            for item in items:
+                if key == "competitors" and payload["tabId"] == "competitor" and isinstance(item, dict):
+                    item = {name: value for name, value in item.items() if name not in {"selected", "detailImageCount", "analysisReady"}}
+                members.append({"key": key, "item": item})
+            if document is before:
+                candidate_group = next((item for item in after.get("inputs", []) if isinstance(item, dict) and item.get("key") == key), {})
+                if type(group.get("count")) is int and (
+                    type(candidate_group.get("count")) is not int or candidate_group["count"] < group["count"]
+                ):
+                    raise FactorySyncError("factory_tab_command_state_reduced")
+        document["inputs"] = members
+    final_after = next((stage for stage in after.get("stages", [])
+                        if isinstance(stage, dict) and stage.get("key") == "final_detail"), {})
+    archived = {candidate.get("id"): candidate for candidate in final_after.get("candidates", [])
+                if isinstance(candidate, dict)}
+    for stage in before.get("stages", []):
+        if not isinstance(stage, dict) or stage.get("key") != "final_detail":
+            continue
+        for candidate in stage.get("candidates", []):
+            if not isinstance(candidate, dict) or candidate.get("kind") != "html" or candidate.get("documentArchiveId"):
+                continue
+            archive_id = archived.get(candidate.get("id"), {}).get("documentArchiveId")
+            if isinstance(archive_id, str) and re.fullmatch(r"[a-f0-9]{16}", archive_id):
+                candidate["documentArchiveId"] = archive_id
+    if payload["tabId"] == "sections" and payload["action"] == "applySectionVariant":
+        value = payload["value"]
+        section_id = value.get("sectionId") if isinstance(value, dict) else None
+        for stage in before.get("stages", []):
+            if not isinstance(stage, dict) or stage.get("key") != "sections":
+                continue
+            target_ids = {item.get("id") for item in stage.get("candidates", [])
+                          if isinstance(item, dict) and section_id and item.get("sectionId") == section_id}
+            stage["selectedIds"] = [item for item in stage.get("selectedIds", []) if item not in target_ids]
+    if payload["tabId"] == "assets" and payload["action"] == "toggleAssetUse":
+        target_id = payload["value"]
+        matched = False
+        for stage in before.get("stages", []):
+            if not isinstance(stage, dict):
+                continue
+            target = next((item for item in after.get("stages", []) if isinstance(item, dict) and item.get("key") == stage.get("key")), {})
+            selected, received = stage.get("selectedIds", []), target.get("selectedIds", [])
+            if target_id in _stage_candidate_ids(stage):
+                matched = True
+                if (target_id in selected) == (target_id in received):
+                    raise FactorySyncError("factory_tab_command_asset_not_toggled")
+                stage["selectedIds"] = [item for item in selected if item != target_id]
+            if {item for item in selected if item != target_id} != {item for item in received if item != target_id}:
+                raise FactorySyncError("factory_tab_command_state_reduced")
+        if not matched:
+            raise FactorySyncError("factory_tab_command_asset_invalid")
+    if not _protected_state_is_preserved(_protected_projection_state(before), _protected_projection_state(after)):
+        raise FactorySyncError("factory_tab_command_state_reduced")
 
 
 def _stage_candidate_ids(stage: Mapping[str, JsonValue]) -> list[str]:
@@ -3878,6 +4428,11 @@ def _normalize_product_job_payload(payload: Mapping[str, JsonValue]) -> JsonObje
         "requiredValues": normalized_required_values,
         "inputImages": normalized_images,
     }
+    if "cafe24Registration" in payload:
+        registration = payload["cafe24Registration"]
+        if not isinstance(registration, Mapping):
+            raise FactorySyncError("factory_cafe24_values_invalid")
+        normalized["cafe24Registration"] = _normalize_cafe24_registration_values(registration)
     if detail_hint:
         normalized["detailHint"] = detail_hint
     pdp_job_id = payload.get("pdpJobId")
@@ -4045,7 +4600,7 @@ def _public_hydration_projection(
         return [item.strip() for item in items if isinstance(item, str) and item.strip()] if isinstance(items, list) else []
 
     def public_progress(mapping: Mapping[str, JsonValue]) -> JsonObject:
-        return {
+        result: JsonObject = {
             "status": text(mapping, "status"),
             "stageKey": text(mapping, "stageKey"),
             "stageLabel": text(mapping, "stageLabel"),
@@ -4054,6 +4609,23 @@ def _public_hydration_projection(
             "mode": text(mapping, "mode"),
             "message": text(mapping, "message"),
         }
+        raw_trace = mapping.get("trace")
+        if isinstance(raw_trace, dict):
+            trace: JsonObject = {}
+            for key in (
+                "schema", "correlationId", "jobId", "workspaceId", "runId", "phase",
+                "request", "sectionId", "sectionName", "errorCode",
+            ):
+                value = raw_trace.get(key)
+                if isinstance(value, str) and value.strip():
+                    trace[key] = value.strip()
+            for key in ("revision", "at", "requestTimeoutMs"):
+                value = raw_trace.get(key)
+                if isinstance(value, int) and value >= 0:
+                    trace[key] = value
+            if trace:
+                result["trace"] = trace
+        return result
 
     def public_publication(mapping: Mapping[str, JsonValue]) -> JsonObject:
         result: JsonObject = {}
@@ -4062,6 +4634,8 @@ def _public_hydration_projection(
             "externalProductNo", "remoteProductNo", "productCode", "mallId",
             "registrationMode", "sourceWorkfileName", "registeredAt", "storefrontUrl",
             "productUrl", "productLink", "adminUrl", "remoteReadbackDigest",
+            "workspaceId", "productId", "productKey", "runId", "inputFingerprint",
+            "identitySource", "optionName",
         ):
             item = text(mapping, key)
             if item:
@@ -4070,6 +4644,14 @@ def _public_hydration_projection(
             item = mapping.get(key)
             if type(item) is int and item >= 0:
                 result[key] = item
+        if isinstance(mapping.get("optionValues"), list):
+            result["optionValues"] = strings(mapping, "optionValues")
+        inventory = mapping.get("inventoryByOption")
+        if isinstance(inventory, dict):
+            result["inventoryByOption"] = {
+                key: {"quantity": text(item, "quantity"), "useInventory": text(item, "useInventory")}
+                for key, item in inventory.items() if isinstance(item, dict)
+            }
         remote = mapping.get("remoteReadback")
         if isinstance(remote, dict):
             result["remoteReadback"] = public_publication(remote)

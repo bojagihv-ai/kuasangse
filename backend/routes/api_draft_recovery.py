@@ -26,8 +26,8 @@ _DRAFT_RECOVERY_DIR = os.path.join(Config.LOCAL_STATE_FOLDER, "pdp-draft-recover
 
 # 한 스코프당 남길 사본 수. 너무 적으면 되살릴 지점이 없고, 너무 많으면 디스크를 먹는다.
 _KEEP_PER_SCOPE = 5
-# 사람이 만들 수 있는 작업파일 크기의 상한. 이미지 원본은 여기 담지 않는다.
-_MAX_BYTES = 24 * 1024 * 1024
+# 원본 이미지를 포함한 복구본도 정상 저장과 같은 크기 한도를 사용한다.
+_MAX_BYTES = Config.MAX_CONTENT_LENGTH
 
 
 def _scope_digest(scope_id: str) -> str:

@@ -50,14 +50,14 @@ export function createCompetitorFactoryTab(capabilities = {}) {
     commands: {
       guideAction: {
         capability: 'competitors:write',
-        execute(action) {
-          return runGuideAction(String(action || ''));
+        execute(action, operationContext) {
+          return runGuideAction(action, operationContext);
         },
       },
       marketAction: {
         capability: 'competitors:write',
-        execute(payload) {
-          return runMarketAction(payload);
+        execute(payload, operationContext) {
+          return runMarketAction(payload, operationContext);
         },
       },
     },

@@ -210,6 +210,21 @@ test('Cafe24 등록 영수증은 mm와 cm로 표현된 같은 사이즈를 일�
   assert.equal(result.mismatches.includes('필수값/사이즈'), false);
 });
 
+test('20 × 12 cm의 공통 단위는 두 치수에 적용하되 명시 단위와 다른 크기는 구분한다', () => {
+  const compare = compile('factoryCafe24CompareRegistrationReadback');
+  const preflight = { productName: '파우치', price: '4000', variantCount: 0,
+    requiredValues: { size: '200mm × 120mm', width_mm: '200mm', depth_mm: '120mm' } };
+  const actual = size => ({ raw: { product_no: '3024', product_name: '파우치', price: '4000',
+    additional_information: [{ name: '사이즈', value: size }] } });
+  const good = compare(preflight, actual('20 × 12 cm'));
+  assert.equal(good.allMatched, true);
+  assert.equal(good.readback.requiredValues.width_mm, '200');
+  assert.equal(good.readback.requiredValues.depth_mm, '120');
+  assert.equal(compare(preflight, actual('200mm × 12cm')).allMatched, true);
+  assert.equal(compare(preflight, actual('20mm × 12cm')).allMatched, false);
+  assert.equal(compare(preflight, actual('21 × 12 cm')).allMatched, false);
+});
+
 test('Cafe24 등록 영수증은 재고 read-back 반영 시차만 제한적으로 재조회한다', async () => {
   let fetchCount = 0;
   let delayCount = 0;

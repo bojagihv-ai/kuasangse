@@ -12,6 +12,10 @@ checks[].status 는 pass | warn | fail | info.
 """
 from __future__ import annotations
 
+from unittest.mock import Mock
+
+import pytest
+
 from routes import api_shared
 
 
@@ -144,3 +148,110 @@ def test_status_payload_when_tower_is_off(monkeypatch) -> None:
     assert status["running"] is False
     assert status["usable"] is False
     assert status["oauthState"] == "unknown"
+
+
+@pytest.fixture
+def guarded_tower(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    monkeypatch.setattr(api_shared, "_cafe24_control_port_open", lambda: True)
+    monkeypatch.setattr(api_shared.requests, "get", Mock(return_value=_Response(
+        {"ok": False, "error": {"code": "control_key_invalid"}}, ok=False, status_code=401,
+    )))
+    hub = Mock()
+    monkeypatch.setattr(api_shared.requests, "post", hub)
+    return hub
+
+
+@pytest.mark.parametrize(("token", "usable", "oauth_state"), [
+    ("pass", True, "connected"), ("fail", False, "reauth_required"), ("warn", True, "expiring"),
+])
+def test_auth_401_reads_setup_through_saved_hub_auth(
+    guarded_tower: Mock, token: str, usable: bool, oauth_state: str,
+) -> None:
+    # Given: 인증된 Hub 조회만 실제 OAuth 검사표를 돌려준다.
+    guarded_tower.return_value = _Response({
+        "ok": True, "status": 200, "response": {"body": _body(token=token)},
+    })
+    # When
+    status = api_shared._cafe24_control_status_payload()
+    # Then: 인증이 필요한 서비스는 꺼진 것이 아니며, OAuth 판정은 그대로 유지한다.
+    assert status["running"] is True
+    assert status["portConflict"] is False
+    assert status["healthOk"] is True
+    assert status["usable"] is usable
+    assert status["oauthState"] == oauth_state
+    guarded_tower.assert_called_once_with(
+        f"{api_shared._JEPUM_API_HUB_BASE}/api/invoke/cafe24_control_tower/setup-status",
+        json={"query": {"include_secrets": 0}}, timeout=2,
+    )
+
+
+@pytest.mark.parametrize("hub_response", [
+    pytest.param(_Response({"ok": False, "status": 200, "response": {"body": _body()}}), id="hub-error"),
+    pytest.param(_Response({"ok": True, "status": 401, "response": {"body": _body()}}), id="upstream-error"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": {"body": _body()}},
+                          ok=False, status_code=502), id="http-error"),
+    pytest.param(_Response({"ok": True, "response": {"body": _body()}}), id="missing-status"),
+    pytest.param(_Response([]), id="wrong-envelope"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": None}), id="missing-response"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": {"body": "not json"}}), id="bad-body"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": {"body": {
+        "ok": True, "data": {"checks": [{"id": "mall-connection", "status": "pass"}]},
+    }}}), id="incomplete-checks"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": {"body": {
+        **_body(), "ok": False,
+    }}}), id="setup-error"),
+    pytest.param(_Response({"ok": True, "status": 200, "response": {"body": _body(token="info")}}),
+                 id="unknown-token"),
+])
+def test_auth_401_with_untrusted_hub_status_stays_unknown(
+    guarded_tower: Mock, hub_response: _Response,
+) -> None:
+    # Given: HTTP 성공만으로는 인증·검사 결과가 확인되지 않는다.
+    guarded_tower.return_value = hub_response
+    # When
+    status = api_shared._cafe24_control_status_payload()
+    # Then: 실행 사실과 미확인 OAuth 상태를 구분한다.
+    assert status["running"] is True
+    assert status["portConflict"] is False
+    assert status["usable"] is None
+    assert status["oauthState"] == "unknown"
+    guarded_tower.assert_called_once()
+
+
+@pytest.mark.parametrize("error", [api_shared.requests.Timeout(), ValueError()])
+def test_auth_401_with_unreachable_or_non_json_hub_stays_unknown(
+    guarded_tower: Mock, error: Exception,
+) -> None:
+    # Given
+    guarded_tower.side_effect = error
+    # When
+    status = api_shared._cafe24_control_status_payload()
+    # Then
+    assert status["running"] is True
+    assert status["portConflict"] is False
+    assert status["usable"] is None
+    assert status["oauthState"] == "unknown"
+    guarded_tower.assert_called_once()
+
+
+@pytest.mark.parametrize(("port_open", "http_status", "body"), [
+    (False, 401, {"error": {"code": "control_key_invalid"}}),
+    (True, 401, {"error": {"code": "unauthorized"}}),
+    (True, 401, {"error": "control_key_invalid"}),
+    (True, 500, {"error": {"code": "control_key_invalid"}}),
+])
+def test_other_services_and_closed_ports_never_use_hub(
+    monkeypatch: pytest.MonkeyPatch, port_open, http_status, body,
+) -> None:
+    # Given
+    monkeypatch.setattr(api_shared, "_cafe24_control_port_open", lambda: port_open)
+    monkeypatch.setattr(api_shared.requests, "get", Mock(return_value=_Response(body, False, http_status)))
+    hub = Mock(side_effect=AssertionError("unexpected Hub invocation"))
+    monkeypatch.setattr(api_shared.requests, "post", hub)
+    # When
+    status = api_shared._cafe24_control_status_payload()
+    # Then
+    assert status["running"] is False
+    assert status["portConflict"] is port_open
+    assert status["usable"] is False
+    hub.assert_not_called()

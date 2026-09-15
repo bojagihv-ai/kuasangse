@@ -62,6 +62,29 @@ function healthyOAuthResponses(mallId) {
   ];
 }
 
+test('Cafe24 승인과 실행결과 조회도 저장된 Hub 인증으로 같은 작업 영수증을 읽는다', async () => {
+  const { sandbox } = createHarness([
+    { body: apiHubEnvelope({ jobRunId: 'registration-job-1' }) },
+    { body: apiHubEnvelope([{ id: 'registration-job-1', status: 'completed', product_no: 4321 }]) },
+  ], [
+    '/api/invoke/cafe24_control_tower/change-plan-approve',
+    '/api/invoke/cafe24_control_tower/jobs',
+  ]);
+  const approval = await sandbox.approveCafe24ControlPlan({ id: 'plan-1' });
+  const result = await sandbox.waitCafe24ControlJob(approval.jobRunId, { attempts: 1 });
+  assert.equal(result.id, approval.jobRunId);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.product_no, 4321);
+});
+
+test('Hub 인증을 사용해도 틀린 승인 문구로는 변경안을 보내지 않는다', async () => {
+  const { sandbox, calls } = createHarness([], []);
+  await assert.rejects(sandbox.approveCafe24ControlPlan({ id: 'plan-1',
+    approval_requirement: { required: true, phrase: '등록 확인' },
+  }, { confirmation: '다른 문구' }), /확인문구/);
+  assert.equal(calls.length, 0);
+});
+
 test('Cafe24 전송은 Control Tower가 꺼져 있으면 먼저 자동 기동한다', async () => {
   // Given: Control Tower가 꺼져 있고 기존 OAuth 상태는 정상인 전송 환경을 준비한다.
   const mallId = 'bojagi1928';

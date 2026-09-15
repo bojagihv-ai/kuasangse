@@ -120,6 +120,10 @@ test('queue starts with the operator console and overview keeps the workfile des
   assert.ok(workfileIndex > overviewIndex, 'workfile desk must remain inside overview');
   assert.ok(reportIndex > workfileIndex, 'report ledger must remain secondary to the workfile desk');
   assert.match(html.slice(queueIndex), /^<section[^>]+>\s*<section class="section operator-console-shell"/u);
+  const initialTabs = [...html.matchAll(/<button\b[^>]*role="tab"[^>]*>/gu)].map(match => match[0]);
+  assert.equal(initialTabs.filter(tab => tab.includes('aria-selected="true"')).length, 1);
+  assert.match(initialTabs.find(tab => tab.includes('aria-selected="true"')), /id="menu-tab-queue"/u);
+  assert.doesNotMatch(html.slice(queueIndex).split('>')[0], /\bhidden\b/u);
 });
 
 test('operator queue declares accessible status filters beside its heading', () => {
@@ -137,6 +141,18 @@ test('operator queue declares accessible status filters beside its heading', () 
   }
   assert.equal((console.match(/data-queue-filter=/g) || []).length, 5);
   assert.match(console, /data-queue-filter="all"[^>]*aria-pressed="true"/u);
+});
+
+test('1024px operator console stacks queue and current work while desktop keeps list-detail', () => {
+  const html = fs.readFileSync(HTML_PATH, 'utf8');
+  const base = html.match(/\.operator-console-grid\s*\{[\s\S]*?\}/u)?.[0] || '';
+  const responsive = html.match(/\/\* operator 콘솔 좁은 화면 규칙[\s\S]*?\.operator-console-grid\s*\{[\s\S]*?\}/u)?.[0] || '';
+
+  assert.match(base, /grid-template-columns:\s*minmax\(min\(var\(--operator-queue-min\), 100%\), 22rem\)\s+minmax\(0, 1fr\)/u);
+  assert.match(responsive, /@media\s*\(max-width:\s*1100px\)/u);
+  assert.match(responsive, /\.operator-console-grid\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/u);
+  assert.match(html, /main\.page[\s\S]*overflow-y:\s*auto/u);
+  assert.match(html, /\.menu-tablist[\s\S]*flex-wrap:\s*wrap/u);
 });
 
 test('menu panels have unique ids and hidden inactive panels do not duplicate roots', () => {

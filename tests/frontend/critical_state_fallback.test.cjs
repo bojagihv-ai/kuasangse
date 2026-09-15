@@ -121,3 +121,30 @@ test('용량 fallback도 마지막 작업의 DB/Cafe24/VM 후보와 선택 상�
   assertCriticalState(minimal, 'minimal fallback');
   assertCriticalState(emergency, 'emergency fallback');
 });
+
+test('축약 복원본도 문서와 탭 브랜치의 연결을 보존하고 다른 문서는 거절한다', async () => {
+  const { createWorkspaceWorkBranch, createWorkspaceWorkIdentity, validateWorkspaceSnapshotIdentity }
+    = await import('../../src/modules/persistence/work-identity.mjs');
+  const original = payload();
+  original.currentProjectId = 'batch:factory-job-pouch';
+  original.workspaceScope = { id: 'draft:lastwork-worker' };
+  original.workspaceKind = 'project';
+  original.workspaceBranch = createWorkspaceWorkBranch({
+    branchId: 'lastwork-worker', documentId: original.currentProjectId, createdAt: 100,
+  });
+  original.workIdentity = createWorkspaceWorkIdentity({
+    instanceId: 'work:pouch', workspaceId: original.currentProjectId,
+    initialProductName: original.productName, createdAt: 100,
+  });
+  assert.equal(validateWorkspaceSnapshotIdentity(original).ok, true);
+  for (const build of [buildMinimal, buildEmergency]) {
+    const restored = JSON.parse(JSON.stringify(build(original)));
+    const validation = validateWorkspaceSnapshotIdentity(restored);
+    assert.equal(validation.ok, true, validation.code);
+    assert.deepEqual(restored.workspaceBranch, original.workspaceBranch);
+    assert.equal(restored.workspaceKind, 'project');
+    assertCriticalState(restored, build.name);
+    restored.currentProjectId = 'batch:different-product';
+    assert.equal(validateWorkspaceSnapshotIdentity(restored).ok, false);
+  }
+});

@@ -370,6 +370,30 @@ def _last_work_analysis_invalidated_on_purpose(existing, incoming):
     )
 
 
+def _last_work_exact_analysis_duplicate_cleanup(existing_analysis, incoming_analysis) -> bool:
+    if not isinstance(existing_analysis, dict) or not isinstance(incoming_analysis, dict):
+        return False
+
+    def canonical(value) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    normalized = dict(existing_analysis)
+    if isinstance(normalized.get("page_score"), dict):
+        normalized["page_score"] = dict(normalized["page_score"])
+    changed = False
+    for container, key in ((normalized, "sections_found"), (normalized.get("page_score"), "criteria")):
+        rows = container.get(key) if isinstance(container, dict) else None
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            continue
+        unique_rows = {}
+        for row in rows:
+            unique_rows.setdefault(canonical(row), row)
+        if len(unique_rows) < len(rows):
+            container[key] = list(unique_rows.values())
+            changed = True
+    return changed and canonical(normalized) == canonical(incoming_analysis)
+
+
 def _last_work_keep_derived_analysis(existing, incoming):
     """분석 묶음이 비어 들어오면, 스냅샷을 통째로 거절하는 대신 지킬 값만 되살린다.
 
@@ -392,7 +416,12 @@ def _last_work_keep_derived_analysis(existing, incoming):
     if not isinstance(incoming_comp, dict):
         return []
     kept = []
+    exact_analysis_duplicate_cleanup = _last_work_exact_analysis_duplicate_cleanup(
+        existing_comp.get("analysisResult"), incoming_comp.get("analysisResult")
+    )
     for key in ("analysisResult", "sectionPlan", "planEdits"):
+        if key == "analysisResult" and exact_analysis_duplicate_cleanup:
+            continue
         merged = _last_work_fill_missing(existing_comp.get(key), incoming_comp.get(key))
         if merged is not _LAST_WORK_UNCHANGED:
             incoming_comp[key] = merged
@@ -626,8 +655,13 @@ def _last_work_derived_state_drop_reason(existing, incoming):
     existing_invalidated = _last_work_nonnegative_int(existing_comp.get("analysisInvalidatedAt"))
     incoming_invalidated = _last_work_nonnegative_int(incoming_comp.get("analysisInvalidatedAt"))
     analysis_invalidated_on_purpose = incoming_invalidated > existing_invalidated
+    exact_analysis_duplicate_cleanup = _last_work_exact_analysis_duplicate_cleanup(
+        existing_comp.get("analysisResult"), incoming_comp.get("analysisResult")
+    )
     for key in ("analysisResult", "sectionPlan", "planEdits"):
         if analysis_invalidated_on_purpose:
+            continue
+        if key == "analysisResult" and exact_analysis_duplicate_cleanup:
             continue
         dropped_path = _last_work_value_drop_path(existing_comp.get(key), incoming_comp.get(key))
         if dropped_path:
@@ -3833,5 +3867,3 @@ def _marketplus_recipe_dry_run(context=None):
         "recipes": summaries,
         "note": "저장된 내부 API 레시피 구조를 확인했습니다. dry-run이라 요청은 보내지 않고 기존 화면 클릭 루트로 이어갑니다." if matched else "요청 채널에 맞는 레시피가 없어 기존 화면 클릭 루트로 진행합니다.",
     }
-
-

@@ -6,8 +6,21 @@
  * 그래서 값 검사만 여기에 모은다.
  */
 
+import { hasSensitiveProductField, hasSensitiveProductValue } from './batch-control-product-contract.mjs';
+
 export const FACTORY_CONTROL_COMMAND_VERSION = 'factory-control-command:v1';
 export const FACTORY_WORKFILE_HYDRATION_COMMAND_VERSION = 'factory-workfile-hydration-command:v1';
+export const FACTORY_TAB_COMMAND_ACTIONS = Object.freeze({
+  workfile: Object.freeze(['export-current', 'save-checkpoint']),
+  db: Object.freeze(['search', 'apply-db-candidate', 'apply-cafe24-candidate', 'confirm-no-db-candidate',
+    'confirm-no-cafe24-candidate', 'clear-db-candidate', 'clear-cafe24-candidate', 'restore-detached-db']),
+  fields: Object.freeze(['commitField', 'commitAllFields']),
+  assets: Object.freeze(['toggleAssetUse']),
+  competitor: Object.freeze(['guideAction', 'marketAction']),
+  sections: Object.freeze(['updateSectionInstruction', 'updateSectionAssemblySource', 'updateSectionAssemblyCutUsage',
+    'updateSectionAssemblyCut', 'updateSectionAssemblyNote', 'saveManualSection', 'applySectionVariant', 'generateSection',
+    'setSectionBasisMode', 'setSectionGenerationMode', 'updateSectionOrder', 'setSectionEnabled']),
+});
 
 export class FactoryControlCommandError extends Error {
   constructor(code) {
@@ -47,6 +60,98 @@ export function selectionPayload(value) {
     throw new FactoryControlCommandError('factory_control_revision_invalid');
   }
   return Object.freeze({ ...value });
+}
+
+export function tabCommandPayload(value) {
+  const fields = ['schema', 'jobId', 'tabId', 'action', 'value', 'expectedWorkspaceId', 'productId', 'productKey',
+    'expectedRunId', 'expectedInputFingerprint', 'expectedRevision', 'expectedStoreRevision', 'idempotencyKey'];
+  const invalid = () => { throw new FactoryControlCommandError('factory_tab_command_payload_invalid'); };
+  if (!record(value) || fields.some(key => !Object.hasOwn(value, key))
+    || Object.keys(value).some(key => !fields.includes(key)) || value.schema !== 'factory-tab-command:v1') invalid();
+  for (const key of fields.filter(key => !['value', 'expectedRevision', 'expectedStoreRevision'].includes(key))) {
+    if (typeof value[key] !== 'string' || !value[key].trim() || value[key] !== value[key].trim()) invalid();
+  }
+  if (!Object.hasOwn(FACTORY_TAB_COMMAND_ACTIONS, value.tabId)
+    || !FACTORY_TAB_COMMAND_ACTIONS[value.tabId].includes(value.action)) invalid();
+  if (value.expectedWorkspaceId !== `batch:${value.jobId}`
+    || !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0
+    || !Number.isSafeInteger(value.expectedStoreRevision) || value.expectedStoreRevision < 0
+    || hasSensitiveProductField(value.value) || hasSensitiveProductValue(value.value)) invalid();
+  const input = value.value;
+  const shape = (keys, required = keys) => {
+    if (!record(input) || Object.keys(input).some(key => !keys.includes(key))
+      || required.some(key => !Object.hasOwn(input, key))) invalid();
+  };
+  const string = key => { if (typeof input[key] !== 'string') invalid(); };
+  if (value.tabId === 'workfile') {
+    shape([]);
+  } else if (value.tabId === 'db') {
+    if (value.action === 'search') {
+      shape(['query', 'source']);
+      string('query');
+      if (!input.query.trim() || !['all', 'db', 'cafe24'].includes(input.source)) invalid();
+    } else if (value.action.startsWith('apply-')) {
+      shape(['candidateIdentity']);
+      const identity = input.candidateIdentity;
+      const keys = ['type', 'candidateKey', 'productNo', 'jcode', 'productCode', 'scopeKey', 'identityKey'];
+      if (!record(identity) || keys.some(key => typeof identity[key] !== 'string')
+        || Object.keys(identity).some(key => !keys.includes(key))
+        || identity.type !== (value.action === 'apply-cafe24-candidate' ? 'cafe24' : 'sinhwa')
+        || !identity.candidateKey || !identity.scopeKey || !identity.identityKey) invalid();
+    } else if (input !== null && (!record(input) || Object.keys(input).length)) invalid();
+  } else if (value.tabId === 'fields') {
+    const fields = value.action === 'commitAllFields' ? input?.fields : [input];
+    if (value.action === 'commitAllFields') {
+      shape(['fields', 'renderAfter'], ['fields']);
+      if (input.renderAfter !== undefined && typeof input.renderAfter !== 'boolean') invalid();
+    }
+    if (!Array.isArray(fields)) invalid();
+    for (const field of fields) {
+      if (!record(field) || Object.keys(field).some(key => !['fieldId', 'value', 'label'].includes(key))
+        || typeof field.fieldId !== 'string' || typeof field.value !== 'string'
+        || (field.label !== undefined && typeof field.label !== 'string') || !field.fieldId.trim()
+        || /^(?:product_?name|user_?product_?name|product_?key|product_?id|workspace_?id|current_?run_?id|input_?image_?fingerprint)$/i.test(field.fieldId)) invalid();
+    }
+  } else if (value.tabId === 'assets') {
+    if (typeof input !== 'string' || !input.trim()) invalid();
+  } else if (value.tabId === 'competitor') {
+    if (value.action === 'guideAction' && typeof input === 'string') {
+      if (!input.trim()) invalid();
+    } else if (!record(input) || !text(input[value.action === 'guideAction' ? 'action' : 'type'])) invalid();
+  } else if (value.action === 'updateSectionOrder') {
+    if (!Array.isArray(input) || !input.length || new Set(input).size !== input.length
+      || input.some(id => typeof id !== 'string' || !/^[a-z][a-z0-9_-]*$/i.test(id))) invalid();
+  } else {
+    const keys = {
+      updateSectionInstruction: ['value'], updateSectionAssemblySource: ['sourceId', 'selected'],
+      updateSectionAssemblyCutUsage: ['cutUsage'], updateSectionAssemblyCut: ['cutAssetKey'],
+      updateSectionAssemblyNote: ['note'], saveManualSection: ['content'], applySectionVariant: ['variantId'],
+      generateSection: [], setSectionBasisMode: ['basisId'], setSectionGenerationMode: ['modeId'], setSectionEnabled: ['enabled'],
+    }[value.action];
+    shape(['sectionId', ...keys]);
+    string('sectionId');
+    if (!/^[a-z][a-z0-9_-]*$/i.test(input.sectionId)) invalid();
+    for (const key of keys) {
+      if (['enabled', 'selected'].includes(key)) { if (typeof input[key] !== 'boolean') invalid(); }
+      else if (key === 'content') {
+        const contentKeys = ['headline', 'subheadline', 'body_text', 'cta_text', 'extra_elements', 'layout_suggestion'];
+        if (!record(input.content) || !Object.keys(input.content).length
+          || Object.entries(input.content).some(([name, item]) => !contentKeys.includes(name)
+            || (typeof item !== 'string' && !(name === 'extra_elements' && Array.isArray(item) && item.every(part => typeof part === 'string'))))) invalid();
+      } else string(key);
+    }
+  }
+  const freezeJson = item => {
+    if (item === null || ['string', 'boolean'].includes(typeof item)) return item;
+    if (typeof item === 'number' && Number.isFinite(item)) return item;
+    if (Array.isArray(item)) return Object.freeze(item.map(freezeJson));
+    if (!record(item)) invalid();
+    return Object.freeze(Object.fromEntries(Object.entries(item).map(([key, child]) => {
+      if (['__proto__', 'prototype', 'constructor'].includes(key)) invalid();
+      return [key, freezeJson(child)];
+    })));
+  };
+  return freezeJson(value);
 }
 
 export function hydrationPayload(value, order) {

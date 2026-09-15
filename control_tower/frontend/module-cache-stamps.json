@@ -1,27 +1,43 @@
 {
   "bulk-intake-model.mjs": {
-    "token": "bulkIntake=11",
-    "digest": "10c4491e9cc6da18"
+    "token": "bulkIntake=14",
+    "digest": "67560979fd929b9e"
   },
-  "production-board-model.mjs": {
-    "token": "parallelBoard=44",
-    "digest": "3c8bd8ee9231b868"
+  "intake-categories.mjs": {
+    "token": "intakeCategories=1",
+    "digest": "067609b9e33089a0"
+  },
+  "factory-operator-controls.mjs": {
+    "token": "operator=3",
+    "digest": "4f82bf7e5ef95506"
   },
   "production-workbench-model.mjs": {
-    "token": "currentProductTruth=2",
-    "digest": "f3035259d1ee5207"
+    "token": "currentProductTruth=5",
+    "digest": "9bef245e92570489"
+  },
+  "production-board-model.mjs": {
+    "token": "parallelBoard=45",
+    "digest": "dd72cacc66e9d1b5"
   },
   "factory-sync-model.mjs": {
-    "token": "selectedId=4",
-    "digest": "bad9c31e2915e5e8"
+    "token": "selectedId=5",
+    "digest": "e6231daca59ba4b0"
   },
   "menu-shell.mjs": {
     "token": "menuReorg=3",
     "digest": "98e78924051c27f9"
   },
   "operator-queue-model.mjs": {
-    "token": "batchList=2",
-    "digest": "aa038e498bb62de8"
+    "token": "batchList=4",
+    "digest": "7e7b4b4b1bde8335"
+  },
+  "factory-operator-source-panels.mjs": {
+    "token": "operator=4",
+    "digest": "4d56f2758d10f878"
+  },
+  "factory-operator-section-panel.mjs": {
+    "token": "operator=3",
+    "digest": "02e45c4b2913c23f"
   },
   "next-action-model.mjs": {
     "token": "nextAction=3",
@@ -32,8 +48,8 @@
     "digest": "ad9cd83f376aa8cc"
   },
   "workfile-job-tabs-model.mjs": {
-    "token": "workfileTabs=5",
-    "digest": "8266fdc9f3f86e03"
+    "token": "workfileTabs=6",
+    "digest": "01ea593e25d6b726"
   },
   "workfile-identity-model.mjs": {
     "token": "actualB=1",

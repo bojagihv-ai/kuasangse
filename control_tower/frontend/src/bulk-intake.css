@@ -1,0 +1,1152 @@
+    :root {
+      --color-page-background: var(--bg);
+      --color-card-background: var(--bg-card);
+      --color-input-background: var(--bg-input);
+      --color-border-default: var(--border);
+      --color-accent-primary: var(--primary);
+      --color-accent-highlight: var(--primary-h);
+      --color-status-ok: var(--ok);
+      --color-status-warn: var(--warn);
+      --color-status-error: var(--err);
+      --color-text-primary: var(--text);
+      --color-text-secondary: var(--text-d);
+      --color-text-muted: var(--text-m);
+      --color-primary-glow: none;
+      --color-surface-sheen: none;
+      --color-accent-wash: rgb(99 102 241 / 0.14);
+      --color-menu-tab-background: rgba(10, 12, 20, .74);
+      --shadow-menu-tab-selected-inset: 0 -1px 0 var(--color-accent-wash) inset;
+      --color-ok-border: rgb(52 211 153 / 0.34);
+      --color-error-border: rgb(251 113 133 / 0.34);
+      --color-danger-wash: rgb(251 113 133 / 0.12);
+      --color-dialog-backdrop: rgb(0 0 0 / 0.74);
+      --color-ok-wash: rgb(52 211 153 / 0.16);
+      --color-warn-wash: rgb(251 191 36 / 0.16);
+      --color-warn-border: rgb(251 191 36 / 0.42);
+      --color-accent-border: rgb(99 102 241 / 0.5);
+      --board-fact-file-max-width: 22ch;
+      --board-cafe24-field-min: 11rem;
+      --board-intake-thumb-size: 92px;
+      --board-intake-card-min: 9rem;
+      --bulk-thumb-size: 132px;
+    --bulk-row-thumb-size: 40px;
+    --bulk-ai-thumb-size: 44px;
+    --bulk-mini-action-size: 32px;
+      --bulk-name-field-basis: 25rem;
+      --bulk-editor-min: 24rem;
+      --bulk-field-min: 9rem;
+      --bulk-lightbox-max-width: 1100px;
+      --space-half: 4px;
+      --space-page-bottom: 48px;
+      --page-gutter: 32px;
+      --page-gutter-compact: 24px;
+      --border-width-default: 1px;
+      --border-width-emphasis: 3px;
+      --focus-outline-width: 2px;
+      --focus-outline-offset: 2px;
+      --badge-padding-block: 2px;
+      --badge-padding-inline: 6px;
+      --radius-card: var(--radius-lg);
+      --radius-compact: var(--radius-md);
+      --radius-pill: 999px;
+      --radius-circle: 50%;
+      /* 1160px 는 화면 좌우를 통째로 비웠다. 넓은 화면에서는 넓게 쓰되,
+         본문이 무한정 퍼지지는 않게 상한만 둔다. */
+      --content-max-width: 1500px;
+      --content-copy-wide: 62ch;
+      --content-copy-narrow: 52ch;
+      --status-dot-size: 8px;
+      --status-mark-size: 36px;
+      --visually-hidden-size: 1px;
+      --grid-min-detail: 240px;
+      --grid-min-card: 304px;
+      --operator-queue-min: 19rem;
+      --operator-stage-min: 7rem;
+      --card-min-block-size: 144px;
+      --scope-row-min-block-size: 96px;
+      --virtual-queue-min-block-size: 240px;
+      --virtual-row-min-block-size: 112px;
+      --lazy-thumb-size: 32px;
+      --board-thumb-size: 112px;
+      --board-thumb-loading-opacity: 0.35;
+      --board-stage-min-block-size: 132px;
+      --board-stage-max-block-size: 208px;
+      --z-index-overlay: 90;
+      --board-zoom-backdrop: rgba(6, 8, 14, 0.86);
+      --board-zoom-max-inline: min(88vw, 1100px);
+      --board-zoom-max-block: 78vh;
+      --board-zoom-min-block: 52vh;
+      --image-intake-thumb-size: 72px;
+      --font-family-sans: Pretendard, "Noto Sans KR", sans-serif;
+      --font-family-mono: "SFMono-Regular", Consolas, monospace;
+      --font-size-kicker: 11px;
+      --font-size-compact: 12px;
+      --font-size-panel-copy: 13px;
+      --font-size-card-title: 15px;
+      --font-size-status-mark: 16px;
+      --font-size-section-title: 20px;
+      --font-size-page-title: clamp(22px, 3vw, 26px);
+      --line-height-body: 1.5;
+      --line-height-tight: 1.15;
+      --line-height-page-title: 1.2;
+      --line-height-section-title: 1.3;
+      --line-height-card-title: 1.35;
+      --tracking-kicker: 0.12em;
+      --tracking-label: 0.06em;
+      --font-weight-strong: 700;
+      --font-weight-emphasis: 800;
+      --font-weight-normal: 400;
+      --control-min-block-size: 44px;
+      --compact-control-min-block-size: 36px;
+      --progress-track-size: 8px;
+      --review-row-min-block-size: 112px;
+      --timeline-max-block-size: 240px;
+    }
+
+
+    /* 대량 투입: 사진 한 장이 한 줄, 구역이 곧 역할이다. */
+    .bulk-color-rule,
+    .bulk-defaults-extra,
+    .bulk-batch-bar {
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-color-rule > summary,
+    .bulk-defaults-extra > summary {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .bulk-color-rule[open] > summary,
+    .bulk-defaults-extra[open] > summary {
+      margin-block-end: var(--space-1);
+    }
+
+    .bulk-color-rule-body {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .bulk-defaults-row {
+      display: flex;
+      align-items: end;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-defaults-label {
+      align-self: center;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      inline-size: 8rem;
+    }
+
+    .bulk-defaults-extra {
+      margin-block-start: var(--space-1);
+    }
+
+    .bulk-batch-bar {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-color-rule-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-color-rule-label {
+      inline-size: 6rem;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-rule-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-half);
+      min-block-size: var(--compact-control-min-block-size);
+      padding: 0 var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      cursor: pointer;
+    }
+
+    .bulk-rule-chip[data-on="true"] {
+      border-color: var(--color-accent-border);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .bulk-rule-chip-hint {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+    }
+
+    .bulk-rule-custom {
+      inline-size: 11rem;
+      min-block-size: var(--compact-control-min-block-size);
+    }
+
+    .bulk-rule-preview {
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-pill);
+      background: var(--color-input-background);
+      font-family: var(--font-family-mono);
+    }
+
+    .bulk-card-head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+    }
+
+    .bulk-card-rail {
+      inline-size: var(--border-width-emphasis);
+      align-self: stretch;
+      border-radius: var(--radius-pill);
+      background: var(--color-status-ok);
+    }
+
+    .bulk-product-card[data-state="warn"] .bulk-card-rail {
+      background: var(--color-status-warn);
+    }
+
+    .bulk-card-spacer {
+      flex-grow: 1;
+    }
+
+    .bulk-card-fact,
+    .bulk-card-verdict {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-card-verdict {
+      padding: var(--badge-padding-block) var(--space-1);
+      border: var(--border-width-default) solid var(--color-ok-border);
+      border-radius: var(--radius-pill);
+      background: var(--color-ok-wash);
+      color: var(--color-status-ok);
+      font-weight: var(--font-weight-strong);
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-card-verdict[data-tone="warn"] {
+      border-color: var(--color-warn-border);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+    }
+
+    .bulk-card-verdict[data-tone="blocked"] {
+      border-color: var(--color-error-border);
+      background: var(--color-danger-wash);
+      color: var(--color-status-error);
+    }
+
+    /* 두 구역이 나란히: 기본 이미지 | 색상 옵션. 구역이 곧 역할이라 select 가 필요 없다. */
+    .bulk-zones {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(30rem, 100%), 1fr));
+      gap: var(--space-1);
+    }
+
+    .bulk-zone {
+      display: flex;
+      flex-direction: column;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+    }
+
+    .bulk-zone-label {
+      padding-block-end: var(--space-half);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .bulk-zone-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    /* 구역이 곧 역할 — 이 버튼으로 넣으면 분류가 끝난다. */
+    .bulk-zone-add {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      min-block-size: var(--control-min-block-size);
+      padding: 0 var(--space-1);
+      border: var(--border-width-default) dashed var(--color-accent-border);
+      border-radius: var(--radius-compact);
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .bulk-zone-add input {
+      position: absolute;
+      inset: 0;
+      inline-size: 100%;
+      block-size: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .bulk-zone-add:focus-within {
+      outline: var(--border-width-emphasis) solid var(--color-accent-highlight);
+      outline-offset: var(--space-half);
+    }
+
+    /* 기본 사진은 제품의 얼굴이다. 크게 보여 무엇이 대표인지 한눈에 알게 한다. */
+    .bulk-base-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      padding-block-start: var(--space-half);
+    }
+
+    .bulk-base-cell {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-half);
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-base-cell .bulk-thumb {
+      inline-size: var(--bulk-thumb-size);
+      block-size: var(--bulk-thumb-size);
+      padding: 0;
+    }
+
+    .bulk-base-cell .bulk-shot-name {
+      flex: none;
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-base-tools {
+      display: flex;
+      align-items: center;
+      gap: var(--space-half);
+      flex-wrap: wrap;
+    }
+
+    .bulk-base-cell .bulk-color-input {
+      inline-size: var(--bulk-thumb-size);
+    }
+
+    .bulk-zone-empty {
+      margin: 0;
+      padding: var(--space-1) 0;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-shot-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-half) 0;
+      border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .bulk-shot-row .bulk-thumb {
+      inline-size: var(--bulk-row-thumb-size);
+      block-size: var(--bulk-row-thumb-size);
+      flex: none;
+      padding: 0;
+    }
+
+    .bulk-shot-name {
+      flex: 0 1 11rem;
+      min-inline-size: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bulk-shot-row .bulk-color-input {
+      inline-size: 9rem;
+    }
+
+    .bulk-color-input[data-missing="true"] {
+      border-color: var(--color-warn-border);
+    }
+
+    .bulk-move-action {
+      min-block-size: var(--bulk-mini-action-size);
+      padding: 0 var(--space-1);
+      border: 0;
+      background: none;
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .bulk-mini-action[data-on="true"] {
+      border-color: var(--color-accent-border);
+      background: var(--color-accent-wash);
+      color: var(--color-text-primary);
+    }
+
+    .bulk-mini-action {
+      min-block-size: var(--bulk-mini-action-size);
+      padding: 0 var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+      cursor: pointer;
+    }
+
+    .bulk-ai-panel {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2);
+      inline-size: min(52rem, 92vw);
+      padding: var(--space-3);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    .bulk-ai-rows {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .bulk-ai-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-1) 0;
+      border-block-start: var(--border-width-default) solid var(--color-border-default);
+    }
+
+    .bulk-ai-row img {
+      inline-size: var(--bulk-ai-thumb-size);
+      block-size: var(--bulk-ai-thumb-size);
+      border-radius: var(--radius-compact);
+      object-fit: cover;
+    }
+
+    .bulk-ai-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+
+    .bulk-intake {
+      display: grid;
+      gap: var(--space-2);
+      block-size: auto;
+      min-inline-size: 0;
+      overflow: visible;
+    }
+
+    .bulk-intake > * {
+      min-inline-size: 0;
+      max-inline-size: 100%;
+    }
+
+    .bulk-intake .section-heading,
+    .bulk-intake .status-message {
+      margin: 0;
+    }
+
+    .bulk-intake .section-heading {
+      align-items: center;
+    }
+
+    .bulk-intake .bulk-mini-action,
+    .bulk-intake .bulk-move-action {
+      min-block-size: var(--control-min-block-size);
+    }
+
+    .bulk-product-creator,
+    .bulk-category-search {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: var(--space-1);
+    }
+
+    .bulk-multi-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      align-items: end;
+    }
+    .bulk-entry-tools {display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:var(--space-4);align-items:end;padding:var(--space-3);border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-card)}
+    .bulk-entry-tools .bulk-paste-field {flex:1 1 14rem}
+    .bulk-entry-tools .bulk-paste-actions {flex:1 1 12rem}
+    .bulk-entry-tools .bulk-product-creator {align-self:start}
+    .bulk-entry-tools .bulk-product-creator .bulk-name-field {flex-basis:14rem}
+    @media (max-width:900px) {.bulk-entry-tools {grid-template-columns:minmax(0,1fr)}}
+    .bulk-paste-field, .bulk-paste-actions {
+      display: grid;
+      flex: 1 1 20rem;
+      min-inline-size: 0;
+      gap: var(--space-1);
+    }
+    .bulk-paste-actions .board-action {justify-self: start}
+    .bulk-common-fields {padding: var(--space-1);border: var(--border-width-default) solid var(--color-border-default);border-radius: var(--radius-compact)}
+    .bulk-common-fields > summary {cursor: pointer;font-weight: var(--font-weight-strong)}
+    .bulk-common-actions {display:flex;flex-wrap:wrap;gap:var(--space-1);margin-block-start:var(--space-1)}
+    .bulk-card-head [data-common-target] {flex:0 0 auto;inline-size:1.1rem;block-size:1.1rem}
+    #bulk-product-rows {
+      inline-size: 100%;
+      min-block-size: 5rem;
+      resize: vertical;
+      padding: var(--space-1);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      border: var(--border-width-default) solid var(--color-accent-border);
+      border-radius: var(--radius-compact);
+      font: inherit;
+    }
+    .bulk-plan > .bulk-product-card {padding: var(--space-1)}
+    .bulk-product-card[data-selected="true"] {border-color: var(--color-accent-highlight)}
+    .bulk-selected-editor {
+      display: grid;
+      min-inline-size: 0;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+    }
+
+    .bulk-product-creator .bulk-name-field {
+      flex: 1 1 var(--bulk-name-field-basis);
+      min-inline-size: 0;
+    }
+
+    .bulk-product-editor {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--bulk-editor-min), 100%), 1fr));
+      align-items: start;
+      gap: var(--space-2);
+    }
+
+    .bulk-product-info,
+    .intake-category-picker,
+    .bulk-product-editor .bulk-zones {
+      display: grid;
+      min-inline-size: 0;
+      gap: var(--space-1);
+      align-content: start;
+    }
+
+    .bulk-product-editor .bulk-zones {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    @media (min-width: 1100px) {
+      .bulk-product-editor .bulk-zones {
+        grid-template-columns: minmax(calc(var(--bulk-thumb-size) + var(--space-3)), 0.6fr) minmax(0, 1.4fr);
+      }
+
+      .bulk-product-editor .bulk-shot-row .bulk-color-input {
+        flex: 1 1 var(--bulk-field-min);
+        min-inline-size: 0;
+      }
+    }
+
+    .bulk-product-fields {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--bulk-field-min), 100%), 1fr));
+      gap: var(--space-2);
+    }
+
+    .bulk-category-search input {
+      flex: 1 1 var(--bulk-field-min);
+      min-inline-size: 0;
+    }
+
+    .bulk-default-field select,
+    .bulk-category-search input {
+      min-block-size: var(--control-min-block-size);
+      inline-size: 100%;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font: inherit;
+    }
+
+    .bulk-batch-tools {
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+    }
+
+    .bulk-batch-tools > summary,
+    .bulk-product-info details > summary {
+      min-block-size: var(--control-min-block-size);
+      align-content: center;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-batch-tools[open] > :not(summary) {
+      margin-block-start: var(--space-2);
+    }
+
+    .bulk-product-card[data-state="queued"] {
+      border-color: var(--color-ok-border);
+    }
+
+    .bulk-product-card input:disabled,
+    .bulk-product-card select:disabled {
+      opacity: 1;
+      color: var(--color-text-secondary);
+    }
+
+    .bulk-pickers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+      gap: var(--space-2);
+    }
+
+    .bulk-picker,
+    .bulk-default-field {
+      display: grid;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    .bulk-picker input,
+    .bulk-default-field input {
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font: inherit;
+    }
+
+    /* 제품을 설명하는 값과 Cafe24 등록 대상 값을 눈으로 갈라 준다. */
+    .bulk-default-field[data-group="cafe24"] > span {
+      color: var(--color-accent-highlight);
+    }
+
+    .bulk-default-field[data-group="cafe24"] input {
+      border-color: var(--color-accent-border);
+    }
+
+    /* 제품마다 카드로 보여 준다. 사진을 눈으로 확인하고 이름과 역할을 그 자리에서 고친다. */
+    .bulk-product-card {
+      display: grid;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+
+    /* 흠은 왼쪽 세로줄(.bulk-card-rail)로 알린다. 카드 전체를 물들이면 무엇이 문제인지가
+       아니라 카드가 통째로 노래져서, 정작 어느 칸이 비었는지는 여전히 안 보인다. */
+    .bulk-product-card[data-state="warn"] {
+      border-color: var(--color-warn-border);
+    }
+
+    .bulk-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+    }
+
+    /* 다섯 글자짜리 제품명에 화면 폭을 다 내주지 않는다. 실측 2026-08-27: 1412px 였다. */
+    .bulk-name-field {
+      display: grid;
+      gap: var(--space-half);
+      flex: 0 1 var(--bulk-name-field-basis);
+      max-inline-size: var(--bulk-name-field-basis);
+      min-inline-size: 0;
+    }
+
+    .bulk-name-field > span {
+      color: var(--color-accent-highlight);
+      font-size: var(--font-size-compact);
+    }
+
+    /* 제품명은 사람이 직접 정하는 값이다. 파일명에서 온 임시 이름을 지우고 칠 수 있게
+       카드에서 가장 도드라지는 입력칸으로 둔다. */
+    .bulk-name-field input {
+      inline-size: 100%;
+      min-inline-size: 0;
+      min-block-size: var(--control-min-block-size);
+      padding: 0 var(--space-2);
+      font-size: var(--font-size-card-title);
+      font-weight: var(--font-weight-strong);
+      border: var(--border-width-default) solid var(--color-accent-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+    }
+
+    .bulk-card-summary,
+    .bulk-card-badge {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-thumb-shelf {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .bulk-thumb-cell {
+      display: grid;
+      gap: var(--space-1);
+      width: var(--bulk-thumb-size);
+    }
+
+    .bulk-thumb {
+      display: block;
+      width: var(--bulk-thumb-size);
+      height: var(--bulk-thumb-size);
+      padding: 0;
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      cursor: zoom-in;
+      overflow: hidden;
+    }
+
+    .bulk-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .bulk-thumb-name {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .bulk-role-select,
+    .bulk-color-input {
+      width: 100%;
+      padding: var(--space-1) var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      color: var(--color-text-primary);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-card-facts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .bulk-lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: var(--z-index-overlay);
+      display: grid;
+      gap: var(--space-2);
+      place-content: center;
+      justify-items: center;
+      padding: var(--space-4);
+      background: var(--color-dialog-backdrop);
+      cursor: zoom-out;
+    }
+
+    .bulk-lightbox img {
+      max-width: min(92vw, var(--bulk-lightbox-max-width));
+      max-height: 82vh;
+      object-fit: contain;
+      border-radius: var(--radius-card);
+    }
+
+    .bulk-lightbox-caption {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-panel-copy);
+    }
+
+    /* 필수값 한 줄 아래에 Cafe24 접힘 상자가 온다. 옆에 붙이면 빈 상자가 자리만 차지한다. */
+    .bulk-defaults {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    /* 자동화 방식·이미지 모델 — 예전엔 숨은 옛 폼에서 조용히 물려받던 값이라 눈에 띄게 둔다. */
+    .bulk-automation-box {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-automation-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--space-1);
+    }
+
+    .bulk-automation-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .bulk-automation-row .field-stack {
+      min-inline-size: 12rem;
+      flex: 1 1 12rem;
+    }
+
+    .bulk-automation-copy {
+      color: var(--color-text-secondary);
+    }
+
+    .bulk-policy-details > summary, .bulk-product-policy > summary, .bulk-policy-markets > summary { cursor: pointer; font-weight: var(--font-weight-strong); }
+    .bulk-policy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--space-1); margin-block: var(--space-1); }
+    .bulk-policy-field { display: flex; flex-direction: column; gap: var(--space-half); min-width: 0; }
+    .bulk-policy-field select { width: 100%; min-width: 0; }
+    .bulk-policy-field small, .bulk-policy-row-summary, .bulk-policy-confirm-summary { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+    .bulk-policy-row-summary { flex: 0 1 auto; min-inline-size: 0; font-size: var(--font-size-compact); word-break: keep-all; }
+    .bulk-card-head .bulk-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--space-1);
+      margin-inline-start: auto;
+      min-inline-size: 0;
+      max-inline-size: 100%;
+    }
+    .bulk-policy-markets { grid-column: 1 / -1; }
+    .bulk-policy-markets .bulk-policy-field { display: inline-flex; width: min(100%, 14rem); padding: var(--space-1); }
+
+    /* 큐로 투입하기 전 확인 화면. 회색 버튼만 보고 아무 일도 안 일어난 줄 알면 안 된다. */
+    .bulk-confirm-box {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+    }
+
+    .bulk-confirm-box[hidden] {
+      display: none;
+    }
+
+    .bulk-confirm-settings {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: var(--space-half) var(--space-1);
+      margin: 0;
+    }
+
+    .bulk-confirm-settings dt {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-compact);
+    }
+
+    .bulk-confirm-settings dd {
+      margin: 0;
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-confirm-warning {
+      margin: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-warn-border);
+      border-radius: var(--radius-compact);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+    }
+
+    .bulk-confirm-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-half);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      max-inline-size: 100%;
+    }
+
+    .bulk-confirm-list li {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: var(--space-half) var(--space-1);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+    }
+
+    .bulk-confirm-flag {
+      padding: var(--badge-padding-block) var(--space-1);
+      border: var(--border-width-default) solid var(--color-warn-border);
+      border-radius: var(--radius-pill);
+      background: var(--color-warn-wash);
+      color: var(--color-status-warn);
+      font-size: var(--font-size-compact);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-confirm-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+    }
+
+    .bulk-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
+      align-items: center;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-accent-primary);
+      border-radius: var(--radius-compact);
+      background: var(--color-accent-wash);
+    }
+
+    .bulk-actions [data-action="submit"] {
+      min-block-size: var(--control-min-block-size);
+      padding-inline: var(--space-3);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .bulk-actions.bulk-queue-actions {
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+
+    .bulk-note {
+      margin: 0;
+      color: var(--color-status-warn);
+      font-size: var(--font-size-panel-copy);
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-plan {
+      display: grid;
+      gap: var(--space-half);
+      block-size: auto;
+      overflow: visible;
+    }
+
+    .bulk-row {
+      display: grid;
+      grid-template-columns: minmax(10rem, 2fr) minmax(4rem, 0.6fr) minmax(6rem, 1fr) minmax(6rem, 1fr) minmax(9rem, 1.4fr);
+      gap: var(--space-half);
+      align-items: stretch;
+    }
+
+    .bulk-cell {
+      display: grid;
+      align-content: center;
+      gap: var(--space-half);
+      min-inline-size: 0;
+      padding: var(--space-1);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-card-background);
+      overflow-wrap: anywhere;
+    }
+
+    .bulk-row-header .bulk-cell {
+      padding-block: var(--space-half);
+      border-color: transparent;
+      background: transparent;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-kicker);
+      letter-spacing: var(--tracking-label);
+    }
+
+    .bulk-row[data-state="warn"] .bulk-cell {
+      border-color: var(--color-warn-border);
+    }
+
+    .bulk-row[data-state="ready"] .bulk-cell:last-child {
+      color: var(--color-status-ok);
+    }
+
+    @media (max-width: 720px) {
+      .bulk-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .bulk-row .bulk-cell:first-child {
+        grid-column: 1 / -1;
+      }
+
+      .bulk-row-header {
+        display: none;
+      }
+    }
+
+
+@media (max-width:720px) {
+      #bulk-intake .bulk-pickers,
+      #bulk-intake .bulk-zones {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      #bulk-intake .bulk-product-card,
+      #bulk-intake .bulk-card-head,
+      #bulk-intake .bulk-zones,
+      #bulk-intake .bulk-zone,
+      #bulk-intake .bulk-zone-head,
+      #bulk-intake .bulk-base-grid,
+      #bulk-intake .bulk-shot-row {
+        min-inline-size: 0;
+        max-inline-size: 100%;
+      }
+
+      #bulk-intake .bulk-shot-row {
+        flex-wrap: wrap;
+      }
+
+      #bulk-intake .bulk-name-field {
+        flex: 1 1 100%;
+        max-inline-size: 100%;
+      }
+
+      #bulk-intake .bulk-shot-row .bulk-shot-name,
+      #bulk-intake .bulk-shot-row .bulk-color-input {
+        flex: 1 1 8rem;
+        inline-size: auto;
+        max-inline-size: 100%;
+      }
+
+      #bulk-intake .bulk-move-action {
+        flex: 1 1 100%;
+        inline-size: 100%;
+        max-inline-size: 100%;
+        text-align: start;
+      }
+
+      #bulk-intake .bulk-actions [data-action="submit"] {
+        flex: 1 1 100%;
+      }
+
+
+}
+
+
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) :is(input,select,textarea,button) {min-block-size:44px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--bg-input);color:var(--text);font:inherit;padding:var(--space-1) var(--space-2)}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) button {cursor:pointer;font-weight:700}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) button:disabled {cursor:not-allowed;opacity:.5}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) :is(button,input,select,textarea):focus-visible {outline:2px solid var(--primary-h);outline-offset:2px}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) .field-stack {display:flex;flex-direction:column;gap:var(--space-1);min-inline-size:0}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) .status-message {font-size:12px;color:var(--text-m);overflow-wrap:anywhere}
+body.native-batch-console #bulk-intake .section-heading {display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-2)}
+body.native-batch-console #bulk-intake .board-toolbar-hint {flex:1 1 12rem;min-inline-size:0;color:var(--text-m);overflow-wrap:anywhere}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) [data-tone=error] {color:var(--err)}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) [data-tone=warning] {color:var(--warn)}
+body.native-batch-console :where(#bulk-intake, .bulk-lightbox) [data-tone=ok] {color:var(--ok)}
+
+.bulk-source-lookup {
+  display: grid;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: var(--space-3);
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-card-background);
+}
+.bulk-source-group,
+.bulk-source-selected {display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2);min-inline-size:0}
+.bulk-source-selected {color:var(--color-status-ok);font-weight:var(--font-weight-strong)}
+.bulk-source-selected img,
+.bulk-source-candidate img {inline-size:var(--image-intake-thumb-size);block-size:var(--image-intake-thumb-size);flex:0 0 var(--image-intake-thumb-size);border-radius:var(--radius-compact);object-fit:cover}
+.bulk-source-candidates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--bulk-field-min), 100%), 1fr));
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+.bulk-source-candidate {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--control-min-block-size);
+  min-inline-size: 0;
+  padding: var(--space-2);
+  color: var(--color-text-primary);
+  text-align: start;
+  border: var(--border-width-default) solid var(--color-border-default);
+  border-radius: var(--radius-compact);
+  background: var(--color-input-background);
+  cursor: pointer;
+}
+.bulk-source-candidate span {min-inline-size:0;overflow-wrap:anywhere}
+.bulk-source-candidate:hover,
+.bulk-source-candidate:focus-visible {border-color:var(--color-accent-primary);outline:none}
+.bulk-native-required-fields {min-inline-size:0}
+
+body.native-batch-console #bulk-intake .bulk-product-editor {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(var(--bulk-editor-min), calc((100% - var(--space-2)) / 2))), 1fr));
+}
+
+body.native-batch-console #bulk-intake .bulk-product-info {
+  display: contents;
+}
+
+body.native-batch-console #bulk-intake .bulk-source-lookup { order: 1; }
+body.native-batch-console #bulk-intake .bulk-product-editor > .bulk-zones { order: 2; }
+body.native-batch-console #bulk-intake .bulk-native-required-fields {
+  order: 3;
+  grid-column: 1 / -1;
+}
+body.native-batch-console #bulk-intake .intake-category-picker {
+  order: 4;
+  grid-column: 1 / -1;
+}
+body.native-batch-console #bulk-intake .bulk-product-extra {
+  order: 5;
+  grid-column: 1 / -1;
+}
+body.native-batch-console #bulk-intake .bulk-product-info > .bulk-product-fields:empty {
+  display: none;
+}

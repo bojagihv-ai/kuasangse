@@ -143,6 +143,46 @@ test('editing project authority preserves and commits its linked draft branch', 
   assert.equal(adapters.server.writes.length, 0);
 });
 
+test('released project authority still commits its linked draft during branch handoff', async () => {
+  const { createWorkspacePersistence } = await loadGateway();
+  const adapters = Object.fromEntries(['session', 'indexeddb', 'server', 'workfile', 'archive']
+    .map(name => [name, adapter(name)]));
+  const current = {
+    scopeId: 'project:alpha', leaseId: 'project-lease', fencingToken: 7,
+    revision: 3, mode: 'released', reasonCode: 'RELEASED',
+  };
+  const gateway = createWorkspacePersistence({ adapters, authority: { snapshot: () => current } });
+  const result = await gateway.commit({
+    scopeId: 'draft:alpha-branch',
+    snapshot: {
+      currentProjectId: 'alpha',
+      workspaceScope: { id: 'draft:alpha-branch' },
+      workspaceBranch: {
+        schema: 'kuasangse.work-branch.v1',
+        branchId: 'alpha-branch',
+        scopeId: 'draft:alpha-branch',
+        documentId: 'alpha',
+        documentScopeId: 'project:alpha',
+        createdAt: 0,
+      },
+      value: 'released-handoff-save',
+    },
+    metadata: {
+      operationId: 'released-handoff-save',
+      revision: {
+        scopeId: 'draft:alpha-branch', counter: 1, updatedAt: 1, writerId: 'branch-test',
+      },
+    },
+    replicas: ['session'],
+  });
+
+  assert.equal(result.accepted, true, JSON.stringify(result));
+  assert.equal(result.clean, true, JSON.stringify(result));
+  assert.deepEqual(adapters.indexeddb.writes.map(item => item.snapshot.value), ['released-handoff-save']);
+  assert.deepEqual(adapters.session.writes.map(item => item.snapshot.value), ['released-handoff-save']);
+  assert.equal(adapters.server.writes.length, 0);
+});
+
 test('project authority rejects a draft branch linked to another document', async () => {
   const { createWorkspacePersistence } = await loadGateway();
   const adapters = Object.fromEntries(['session', 'indexeddb', 'server', 'workfile', 'archive']

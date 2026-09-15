@@ -89,8 +89,9 @@ test('same-work project save keeps competitor candidates when live factory produ
     buildFactoryProjectPersistenceServerSnapshot: () => ({}),
     workspacePersistenceApi: () => ({
       restore: async () => null,
-      commit: async () => ({ accepted: true, clean: true, protectedNoOp: false }),
+      commit: async () => ({ accepted: true, clean: true, protectedNoOp: false, envelope: { metadata: { revision: { counter: 1 } } } }),
     }),
+    observeWorkspaceRevisionSnapshot() {},
     workspaceCommitMetadata: () => ({}),
     markWorkspaceDocumentClean() {},
     setUiNotice() {},
@@ -114,6 +115,28 @@ test('same-work project save keeps competitor candidates when live factory produ
     [],
     'batch checkpoint save must not start a draft-branch session write after retaining project authority',
   );
+  const originalGet = context.workspaceGet;
+  const originalAuthority = context.ensureWorkspaceEditAuthority;
+  const originalPersistence = context.workspacePersistenceApi;
+  for (const phase of ['settle', 'read', 'authority', 'restore', 'commit']) {
+    state.currentProjectId = projectId;
+    state.error = '';
+    let writes = 0;
+    const switchWork = () => { state.currentProjectId = 'batch:other-product'; };
+    context.settleWorkspaceScopeTransitionPersistence = async () => { if (phase === 'settle') switchWork(); };
+    context.workspaceGet = async (...args) => { const result = await originalGet(...args); if (phase === 'read') switchWork(); return result; };
+    context.ensureWorkspaceEditAuthority = async (...args) => { const result = await originalAuthority(...args); if (phase === 'authority') switchWork(); return result; };
+    context.workspacePersistenceApi = () => ({
+      restore: async () => { if (phase === 'restore') switchWork(); return null; },
+      commit: async options => { if (phase === 'commit') switchWork(); if (options.isCurrent()) writes += 1; return originalPersistence().commit(options); },
+    });
+    await assert.rejects(context.save({ retainProjectAuthority: true, assertCurrent: () => {
+      if (state.currentProjectId !== projectId) throw new Error('stale_reference_decision');
+    } }), /stale_reference_decision/);
+    assert.equal(writes, 0, `no foreign write after ${phase}`);
+    assert.equal(state.currentProjectId, 'batch:other-product');
+    assert.equal(state.error, '', 'a stale save must not replace the new product error');
+  }
 });
 
 test('same-scope server-restored candidate fields survive a thin batch project save', async () => {
@@ -220,9 +243,10 @@ test('same-scope server-restored candidate fields survive a thin batch project s
       },
       commit: async command => {
         committed = command;
-        return { accepted: true, clean: true, protectedNoOp: false };
+        return { accepted: true, clean: true, protectedNoOp: false, envelope: { metadata: { revision: { counter: 1 } } } };
       },
     }),
+    observeWorkspaceRevisionSnapshot() {},
     currentWorkspaceInputImageFingerprint: () => '',
     ensureActiveWorkIdentity: () => ({ workspaceId: targetScopeId }),
     currentWorkspaceRevision: () => null,

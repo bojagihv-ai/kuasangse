@@ -267,8 +267,9 @@ function getImageProxyBackendBases() {
   const bases = [
     state.backendBaseUrl,
     'http://127.0.0.1:5000',
-    'http://127.0.0.1:5050',
-  ].map(value => String(value || '').trim().replace(/\/+$/, '')).filter(Boolean);
+    'http://127.0.0.1:43030',
+  ].map(value => String(value || '').trim().replace(/\/+$/, '')
+    .replace(/^http:\/\/(?:127\.0\.0\.1|localhost):(?:5050|41026)$/i, 'http://127.0.0.1:43030')).filter(Boolean);
   return [...new Set(bases)];
 }
 
@@ -945,7 +946,10 @@ function normalizeProductInfoManualValues(raw = null) {
 }
 
 function productInfoFieldResolved(field, product, db) {
-  const manual = state.productInfoManualValues?.[field.id];
+  const manual = firstProductValue(
+    state.productInfoManualValues?.[field.id],
+    field.id === 'sale_price' ? state.productInfoManualValues?.salePrice : ''
+  );
   if (hasProductValue(manual)) return { value: manual, source: '직접 입력' };
   const a = state.analysis || {};
   try {
@@ -2529,6 +2533,18 @@ function renderPreservingMainScroll() {
   // 80ms 동안 네 번 되돌렸는데, 배치가 끝나기 전 위치로 잘렸다가 되튀기를
   // 반복해 화면이 위아래로 떨렸다. 이제 한 번만, 그것도 실제로 어긋났을 때만 쓴다.
   restoreMainScrollPosition(top, left);
+  const after = mainScrollElement();
+  const maxAfter = after ? Math.max(0, after.scrollHeight - after.clientHeight) : 0;
+  if (after && top > maxAfter && after.scrollTop < maxAfter) {
+    after.scrollTop = maxAfter;
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        const settled = mainScrollElement();
+        const settledMax = settled ? Math.max(0, settled.scrollHeight - settled.clientHeight) : 0;
+        if (settled && top > settledMax && settled.scrollTop < settledMax) settled.scrollTop = settledMax;
+      });
+    }
+  }
 }
 
 function cloneData(value) {
@@ -2817,6 +2833,7 @@ let lastWorkSaveTimer = null;
 let optionSorterLiveSaveTimer = null;
 let optionSorterLiveSaveQueued = false;
 let lastLightweightSessionPayload = null;
+const lastLightweightSessionPayloadByScope = new Map();
 let sessionAssetsHydrated = false;
 let pendingSessionAssetSaveAfterHydrate = false;
 let sessionAssetSavePromise = null;
@@ -3145,7 +3162,7 @@ function productImageBackupReferencePayload(payload = currentProductImageBackupP
 }
 
 function currentProductImageBackupPayload() {
-  const factoryProduct = state.factory?.product || {};
+  const factoryProduct = factoryRuntimeReadFactory()?.product || {};
   const market = state.compPage?.marketScrape || {};
   const analysisImage = (Array.isArray(state.analysisImages) ? state.analysisImages : []).find(img => img?.base64 || img?.preview || img?.dataUrl || img?.image);
   const appItem = productImageBackupItem('app', {
@@ -3367,14 +3384,21 @@ function applyProductImageBackupPayload(payload, options = {}) {
       factory.product.imageMime = item.mime || 'image/png';
       factory.product.imagePreview = item.preview || `data:${factory.product.imageMime};base64,${item.base64}`;
       factory.product.imageName = item.name || '제품사진';
-      factory.product.inputImages = [{
-        id: uid('factory_input_restore'),
+      const inputs = Array.isArray(factory.product.inputImages) ? factory.product.inputImages : [];
+      const savedIndex = inputs.findIndex(image => lockedInputImageFingerprint
+        && image?.inputImageFingerprint === lockedInputImageFingerprint);
+      const savedInput = inputs[savedIndex];
+      const restoredInput = {
+        ...savedInput,
+        id: savedInput?.id || uid('factory_input_restore'),
         name: item.name || '제품사진',
         base64: item.base64,
         mime: factory.product.imageMime,
         preview: factory.product.imagePreview,
         restoredFrom: 'lastProductImageBackup',
-      }];
+      };
+      factory.product.inputImages = savedIndex < 0 ? [restoredInput]
+        : inputs.map((image, index) => index === savedIndex ? restoredInput : image);
       changed = true;
     }
   } catch(e) {}
@@ -3654,6 +3678,8 @@ function buildMinimalLocalSessionPayload(payload = {}) {
     workIdentity: payload.workIdentity || null,
     inputImageFingerprint: payload.inputImageFingerprint || '',
     workspaceScope: payload.workspaceScope || null,
+    workspaceBranch: payload.workspaceBranch || null,
+    workspaceKind: payload.workspaceKind || '',
     workspaceRevision: payload.workspaceRevision || null,
     dbMatchCandidates: Array.isArray(payload.dbMatchCandidates) ? payload.dbMatchCandidates.slice(0, 80) : [],
     dbMatchLastQuery: payload.dbMatchLastQuery || '',
@@ -3724,6 +3750,8 @@ function buildEmergencyLocalSessionPayload(payload = {}) {
     workIdentity: payload.workIdentity || null,
     inputImageFingerprint: payload.inputImageFingerprint || '',
     workspaceScope: payload.workspaceScope || null,
+    workspaceBranch: payload.workspaceBranch || null,
+    workspaceKind: payload.workspaceKind || '',
     workspaceRevision: payload.workspaceRevision || null,
     dbMatchCandidates: Array.isArray(payload.dbMatchCandidates) ? payload.dbMatchCandidates.slice(0, 80) : [],
     dbMatchLastQuery: payload.dbMatchLastQuery || '',
@@ -3880,7 +3908,17 @@ function stripImageItem(image) {
 }
 
 function stripAnalysisImages(images = []) {
-  return (Array.isArray(images) ? images : []).map(stripImageItem);
+  return (Array.isArray(images) ? images : []).map(image => {
+    const stripped = stripImageItem(image);
+    const body = image?.base64 || [image?.preview, image?.dataUrl, image?.image, image?.result]
+      .find(value => /^data:image\/[^;,]+;base64,/i.test(String(value || '')));
+    const fingerprint = body && typeof factoryImagePayloadFingerprint === 'function'
+      ? factoryImagePayloadFingerprint(body) : '';
+    if (fingerprint && (!image.inputImageFingerprint || image.inputImageFingerprint === fingerprint)) {
+      stripped.inputImageFingerprint = fingerprint;
+    }
+    return stripped;
+  });
 }
 
 function runtimeExternalImageSrc(src) {
@@ -3979,7 +4017,9 @@ function stripRuntimeAssetsForApply(assets = {}) {
     });
   }
   if (copy.compPage && typeof copy.compPage === 'object') copy.compPage = stripCompPageImages(copy.compPage);
-  if (copy.optionSorter && typeof copy.optionSorter === 'object') copy.optionSorter = stripOptionSorterImages(copy.optionSorter);
+  if (copy.optionSorter && typeof copy.optionSorter === 'object') {
+    copy.optionSorter = stripOptionSorterImages(copy.optionSorter, { preserveRecentResults: true });
+  }
   if (copy.factory && typeof copy.factory === 'object' && typeof stripFactoryImages === 'function') copy.factory = stripFactoryImages(copy.factory);
   return copy;
 }
@@ -3987,7 +4027,8 @@ function stripRuntimeAssetsForApply(assets = {}) {
 function stripSectionImages(sectionImages = {}) {
   const result = {};
   for (const [sectionId, image] of Object.entries(sectionImages || {})) {
-    result[sectionId] = image ? '__stored_in_indexeddb__' : null;
+    const src = runtimeExternalImageSrc(image);
+    result[sectionId] = src && !/^blob:/i.test(src) ? src : (image ? '__stored_in_indexeddb__' : null);
   }
   return result;
 }
@@ -4572,18 +4613,18 @@ function stripOptionSorterImages(optionSorter = {}, options = {}) {
   };
   const imageKeep = keepRecentIndexes(copy.images, imageLimit, image => !!(image?.base64 || image?.preview || image?.dataUrl));
   copy.images = (Array.isArray(copy.images) ? copy.images : []).map((image, index) => {
-    const keepImage = imageKeep.has(index);
+    const { base64, preview, dataUrl, ...metadata } = image;
+    const keepImage = imageKeep.has(index) || (preserveRecentResults
+      && !!(base64 || preview || dataUrl)
+      && !(image.archiveId || image.imageUrl || image.localArchive?.archiveId));
     return keepImage
       ? { ...image, imagePersistence: 'session-recent-inline' }
       : {
-          id: image.id,
-          name: image.name,
-          mime: image.mime,
-          ...(image.createdAt ? { createdAt: image.createdAt } : {}),
+          ...metadata,
           hasImageData: !!(
-            image.base64 ||
-            image.preview ||
-            image.dataUrl ||
+            base64 ||
+            preview ||
+            dataUrl ||
             image.imageUrl ||
             image.archiveId ||
             image.localArchive?.archiveId ||
@@ -4600,7 +4641,8 @@ function stripOptionSorterImages(optionSorter = {}, options = {}) {
   });
   const resultKeep = keepRecentIndexes(copy.optionResults, resultLimit, result => !!(result?.image || (Array.isArray(result?.splitImages) && result.splitImages.some(item => item?.image))));
   copy.optionResults = (Array.isArray(copy.optionResults) ? copy.optionResults : []).map((result, index) => {
-    const keepResult = resultKeep.has(index);
+    const keepResult = resultKeep.has(index) || (preserveRecentResults && !!result.image
+      && !(result.archiveId || result.imageUrl || result.localArchive?.archiveId));
     return {
       ...result,
       hasImage: !!(result.image || result.hasImage),
@@ -4610,7 +4652,8 @@ function stripOptionSorterImages(optionSorter = {}, options = {}) {
         ? result.splitImages.map(item => ({
             ...item,
             hasImage: !!(item.image || item.hasImage),
-            image: keepResult ? item.image : null,
+            image: keepResult || (preserveRecentResults && !!item.image
+              && !(item.archiveId || item.imageUrl || item.localArchive?.archiveId)) ? item.image : null,
           }))
         : [],
     };
@@ -4657,12 +4700,19 @@ function saveOptionSorterLiveRecovery() {
     return Promise.resolve(false);
   }
   const scopeId = getCurrentLastWorkWorkspaceScope();
+  const existingRecovery = loadOptionSorterLiveRecovery(scopeId, {
+    projectId: String(state.currentProjectId || ''),
+  });
+  let optionSorter = state.optionSorter || {};
+  if (existingRecovery?.optionSorter) {
+    optionSorter = mergeOptionSorterStoredImages(existingRecovery.optionSorter, optionSorter);
+  }
   const recovery = {
     version: 1,
     workspaceScope: scopeId,
     projectId: String(state.currentProjectId || ''),
     savedAt: Date.now(),
-    optionSorter: stripOptionSorterImages(state.optionSorter),
+    optionSorter: stripOptionSorterImages(optionSorter),
   };
   return Promise.resolve(
     workspaceSessionSetItem(OPTION_SORTER_LIVE_RECOVERY_KEY, JSON.stringify(recovery)),
@@ -5067,6 +5117,23 @@ function currentSessionAssetsPayload(options = {}) {
     inputImageFingerprint,
     scopeId: persistenceScopeId,
   });
+  const priorLightweightPayload = !includeImages
+    ? getLastLightweightSessionPayloadForScope(persistenceScopeId)
+    : null;
+  const priorLightweightOptionSorter = priorLightweightPayload?.optionSorter
+    && typeof priorLightweightPayload.optionSorter === 'object'
+    ? priorLightweightPayload.optionSorter
+    : null;
+  const liveOptionSorterRecovery = !includeImages
+    ? loadOptionSorterLiveRecovery(persistenceScopeId, { projectId })
+    : null;
+  let optionSorterSnapshot = state.optionSorter || {};
+  if (priorLightweightOptionSorter && typeof priorLightweightOptionSorter === 'object') {
+    optionSorterSnapshot = mergeOptionSorterStoredImages(priorLightweightOptionSorter, optionSorterSnapshot);
+  }
+  if (liveOptionSorterRecovery?.optionSorter) {
+    optionSorterSnapshot = mergeOptionSorterStoredImages(liveOptionSorterRecovery.optionSorter, optionSorterSnapshot);
+  }
   return {
     id: SESSION_ASSET_ID,
     currentProjectId: projectId,
@@ -5125,7 +5192,7 @@ function currentSessionAssetsPayload(options = {}) {
       uploadedImages: includeImages ? cloneData(compPageSnapshot.uploadedImages || []) : [],
       evidenceImages: includeImages ? cloneData(compPageSnapshot.evidenceImages || []) : [],
     },
-    optionSorter: includeImages ? cloneData(state.optionSorter || {}) : stripOptionSorterImages(state.optionSorter || {}, {
+    optionSorter: includeImages ? cloneData(state.optionSorter || {}) : stripOptionSorterImages(optionSorterSnapshot, {
       preserveRecentResults: preserveRecentWorkingImages,
     }),
     factory: factorySnapshot,
@@ -5142,10 +5209,11 @@ function getServerLastWorkBases() {
   const bases = [
     state?.backendBaseUrl,
     loadBackendUrl?.(),
-    'http://127.0.0.1:5050',
+    'http://127.0.0.1:43030',
   ].filter(v => typeof v === 'string' && v.trim())
     .map(v => String(v).trim().replace(/\/+$/, ''))
-    .map(base => base.replace(/^http:\/\/localhost(?=[:/]|$)/i, 'http://127.0.0.1'));
+    .map(base => base.replace(/^http:\/\/localhost(?=[:/]|$)/i, 'http://127.0.0.1')
+      .replace(/^http:\/\/127\.0\.0\.1:(?:5050|41026)$/i, 'http://127.0.0.1:43030'));
   return [...new Set(bases)];
 }
 
@@ -5441,6 +5509,20 @@ function lastWorkSnapshotWorkspaceScope(snapshot = {}) {
   ).trim();
 }
 
+function getLastLightweightSessionPayloadForScope(scopeId = '') {
+  const expectedScope = String(scopeId || '').trim();
+  if (!expectedScope) return lastLightweightSessionPayload;
+  if (lastWorkSnapshotWorkspaceScope(lastLightweightSessionPayload) === expectedScope) {
+    return lastLightweightSessionPayload;
+  }
+  return lastLightweightSessionPayloadByScope.get(expectedScope) || null;
+}
+
+function cacheLastLightweightSessionPayload(payload) {
+  const scopeId = lastWorkSnapshotWorkspaceScope(payload);
+  if (scopeId) lastLightweightSessionPayloadByScope.set(scopeId, payload);
+}
+
 function lastWorkSnapshotMatchesCurrentWorkspace(snapshot = {}) {
   const incomingScope = lastWorkSnapshotWorkspaceScope(snapshot);
   const activeScope = getCurrentLastWorkWorkspaceScope();
@@ -5569,7 +5651,7 @@ function factoryLastSnapshotRecoveryWriteDecision(scopeId, authority, currentSco
   if (!targetScope || targetScope !== activeScope) return 'discard';
   if (authorityScope === targetScope && authorityMode === 'editing') return 'publish';
   if (authorityMode === 'editing' && projectAuthorityCoversCurrentBranch(targetScope, authority)) {
-    return 'publish';
+    return 'defer';
   }
   if (authorityScope === targetScope && authorityMode === 'offline-edit' && targetScope.startsWith('draft:')) {
     return 'publish';
@@ -6089,6 +6171,7 @@ function scheduleDeferredBranchAuthorityRestore(branchScope, documentFence) {
 const DRAFT_RECOVERY_MIN_INTERVAL_MS = 20000;
 let draftRecoveryLastSentAt = 0;
 let draftRecoverySending = false;
+let draftRecoveryRequestPromise = null;
 
 /**
  * **서버가 거절한 작업**의 되살릴 사본.
@@ -6112,7 +6195,7 @@ function saveDraftRecoverySnapshot(scopeId, reason = '', options = {}) {
   // 평소에는 저장 전(draft:) 작업만 여기에 남긴다. 저장된 작업은 정상 저장 경로가 있기 때문이다.
   // 예외는 하나 - 서버가 그 정상 경로를 거절했을 때(allowSavedWork). 그때는 사본이 유일한 그물이다.
   if (!scope.startsWith('draft:') && !(options.allowSavedWork === true && scope.startsWith('project:'))) return false;
-  if (draftRecoverySending) return false;
+  if (draftRecoverySending) return draftRecoveryRequestPromise || false;
   const now = Date.now();
   // 자동저장은 자주 돈다. 매번 보내면 디스크와 네트워크를 먹는다.
   if (now - draftRecoveryLastSentAt < DRAFT_RECOVERY_MIN_INTERVAL_MS) return false;
@@ -6132,19 +6215,25 @@ function saveDraftRecoverySnapshot(scopeId, reason = '', options = {}) {
     productName: String(state?.productName || snapshot?.productName || ''),
     snapshot,
   });
-  fetch(`${kuasangseBackendBaseUrl()}/api/draft-recovery`, {
+  draftRecoveryRequestPromise = fetch(`${kuasangseBackendBaseUrl()}/api/draft-recovery`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body,
   }).then(response => {
     // 실패해도 사용자의 일을 막지 않는다. 이건 그물이지 저장이 아니다.
-    if (!response.ok) console.warn(`draft recovery save rejected: HTTP ${response.status}`);
+    if (!response.ok) {
+      console.warn(`draft recovery save rejected: HTTP ${response.status}`);
+      return false;
+    }
+    return true;
   }).catch(error => {
     console.warn('draft recovery save failed:', error);
+    return false;
   }).finally(() => {
     draftRecoverySending = false;
+    draftRecoveryRequestPromise = null;
   });
-  return true;
+  return draftRecoveryRequestPromise;
 }
 
 function buildServerLastWorkSnapshot(reason = 'auto', options) {
@@ -6169,7 +6258,7 @@ function buildServerLastWorkSnapshot(reason = 'auto', options) {
   }), {
     targetName,
   });
-  const lightweight = sanitizeLastWorkPayloadProductScope(buildLightweightSessionPayload({
+  let lightweight = sanitizeLastWorkPayloadProductScope(buildLightweightSessionPayload({
     step: state.step,
     currentProjectId: state.currentProjectId,
     currentProjectName: state.currentProjectName,
@@ -6200,7 +6289,18 @@ function buildServerLastWorkSnapshot(reason = 'auto', options) {
   }), {
     targetName,
   });
+  const previousLightweight = getLastLightweightSessionPayloadForScope(workspaceScope);
+  if (previousLightweight
+    && lastWorkSnapshotWorkspaceScope(previousLightweight) === workspaceScope
+    && previousLightweight.optionSorter
+    && lightweight.optionSorter) {
+    lightweight = {
+      ...lightweight,
+      optionSorter: mergeOptionSorterStoredImages(previousLightweight.optionSorter, lightweight.optionSorter),
+    };
+  }
   lastLightweightSessionPayload = lightweight;
+  cacheLastLightweightSessionPayload(lightweight);
   const savedAt = Date.now();
   return {
     id: 'current',
@@ -6250,7 +6350,11 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
   const documentFence = captureWorkspaceDocumentFence(options);
   const activeBranchScope = documentFence.scopeId;
   if (!workspaceDocumentFenceIsCurrent(documentFence)) return false;
-  if (workspaceScopeTransitionState.inProgress) return false;
+  if (workspaceScopeTransitionState.inProgress) {
+    return waitForWorkspaceScopeTransition().then(settled => (
+      settled ? saveServerLastWorkSnapshot(reason, options) : false
+    ));
+  }
   const forceRequested = options.force === true;
   if (!serverLastWorkHydrated && !forceRequested) return false;
   const retryWait = Math.max(0, serverLastWorkRetryAfter - Date.now());
@@ -6290,7 +6394,7 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
         // 자동으로 복원하지 않는다 - 사람이 되살리기를 누를 때만 쓰는 참고본이다.
         serverLastWorkFailureCount = 0;
         serverLastWorkRetryAfter = 0;
-        saveDraftRecoverySnapshot(scopeId, reason);
+        await saveDraftRecoverySnapshot(scopeId, reason);
         return false;
       }
       const authority = await ensureWorkspaceEditAuthority(scopeId);
@@ -6329,10 +6433,11 @@ async function saveServerLastWorkSnapshot(reason = 'auto', options = {}) {
       if (result.protectedNoOp) {
         // 조용히 넘어가면 서버 사본이 낡아 가는 것을 아무도 모른다.
         warnProtectedSaveRefused(result.reason);
-        saveRejectedWorkRecoverySnapshot(result.reason);
+        await saveRejectedWorkRecoverySnapshot(result.reason);
         continue;
       }
       if (result.clean) {
+        observeWorkspaceRevisionSnapshot({ workspaceRevision: result.envelope.metadata.revision }, scopeId);
         serverLastWorkLastSavedAt = Number(snapshot.savedAt) || Date.now();
       }
     } while (serverLastWorkSaveRequestedAgain);
@@ -6502,6 +6607,7 @@ function applyServerLastWorkSnapshot(snapshot, options = {}) {
   if (lightweight) {
     try {
       lastLightweightSessionPayload = prepareLocalSessionPayload(lightweight);
+      cacheLastLightweightSessionPayload(lastLightweightSessionPayload);
     } catch(e) {}
   }
   if (assets) {
@@ -6918,11 +7024,13 @@ async function saveSessionAssetsToDb() {
     sessionAssetSaveRequestedAgain = true;
     return sessionAssetSavePromise;
   }
+  let lastSaveResult = true;
   sessionAssetSavePromise = (async () => {
     do {
       sessionAssetSaveRequestedAgain = false;
-      await saveSessionAssetsToDbOnce();
+      lastSaveResult = await saveSessionAssetsToDbOnce();
     } while (sessionAssetSaveRequestedAgain);
+    return lastSaveResult !== false;
   })().finally(() => {
     sessionAssetSavePromise = null;
   });
@@ -6943,10 +7051,10 @@ async function saveSessionAssetsToDbOnce(reconcileAttempted = false) {
     const existingRevision = workspaceSnapshotRevision(existing);
     const payloadRevision = workspaceSnapshotRevision(payload);
     if (existingRevision && (!payloadRevision || revisionApi?.compare?.(existingRevision, payloadRevision) > 0)) {
-      return;
+      return true;
     }
     if (existing?.savedAt && payload.savedAt && Number(existing.savedAt) > Number(payload.savedAt)) {
-      return;
+      return true;
     }
     if (existing?.factory && payload.factory && typeof mergeFactoryStoredImages === 'function') {
       payload.factory = stripFactoryImages(mergeFactoryStoredImages(payload.factory, existing.factory), {
@@ -6971,11 +7079,12 @@ async function saveSessionAssetsToDbOnce(reconcileAttempted = false) {
     if (lastLightweightSessionPayload) {
       try {
         lastLightweightSessionPayload = prepareLocalSessionPayload(lastLightweightSessionPayload);
+        cacheLastLightweightSessionPayload(lastLightweightSessionPayload);
       } catch(e) {
         console.warn('Session metadata retry failed:', e);
         const changed = setStorageWarningOnce('이미지는 IndexedDB에 저장됐지만 세션 정보 저장 공간이 부족합니다. 현재 작업 저장을 눌러 안전하게 보존해주세요.');
         if (changed && typeof render === 'function') render();
-        return;
+        return false;
       }
     }
     if (state.storageWarning && state.storageWarning.includes('이미지 저장')) {
@@ -6990,12 +7099,14 @@ async function saveSessionAssetsToDbOnce(reconcileAttempted = false) {
     if (!reconcileAttempted && await reconcileMatchingWorkspaceReplicaRevision(e)) {
       return saveSessionAssetsToDbOnce(true);
     }
+    if (e?.code === 'STALE_SCOPE') return false;
     console.warn('Session asset save failed:', e);
     const changed = setStorageWarningOnce('이미지 저장소 저장에 실패했습니다. 현재 화면은 유지되지만, 새로고침 전에 현재 작업 저장을 한 번 눌러주세요.');
     if (changed && typeof render === 'function') render();
-    return;
+    return false;
   }
   if (clearedWarning && typeof render === 'function') render();
+  return true;
 }
 
 function scheduleSessionAssetSave() {
@@ -7141,7 +7252,11 @@ function scheduleSessionAssetSaveIfChanged() {
 function saveSessionAssetsToDbIfChanged() {
   let nextFingerprint = '';
   try { nextFingerprint = sessionAssetSaveFingerprint(); } catch(e) {}
-  if (nextFingerprint && nextFingerprint === lastSessionAssetFingerprint) return Promise.resolve(false);
+  if (nextFingerprint && nextFingerprint === lastSessionAssetFingerprint && !state.storageWarning) {
+    return Promise.resolve(true);
+  }
+  if (nextFingerprint && nextFingerprint === lastSessionAssetFingerprint
+    && !String(state.storageWarning || '').startsWith('이미지 저장소 저장에 실패했습니다.')) return Promise.resolve(false);
   return saveSessionAssetsToDb();
 }
 
@@ -7223,13 +7338,13 @@ function flushFactoryLastSnapshotSave() {
     clearTimeout(factoryLastSnapshotSaveTimer);
     factoryLastSnapshotSaveTimer = null;
   }
-  if (!factoryLastSnapshotSavePending || typeof saveFactoryLastSnapshot !== 'function') return;
+  if (!factoryLastSnapshotSavePending || typeof saveFactoryLastSnapshot !== 'function') return Promise.resolve(false);
   factoryLastSnapshotSavePending = false;
   const factorySnapshot = typeof factoryRuntimeReadCommittedFactory === 'function'
     ? factoryRuntimeReadCommittedFactory()
     : state.factory;
-  if (!factorySnapshot) return;
-  try { saveFactoryLastSnapshot(factorySnapshot); } catch(e) {}
+  if (!factorySnapshot) return Promise.resolve(false);
+  try { return Promise.resolve(saveFactoryLastSnapshot(factorySnapshot)); } catch(e) { return Promise.reject(e); }
 }
 
 function scheduleLastWorkSave(delay = 1600, options = {}) {
@@ -7332,6 +7447,7 @@ function markWorkspaceBlankResetBoundary() {
   serverLastWorkHydrated = true;
   serverLastWorkHydrating = false;
   lastLightweightSessionPayload = null;
+  lastLightweightSessionPayloadByScope.clear();
   lastLocalSessionJson = null;
   lastSessionAssetFingerprint = '';
   if (optionSorterLiveSaveTimer) {
@@ -7425,11 +7541,25 @@ function saveLastWorkNow(options = {}) {
     clearTimeout(lastWorkSaveTimer);
     lastWorkSaveTimer = null;
   }
+  if (optionSorterLiveSaveTimer) {
+    clearTimeout(optionSorterLiveSaveTimer);
+    optionSorterLiveSaveTimer = null;
+  }
   if (!options.factory && options.sync !== false && !lastWorkSyncingVisibleInputs) {
     syncVisibleLastWorkInputs({ deep: options.deep === true });
   }
   const pending = [];
+  if (options.server !== false && documentFence.scopeId.startsWith('draft:')) {
+    pending.push(Promise.resolve().then(() => (
+      workspaceDocumentFenceIsCurrent(documentFence)
+        ? (typeof saveDraftRecoverySnapshot === 'function'
+          ? saveDraftRecoverySnapshot(documentFence.scopeId, 'manual-now')
+          : false)
+        : false
+    )));
+  }
   let persistenceBoundary = Promise.resolve(true);
+  let factorySnapshotBoundary = Promise.resolve(true);
   let detachedFactory = null;
   if (options.persistent !== false) {
     detachedFactory = options.factory
@@ -7457,15 +7587,30 @@ function saveLastWorkNow(options = {}) {
     pending.push(persistenceBoundary);
   } else {
     saveLastWorkBootstrap({ documentFence });
-    if (state.factory && typeof saveFactoryLastSnapshot === 'function') saveFactoryLastSnapshot(state.factory);
+    if (state.factory && typeof saveFactoryLastSnapshot === 'function') {
+      factorySnapshotBoundary = Promise.resolve(saveFactoryLastSnapshot(state.factory));
+    }
   }
   if (!blankCheckpoint) {
-    flushFactoryLastSnapshotSave();
+    const sessionPersistenceBoundary = persistenceBoundary;
+    const factorySnapshotWriteBoundary = factorySnapshotBoundary;
+    factorySnapshotBoundary = sessionPersistenceBoundary.then(saved => {
+      if (saved !== true) return false;
+      return Promise.all([
+        factorySnapshotWriteBoundary,
+        flushFactoryLastSnapshotSave(),
+      ]).then(() => true);
+    });
+    pending.push(factorySnapshotBoundary);
+    persistenceBoundary = Promise.all([sessionPersistenceBoundary, factorySnapshotBoundary])
+      .then(([saved]) => saved === true);
     pending.push(saveLastProductImageBackupToDbIfChanged().catch(() => false));
   }
   let assetBoundary = persistenceBoundary;
   if (!blankCheckpoint && sessionAssetsHydrated) {
-    assetBoundary = persistenceBoundary.then(() => saveSessionAssetsToDbIfChanged()).catch(() => false);
+    assetBoundary = persistenceBoundary
+      .then(saved => (saved === true ? saveSessionAssetsToDbIfChanged() : false))
+      .catch(() => false);
     pending.push(assetBoundary);
   } else {
     markPendingSessionAssetSaveIfChanged();
@@ -7473,7 +7618,9 @@ function saveLastWorkNow(options = {}) {
   if (options.server !== false) {
     const serverSaveOptions = { force: options.force === true };
     if (detachedFactory) serverSaveOptions.factorySnapshot = detachedFactory;
-    pending.push(assetBoundary.then(() => saveServerLastWorkSnapshot('manual-now', serverSaveOptions)).catch(() => false));
+    pending.push(assetBoundary
+      .then(saved => (saved === true ? saveServerLastWorkSnapshot('manual-now', serverSaveOptions) : false))
+      .catch(() => false));
   }
   return Promise.allSettled(pending);
 }
@@ -7851,10 +7998,11 @@ function mergeOptionSorterStoredImages(current = {}, incoming = {}) {
       ...(current.optionSourceDeletedArchiveIds || []),
       ...(incoming.optionSourceDeletedArchiveIds || []),
     ])),
+    optionSourceClearedAt: Math.max(currentClearedAt, incomingClearedAt),
   };
 }
 
-function mergeSameWorkDerivedValue(current, incoming) {
+function mergeSameWorkDerivedValue(current, incoming, path = '') {
   const hasValue = value => (
     Array.isArray(value) ? value.length > 0
       : value && typeof value === 'object' ? Object.keys(value).length > 0
@@ -7864,8 +8012,24 @@ function mergeSameWorkDerivedValue(current, incoming) {
   if (!hasValue(incoming)) return current;
   if (!hasValue(current)) return incoming;
   if (Array.isArray(current) && Array.isArray(incoming)) {
+    if (path === 'sections_found' || path === 'page_score.criteria') {
+      const rows = [...incoming, ...current];
+      if (rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) {
+        const seen = new Set();
+        return rows.filter(row => {
+          const key = JSON.stringify(row, (_key, value) => (
+            value && typeof value === 'object' && !Array.isArray(value)
+              ? Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]]))
+              : value
+          ));
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+    }
     return incoming
-      .map((value, index) => mergeSameWorkDerivedValue(current[index], value))
+      .map((value, index) => mergeSameWorkDerivedValue(current[index], value, `${path}[${index}]`))
       .concat(current.slice(incoming.length));
   }
   if (
@@ -7876,7 +8040,7 @@ function mergeSameWorkDerivedValue(current, incoming) {
     return Object.fromEntries(Array.from(new Set([
       ...Object.keys(current),
       ...Object.keys(incoming),
-    ])).map(key => [key, mergeSameWorkDerivedValue(current[key], incoming[key])]));
+    ])).map(key => [key, mergeSameWorkDerivedValue(current[key], incoming[key], path ? `${path}.${key}` : key)]));
   }
   return incoming;
 }
@@ -8171,11 +8335,17 @@ function applySessionAssetsPayload(assets, options = {}) {
   const currentKey = typeof factoryIdentityKey === 'function' ? factoryIdentityKey(currentFactoryForIdentity) : '';
   const currentHasProductWork = !!(
     currentKey ||
-    state.imageBase64 ||
+    (state.imageBase64 && state.imageBase64 !== '__stored_in_indexeddb__') ||
     (state.imagePreview && state.imagePreview !== '__stored_in_indexeddb__') ||
-    (typeof factoryProductHasImage === 'function' && factoryProductHasImage(workingFactory.product || {}))
+    (typeof factoryProductHasImage === 'function' && factoryProductHasImage(currentFactorySnapshot.product || {}))
   );
-  const blockForeignProductRestore = !options.forceProductRestore && !!(incomingKey && currentHasProductWork && (!currentKey || currentKey !== incomingKey));
+  const sameImageOnlyRestore = !currentKey && matchesWorkspace && incomingInputImageFingerprint
+    && incomingInputImageFingerprint === workspaceImagePayloadFingerprint({
+      base64: state.imageBase64,
+      preview: state.imagePreview,
+    });
+  const blockForeignProductRestore = !options.forceProductRestore && !sameImageOnlyRestore
+    && !!(incomingKey && currentHasProductWork && (!currentKey || currentKey !== incomingKey));
   if (blockForeignProductRestore) {
     state.storageWarning = '서로 다른 상품의 마지막 작업 저장본이 감지되어 DB/내용 복원을 건너뛰고 현재 제품 사진 작업을 유지했습니다.';
     state.storageWarningDismissKey = `foreign-last-work:${currentKey || 'image-only'}:${incomingKey}`;
@@ -8601,9 +8771,10 @@ function repairRestoredSessionIdentityDrift(reason = 'restore', factory) {
 
   if (state.compPage?.marketScrape && typeof state.compPage.marketScrape === 'object') {
     const market = state.compPage.marketScrape;
+    const marketIdentity = market.factoryProductKey || market.productKey || market.workProductName || market.productName || '';
     const marketKey = typeof factoryNormalizeIdentityText === 'function'
-      ? factoryNormalizeIdentityText(market.productName || '')
-      : String(market.productName || '').replace(/\s+/g, '').toLowerCase();
+      ? factoryNormalizeIdentityText(marketIdentity)
+      : String(marketIdentity).replace(/\s+/g, '').toLowerCase();
     const marketMatchesTarget = typeof factoryIdentityKeysCompatible === 'function'
       ? factoryIdentityKeysCompatible(marketKey, targetKey)
       : marketKey === targetKey;
@@ -9058,13 +9229,12 @@ function saveBackendUrl(url) {
 function loadBackendUrl() {
   try {
     const stored = localStorage.getItem('gemini_backend_url') || '';
-    // 4000은 sachyosangse API (pdp 전용) — GeminiClient backendUrl로 쓰면 안 됨, 5050으로 리셋
-    if (!stored || stored.includes(':4000')) {
-      localStorage.setItem('gemini_backend_url', 'http://127.0.0.1:5050');
-      return 'http://127.0.0.1:5050';
+    if (!stored || stored.includes(':4000') || /^http:\/\/(?:127\.0\.0\.1|localhost):(?:5050|41026)\/?$/i.test(stored)) {
+      localStorage.setItem('gemini_backend_url', 'http://127.0.0.1:43030');
+      return 'http://127.0.0.1:43030';
     }
     return stored;
-  } catch(e) { return 'http://127.0.0.1:5050'; }
+  } catch(e) { return 'http://127.0.0.1:43030'; }
 }
 
 function defaultServerAutomationApiBase() {
@@ -9284,14 +9454,21 @@ function stripCompSnapshotImages(snapshot) {
 
 function applyCompAnalysisSnapshot(saved, targetSubStep = null, options = {}) {
   if (!saved || !state?.compPage) return false;
-  const currentScope = sectionWorkScopeMeta();
+  const currentScope = options.currentScope || sectionWorkScopeMeta();
   const workspaceScopeMatches = !currentScope.scopeKey || sectionWorkScopeMatches(saved.sectionWorkScope, currentScope);
   const analysisProductScope = saved.analysisResult?.analysisProductScope || null;
   const analysisScopeMatches = !saved.analysisResult || (
     !!analysisProductScope && sectionWorkScopeMatches(analysisProductScope, currentScope)
   );
   const scopeMatches = workspaceScopeMatches && analysisScopeMatches;
-  if (!scopeMatches && options.allowScopeMismatch !== true) return false;
+  if (!scopeMatches && options.allowScopeMismatch !== true) {
+    if (!saved.marketScrape || saved.analysisResult || Object.keys(saved.sectionPlan || {}).length || Object.keys(saved.planEdits || {}).length
+      || !sectionWorkScopeMatchesForDetailTransfer(saved.marketScrape, currentScope).ok) return false;
+    state.compPage.marketScrape = mergeCompMarketStoredState(
+      state.compPage.marketScrape || {}, sanitizeCompMarketScrapeForPersistence(saved.marketScrape) || {},
+    );
+    return true;
+  }
   const cp = state.compPage;
   const preserveCurrent = options.replaceWorkspace !== true;
   const nonEmpty = value => (
@@ -9326,10 +9503,14 @@ function applyCompAnalysisSnapshot(saved, targetSubStep = null, options = {}) {
   cp.urlInput = keepCurrent(saved.urlInput, cp.urlInput) || '';
   cp.scraperBase = keepCurrent(saved.scraperBase, cp.scraperBase) || 'http://127.0.0.1:5001';
   cp.scraperImportInfo = keepCurrent(saved.scraperImportInfo, cp.scraperImportInfo) || null;
+  const currentSelectedImageIds = preserveCurrent && Array.isArray(cp.marketScrape?.selectedImageIds)
+    ? [...cp.marketScrape.selectedImageIds]
+    : null;
   cp.marketScrape = mergeCompMarketStoredState(
     cp.marketScrape || {},
     sanitizeCompMarketScrapeForPersistence(saved.marketScrape || null) || {},
   );
+  if (currentSelectedImageIds) cp.marketScrape.selectedImageIds = currentSelectedImageIds;
   cp.analyzeMsg = keepCurrent(saved.analyzeMsg, cp.analyzeMsg) || '';
   cp.analyzeProgress = keepCurrent(saved.analyzeProgress, cp.analyzeProgress) || 0;
   cp.analyzeStage = keepCurrent(saved.analyzeStage, cp.analyzeStage) || '';
@@ -10401,6 +10582,7 @@ function savePersistentState(options = {}) {
       inputImageFingerprint,
       workspaceScope: { id: scopeId },
       workspaceBranch: currentWorkspaceBranch(scopeId, state.currentProjectId),
+      workspaceKind: lastWorkBootstrapWorkspaceKind(options, state.currentProjectId),
       workspaceRevision,
       workfileLastSavedAt: state.workfileLastSavedAt,
       sectionWorkScope: state.sectionWorkScope || sectionWorkScopeMeta(),
@@ -10459,7 +10641,18 @@ function savePersistentState(options = {}) {
     const lightweight = buildLightweightSessionPayload(payload);
     const result = selectLocalSessionPayload(lightweight);
     if (!result.ok) throw result.error || new Error('localStorage session save failed');
+    const previousLightweight = getLastLightweightSessionPayloadForScope(scopeId);
+    if (previousLightweight
+      && lastWorkSnapshotWorkspaceScope(previousLightweight) === scopeId
+      && previousLightweight.optionSorter
+      && result.payload.optionSorter) {
+      result.payload = {
+        ...result.payload,
+        optionSorter: mergeOptionSorterStoredImages(previousLightweight.optionSorter, result.payload.optionSorter),
+      };
+    }
     lastLightweightSessionPayload = result.payload;
+    cacheLastLightweightSessionPayload(result.payload);
     if (!workspaceDocumentFenceIsCurrent(documentFence)) {
       persistenceCompletion = Promise.resolve(false).finally(finishPersistentStateSave);
       persistentStateSavePromise = persistenceCompletion;
@@ -10489,6 +10682,7 @@ function savePersistentState(options = {}) {
         rebaseRevision: true,
         replicas: ['session'],
         context: {
+          session: { writeBootstrap: true },
           server: { bases: getServerLastWorkBases(), serverSnapshot },
           indexeddb: { sessionAssets },
         },
@@ -10515,7 +10709,6 @@ function savePersistentState(options = {}) {
       }
       if (!workspaceDocumentFenceIsCurrent(documentFence)) return false;
       commitCurrentWorkspaceRevision(commitResult.envelope.metadata.revision);
-      saveLastWorkBootstrap({ documentFence });
       lastLocalSessionJson = result.json;
       markSessionAssetFingerprintSaved();
       const warningCleared = clearResolvedSessionPersistenceWarning();
@@ -10542,6 +10735,19 @@ function savePersistentState(options = {}) {
   return persistenceCompletion;
 }
 
+function waitForWorkspaceScopeTransition() {
+  if (!workspaceScopeTransitionState.inProgress) return Promise.resolve(true);
+  const startedAt = Date.now();
+  return new Promise(resolve => {
+    const check = () => {
+      if (!workspaceScopeTransitionState.inProgress) return resolve(true);
+      if (Date.now() - startedAt >= 30_000) return resolve(false);
+      setTimeout(check, 25);
+    };
+    check();
+  });
+}
+
 async function flushQueuedPersistentState(options = {}, retryCount = 0) {
   const inFlight = persistentStateSavePromise;
   if (inFlight) await Promise.resolve(inFlight).catch(() => false);
@@ -10561,6 +10767,7 @@ async function flushQueuedPersistentState(options = {}, retryCount = 0) {
   if (saveStartedDuringHydration && saveStartedDuringHydration !== inFlight) {
     await Promise.resolve(saveStartedDuringHydration).catch(() => false);
   }
+  if (!await waitForWorkspaceScopeTransition()) return false;
   if (persistentStateSaveRetryTimer) {
     clearTimeout(persistentStateSaveRetryTimer);
     persistentStateSaveRetryTimer = null;
@@ -11428,4 +11635,3 @@ const FACTORY_DB_FIELD_DEFS = [
   { id: 'promotion_label', label: '프로모션 문구', required: false, aliases: ['promotion_label','promotion_text','프로모션문구'] },
   { id: 'memo', label: '관리 메모', required: false, aliases: ['memo','admin_memo','internal_memo','관리메모'] },
 ];
-

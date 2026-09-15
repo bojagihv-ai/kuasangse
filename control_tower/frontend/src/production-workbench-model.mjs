@@ -122,9 +122,12 @@ export const ASSEMBLY_WORKBENCH_STEPS = Object.freeze([
 ]);
 
 const CUT_STAGE_KEYS = Object.freeze(['representative', 'size', 'option_color', 'general']);
+const REQUIRED_INPUT_KEYS = new Set(['requirements', 'required_values', 'required_fields']);
+const COMPETITOR_INPUT_KEYS = new Set(['competitors', 'competitor_sources', 'competitor']);
 const WORKBENCH_STAGE_KEYS = Object.freeze({
   intake: 'start',
   queued: 'start',
+  db: 'db',
   product_matching: 'db',
   db_product_match: 'db',
   cafe24_product_match: 'db',
@@ -134,16 +137,27 @@ const WORKBENCH_STAGE_KEYS = Object.freeze({
   competitor_collection: 'competitors',
   competitor_product_match: 'competitors',
   representative: 'cuts',
+  hero: 'cuts',
   size: 'cuts',
   option_color: 'cuts',
+  options: 'cuts',
+  cuts: 'cuts',
   general: 'cuts',
   generated_images: 'cuts',
   sections: 'sections',
+  detail: 'sections',
   final_detail: 'sections',
   cafe24: 'send',
   cafe24_preflight: 'send',
   registration: 'send',
+  export: 'send',
 });
+
+function inputMissingCount(current, keys) {
+  return list(record(current).inputs)
+    .filter(input => keys.has(text(record(input).key)))
+    .reduce((total, input) => total + list(record(input).missing).length, 0);
+}
 
 function assemblyStage(current, key) {
   return list(record(current).stages).find(stage => text(record(stage).key) === key) || {};
@@ -156,17 +170,20 @@ function assemblyGroups(current, keys) {
     return Object.freeze({
       key,
       candidateCount: candidates.length,
-      selectedCount: text(stage.selectedId) ? 1 : 0,
+      selectedCount: Array.isArray(stage.selectedIds) ? new Set(stage.selectedIds).size : text(stage.selectedId) ? 1 : 0,
     });
   });
 }
 
 function currentAssemblyStep(current, job) {
   const jobRecord = record(job);
-  const stageKey = text(jobRecord.stageKey || record(current).progress?.stageKey);
+  const progress = record(record(current).progress);
+  const liveRunning = text(jobRecord.status) === 'running' && text(progress.status) === 'running';
+  const stageKey = text(liveRunning ? progress.stageKey || jobRecord.stageKey : jobRecord.stageKey || progress.stageKey);
   if (text(jobRecord.status).toLowerCase() === 'completed' || WORKBENCH_STAGE_KEYS[stageKey] === 'send') return 'send';
+  if (inputMissingCount(current, REQUIRED_INPUT_KEYS)) return 'required';
+  if (inputMissingCount(current, COMPETITOR_INPUT_KEYS)) return 'competitors';
   if (WORKBENCH_STAGE_KEYS[stageKey]) return WORKBENCH_STAGE_KEYS[stageKey];
-  if (list(record(current).inputs).some(input => list(record(input).missing).length)) return 'required';
   if (assemblyStage(current, 'final_detail').selectedId || assemblyStage(current, 'sections').selectedId) return 'sections';
   if (CUT_STAGE_KEYS.some(key => text(record(assemblyStage(current, key)).selectedId))) return 'cuts';
   return 'start';
@@ -179,7 +196,7 @@ export function deriveAssemblyWorkbench(currentValue = {}, jobValue = {}, cafe24
   const currentIndex = ASSEMBLY_WORKBENCH_STEPS.findIndex(step => step.key === currentKey);
   const status = text(job.status || record(current.progress).status).toLowerCase();
   const disconnected = current.connected === false;
-  const inputMissing = list(current.inputs).reduce((total, input) => total + list(record(input).missing).length, 0);
+  const inputMissing = inputMissingCount(current, REQUIRED_INPUT_KEYS);
   const cuts = assemblyGroups(current, CUT_STAGE_KEYS);
   const sections = assemblyGroups(current, ['sections', 'final_detail']);
   const blockers = list(record(current.registration).blockers).map(text).filter(Boolean);
@@ -190,6 +207,9 @@ export function deriveAssemblyWorkbench(currentValue = {}, jobValue = {}, cafe24
     let state = index < currentIndex ? 'done' : index > currentIndex ? 'pending' : 'active';
     if (index === currentIndex && status === 'blocked') state = 'blocked';
     if (index === currentIndex && status === 'waiting_manual') state = 'manual';
+    if (index === currentIndex && status === 'waiting_manual' && definition.key === 'send' && blockers.length) {
+      state = 'blocked';
+    }
     if (definition.key === 'required' && inputMissing && index === currentIndex) state = 'blocked';
     if (definition.key === 'send' && cafe24Registered === true && !disconnected) state = 'done';
     if (disconnected && index === currentIndex) state = 'blocked';
@@ -198,9 +218,17 @@ export function deriveAssemblyWorkbench(currentValue = {}, jobValue = {}, cafe24
       : disconnected && index === currentIndex
         ? '조립공장 연결 끊김'
       : state === 'manual'
-        ? 'A컷 선택 필요'
+        ? ({
+          start: '제품 투입 필요',
+          db: 'DB 확정 필요',
+          required: '필수값 확인 필요',
+          competitors: '경쟁사 후보 선택 필요',
+          cuts: 'A컷 선택 필요',
+          sections: '섹션 선택 필요',
+          send: 'Cafe24 사전점검 필요',
+        }[definition.key] || '다음 단계 확인 필요')
         : definition.key === 'send' && blockers.length
-          ? blockers[0]
+          ? 'Cafe24 사전점검 필요'
           : state === 'blocked'
             ? pick(job.message, current.blockReason, '작업 차단')
             : '';
@@ -217,6 +245,20 @@ export function deriveAssemblyWorkbench(currentValue = {}, jobValue = {}, cafe24
   return Object.freeze({
     currentStep: steps[currentIndex],
     steps: Object.freeze(steps),
+  });
+}
+
+export function followAssemblyWorkbenchStep(stateValue = {}, jobIdValue = '', currentStepKeyValue = '', manualStepKeyValue = '') {
+  const state = record(stateValue);
+  const jobId = text(jobIdValue);
+  const currentStepKey = text(currentStepKeyValue);
+  const manualStepKey = text(manualStepKeyValue);
+  const sameJob = jobId === text(state.jobId);
+  const manual = sameJob && (Boolean(manualStepKey) || state.manual === true);
+  return Object.freeze({
+    jobId,
+    key: manual ? manualStepKey || text(state.key) || currentStepKey : currentStepKey,
+    manual,
   });
 }
 

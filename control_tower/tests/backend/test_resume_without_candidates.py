@@ -49,6 +49,9 @@ def test_resume_regenerates_when_the_waiting_stage_has_no_candidates(tmp_path: P
 
     resumed = bridge.resume_product(job_id)
     assert resumed["status"] in {"queued", "running"}, f"재개되지 않았습니다: {resumed['status']}"
+    order = bridge.claim(_live_worker())["order"]
+    assert order["command"]["payload"]["regenerateStage"] is True
+    assert order["command"]["payload"]["restoreOnly"] is False
 
 
 def test_resume_still_demands_a_decision_while_candidates_are_waiting(tmp_path: Path) -> None:
@@ -65,3 +68,18 @@ def test_resume_still_demands_a_decision_while_candidates_are_waiting(tmp_path: 
     with pytest.raises(FactorySyncError) as raised:
         bridge.resume_product(job_id)
     assert raised.value.code == "factory_decision_required"
+
+
+def test_resume_preserves_a_selection_while_candidate_list_is_restoring(tmp_path: Path) -> None:
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    job_id = _prepared(bridge, "selected")
+    selected = _product_projection(job_id, sequence=120, revision=24)
+    selected["stages"][0]["candidates"] = []
+    selected["stages"][0]["selectedIds"] = ["representative-b"]
+    bridge.accept_session_projection(_envelope(selected, cursor=30))
+
+    bridge.resume_product(job_id)
+
+    order = bridge.claim(_live_worker())["order"]
+    assert order["command"]["payload"]["regenerateStage"] is False
+    assert order["command"]["payload"]["startFresh"] is False

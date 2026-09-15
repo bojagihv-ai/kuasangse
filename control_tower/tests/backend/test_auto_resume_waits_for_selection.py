@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from control_tower.backend.factory_sync import FactorySyncBridge
 
 from test_factory_sync import _hello, _manual_product_job_payload, _product_projection
@@ -101,9 +103,11 @@ def test_auto_resume_holds_until_the_factory_shows_the_selection(tmp_path: Path)
     assert moved["autoResumePending"] is False
 
 
-def test_auto_resume_still_advances_when_the_selection_is_already_visible(tmp_path: Path) -> None:
+@pytest.mark.parametrize("restored_stage", ["representative", ""])
+def test_auto_resume_still_advances_when_the_selection_is_already_visible(tmp_path: Path, restored_stage: str) -> None:
     bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
     job_id = _prepared(bridge)
+    bridge._product_jobs[job_id].stage_key = restored_stage
     bridge.reserve_product_selection(
         job_id,
         {"stageKey": "representative", "candidateId": "representative-b"},

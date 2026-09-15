@@ -33,6 +33,9 @@ export function createWorkspaceLockCoordinator({
   const listeners = new Set();
   let current = frozenSnapshot({ mode: 'idle', sessionId });
   let mutationQueue = Promise.resolve();
+  let mutationBarrier = mutationQueue;
+  let pendingMutations = 0;
+  let releaseIntent = 0;
 
   function notify(next) {
     current = frozenSnapshot({ ...next, sessionId: next.sessionId || sessionId });
@@ -67,11 +70,58 @@ export function createWorkspaceLockCoordinator({
     authorityTransitionIsCurrent: transitions.authorityTransitionIsCurrent,
   });
 
-  function runMutation(operation) {
-    if (typeof operation !== 'function') throw new TypeError('workspace mutation callback is required');
-    const running = mutationQueue.then(() => operation());
+  function enqueueMutation(operation) {
+    const running = mutationQueue.then(operation);
     mutationQueue = running.catch(() => undefined);
     return running;
+  }
+
+  function runMutation(operation) {
+    if (typeof operation !== 'function') throw new TypeError('workspace mutation callback is required');
+    pendingMutations += 1;
+    const running = enqueueMutation(async () => {
+      try {
+        return await operation();
+      } finally {
+        pendingMutations -= 1;
+      }
+    });
+    mutationBarrier = running.catch(() => undefined);
+    return running;
+  }
+
+  function afterQueuedMutations(operation) {
+    return pendingMutations > 0 ? mutationBarrier.then(operation) : operation();
+  }
+
+  function acquire(options) {
+    const scopeId = String(options?.scopeId || '').trim();
+    const currentAuthority = current;
+    if (pendingMutations > 0
+      && currentAuthority.mode === 'editing'
+      && currentAuthority.scopeId === scopeId
+      && options?.confirmedTakeover !== true) {
+      releaseIntent += 1;
+      return Promise.resolve(currentAuthority);
+    }
+    return afterQueuedMutations(() => transitions.acquire(options));
+  }
+
+  function openReadOnly(reason) {
+    return afterQueuedMutations(() => transitions.openReadOnly(reason));
+  }
+
+  function takeover(options) {
+    return afterQueuedMutations(() => transitions.takeover(options));
+  }
+
+  function release(options) {
+    const transition = transitions.captureAuthorityTransition();
+    const intent = releaseIntent += 1;
+    return enqueueMutation(() => intent === releaseIntent
+      && transitions.authorityTransitionIsCurrent(transition)
+      ? transitions.release(options)
+      : current);
   }
 
   function subscribe(listener) {
@@ -82,16 +132,16 @@ export function createWorkspaceLockCoordinator({
   }
 
   return Object.freeze({
-    acquire: transitions.acquire,
+    acquire,
     heartbeat: lifecycle.heartbeat,
     observeRevision: lifecycle.observeRevision,
-    openReadOnly: transitions.openReadOnly,
+    openReadOnly,
     refresh: lifecycle.refresh,
-    release: transitions.release,
+    release,
     snapshot: () => current,
     runMutation,
     subscribe,
-    takeover: transitions.takeover,
+    takeover,
   });
 }
 

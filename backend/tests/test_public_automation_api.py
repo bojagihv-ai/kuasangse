@@ -39,11 +39,13 @@ def test_health_and_openapi_describe_launcher_and_all_capabilities(client):
     assert health.status_code == 200
     assert health.get_json()["status"] == "ok"
     assert health.get_json()["launcher"]["api_hub_connector_id"] == "kuasangse_python_5050"
+    assert health.get_json()["launcher"]["server_url"] == "http://127.0.0.1:43030"
 
     response = http.get("/api/v1/openapi.json")
     assert response.status_code == 200
     document = response.get_json()
     assert document["openapi"].startswith("3.")
+    assert document["servers"] == [{"url": "http://127.0.0.1:43030/api/v1"}]
     assert document["x-launcher"]["health_url"].endswith("/api/v1/health")
 
     paths = document["paths"]

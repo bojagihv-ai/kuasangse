@@ -10,6 +10,8 @@ export function createPersistenceAuthorityRuntime(authority = null) {
     if (!current?.scopeId?.startsWith('project:') || !envelope?.scopeId?.startsWith('draft:')) {
       return false;
     }
+    if (current.mode !== 'editing'
+      && !(current.mode === 'released' && current.reasonCode === 'RELEASED')) return false;
     const validation = validateWorkspaceSnapshotIdentity(envelope.snapshot);
     return validation.ok
       && validation.branch?.scopeId === envelope.scopeId
@@ -22,7 +24,7 @@ export function createPersistenceAuthorityRuntime(authority = null) {
 
   function isLinkedProjectAuthority(envelope) {
     const current = snapshot();
-    return current?.mode === 'editing' && linkedProjectAuthority(envelope, current);
+    return (current?.mode === 'editing' || current?.mode === 'released') && linkedProjectAuthority(envelope, current);
   }
 
   function snapshot() {
@@ -170,9 +172,8 @@ export function createPersistenceAuthorityRuntime(authority = null) {
     if (envelope.scopeId.startsWith('draft:') && current?.mode === 'offline-edit'
       && current.scopeId === envelope.scopeId) return null;
     if (linkedProjectAuthority(envelope, current)) {
-      return current.mode === 'editing'
-        ? null
-        : new WorkspaceAuthorityError('READ_ONLY', current.reason || 'workspace is read-only', current);
+      return current.mode === 'editing' || current.mode === 'released'
+        ? null : new WorkspaceAuthorityError('READ_ONLY', current.reason || 'workspace is read-only', current);
     }
     if (!current || current.scopeId !== envelope.scopeId) {
       return new WorkspaceAuthorityError('STALE_SCOPE', 'workspace authority scope changed', current);

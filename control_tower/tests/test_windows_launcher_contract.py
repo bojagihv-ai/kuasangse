@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 LAUNCHER_PATH = REPOSITORY_ROOT / "control_tower" / "launch.ps1"
+FACTORY_LAUNCHER_PATH = REPOSITORY_ROOT / "launcher.ps1"
 INSTALLER_PATH = REPOSITORY_ROOT / "control_tower" / "install_shortcut.ps1"
 
 
@@ -85,7 +86,7 @@ def test_frontend_readiness_survives_windows_powershell_51_utf8_decoding() -> No
     frontend_source = (REPOSITORY_ROOT / "control_tower" / "frontend" / "control-tower.html").read_text(
         encoding="utf-8",
     )
-    marker = 'const healthUrl = "http://127.0.0.1:41009/api/health";'
+    marker = 'const healthUrl = "http://localhost:41009/api/health";'
 
     assert marker.isascii()
     assert marker in frontend_source
@@ -182,6 +183,15 @@ def test_launcher_waits_for_the_exact_manifest_worker_build_before_opening_contr
     assert "$process.ExitCode -ne 0" in worker_body
 
 
+def test_factory_worker_launcher_waits_for_a_fresh_session_after_module_readiness() -> None:
+    source = _read_required(FACTORY_LAUNCHER_PATH)
+
+    assert "Wait-HttpSuccess -Url $WorkerShellUrl" in source
+    assert "$previousWorkerSessionId = ''" in source
+    assert "$currentWorkerSessionId -ne $previousWorkerSessionId" in source
+    assert "'&launch=' + [Guid]::NewGuid().ToString('N')" in source
+
+
 def test_launcher_requires_business_api_readiness_and_replaces_only_owned_stale_backend() -> None:
     # Given: health와 process ownership을 함께 판단하는 launcher 원문을 준비한다.
     source = _read_required(LAUNCHER_PATH)
@@ -242,7 +252,8 @@ def test_launcher_recovers_the_default_sinhwa_hub_before_control_tower_startup()
         "-Action Start",
         "-BackendPort 8200",
         "-FrontendPort 5173",
-        "-SqlContainerName disabled",
+        "[string]$SinhwaSqlContainerName = \"sqlserver-dev\"",
+        "-SqlContainerName $SinhwaSqlContainerName",
     )
     assert all(fragment in source for fragment in required_fragments)
     assert start_body.index(dependency_call) < start_body.index(backend_call)

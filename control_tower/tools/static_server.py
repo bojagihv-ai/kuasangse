@@ -12,9 +12,45 @@ from __future__ import annotations
 import argparse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import BinaryIO, Final
+from urllib.parse import unquote, urlsplit
+
+NATIVE_PREFIX: Final = "/factory-native/"
+APP_ROOT: Final = Path(__file__).resolve().parents[2]
+
+
+def native_public_path(url: str) -> Path | None:
+    relative = unquote(urlsplit(url).path.removeprefix(NATIVE_PREFIX))
+    parts = relative.split("/")
+    if any(not part or part.startswith(".") or part.endswith((".", " ")) for part in parts):
+        return None
+    if any(character in relative for character in ("\\", ":", "\0")):
+        return None
+    allowed = relative in {"app.html", "src/runtime-manifest.json", "dist/app-runtime.bundle.js"}
+    allowed = allowed or (parts[0] == "src" and Path(relative).suffix in {".js", ".mjs", ".css"})
+    if not allowed:
+        return None
+    candidate = APP_ROOT.joinpath(*parts)
+    if candidate.resolve() != candidate or not candidate.is_file():
+        return None
+    return candidate
 
 
 class NoStoreHandler(SimpleHTTPRequestHandler):
+    def translate_path(self, path: str) -> str:
+        if path.startswith(NATIVE_PREFIX):
+            public_path = native_public_path(path)
+            if public_path is not None:
+                return str(public_path)
+        return super().translate_path(path)
+
+    def send_head(self) -> BinaryIO | None:
+        if self.path.startswith(NATIVE_PREFIX) and native_public_path(self.path) is None:
+            self.send_error(404, "File not found")
+            return None
+        return super().send_head()
+
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")

@@ -208,7 +208,10 @@ export function createSessionStorageAdapter({ storage, draftStorage = storage, a
       const bootstrap = writeBootstrap ? {
         workspaceScope: { id: envelope.scopeId },
         workspaceRevision: envelope.metadata.revision,
-        currentProjectId: String(envelope.snapshot?.currentProjectId || envelope.scopeId.replace(/^project:/i, '')),
+        workspaceBranch: sessionSnapshot.workspaceBranch || null,
+        workspaceKind: String(sessionSnapshot.workspaceKind || ''),
+        currentProjectId: String(envelope.snapshot?.currentProjectId
+          || (envelope.scopeId.startsWith('project:') ? envelope.scopeId.slice('project:'.length) : '')),
         currentProjectName: String(envelope.snapshot?.currentProjectName || ''),
         currentProjectCreatedAt: envelope.snapshot?.currentProjectCreatedAt || null,
         step: String(envelope.snapshot?.step || 'upload'),

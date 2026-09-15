@@ -25,7 +25,14 @@ from .pdp_client import PdpHttpError
 from .cafe24_bridge import Cafe24BridgeError, Cafe24CommandBridge, UnavailableCafe24CommandBridge, build_cafe24_command, build_cafe24_reconcile_command
 from .cafe24_staging import APPROVAL_BINDING_FIELDS, SAFE_DEFAULTS, Cafe24ApprovalGate, Cafe24StagingError, build_preview, verify_readback
 from .handoff import HandoffError, HandoffStore
-from .factory_sync import FactorySyncBridge, FactorySyncError
+from .human_presence import HumanPresenceError, HumanPresenceStore, PRESENCE_EXPIRY_MS
+from .factory_sync import (
+    FactorySyncBridge,
+    FactorySyncError,
+    TAB_COMMAND_MAX_BYTES,
+    WORK_ORDER_VERSION,
+    WORKER_CAPABILITY_VERSION,
+)
 from .candidate_selector import CandidateSelectionError, decide_candidates
 from .gpt_oauth import GptOAuthError, GptOAuthJudge
 from .policy import (
@@ -739,6 +746,7 @@ def register_routes(
     factory_sync_bridge: FactorySyncBridge | None = None,
     gpt_judge: GptOAuthJudge | None = None,
     factory_archive_root: Path | None = None,
+    human_presence_store: HumanPresenceStore | None = None,
 ) -> None:
     api = pdp_api if pdp_api is not None else UnavailablePdpApi()
     bridge = cafe24_bridge if cafe24_bridge is not None else UnavailableCafe24CommandBridge()
@@ -746,6 +754,7 @@ def register_routes(
     handoffs = HandoffStore()
     cafe24_approvals = Cafe24ApprovalGate()
     factory_sync = factory_sync_bridge if factory_sync_bridge is not None else FactorySyncBridge()
+    human_presences = human_presence_store if human_presence_store is not None else HumanPresenceStore()
     judge = gpt_judge if gpt_judge is not None else GptOAuthJudge()
     archive_root = (factory_archive_root or (Path("output") / "local-archive")).resolve()
 
@@ -928,15 +937,26 @@ def register_routes(
     def invoke_worker(action: str, order_id: str | None, payload: JsonObject) -> JsonObject | tuple[Response, int]:
         try:
             if action == "claim":
-                if factory_sync.has_pending():
-                    factory_claim = factory_sync.claim(payload)
-                    if factory_claim.get("order") is not None:
-                        return factory_claim
-                local_claim = getattr(bridge, "claim", None)
-                if callable(local_claim):
-                    local_result = local_claim(payload)
-                    if local_result.get("order") is not None:
-                        return local_result
+                if (
+                    payload.get("contractVersion") == WORK_ORDER_VERSION
+                    and payload.get("capabilityVersion") != WORKER_CAPABILITY_VERSION
+                ):
+                    return _error("capability_version_unsupported", 422, retryable=False, correlation_id=_correlation_id())
+                is_batch_worker_claim = (
+                    payload.get("contractVersion") == WORK_ORDER_VERSION
+                    and payload.get("capabilityVersion") == WORKER_CAPABILITY_VERSION
+                )
+                if is_batch_worker_claim:
+                    if factory_sync.has_pending():
+                        factory_claim = factory_sync.claim(payload)
+                        if factory_claim.get("order") is not None:
+                            return factory_claim
+                    local_claim = getattr(bridge, "claim", None)
+                    if callable(local_claim):
+                        local_result = local_claim(payload)
+                        if local_result.get("order") is not None:
+                            return local_result
+                    return {"claimed": False, "order": None}
                 return api.worker_claim(payload)
             if order_id is None:
                 return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
@@ -1342,8 +1362,45 @@ def register_routes(
 
     @app.get("/api/factory/jobs")
     def factory_product_jobs() -> Response:
-        jobs = factory_sync.product_jobs()
-        return jsonify({"jobs": jobs, "total": len(jobs)})
+        state = factory_sync.product_queue_state()
+        state["humanPresences"] = human_presences.active()
+        return jsonify(state)
+
+    @app.post("/api/factory/jobs/pause-after-current")
+    def factory_product_pause_after_current() -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None or set(payload) != {"enabled"} or type(payload.get("enabled")) is not bool:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            state = factory_sync.set_pause_after_current(payload["enabled"])
+        except FactorySyncError as error:
+            return _error(error.code, 503, retryable=True, correlation_id=_correlation_id())
+        return jsonify(state), 202
+
+    @app.post("/api/factory/presence")
+    def factory_human_presence() -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        payload = _json_object()
+        if payload is None:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            human_presences.upsert(payload)
+        except HumanPresenceError:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"ok": True, "expiresInMs": PRESENCE_EXPIRY_MS})
+
+    @app.delete("/api/factory/presence/<presence_id>")
+    def delete_factory_human_presence(presence_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        human_presences.dismiss(presence_id)
+        return jsonify({"ok": True})
 
     @app.get("/api/factory/jobs/<job_id>/history")
     def factory_product_history(job_id: str) -> Response | tuple[Response, int]:
@@ -1477,7 +1534,10 @@ def register_routes(
         if csrf_error is not None:
             return csrf_error
         payload = _json_object()
-        if payload is None or set(payload) - {"imageModel", "expectedCheckpointRevision", "expectedCheckpointRunId"}:
+        if payload is None or set(payload) - {"imageModel", "expectedCheckpointRevision", "expectedCheckpointRunId", "restoreOnly"}:
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        restore_only = payload.get("restoreOnly", False)
+        if type(restore_only) is not bool:
             return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
         match payload.get("imageModel"):
             case None:
@@ -1506,6 +1566,7 @@ def register_routes(
                 image_model=image_model,
                 expected_checkpoint_revision=expected_checkpoint_revision,
                 expected_checkpoint_run_id=expected_checkpoint_run_id,
+                restore_only=restore_only,
             )
         except FactorySyncError as error:
             status = (
@@ -1757,6 +1818,13 @@ def register_routes(
         csrf_error = require_csrf()
         if csrf_error is not None:
             return csrf_error
+        return _error("factory_cafe24_approval_required", 409, retryable=False, correlation_id=_correlation_id())
+
+    @app.post("/api/factory/jobs/<job_id>/cafe24/values")
+    def factory_product_cafe24_values(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
         payload = _json_object()
         # 등록 방식(새 상품/기존 수정)은 사람이 정하는 값이다. 이 목록에 없으면 보드에서
         # 골라도 조립공장까지 전달되지 않아, 스토어에 이미 있는 제품이 늘 덮어쓰기가 된다.
@@ -1777,11 +1845,11 @@ def register_routes(
             if value is not None and not isinstance(value, str):
                 return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
         try:
-            order = factory_sync.queue_cafe24_registration(job_id, payload)
+            job = factory_sync.save_cafe24_registration_values(job_id, payload)
         except FactorySyncError as error:
-            status = 404 if error.code == "factory_product_job_not_found" else 409
+            status = 404 if error.code == "factory_product_job_not_found" else 409 if error.code == "factory_product_job_busy" else 422
             return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
-        return jsonify({"accepted": True, "orderId": order["orderId"]}), 202
+        return jsonify({"accepted": True, "job": job})
 
     @app.post("/api/factory/jobs/<job_id>/workfile-rebind")
     def factory_product_workfile_rebind(job_id: str) -> Response | tuple[Response, int]:
@@ -1861,6 +1929,48 @@ def register_routes(
                 "checkpointRunId": payload.get("expectedCheckpointRunId"),
             },
         }), 202
+
+    @app.post("/api/factory/jobs/<job_id>/tab-command")
+    def factory_product_tab_command(job_id: str) -> Response | tuple[Response, int]:
+        csrf_error = require_csrf()
+        if csrf_error is not None:
+            return csrf_error
+        if request.content_length is not None and request.content_length > TAB_COMMAND_MAX_BYTES:
+            return _error("factory_tab_command_too_large", 413, retryable=False, correlation_id=_correlation_id())
+        request.max_content_length = TAB_COMMAND_MAX_BYTES
+        payload = _json_object()
+        if payload is None or _has_raw_path(payload):
+            return _error("request_invalid", 422, retryable=False, correlation_id=_correlation_id())
+        try:
+            order = factory_sync.queue_tab_command(job_id, payload)
+        except FactorySyncError as error:
+            status = 404 if error.code == "factory_product_job_not_found" else (
+                422 if error.code in {"factory_tab_command_invalid", "factory_tab_command_action_invalid", "factory_control_revision_invalid"} else 409
+            )
+            return _error(error.code, status, retryable=False, correlation_id=_correlation_id())
+        return jsonify({"accepted": True, "orderId": order["orderId"], "status": "queued"}), 202
+
+    @app.get("/api/factory/jobs/<job_id>/tab-command/<order_id>")
+    def factory_product_tab_command_status(job_id: str, order_id: str) -> Response | tuple[Response, int]:
+        session_error = require_session_cookie()
+        if session_error is not None:
+            return session_error
+        try:
+            result = factory_sync.tab_command_execution(job_id, order_id)
+        except FactorySyncError as error:
+            return _error(error.code, 404, retryable=False, correlation_id=_correlation_id())
+        return jsonify(_public_event_value(result))
+
+    @app.get("/api/factory/jobs/<job_id>/command-receipt/<path:idempotency_key>")
+    def factory_product_command_receipt(job_id: str, idempotency_key: str) -> Response | tuple[Response, int]:
+        session_error = require_session_cookie()
+        if session_error is not None:
+            return session_error
+        try:
+            result = factory_sync.command_receipt(job_id, idempotency_key)
+        except FactorySyncError as error:
+            return _error(error.code, 404, retryable=False, correlation_id=_correlation_id())
+        return jsonify(_public_event_value(result))
 
     @app.post("/api/factory/jobs/<job_id>/select")
     def factory_product_select(job_id: str) -> Response | tuple[Response, int]:
@@ -1958,6 +2068,7 @@ def register_routes(
                 "decisionReceipt": receipt,
             })
         queue_payload: JsonObject = {
+            "jobId": job_id,
             "productId": session["productId"],
             "productKey": session["productKey"],
             "stageKey": stage_key,
@@ -2225,6 +2336,7 @@ def register_routes(
         except FactorySyncError as error:
             conflict_codes = {
                 "factory_worker_build_mismatch",
+                "factory_worker_already_connected",
                 "stale_factory_session",
                 "stale_session_cursor",
                 "stale_run_fingerprint",

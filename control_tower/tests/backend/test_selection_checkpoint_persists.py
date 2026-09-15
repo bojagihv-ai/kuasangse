@@ -29,6 +29,10 @@ def _complete_cut_order(
         if order is None or order["command"]["name"] == "selectFactoryACut":
             break
     assert order is not None and order["command"]["name"] == "selectFactoryACut"
+    payload = order["command"]["payload"]
+    assert payload.get("jobId") == projection["registration"]["jobId"]
+    assert payload["stageKey"] == "representative"
+    assert payload["candidateId"] == candidate_id
     bridge.lifecycle(
         order["orderId"],
         "ack",
@@ -93,6 +97,13 @@ def test_selection_receipt_updates_the_job_checkpoint(tmp_path: Path) -> None:
     assert after is not None
     assert after["revision"] == 24, "선택 이후 체크포인트가 갱신되지 않았습니다"
     assert after["revision"] != before["revision"]
+    assert after["jobId"] == job_id
+    assert after["projectId"] == f"batch:{job_id}"
+    assert after == checkpoint
+
+    restored = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    assert restored._product_jobs[job_id].checkpoint == checkpoint
+    assert restored.product_jobs()[0]["progress"]["stages"][0]["selectedId"] == "representative-b"
 
 
 def test_a_receipt_without_a_checkpoint_leaves_the_previous_one(tmp_path: Path) -> None:

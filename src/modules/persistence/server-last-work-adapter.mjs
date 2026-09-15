@@ -32,10 +32,11 @@ function defaultBases(root) {
   try {
     configured = String(root.localStorage?.getItem('gemini_backend_url') || '').trim();
   } catch (_) {}
+  if (/^http:\/\/(?:127\.0\.0\.1|localhost):(?:5050|41026)\/?$/i.test(configured)) configured = 'http://127.0.0.1:43030';
   return [...new Set([
     configured.replace(/\/$/, ''),
     origin,
-    'http://127.0.0.1:5050',
+    'http://127.0.0.1:43030',
   ].filter(Boolean))];
 }
 

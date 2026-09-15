@@ -1,3 +1,5 @@
+import { normalizeProductSourceSelection, sourcePayload } from './bulk-intake-source.mjs';
+
 const IMAGE_EXTENSIONS = Object.freeze(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp']);
 
 const CSV_COLUMNS = Object.freeze({
@@ -16,6 +18,7 @@ const CSV_COLUMNS = Object.freeze({
   supplyPrice: ['supplyprice', '공급가', '원가', '매입가'],
   displayStatus: ['displaystatus', '진열', '진열상태'],
   sellingStatus: ['sellingstatus', '판매', '판매상태'],
+  weight: ['weight', '무게', '중량'],
 });
 
 const REQUIRED_VALUE_KEYS = Object.freeze([
@@ -34,6 +37,7 @@ const REQUIRED_VALUE_KEYS = Object.freeze([
   'supplyPrice',
   'displayStatus',
   'sellingStatus',
+  'weight',
 ]);
 
 function text(value) {
@@ -46,6 +50,14 @@ function record(value) {
 
 function list(value) {
   return Array.isArray(value) ? value : [];
+}
+
+export function readBulkQueueReceipt(response, input) {
+  const job = record(response?.job);
+  if (response?.accepted !== true || !text(job.jobId) || job.productName !== input.productName || job.batchId !== input.batchId) {
+    throw new Error('작업큐의 수락 결과를 확인하지 못했습니다. 입력은 보존했습니다. 작업큐를 확인한 뒤 다시 시도하세요.');
+  }
+  return job;
 }
 
 function normalizeHeader(value) {
@@ -197,13 +209,58 @@ export function parseIntakeCsv(textValue) {
   return { rows, errors, columns: [...mapping.keys()] };
 }
 
+export function appendBulkProductRows(products, textValue) {
+  const raw = text(textValue);
+  const parsed = parseIntakeCsv(raw);
+  const rows = parsed.columns.includes('productName') || /[,\t]/.test(raw)
+    ? parsed.rows
+    : raw.split(/\r?\n/).map(productName => ({ productName: productName.trim(), requiredValues: {} })).filter(row => row.productName);
+  const errors = parsed.columns.includes('productName') || /[,\t]/.test(raw) ? parsed.errors : [];
+  const names = new Set(products.map(product => product.productName));
+  let added = 0;
+  let duplicates = 0;
+  for (const row of rows) {
+    if (names.has(row.productName)) { duplicates += 1; continue; }
+    names.add(row.productName);
+    products.push({ ...row, images: [], inheritDefaults: false });
+    added += 1;
+  }
+  return { added, duplicates, errors };
+}
+
+export function fillBulkProductRequiredValues(product, effectiveValues, commonValues) {
+  if (product.queued || product.queueRequest) return 0;
+  const normalized = normalizeRequiredValues(commonValues);
+  const dimensionsConflict = ['widthMm', 'depthMm'].some(key => text(effectiveValues[key]) && normalized[key] && Number(effectiveValues[key]) !== Number(normalized[key]));
+  let changed = 0;
+  for (const [key, value] of Object.entries(normalized)) {
+    if (text(effectiveValues[key])) continue;
+    if (dimensionsConflict && ['size', 'widthMm', 'depthMm'].includes(key)) continue;
+    product.requiredValues = { ...record(product.requiredValues), [key]: value };
+    changed += 1;
+  }
+  return changed;
+}
+
+function normalizeMoney(value) {
+  const raw = text(value);
+  const plainMoney = raw.replace(/[\s,₩￦$€¥£원]/g, '');
+  if (/^\d+$/.test(plainMoney)) return plainMoney;
+  const zeroDecimal = /^(\d+)\.0+$/.exec(plainMoney);
+  return zeroDecimal ? zeroDecimal[1] : raw;
+}
+
 function normalizeRequiredValues(values) {
   const result = {};
   for (const key of REQUIRED_VALUE_KEYS) {
     const value = text(record(values)[key]);
     if (value) result[key] = value;
   }
-  for (const key of ['salePrice', 'stock', 'supplyPrice', 'cafe24CategoryId']) {
+  for (const key of ['salePrice', 'supplyPrice']) {
+    if (result[key] === undefined) continue;
+    result[key] = normalizeMoney(result[key]);
+  }
+  for (const key of ['stock', 'cafe24CategoryId']) {
     if (result[key] === undefined) continue;
     result[key] = result[key].replace(/[^\d]/g, '');
     if (result[key] === '') delete result[key];
@@ -239,6 +296,7 @@ export const BLOCKING_ISSUES = new Set([
   // 자릿수를 넘긴 숫자는 조립공장이 422 로 거절한다(salePrice ≤12자리, stock ≤9자리).
   // 보내 봐야 실패하므로 여기서 막고 이유를 말한다.
   'sale_price_invalid',
+  'supply_price_invalid',
   'stock_invalid',
   // 가로·세로가 없으면 조립공장이 사이즈이미지를 그릴 수 없다. 신화사 DB 에서 고른 제품은
   // DB 가 채워 주지만 직접 입력한 제품은 아무도 못 채운다 — 실측 2026-08-28, 6단계 중
@@ -276,6 +334,9 @@ function issuesFor(entry) {
   if (entry.requiredValues.salePrice && !/^\d{1,12}$/.test(entry.requiredValues.salePrice)) {
     issues.push('sale_price_invalid');
   }
+  if (entry.requiredValues.supplyPrice && !/^\d+$/.test(entry.requiredValues.supplyPrice)) {
+    issues.push('supply_price_invalid');
+  }
   if (entry.requiredValues.stock && !/^\d{1,9}$/.test(entry.requiredValues.stock)) {
     issues.push('stock_invalid');
   }
@@ -307,11 +368,19 @@ export function buildBulkPlan(groupsValue, csvRowsValue = [], defaultsValue = {}
   const entries = groups.map(group => {
     const productName = text(record(group).productName);
     const fromCsv = byName.get(productName) || {};
+    const productValues = record(group.requiredValues);
+    const productSize = Object.hasOwn(productValues, 'size') ? readSizePair(productValues.size) : {};
     const entry = {
       productName,
       images: list(record(group).images),
-      requiredValues: { ...defaults, ...fromCsv },
+      requiredValues: normalizeRequiredValues({ ...(group.inheritDefaults === false ? {} : defaults), ...fromCsv, ...productSize, ...productValues }),
       matchedCsv: byName.has(productName),
+      decisionOverrides: record(group.decisionOverrides),
+      sourceSelection: normalizeProductSourceSelection(group.sourceSelection),
+      sourceFields: record(group.sourceFields),
+      fieldDrafts: record(group.fieldDrafts),
+      ...(group.queuedPolicySnapshot ? { queuedPolicySnapshot: record(group.queuedPolicySnapshot) } : {}),
+      ...(group.queued === true ? { queued: true, queuedJobId: text(group.queuedJobId) } : {}),
     };
     return { ...entry, issues: issuesFor(entry) };
   });
@@ -326,10 +395,10 @@ export function buildBulkPlan(groupsValue, csvRowsValue = [], defaultsValue = {}
     // 그러나 사진의 색상명과 기본 사진은 조립공장이 만들어 낼 수 없다 — 색상명이 없으면
     // 옵션표 슬롯명을 정하지 못하고, 기본 사진이 없으면 만들 바탕이 없다.
     // 이것들을 '투입 가능' 으로 세면 버튼이 열린 채로 눌러야만 실패를 알게 된다.
-    ready: entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
-    blocked: entries.filter(entry => entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
+    ready: entries.filter(entry => !entry.queued && !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
+    blocked: entries.filter(entry => !entry.queued && entry.issues.some(issue => BLOCKING_ISSUES.has(issue))).length,
     warned: entries.filter(entry => (
-      entry.issues.length && !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))
+      !entry.queued && entry.issues.length && !entry.issues.some(issue => BLOCKING_ISSUES.has(issue))
     )).length,
   };
 }
@@ -352,6 +421,10 @@ export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha2
     .trim()
     .slice(0, 80) || 'product';
   const requiredValues = normalizeRequiredValues(source.requiredValues);
+  if (
+    (requiredValues.salePrice && !/^\d{1,12}$/.test(requiredValues.salePrice))
+    || (requiredValues.supplyPrice && !/^\d+$/.test(requiredValues.supplyPrice))
+  ) throw new TypeError('integer money required');
   const category = requiredValues.category || '';
   // 옵션 사진에 색상명이 붙어 있을 때만 옵션이 있는 제품이다. 없는데 'provided' 로 보내면
   // 조립공장이 만들 수 없는 색상옵션 단계를 돌리다 막힌다.
@@ -370,7 +443,8 @@ export function buildProductPayload(entry, { batchId, imageModel, dataUrls, sha2
     mode: mode === 'auto' ? 'auto' : 'manual',
     ...(policySnapshot && typeof policySnapshot === 'object' ? { policySnapshot } : {}),
     cafe24ApprovalMode: 'existing_one_time_target_gate',
-    source: { kind: 'manual' },
+    source: sourcePayload(source.sourceSelection),
+    ...(source.sourceSelection?.kind === 'sinhwa-db' ? { jcode: Number(source.sourceSelection.selectionId) } : {}),
     productName,
     workfileName: `${workfileStem}.kuasangse`,
     ...(category ? { category } : {}),
@@ -426,7 +500,7 @@ export function summarizeBulkIntake(resultsValue) {
  */
 export const WORKING_STATE_SCHEMA = 'bulk-intake-working-state:v1';
 
-export function serializeWorkingState({ grouped, csvRows, csvErrors, defaults } = {}) {
+export function serializeWorkingState({ grouped, csvRows, csvErrors, defaults, settings } = {}) {
   const source = record(grouped);
   return {
     schema: WORKING_STATE_SCHEMA,
@@ -434,6 +508,15 @@ export function serializeWorkingState({ grouped, csvRows, csvErrors, defaults } 
       const product = record(productValue);
       return {
         productName: text(product.productName),
+        ...(product.decisionOverrides ? { decisionOverrides: record(product.decisionOverrides) } : {}),
+        ...(product.queuedPolicySnapshot ? { queuedPolicySnapshot: record(product.queuedPolicySnapshot) } : {}),
+        ...(product.inheritDefaults === false ? { inheritDefaults: false } : {}),
+        ...(product.requiredValues ? { requiredValues: record(product.requiredValues) } : {}),
+        ...(product.queued === true ? { queued: true, queuedJobId: text(product.queuedJobId) } : {}),
+        ...(product.queueRequest ? { queueRequest: record(product.queueRequest) } : {}),
+        ...(product.sourceSelection ? { sourceSelection: normalizeProductSourceSelection(product.sourceSelection) } : {}),
+        ...(product.sourceFields ? { sourceFields: record(product.sourceFields) } : {}),
+        ...(product.fieldDrafts ? { fieldDrafts: record(product.fieldDrafts) } : {}),
         images: list(product.images).map(imageValue => {
           const image = record(imageValue);
           return {
@@ -456,6 +539,7 @@ export function serializeWorkingState({ grouped, csvRows, csvErrors, defaults } 
     csvRows: list(csvRows),
     csvErrors: list(csvErrors),
     defaults: record(defaults),
+    ...(settings ? { settings: record(settings) } : {}),
   };
 }
 
@@ -496,13 +580,25 @@ export function hydrateWorkingState(recordValue, blobsValue, makeFile) {
         file: build(blob, text(image.fileName), text(image.type)),
       });
     }
-    products.push({ productName: text(product.productName), images });
+    products.push({
+      productName: text(product.productName), images,
+      ...(product.decisionOverrides ? { decisionOverrides: record(product.decisionOverrides) } : {}),
+      ...(product.queuedPolicySnapshot ? { queuedPolicySnapshot: record(product.queuedPolicySnapshot) } : {}),
+      ...(product.inheritDefaults === false ? { inheritDefaults: false } : {}),
+      ...(product.requiredValues ? { requiredValues: record(product.requiredValues) } : {}),
+      ...(product.queued === true ? { queued: true, queuedJobId: text(product.queuedJobId) } : {}),
+      ...(product.queueRequest ? { queueRequest: record(product.queueRequest) } : {}),
+      ...(product.sourceSelection ? { sourceSelection: normalizeProductSourceSelection(product.sourceSelection) } : {}),
+      ...(product.sourceFields ? { sourceFields: record(product.sourceFields) } : {}),
+      ...(product.fieldDrafts ? { fieldDrafts: record(product.fieldDrafts) } : {}),
+    });
   }
   return {
     grouped: { products, skipped: list(stored.skipped) },
     csvRows: list(stored.csvRows),
     csvErrors: list(stored.csvErrors),
     defaults: record(stored.defaults),
+    settings: record(stored.settings),
     dropped,
   };
 }

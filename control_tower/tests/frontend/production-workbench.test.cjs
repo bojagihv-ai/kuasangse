@@ -9,6 +9,13 @@ const HTML = path.join(FRONTEND, 'control-tower.html');
 const MODULE = path.join(FRONTEND, 'src', 'production-workbench.mjs');
 const MODEL = path.join(FRONTEND, 'src', 'production-workbench-model.mjs');
 
+test('런타임 준비 순서가 늦어도 생산관제 작업대가 마운트된다', () => {
+  const html = fs.readFileSync(HTML, 'utf8');
+  const moduleSource = fs.readFileSync(MODULE, 'utf8');
+  assert.match(html, /control-tower:runtime-ready/);
+  assert.match(moduleSource, /addEventListener\(['"]control-tower:runtime-ready['"]/);
+});
+
 function projection(overrides = {}) {
   return {
     schema: 'factory-control-projection:v1',
@@ -64,7 +71,10 @@ test('assembly workbench derives exactly seven grouped operator steps without a 
     [{ stageKey: 'product_matching', status: 'blocked' }, {}, 'db'],
     [{ stageKey: 'required_values', status: 'blocked' }, { inputs: [{ key: 'required_values', missing: ['소재'] }] }, 'required'],
     [{ stageKey: 'competitors', status: 'running' }, {}, 'competitors'],
+    [{ stageKey: 'general', status: 'running' }, { progress: { stageKey: 'detail', status: 'running' } }, 'sections'],
+    [{ stageKey: 'size', status: 'waiting_manual' }, { progress: { stageKey: 'detail', status: 'running' } }, 'cuts'],
     [{ stageKey: 'option_color', status: 'waiting_manual' }, { stages: [{ key: 'option_color', candidates: [{ id: 'option-a' }], selectedId: '' }] }, 'cuts'],
+    [{ stageKey: '', status: 'blocked' }, { progress: { stageKey: 'options' }, stages: [{ key: 'final_detail', selectedId: 'draft-only' }] }, 'cuts'],
     [{ stageKey: 'final_detail', status: 'running' }, { stages: [{ key: 'sections', candidates: [{ id: 'section-a' }], selectedId: 'section-a' }] }, 'sections'],
     [{ stageKey: 'final_detail', status: 'completed' }, { registration: { status: 'approval_required', blockers: ['approval'] } }, 'send'],
   ];
@@ -86,6 +96,103 @@ test('assembly workbench derives exactly seven grouped operator steps without a 
   ]);
   assert.equal(grouped.state, 'manual');
   assert.equal(grouped.blocker, 'A컷 선택 필요');
+});
+
+test('assembly workbench keeps competitor collection missing out of required-field blocking', async () => {
+  const model = await import(`${pathToFileURL(MODEL).href}?competitor-missing=${Date.now()}`);
+  const common = {
+    inputs: [
+      { key: 'product', missing: [] },
+      { key: 'requirements', missing: [] },
+      { key: 'source_images', missing: [] },
+      { key: 'strategy', missing: [] },
+      { key: 'competitors', missing: ['경쟁사 후보 수집', '상세수집 후보 선택', '경쟁사 상세 이미지', '경쟁사 이미지 분석'] },
+    ],
+    progress: { stageKey: 'db', stageLabel: 'DB 후보 자동 확정 완료', percent: 42, status: 'manual' },
+  };
+
+  const competitorOnly = model.deriveAssemblyWorkbench(common);
+  assert.equal(competitorOnly.currentStep.key, 'competitors');
+  assert.equal(competitorOnly.steps.find(step => step.key === 'required').blocker, '');
+  assert.equal(competitorOnly.steps.find(step => step.key === 'competitors').state, 'active');
+
+  const requiredMissing = model.deriveAssemblyWorkbench({
+    ...common,
+    inputs: common.inputs.map(input => input.key === 'requirements'
+      ? { ...input, missing: ['category'] }
+      : input),
+  });
+  assert.equal(requiredMissing.currentStep.key, 'required');
+  assert.equal(requiredMissing.steps.find(step => step.key === 'required').state, 'blocked');
+  assert.equal(requiredMissing.steps.find(step => step.key === 'required').blocker, '필수값 1개 누락');
+});
+
+test('export 완료 작업은 전송에 표시하고 여러 섹션 선택을 모두 센다', async () => {
+  const model = await import(`${pathToFileURL(MODEL).href}?multi-selected=${Date.now()}`);
+  const current = { progress: { stageKey: 'export', status: 'manual', percent: 100 }, stages: [
+    { key: 'sections', candidates: [{ id: 'hook:a' }, { id: 'size:b' }], selectedId: 'hook:a', selectedIds: ['hook:a', 'size:b'] },
+  ] };
+  const result = model.deriveAssemblyWorkbench(current, { stageKey: '', status: 'waiting_manual' });
+  assert.equal(result.currentStep.key, 'send');
+  assert.equal(result.steps.find(step => step.key === 'sections').selectedCount, 2);
+});
+
+test('export 대기 작업은 A컷이 아니라 Cafe24 사전점검으로 표시한다', async () => {
+  const model = await import(`${pathToFileURL(MODEL).href}?send-blocker-copy=${Date.now()}`);
+  const result = model.deriveAssemblyWorkbench({
+    progress: { stageKey: 'export', status: 'manual', percent: 100 },
+    registration: { blockers: ['category_id'] },
+    stages: [],
+  }, { stageKey: '', status: 'waiting_manual' });
+  assert.equal(result.currentStep.key, 'send');
+  assert.equal(result.currentStep.state, 'blocked');
+  assert.equal(result.currentStep.blocker, 'Cafe24 사전점검 필요');
+});
+
+test('실제 projection의 복수 선택과 최종 문서 보관 주소를 화면까지 보존한다', async () => {
+  const { normalizeFactoryProjection } = await import(pathToFileURL(path.join(FRONTEND, 'src/factory-sync-model.mjs')).href);
+  const raw = projection({ stages: [{ key: 'final_detail', selectedId: 'a', selectedIds: ['a', 'b'], candidates: [
+    { id: 'a', kind: 'html', label: '이전 문서', documentArchiveId: 'doc-a' },
+    { id: 'b', kind: 'html', label: '14개 섹션', summary: '섹션 14개', documentArchiveId: 'doc-b' },
+  ] }] });
+  const current = normalizeFactoryProjection(raw);
+  assert.deepEqual(current.stages[0].selectedIds, ['a', 'b']);
+  assert.equal(current.stages[0].candidates[1].documentArchiveId, 'doc-b');
+  assert.equal(current.stages[0].candidates[1].kind, 'html');
+  assert.equal(current.stages[0].candidates[1].label, '14개 섹션');
+});
+
+test('assembly workbench follows an async current step until an operator selects one', async () => {
+  const model = await import(`${pathToFileURL(MODEL).href}?assembly-step-follow=${Date.now()}`);
+  const job = { jobId: 'factory-job-async-step', stageKey: 'intake', status: 'queued' };
+  const initial = model.deriveAssemblyWorkbench({}, job);
+  const start = model.followAssemblyWorkbenchStep({}, job.jobId, initial.currentStep.key);
+  const hydratedCurrent = {
+    inputs: [{ key: 'requirements', missing: [] }],
+    stages: [{
+      key: 'representative',
+      candidates: [{ id: 'rep-1' }, { id: 'rep-2' }, { id: 'rep-3' }, { id: 'rep-4' }],
+      selectedId: '',
+    }],
+    progress: { stageKey: 'representative', status: 'waiting_manual' },
+  };
+  const hydratedJob = { ...job, stageKey: 'representative', status: 'waiting_manual' };
+  const hydrated = model.deriveAssemblyWorkbench(hydratedCurrent, hydratedJob);
+  const followed = model.followAssemblyWorkbenchStep(start, job.jobId, hydrated.currentStep.key);
+
+  assert.equal(hydrated.currentStep.key, 'cuts');
+  assert.equal(hydrated.currentStep.state, 'manual');
+  assert.deepEqual(followed, { jobId: job.jobId, key: 'cuts', manual: false });
+
+  const manuallySelected = model.followAssemblyWorkbenchStep(followed, job.jobId, hydrated.currentStep.key, 'required');
+  const afterProjection = model.followAssemblyWorkbenchStep(manuallySelected, job.jobId, 'sections');
+  assert.deepEqual(afterProjection, { jobId: job.jobId, key: 'required', manual: true });
+  assert.deepEqual(
+    model.followAssemblyWorkbenchStep(afterProjection, 'factory-job-next', 'sections'),
+    { jobId: 'factory-job-next', key: 'sections', manual: false },
+  );
+  assert.deepEqual(hydratedCurrent.stages[0].candidates.map(candidate => candidate.id), ['rep-1', 'rep-2', 'rep-3', 'rep-4']);
+  assert.equal(hydratedCurrent.stages[0].selectedId, '');
 });
 
 test('durable waiting job keeps saved candidates visible while factory is disconnected', async () => {
@@ -124,6 +231,7 @@ test('durable waiting job keeps saved candidates visible while factory is discon
 
 test('factory workbench exposes one compact API-driven master-detail surface', () => {
   const html = fs.readFileSync(HTML, 'utf8');
+  const workbench = fs.readFileSync(MODULE, 'utf8');
 
   for (const id of [
     'factory-sync-bar',
@@ -146,10 +254,13 @@ test('factory workbench exposes one compact API-driven master-detail surface', (
   }
   assert.match(html, /src=["']\.\/src\/production-workbench\.mjs(?:\?[^"']*)?["']/);
   assert.match(html, /production-workbench\.mjs\?[^"']*imageLoading=1/);
+  assert.match(html, /production-workbench\.mjs\?[^"']*currentProductTruth=4/);
+  assert.equal((workbench.match(/production-workbench-model\.mjs\?currentProductTruth=5/g) || []).length, 2);
+  assert.doesNotMatch(workbench, /production-workbench-model\.mjs\?currentProductTruth=2/);
   assert.match(html, /<main\s+class=["']page["']\s+id=["']app["']/);
   assert.match(html, /main\.page\s*\{[^}]*overflow-y:\s*auto[^}]*scrollbar-gutter:\s*stable/s);
-  assert.match(html, /const API_BASE = localOrigin\("apiBase", "http:\/\/127\.0\.0\.1:41009"\)/);
-  assert.match(html, /const FACTORY_BACKEND = localOrigin\("factoryBackend", "http:\/\/127\.0\.0\.1:5050"\)/);
+  assert.match(html, /const API_BASE = localOrigin\("apiBase", "http:\/\/localhost:41009"\)/);
+  assert.match(html, /const FACTORY_BACKEND = localOrigin\("factoryBackend", "http:\/\/127\.0\.0\.1:43030"\)/);
   assert.match(html, /source\.startsWith\("\/api\/local-archive\/"\) \? FACTORY_BACKEND : API_BASE/);
   assert.doesNotMatch(html, /(?:factory-sync-workspace|a-cut-contact-sheet|artifact-inspector)[^{]*\{[^}]*(?:overflow-y:\s*(?:auto|scroll)|height:\s*\d+px)/s);
 });
@@ -223,8 +334,8 @@ test('workbench consumes factory snapshot and SSE and uses only registered BFF c
   );
   assert.equal(
     (source.match(/(?:image|preview)\.loading = ['"]lazy['"]/g) || []).length,
-    3,
-    '경쟁사·A컷·근거 썸네일은 주 스크롤에서 지연 로드됩니다.',
+    4,
+    '제품 목록·경쟁사·A컷·근거 썸네일은 주 스크롤에서 지연 로드됩니다.',
   );
   assert.match(source, /CANDIDATE_PAGE_SIZE = 24/);
   assert.doesNotMatch(source, /factoryState|window\.state|app-core-0[56]|localStorage|indexedDB|querySelector\([^)]*factory/i);
@@ -558,6 +669,17 @@ test('current product resolver keeps an existing valid session product', async (
   assert.equal(workbench.currentFactoryProductLabel(current.session, { status: 'blocked', stageKey: 'option_color' }), 'product:alpha');
 });
 
+test('current product resolver prefers the active queue product name for operator display', async () => {
+  const workbench = await import(`${pathToFileURL(MODULE).href}?current-product-display=${Date.now()}`);
+  assert.equal(
+    workbench.currentFactoryProductLabel(
+      { productKey: '[생산관제시험]색동동전지갑20260909' },
+      { productName: '[생산관제 시험] 색동동전지갑 20260909' },
+    ),
+    '[생산관제 시험] 색동동전지갑 20260909',
+  );
+});
+
 test('current product resolver keeps Product B from a blocked option-color state response', async () => {
   const workbench = await import(`${pathToFileURL(MODULE).href}?current-product-b-state=${Date.now()}`);
   const productBKey = '수동a컷검증미니데스크오거나이저b20260817';
@@ -752,7 +874,7 @@ test('candidate thumbnail projection uses a placeholder for empty and invalid UR
   );
 });
 
-test('operator queue filters map durable states to the four operator labels', async () => {
+test('operator queue filters map durable states to the operator labels', async () => {
   const workbench = await import(`${pathToFileURL(MODULE).href}?queue-filter=${Date.now()}`);
   const cases = [
     ['waiting_manual', 'selection', '선택 필요'],
@@ -768,6 +890,20 @@ test('operator queue filters map durable states to the four operator labels', as
   }
   assert.equal(workbench.queueFilterMatches({ status: 'blocked' }, 'completed'), false);
   assert.equal(workbench.queueFilterMatches({ status: 'blocked' }, 'all'), true);
+
+  const approval = { status: 'waiting_manual', stageKey: 'export', progress: {
+    stageKey: 'export',
+    registration: { status: 'approval_required' },
+  } };
+  assert.deepEqual(workbench.operatorQueueState(approval), { key: 'approval', label: '승인 필요' });
+  assert.equal(workbench.queueFilterMatches(approval, 'approval'), true);
+  assert.equal(workbench.queueFilterMatches(approval, 'selection'), false);
+
+  const cutSelection = { status: 'waiting_manual', stageKey: 'representative', progress: {
+    stageKey: 'hero',
+    registration: { status: 'approval_required' },
+  } };
+  assert.deepEqual(workbench.operatorQueueState(cutSelection), { key: 'selection', label: '선택 필요' });
 });
 
 test('Cafe24 staging payload binds actual factory identity and F/F/F defaults', async () => {
@@ -847,10 +983,11 @@ test('live Cafe24 registration actions keep their canonical handlers', () => {
   assert.match(source, /confirmInput\.dataset\.action = 'confirm-cafe24-target'[\s\S]*confirmInput\.addEventListener\('change'/);
 });
 
-test('operator queue does not replace a focused action while the user activates it', () => {
+test('operator queue preserves editor focus while still rerendering a selected row', () => {
   const source = fs.readFileSync(MODULE, 'utf8');
 
-  assert.match(source, /function renderQueue\(\) \{[\s\S]*if \(root\.contains\(document\.activeElement\)\) return;[\s\S]*root\.replaceChildren\(\)/);
+  assert.match(source, /function renderQueue\(\) \{[\s\S]*const focusedElement = document\.activeElement[\s\S]*preservesEditorFocus/);
+  assert.match(source, /if \(preservesEditorFocus\) return;[\s\S]*root\.replaceChildren\(\)/);
 });
 
 test('operator queue refreshes after a focused resume action settles', () => {
@@ -904,7 +1041,7 @@ test('waiting manual product rows normalize worker selectedIds and open candidat
   assert.equal(workbench.waitingManualJobAction({ mode: 'auto' }, normalized.stages[0]), 'resume');
   assert.match(source, /localJob\?\.status === 'waiting_manual'[\s\S]*?return resumeFactoryJob\(jobId\)/);
   assert.match(source, /if \(job\.status === 'waiting_manual'\) \{[\s\S]*jobId === projectionJobId[\s\S]*waitingManualJobAction\(job, stage\)/);
-  assert.doesNotMatch(source, /job\.status === 'waiting_manual'[\s\S]{0,800}job\.checkpointAvailable[\s\S]{0,800}resumeFactoryJob\(job\.jobId\)/);
+  assert.match(source, /const durableProjection = workfileTabs\.projectionFor\([\s\S]*작업 재개/);
   assert.match(source, /job\.status === 'completed' && job\.checkpointAvailable/);
 });
 

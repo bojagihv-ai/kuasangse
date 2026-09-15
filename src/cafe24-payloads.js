@@ -817,6 +817,15 @@ function factoryCafe24AdditionalInfoPairs(value) {
 }
 
 function factoryCafe24ProductFieldValuesEqual(field, expected, actual) {
+  if (field === 'product_weight') {
+    const expectedKg = factoryCafe24WeightValueForPayload(expected, 'product_weight');
+    const actualKg = factoryCafe24WeightValueForPayload(actual, 'product_weight');
+    const expectedNumber = Number(expectedKg);
+    const actualNumber = Number(actualKg);
+    if (Number.isFinite(expectedNumber) && Number.isFinite(actualNumber)) {
+      return Math.round(expectedNumber * 100) === Math.round(actualNumber * 100);
+    }
+  }
   if (field === 'points_amount') {
     return factoryCafe24ValuesRoughlyEqual(
       factoryCafe24PointsAmountPayload(expected),
@@ -1468,11 +1477,6 @@ function factoryCafe24WeightValueForPayload(value, sourceKey = '', finalDb = {})
   const asKg = (rawHasGram || contextHasGram || ambiguousSmallWeightLooksGram) && !rawHasKg && !contextHasKg
     ? numeric / 1000
     : numeric;
-  const isCafe24WeightField = /product_weight|shipping_weight|weight_g|weight$/i.test(String(sourceKey || '').trim());
-  if (isCafe24WeightField) {
-    const rounded = Math.max(0.01, Number(asKg.toFixed(2)));
-    return rounded.toFixed(2);
-  }
   return String(Number(asKg.toFixed(6))).replace(/\.0+$/, '');
 }
 
@@ -2427,7 +2431,7 @@ function factoryCafe24SanitizeDetailHtmlPayload(product = {}, finalDb = {}, fact
   if (fallbackHtml) {
     product.description = fallbackHtml;
     product.mobile_description = fallbackHtml;
-    product.separated_mobile_description = 'F';
+    product.separated_mobile_description = 'T';
   } else {
     delete product.description;
     delete product.mobile_description;
@@ -2576,8 +2580,26 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
   const detailHtmlImageAlt = tag => detailHtmlAltKey(
     String(tag || '').match(new RegExp("\\balt\\s*=\\s*([\"'])(.*?)\\1", 'i'))?.[2] || '',
   );
-  const selectedSectionImageByAlt = new Map(assets
+  const selectedSectionImageByAlt = assets
     .filter(asset => asset?.used && !asset?.rejected)
+    .filter(asset => {
+      const sectionId = asset.placedSectionId || factory.detailPlacement?.[asset.id] || '';
+      const image = typeof factoryAssetDisplayImage === 'function'
+        ? factoryAssetDisplayImage(asset)
+        : (asset.image || asset.imageUrl || '');
+      const currentPlacement = String(appState.cuts?.placement?.[sectionId] || '');
+      const hasSelectedPlacementOwner = currentPlacement && assets.some(candidate => {
+        const candidateImage = typeof factoryAssetDisplayImage === 'function'
+          ? factoryAssetDisplayImage(candidate)
+          : (candidate?.image || candidate?.imageUrl || '');
+        return candidate?.used
+          && !candidate?.rejected
+          && candidateImage
+          && (candidate.placedSectionId || factory.detailPlacement?.[candidate.id] || '') === sectionId
+          && currentPlacement === `factory:${candidate.id}`;
+      });
+      return image && (!hasSelectedPlacementOwner || currentPlacement === `factory:${asset.id}`);
+    })
     .map(asset => {
       const sectionId = asset.placedSectionId || factory.detailPlacement?.[asset.id] || '';
       const section = typeof SECTIONS !== 'undefined' && Array.isArray(SECTIONS)
@@ -2588,7 +2610,11 @@ function factoryCafe24CurrentScopedDetailHtml(factory = factoryRuntimeReadFactor
         : (asset.image || asset.imageUrl || '');
       return [detailHtmlAltKey(section?.name), image];
     })
-    .filter(([alt, image]) => alt && image));
+    .filter(([alt, image]) => alt && image)
+    .reduce((selected, [alt, image]) => {
+      if (!selected.has(alt)) selected.set(alt, image);
+      return selected;
+    }, new Map());
   const mergeCurrentSectionImages = (preservedHtml, currentHtml) => {
     const currentByAlt = new Map((String(currentHtml || '').match(/<img\b[^>]*>/gi) || [])
       .map(tag => [detailHtmlImageAlt(tag), tag])
@@ -2856,7 +2882,7 @@ function factoryCafe24EnsureScopedDetailHtmlPayload(product = {}, finalDb = {}, 
     const html = factoryCafe24StripDetailAdminLabels(scoped.html);
     product.description = html;
     product.mobile_description = html;
-    product.separated_mobile_description = 'F';
+    product.separated_mobile_description = 'T';
     if (options.recordDetailPreflight && factory.product) {
       factory.product.cafe24DetailHtmlScope = {
         ok: true,
@@ -2875,7 +2901,7 @@ function factoryCafe24EnsureScopedDetailHtmlPayload(product = {}, finalDb = {}, 
     if (fallbackHtml) {
       product.description = fallbackHtml;
       product.mobile_description = fallbackHtml;
-      product.separated_mobile_description = 'F';
+      product.separated_mobile_description = 'T';
     } else {
       FACTORY_CAFE24_DETAIL_HTML_FIELDS.forEach(field => {
         delete product[field];
@@ -2910,7 +2936,7 @@ function factoryCafe24EnsureScopedDetailHtmlPayload(product = {}, finalDb = {}, 
     if (fallbackHtml) {
       product.description = fallbackHtml;
       product.mobile_description = fallbackHtml;
-      product.separated_mobile_description = 'F';
+      product.separated_mobile_description = 'T';
       if (options.recordDetailPreflight && factory.product) {
         factory.product.cafe24DetailHtmlScope = {
           ok: true,
@@ -2932,7 +2958,7 @@ function factoryCafe24EnsureScopedDetailHtmlPayload(product = {}, finalDb = {}, 
   if (fallbackHtml) {
     product.description = fallbackHtml;
     product.mobile_description = fallbackHtml;
-    product.separated_mobile_description = 'F';
+    product.separated_mobile_description = 'T';
   } else {
     delete product.description;
     delete product.mobile_description;
@@ -3592,4 +3618,3 @@ function factoryCafe24InventoryPayloadFromEdit(row = {}, edit = {}) {
   }
   return inventory;
 }
-

@@ -26,7 +26,22 @@ const ARCHIVE_PNG = Buffer.from(
   'base64',
 );
 
-async function startArchiveFixtureServer() {
+function archiveFixturePort(env = process.env) {
+  const value = String(env.KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT || '').trim();
+  const strict = ['1', 'true', 'yes', 'on'].includes(String(env.KUASANGSE_CDP_BASE_PORT_STRICT || '').trim().toLowerCase());
+  if (!value) {
+    if (strict) throw new Error('strict archive fixture requires KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT');
+    return 0;
+  }
+  if (!/^\d+$/.test(value)) throw new Error(`invalid KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT: ${value}`);
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`invalid KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT: ${value}`);
+  }
+  return port;
+}
+
+async function startArchiveFixtureServer(port = archiveFixturePort()) {
   const paths = new Set(Object.values(ARCHIVE_IDS)
     .map(archiveId => `/api/local-archive/assets/${archiveId}/image`));
   const server = http.createServer((request, response) => {
@@ -44,7 +59,7 @@ async function startArchiveFixtureServer() {
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(port, '127.0.0.1', resolve);
   });
   const address = server.address();
   return {
@@ -279,7 +294,11 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error(error.stack || error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(error => {
+    console.error(error.stack || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { archiveFixturePort, startArchiveFixtureServer };

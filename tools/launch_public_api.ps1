@@ -4,7 +4,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $backendRoot = Join-Path $repositoryRoot "backend"
 $waitress = Join-Path $backendRoot "venv311\Scripts\waitress-serve.exe"
 $certificate = Join-Path $backendRoot "venv311\Lib\site-packages\certifi\cacert.pem"
-$healthUrl = "http://127.0.0.1:5050/api/v1/health"
+$healthUrl = "http://127.0.0.1:43030/api/v1/health"
 
 function Test-PublicApi {
     try {
@@ -30,7 +30,7 @@ if (Test-Path -LiteralPath $certificate) {
 
 Start-Process `
     -FilePath $waitress `
-    -ArgumentList @("--call", "--listen=127.0.0.1:5050", "--threads=16", "app:create_app") `
+    -ArgumentList @("--call", "--listen=127.0.0.1:43030", "--threads=16", "app:create_app") `
     -WorkingDirectory $backendRoot `
     -WindowStyle Hidden
 

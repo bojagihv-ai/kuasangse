@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from control_tower.backend.factory_sync import FactorySyncBridge
 
 from test_factory_sync import (
@@ -60,7 +62,8 @@ def _job(bridge: FactorySyncBridge, job_id: str) -> dict[str, Any]:
     return next(job for job in bridge.product_jobs() if job["jobId"] == job_id)
 
 
-def test_waiting_product_releases_the_worker_to_the_next_product(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stage_key", ["representative", "db", "required_fields", "competitors"])
+def test_waiting_product_releases_the_worker_to_the_next_product(tmp_path: Path, stage_key: str) -> None:
     bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
     bridge.hello(_hello())
     first_id = str(bridge.queue_product(_manual_product_job_payload(suffix="lane-one"))["jobId"])
@@ -68,14 +71,20 @@ def test_waiting_product_releases_the_worker_to_the_next_product(tmp_path: Path)
 
     first_order = bridge.claim(_live_worker())["order"]
     assert first_order["command"]["payload"]["jobId"] == first_id
-    _run_to_waiting_manual(bridge, first_order, first_id, sequence=8)
+    _run_to_waiting_manual(bridge, first_order, first_id, sequence=8, stage_key=stage_key)
 
     second_order = bridge.claim(_live_worker())["order"]
 
     assert second_order is not None
     assert second_order["command"]["payload"]["jobId"] == second_id
     assert _job(bridge, first_id)["status"] == "waiting_manual"
+    assert _job(bridge, first_id)["stageKey"] == stage_key
     assert _job(bridge, second_id)["status"] == "running"
+    saved_first = _job(bridge, first_id)
+    restored = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    assert _job(restored, first_id)["stageKey"] == stage_key
+    assert _job(restored, first_id)["progress"] == saved_first["progress"]
+    assert _job(restored, first_id)["checkpointAvailable"] is True
 
 
 def test_each_product_keeps_its_own_stopped_progress_when_the_worker_moves_on(

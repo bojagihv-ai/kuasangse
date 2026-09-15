@@ -39,7 +39,7 @@ test('production worker startup cannot seed or mutate an isolated test workspace
   assert.match(source, /startProjectionPolling/);
   assert.match(source, /controlTowerBase/);
   assert.match(source, /\['127\.0\.0\.1', 'localhost'\]/);
-  assert.match(source, /render: \(\) => requestClassicRuntime\('render', isBatchWorker \? \{ mode: 'batch-worker' \} : null\)/);
+  assert.match(source, /render: \(\) => requestClassicRuntime\('render', isBatchWorker \? \{ mode: 'batch-worker', display: isBatchConsole \} : null\)/);
   assert.match(
     source,
     /\['factory-cafe24-command', 'factory-control-command'\]\.includes\(command\)\s*\?\s*CLASSIC_RUNTIME_FACTORY_COMMAND_TIMEOUT_MS/,
@@ -51,7 +51,7 @@ test('production worker startup cannot seed or mutate an isolated test workspace
     '상세 15개 생성과 저장까지 끝날 수 있도록 제품 공정 명령은 60분을 기다려야 합니다.',
   );
   assert.match(source, /batch-worker-shell/);
-  assert.match(source, /const expectedRootSelector = isBatchWorker \? '\.batch-worker-shell' : '\.app'/);
+  assert.match(source, /const expectedRootSelector = isBatchWorker && !isBatchConsole \? '\.batch-worker-shell' : '\.app'/);
   assert.match(source, /ttlMs: isBatchWorker \? 120_000 : undefined/);
   assert.match(source, /authorityHeartbeat: \(\) => window\.__KUASANGSE_WORKSPACE_LOCK__\?\.heartbeat\?\.\(\)/);
   assert.doesNotMatch(source, /factoryState|window\.state/);
@@ -63,9 +63,10 @@ test('production worker startup cannot seed or mutate an isolated test workspace
   );
   assert.match(classicRuntime, /options\?\.mode === 'batch-worker'/);
   assert.match(classicRuntime, /classicRuntimeBatchWorkerMode = true/);
-  assert.match(classicRuntime, /classicRuntimeHydrationActive \|\| classicRuntimeBatchWorkerMode/);
+  assert.match(classicRuntime, /classicRuntimeHydrationActive \|\| \(classicRuntimeBatchWorkerMode && !classicRuntimeBatchConsoleMode\)/);
   assert.match(classicHydration, /classicRuntimeIsBatchWorker/);
-  assert.match(classicHydration, /if \(!batchWorker\) \{\s*await hydrateServerLastWorkSnapshot\(/);
+  assert.match(classicHydration, /if \(!batchWorker \|\| \/\^batch:factory-job-\/\.test\(String\(state\.currentProjectId \|\| ''\)\)\) \{\s*await hydrateServerLastWorkSnapshot\(/,
+    '배치 작업자는 연결된 자기 제품 문서만 복원하고 일반/격리 작업 문서는 읽지 않아야 합니다.');
   assert.match(
     classicHydration,
     /const initialWorkspaceAuthority = !batchWorker\s*&&\s*hydrationIdentityIsCurrent\(initialHydrationIdentity\)/,
@@ -378,6 +379,7 @@ test('Sinhwa job crosses the real worker and runtime bridge before exact-jcode c
       workspaceDocumentDirty: false,
     },
     CAFE24_CONTROL_API: { defaultMallId: 'test-mall' },
+    installFactoryRuntimeStart: { nativeCommands: null },
     factoryRuntimeReadFactory: () => factory,
     factorySinhwaCandidateKey: candidate => String(candidate?.jcode || candidate?.id || ''),
     fetchSinhwaProductDetail: async jcode => {
@@ -887,7 +889,7 @@ test('production control auto run owns source analysis and rebuilds an exact 14-
   assert.match(runtime, /inventoryQuantity:\s*'99'/);
   assert.match(runtime, /\['size', 'options', 'cuts'\]\.includes\(stageId\)[\s\S]{0,120}factoryApplySelectedAssetsToSections\(draft\)/);
   assert.match(runtime, /const revisesPublishedProduct = \([\s\S]*registrationReceipt\?\.status === 'verified'[\s\S]*targetProductNo === String\(registrationReceipt\.productNo/);
-  assert.match(runtime, /const publicationReceipt = factoryRuntimeBatchCafe24BindingMatches\([\s\S]*product\.cafe24BatchControlBinding[\s\S]*htmlDigest: preflight\.htmlDigest/);
+  assert.match(runtime, /const publicationReceipt = product\.cafe24PublicationReceipt\?\.schema === 'factory-cafe24-terminal-publication-receipt:v1'\s*&& product\.cafe24PublicationReceipt\.status === 'staged_verified'\s*&& factoryRuntimeBatchCafe24BindingMatches\([\s\S]*product\.cafe24BatchControlBinding[\s\S]*htmlDigest: preflight\.htmlDigest/);
   assert.match(runtime, /payload\.startFresh !== true[\s\S]*?hydrateServerLastWorkSnapshot\(\{\s*force: true,\s*forceRevisionRestore: true,\s*render: false,\s*\}\)/);
   assert.match(runtime, /payload\.startFresh !== true[\s\S]*?factoryApplyProductImagePayload\(firstBase, \{ factory: draft, syncState: true \}\)/);
   assert.match(runtime, /key: 'competitors'/);

@@ -15,12 +15,16 @@ import {
   REQUIRED_VALUE_PASTE_KEYS,
   summarizeBatchSelection,
   PRODUCT_VALUE_LABELS,
-} from './production-board-model.mjs?parallelBoard=44';
-import { resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=2';
+} from './production-board-model.mjs?parallelBoard=45';
+import { resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=5';
+import { buildACutSelectionCommand } from './factory-sync-model.mjs?selectedId=5';
 
 // 이벤트가 몰아칠 때 다시 읽기를 모으는 시간. 사람 눈에는 즉시로 보이면서
 // 한 번에 수백 건이 와도 요청은 한 번만 나간다.
 const EVENT_REFRESH_COALESCE_MS = 250;
+const HUMAN_PRESENCE_POLL_MS = 15_000;
+const EVENT_STREAM_LEASE_KEY = 'control-tower:factory-event-stream';
+const EVENT_STREAM_LEASE_MS = 12_000;
 
 const BOARD_EVENT_TYPES = Object.freeze([
   'factory.snapshot',
@@ -114,6 +118,7 @@ export function mountProductionBoard(runtime, {
   const loadJobs = fetchJobs || (() => apiRequest('/api/factory/jobs'));
 
   let jobs = [];
+  let humanPresences = [];
   let openCell = { jobId: '', stageKey: '' };
   let pendingManualAdvance = null;
   let projectionState = null;
@@ -136,8 +141,10 @@ export function mountProductionBoard(runtime, {
   let openResults = '';
   let openCafe24Values = '';
   let openProductValues = '';
+  let showHistory = false;
   // 고른 이미지는 저장 전까지 여기에 담아 둔다. 새로 그려도 사라지지 않아야 한다.
   const imageDrafts = new Map();
+  const cafe24Drafts = new Map();
   const resultCache = new Map();
   // 확대창에 넘길 후보 묶음. dataset 에 담기엔 커서 노드 키로 따로 보관한다.
   const zoomPayloads = new Map();
@@ -174,12 +181,81 @@ export function mountProductionBoard(runtime, {
   let stopped = false;
   let loaded = false;
   let eventSource = null;
+  const eventStreamOwner = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+  let eventStreamLeaseTimer = null;
+  let boardPollTimer = null;
   // 지금까지 화면에 반영된 이벤트 자리. 스트림은 이 다음부터 듣는다.
   let eventCursor = '0';
   let eventRefreshTimer = null;
+  let humanPresencePollTimer = null;
   let focusedSurface = null;
   let gridHome = null;
   let statusHome = null;
+
+  function readEventStreamLease() {
+    try {
+      const raw = globalThis.localStorage?.getItem(EVENT_STREAM_LEASE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function acquireEventStreamLease() {
+    try {
+      if (!globalThis.localStorage) return true;
+      const now = Date.now();
+      const current = readEventStreamLease();
+      if (current?.ownerId && current.ownerId !== eventStreamOwner
+        && Number(current.expiresAt) > now) return false;
+      globalThis.localStorage.setItem(EVENT_STREAM_LEASE_KEY, JSON.stringify({
+        ownerId: eventStreamOwner,
+        expiresAt: now + EVENT_STREAM_LEASE_MS,
+      }));
+      return readEventStreamLease()?.ownerId === eventStreamOwner;
+    } catch {
+      return true;
+    }
+  }
+
+  function renewEventStreamLease() {
+    try {
+      const current = readEventStreamLease();
+      if (current?.ownerId !== eventStreamOwner) return false;
+      globalThis.localStorage.setItem(EVENT_STREAM_LEASE_KEY, JSON.stringify({
+        ownerId: eventStreamOwner,
+        expiresAt: Date.now() + EVENT_STREAM_LEASE_MS,
+      }));
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  function releaseEventStreamLease() {
+    if (eventStreamLeaseTimer) {
+      globalThis.clearInterval(eventStreamLeaseTimer);
+      eventStreamLeaseTimer = null;
+    }
+    try {
+      if (readEventStreamLease()?.ownerId === eventStreamOwner) {
+        globalThis.localStorage.removeItem(EVENT_STREAM_LEASE_KEY);
+      }
+    } catch {}
+  }
+
+  function stopBoardPolling() {
+    if (!boardPollTimer) return;
+    globalThis.clearInterval(boardPollTimer);
+    boardPollTimer = null;
+  }
+
+  function startBoardPolling() {
+    if (boardPollTimer || document.hidden) return;
+    boardPollTimer = globalThis.setInterval(() => {
+      if (!stopped && !document.hidden) void refresh();
+    }, 5_000);
+  }
 
   const grid = element('div', 'board-grid');
   grid.addEventListener('pointerdown', event => {
@@ -199,6 +275,9 @@ export function mountProductionBoard(runtime, {
   // 버튼 밖에서 손을 떼면 grid 는 pointerup 을 못 받는다. 창 전체에서도 풀어 준다.
   globalThis.addEventListener?.('pointerup', releaseHeldRow);
   const summaryBar = element('div', 'board-summary');
+  const humanPresencePanel = element('section', 'board-result-strip board-human-presences');
+  humanPresencePanel.dataset.surface = 'human-presences';
+  humanPresencePanel.setAttribute('aria-label', '사람이 쥔 작업');
   const headroom = element('p', 'board-headroom');
   const connection = element('p', 'board-connection');
   connection.hidden = true;
@@ -218,7 +297,7 @@ export function mountProductionBoard(runtime, {
       '작업을 한 표에 나란히 놓고 몇 단계까지 갔는지와 멈춘 지점을 함께 봅니다. 멈춘 칸에서 쓸 컷을 고르면 조립공장이 그 작업을 다시 열 때 자동으로 적용됩니다.',
     ),
   );
-  root.replaceChildren(heading, connection, summaryBar, headroom, toolbar, statusNode, grid);
+  root.replaceChildren(heading, connection, summaryBar, humanPresencePanel, headroom, toolbar, statusNode, grid);
 
   function restoreGrid() {
     grid.removeEventListener('click', onClick);
@@ -330,6 +409,7 @@ export function mountProductionBoard(runtime, {
       ['대기', summary.queued],
       ['진행 중', summary.running],
       ['컷 선택 대기', summary.waiting],
+      ['승인 필요', summary.approval],
       ['선택 예약', summary.reserved],
       ['차단', summary.blocked],
       ['완료', summary.completed],
@@ -346,14 +426,92 @@ export function mountProductionBoard(runtime, {
     );
   }
 
+  const HUMAN_PRESENCE_FIELDS = Object.freeze([
+    'presenceId', 'role', 'productName', 'workspaceId', 'stageKey', 'stageLabel', 'message', 'buildId', 'sentAt',
+  ]);
+
+  function normalizedHumanPresences() {
+    return humanPresences
+      .filter(presence => presence && typeof presence === 'object' && !Array.isArray(presence))
+      .map(presence => Object.fromEntries(HUMAN_PRESENCE_FIELDS.map(field => [field, presence[field] ?? ''])))
+      .sort((left, right) => String(left.presenceId).localeCompare(String(right.presenceId)));
+  }
+
+  function humanPresenceSignature(entries) {
+    return JSON.stringify(entries.map(entry => HUMAN_PRESENCE_FIELDS.map(field => entry[field])));
+  }
+
+  function humanPresenceField(label, value) {
+    return element('span', 'board-product-meta', `${label}: ${String(value || '확인 필요')}`);
+  }
+
+  let lastHumanPresenceSignature = '';
+
+  function renderHumanPresences() {
+    const entries = normalizedHumanPresences();
+    const signature = humanPresenceSignature(entries);
+    if (signature === lastHumanPresenceSignature && humanPresencePanel.childElementCount) return;
+    lastHumanPresenceSignature = signature;
+    const presenceHeading = element('div', 'board-candidate-heading');
+    presenceHeading.append(element('strong', '', `사람이 쥔 작업 ${entries.length}`));
+    const summary = element('div', 'board-summary');
+    const summaryCell = element('div', 'board-summary-cell');
+    summaryCell.append(
+      element('span', 'board-summary-label', '사람 세션'),
+      element('strong', 'board-summary-value', String(entries.length)),
+    );
+    summary.append(summaryCell);
+    humanPresencePanel.dataset.humanPresenceCount = String(entries.length);
+    humanPresencePanel.replaceChildren(presenceHeading, summary);
+    if (!entries.length) {
+      humanPresencePanel.append(element('p', 'board-human-presence-empty', '현재 사람이 쥔 작업이 없습니다.'));
+      return;
+    }
+    const cards = element('div', 'board-summary');
+    for (const presence of entries) {
+      const card = element('article', 'board-summary-cell board-human-presence-card');
+      card.dataset.presenceId = String(presence.presenceId);
+      card.append(
+        element('strong', '', String(presence.productName || '제품명 확인 필요')),
+        humanPresenceField('역할', presence.role),
+        humanPresenceField('단계', presence.stageLabel || presence.stageKey),
+        humanPresenceField('메시지', presence.message),
+        humanPresenceField('작업공간', presence.workspaceId),
+        humanPresenceField('빌드', presence.buildId),
+        humanPresenceField('presenceId', presence.presenceId),
+        humanPresenceField('sentAt', presence.sentAt),
+      );
+      cards.append(card);
+    }
+    humanPresencePanel.append(cards);
+  }
+
+  function operatorVisibleRows(rows) {
+    const openJobIds = new Set([openCell.jobId, openResults, openCafe24Values, openProductValues].filter(Boolean));
+    const activeRows = rows.filter(row => !['blocked', 'completed'].includes(row.status) || openJobIds.has(row.jobId));
+    return showHistory || !activeRows.length ? rows : activeRows;
+  }
+
   function renderToolbar(board) {
-    const pickable = board.summary.pickableCells;
+    const visibleRows = operatorVisibleRows(board.rows);
+    const pickable = visibleRows.reduce((total, row) => total + row.cells.filter(cell => cell.pickable && !cell.reservedCandidateId).length, 0);
+    const pickableJobs = visibleRows.filter(row => row.cells.some(cell => cell.pickable && !cell.reservedCandidateId)).length;
+    const resumableRows = visibleRows.filter(row => row.status === 'waiting_manual' && row.nextAction?.kind === 'resume');
+    const reservedCount = visibleRows.filter(row => row.hasReservation).length;
+    const approvalCount = visibleRows.filter(row => row.approvalRequired).length;
+    const historyCount = board.rows.length - visibleRows.filter(row => !['blocked', 'completed'].includes(row.status)).length;
     const auto = button('board-action primary', 'AI 자동선택 일괄 적용', { action: 'auto' });
     const resume = button('board-action', '선택 끝난 작업 일괄 재개', { action: 'resume' });
     const clear = button('board-action ghost', '예약 모두 지우기', { action: 'clear' });
+    const history = button(
+      'board-action ghost',
+      showHistory ? '이전 기록 숨기기' : `이전 기록 보기${historyCount ? ` (${historyCount})` : ''}`,
+      { action: 'toggle-history' },
+    );
     auto.disabled = busy || pickable === 0;
-    resume.disabled = busy || board.summary.resumable === 0;
-    clear.disabled = busy || board.summary.reserved === 0;
+    resume.disabled = busy || resumableRows.length === 0;
+    clear.disabled = busy || reservedCount === 0;
+    history.disabled = historyCount === 0;
     const toggle = element('label', 'board-toggle');
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -364,12 +522,14 @@ export function mountProductionBoard(runtime, {
       'span',
       'board-toolbar-hint',
       pickable
-        ? `${pickable}개 작업이 컷 선택을 기다립니다.`
-        : board.summary.resumable
-          ? `${board.summary.resumable}개 작업이 다음 단계 진행을 기다립니다.`
+        ? `${pickableJobs}개 작업 · ${pickable}개 컷 선택 대기`
+        : approvalCount
+          ? `${approvalCount}개 작업이 Cafe24 승인을 기다립니다.`
+          : resumableRows.length
+            ? `${resumableRows.length}개 작업이 다음 단계 진행을 기다립니다.`
           : '지금 선택을 기다리는 작업이 없습니다.',
     );
-    toolbar.replaceChildren(auto, resume, clear, toggle, hint);
+    toolbar.replaceChildren(auto, resume, clear, history, toggle, hint);
   }
 
   function renderHeaderRow() {
@@ -392,8 +552,8 @@ export function mountProductionBoard(runtime, {
   { name: 'categoryId', label: '상품분류 번호', placeholder: '비우면 스토어 값을 씁니다' },
   { name: 'salePrice', label: '판매가', placeholder: '예: 2700' },
   { name: 'supplyPrice', label: '공급가/원가', placeholder: '예: 500' },
-  { name: 'displayStatus', label: '진열 (T/F)', placeholder: 'F = 진열 안 함' },
-  { name: 'sellingStatus', label: '판매 (T/F)', placeholder: 'F = 판매 안 함' },
+  { name: 'displayStatus', label: '진열 상태', options: [['F', '진열 안 함'], ['T', '진열함']] },
+  { name: 'sellingStatus', label: '판매 상태', options: [['F', '판매 안 함'], ['T', '판매함']] },
 ]);
 
   const REQUIRED_VALUE_ORDER = REQUIRED_VALUE_PASTE_KEYS;
@@ -574,7 +734,10 @@ export function mountProductionBoard(runtime, {
           const input = document.createElement('input');
           input.type = 'text';
           input.name = key;
-          input.value = String(row.requiredValues?.[key] || (key === 'originCountry' ? row.requiredValues?.origin : '') || '');
+          input.value = String(row.requiredValues?.[key]
+            || (key === 'productName' ? row.productName
+              : key === 'supplyPrice' ? row.cafe24Values?.supplyPrice
+                : key === 'originCountry' ? row.requiredValues?.origin : '') || '');
           label.append(input);
         }
         grid.append(label);
@@ -687,10 +850,19 @@ export function mountProductionBoard(runtime, {
     form.dataset.jobId = row.jobId;
     form.dataset.readOnly = String(readOnly);
     form.addEventListener('submit', event => event.preventDefault());
+    const draft = cafe24Drafts.get(row.jobId) || {};
+    const remember = event => {
+      if (readOnly || !CAFE24_VALUE_FIELDS.some(field => field.name === event.target?.name)) return;
+      draft[event.target.name] = event.target.value;
+      cafe24Drafts.set(row.jobId, draft);
+    };
+    form.addEventListener('input', remember);
+    form.addEventListener('change', remember);
     const title = element('div', 'board-candidate-heading');
     title.append(
       element('strong', '', `${row.productName} · Cafe24 등록값`),
-      element('span', 'factory-pill', '투입값 없음'),
+      element('span', 'factory-pill', Object.values(row.cafe24Values || {}).some(value => String(value ?? '').trim())
+        ? '저장된 등록값' : '투입값 없음'),
       button('board-action ghost', '닫기', { action: 'panel-close', panel: 'cafe24' }),
     );
     form.append(title);
@@ -716,7 +888,7 @@ export function mountProductionBoard(runtime, {
           node.textContent = option[1];
           select.append(node);
         }
-        select.value = String(row.cafe24Values?.[field.name] || '');
+        select.value = String(draft[field.name] ?? row.cafe24Values?.[field.name] ?? (field.name.endsWith('Status') ? 'F' : ''));
         select.disabled = readOnly;
         label.append(select);
         if (field.name === 'registrationMode') modeSelect = select;
@@ -725,7 +897,7 @@ export function mountProductionBoard(runtime, {
         input.type = 'text';
         input.name = field.name;
         input.placeholder = field.placeholder;
-        input.value = String(row.cafe24Values?.[field.name] || '');
+        input.value = String(draft[field.name] ?? row.cafe24Values?.[field.name] ?? row.requiredValues?.[field.name] ?? '');
         input.disabled = readOnly;
         label.append(input);
         if (field.name === 'targetProductNo') targetInput = input;
@@ -763,8 +935,16 @@ export function mountProductionBoard(runtime, {
     const optionInventory = element('section', 'board-intake-group');
     optionInventory.append(element('p', 'board-intake-group-title', '옵션·재고'));
     const optionGrid = element('div', 'board-cafe24-fields');
+    const countValues = value => Array.isArray(value) ? value.length : 0;
+    const optionValueCount = [
+      countValues(registration.optionValues),
+      countValues(row.requiredValues?.optionValues),
+      (Array.isArray(row.inputImageSummary) ? row.inputImageSummary : []).filter(image => image.role === 'color-option').length,
+      Number(registration.optionCount),
+      Number(row.requiredValues?.optionCount),
+    ].find(value => Number.isInteger(value) && value > 0) || 0;
     for (const [labelText, value] of [
-      ['옵션', `${String(registration.optionCount ?? row.requiredValues?.optionCount ?? 0)}개`],
+      ['옵션', `${optionValueCount}개`],
       ['재고', String(registration.stock ?? row.requiredValues?.stock ?? '확인 필요')],
     ]) {
       const label = element('label', 'board-cafe24-field');
@@ -780,7 +960,7 @@ export function mountProductionBoard(runtime, {
     form.append(optionInventory);
     const displaySale = element('p', 'status-message', `진열 ${String(row.cafe24Values?.displayStatus || row.cafe24Values?.display || '확인 필요')} · 판매 ${String(row.cafe24Values?.sellingStatus || row.cafe24Values?.selling || '확인 필요')}`);
     form.append(displaySale);
-    const submit = button('board-mini-action', '이 값으로 Cafe24 등록', {
+    const submit = button('board-mini-action', 'Cafe24 값 저장', {
       action: 'cafe24-values-submit',
       jobId: row.jobId,
     });
@@ -899,19 +1079,12 @@ export function mountProductionBoard(runtime, {
 
   /** 그 변형의 본문을 보관함에서 받아 온다. 한 번 받으면 기억한다. */
   async function loadCandidateDocument(candidate) {
-    const key = String(candidate.id || '');
-    const archiveId = String(candidate.documentArchiveId || '').trim();
+    const key = String(candidate.documentArchiveId || '').trim();
     if (!key || documentCache.has(key)) return;
-    if (!archiveId) {
-      documentCache.set(key, { html: '', note: '이 변형은 본문이 보관되기 전에 만들어져 미리보기가 없습니다.' });
-      documentCacheVersion += 1;
-      render();
-      return;
-    }
     documentCache.set(key, { loading: true });
     documentCacheVersion += 1;
     try {
-      const body = await apiRequest(`/api/factory/archive-document/${encodeURIComponent(archiveId)}`);
+      const body = await apiRequest(`/api/factory/archive-document/${encodeURIComponent(key)}`);
       documentCache.set(key, {
         html: embeddableDocument(body?.html),
         note: String(body?.note || '').trim(),
@@ -1044,9 +1217,10 @@ export function mountProductionBoard(runtime, {
       cell.stageKey,
     );
     const bundleAsset = candidateAsset.asset;
-    // final_detail 후보는 보관 출력의 정확한 자산 identity가 있어야만 고를 수 있다.
+    // final_detail 후보는 명시한 문서 보관 ID 또는 정확한 출력 자산 identity로만 고른다.
     // 옛 기록의 후보 번호와 보관 이미지를 순서·이름으로 맞추면 엉뚱한 상세를 확정할 수 있다.
-    const identityBlocked = cell.stageKey === 'final_detail' && candidateAsset.status !== 'matched';
+    const identityBlocked = cell.stageKey === 'final_detail'
+      && !candidate.documentArchiveId && candidateAsset.status !== 'matched';
     option.disabled = busy || identityBlocked;
     if (identityBlocked) option.dataset.identityState = candidateAsset.status;
     const previewCandidate = bundleAsset ? {
@@ -1069,7 +1243,7 @@ export function mountProductionBoard(runtime, {
       // 상세페이지 변형은 그림이 아니라 문서다. 보관함에 남은 본문을 그대로 그려
       // 무엇을 고르는지 눈으로 보게 한다. 문서가 없던 시절 변형은 글로만 알려 준다.
       void loadCandidateDocument(candidate);
-      const entry = documentCache.get(String(candidate.id || ''));
+      const entry = documentCache.get(String(candidate.documentArchiveId || '').trim());
       const frame = element('div', 'board-candidate-doc');
       if (entry?.html) {
         const view = document.createElement('iframe');
@@ -1082,7 +1256,8 @@ export function mountProductionBoard(runtime, {
         frame.append(view);
       } else {
         frame.dataset.state = entry?.loading ? 'loading' : 'empty';
-        frame.append(element('span', '', entry?.loading ? '본문 불러오는 중' : (entry?.note || '미리보기 없음')));
+        const note = candidate.documentArchiveId ? '미리보기 없음' : '이 변형은 본문이 보관되기 전에 만들어져 미리보기가 없습니다.';
+        frame.append(element('span', '', entry?.loading ? '본문 불러오는 중' : (entry?.note || note)));
       }
       option.append(frame);
       const note = element('div', 'board-candidate-note');
@@ -1141,8 +1316,15 @@ export function mountProductionBoard(runtime, {
       option.append(element('span', 'board-candidate-meta', candidate.model));
     }
     option.title = candidate.id;
+    option.setAttribute('aria-pressed', String(picked));
     const wrap = element('div', 'board-candidate-slot');
     wrap.append(option);
+    if (presentation === 'image' && previewCandidate.thumbnailUrl) {
+      wrap.append(button('board-prompt-toggle board-candidate-zoom', '크게 보기', {
+        action: 'zoom-candidate', jobId: row.jobId, stageKey: cell.stageKey,
+        candidateId: candidate.id,
+      }));
+    }
     // 카드 자체는 '고르기' 버튼이라 그 안에 또 버튼을 넣을 수 없다. 밖에 붙인다.
     const promptOpen = promptAlwaysOpen || openPrompts.has(String(candidate.id || ''));
     const toggle = button('board-prompt-toggle', promptOpen ? '프롬프트 접기' : '프롬프트 보기', {
@@ -1271,7 +1453,7 @@ export function mountProductionBoard(runtime, {
         // 왼쪽에 같은 그림을 한 번 더 두면 서로 다른 안이 둘인 것처럼 읽힌다.
         // 실측 2026-08-26: 헤더의 왼쪽 기준 그림과 변형 1/3 카드가 같은 그림이었다.
         // 고른 변형이 없어서 카드에 그림이 하나도 없을 때만 기준 그림을 둔다.
-        const anyCardHasImage = !!group.selectedId || group.candidates.length === 1;
+        const anyCardHasImage = !!group.selectedId;
         if (shot && !anyCardHasImage) {
           const preview = document.createElement('img');
           preview.className = 'board-section-preview';
@@ -1297,19 +1479,17 @@ export function mountProductionBoard(runtime, {
         }
         copy.append(heading);
         const groupOptions = element('div', 'board-candidate-options');
-        // 변형이 하나뿐이고 고를 차례도 아니면, 그 하나가 지금 쓰이는 컷이다.
-        const soleInUse = !group.selectedId && !cell.pickable && group.candidates.length === 1;
         for (const [index, candidate] of group.candidates.entries()) {
           // 지금 이 섹션에 실제로 쓰이는 그림은 '고른 변형' 하나뿐이다.
           // imageRef 가 current-section-image 라는 말은 "만들 당시 현재였다" 는 뜻이지
           // "지금도 이 그림이다" 가 아니다. 그것을 현재 그림으로 읽어 모든 변형에
           // 같은 그림을 붙이면, 서로 다른 안이 똑같아 보인다. 빈 칸보다 나쁘다.
           // 실측 2026-08-26: 인증/수상 3개 변형이 전부 같은 그림으로 떴다.
-          const usesCurrent = candidate.id === group.selectedId || soleInUse;
+          const usesCurrent = candidate.id === group.selectedId;
           groupOptions.append(renderCandidateOption(row, cell, candidate, {
             index,
             total: group.candidates.length,
-            picked: candidate.id === group.selectedId || soleInUse,
+            picked: usesCurrent,
             fallbackThumbUrl: usesCurrent && shot
               ? (shot.asset.thumbnailReference || shot.asset.contentReference)
               : '',
@@ -1540,7 +1720,7 @@ export function mountProductionBoard(runtime, {
       // 조립공장에는 등록 화면이 없다. 분류·공급가·진열은 이 작업의 투입값을 그대로 싣는다.
       // 투입값이 없는 작업은 바로 지시하지 않고 여기서 값을 받는다. 등록값이 없어 차단된
       // 작업도 원문 코드 대신 이 입력으로 풀 수 있어야 한다.
-      const register = button('board-mini-action board-action-primary', 'Cafe24 등록', {
+      const register = button('board-mini-action board-action-primary', 'Cafe24 승인·등록 열기', {
         action: 'cafe24',
         jobId: row.jobId,
       });
@@ -1687,7 +1867,10 @@ export function mountProductionBoard(runtime, {
         node.append(element('span', 'board-cell-loading', '불러오는 중'));
       }
       // 몇 개 중 몇 번째를 골랐는지 칸에 적는다. "고름" 만으로는 무엇을 골랐는지 알 수 없다.
-      if (cell.selectedIndex && cell.candidateCount > 1) {
+      const selectedCount = new Set([cell.selectedId, ...cell.selectedIds].filter(Boolean)).size;
+      if (cell.stageKey === 'sections' && selectedCount) {
+        node.append(element('span', 'board-cell-choice', `${selectedCount}/${cell.candidateCount} 선택`));
+      } else if (cell.selectedIndex && cell.candidateCount > 1) {
         node.append(element('span', 'board-cell-choice', `${cell.selectedIndex}/${cell.candidateCount}`));
       }
       if (cell.pickable) node.append(element('span', 'board-cell-pick-hint', '고르기'));
@@ -1764,6 +1947,7 @@ export function mountProductionBoard(runtime, {
       // 눌러도 표가 다시 그려지지 않아 아무 일도 일어나지 않는다.
       promptAlwaysOpen, openCompose, [...openPrompts].sort().join('|'),
       promptCacheVersion,
+      showHistory,
       // 본문을 받아 오면 빈 칸이 미리보기로 바뀐다. 서명에 없으면 받아 놓고도 안 그린다.
       documentCacheVersion,
       // 총 기계/대기 시간은 새로고침마다 흘러간다. 이것까지 서명에 넣으면 아무 일이
@@ -1776,6 +1960,7 @@ export function mountProductionBoard(runtime, {
         row.stepLabel, row.nextAction?.copy || '',
         row.cells.map(cell => [
           cell.stageKey, cell.state, cell.candidateCount,
+          cell.selectedId, cell.selectedIds, cell.candidates,
           cell.selectedIndex, cell.selectedThumbnailUrl, cell.pickable, cell.changeable,
         ]),
       ]),
@@ -1784,8 +1969,10 @@ export function mountProductionBoard(runtime, {
 
   function render() {
     const board = projectProductionBoard(jobs, { results: archivedResults() });
+    const displayRows = operatorVisibleRows(board.rows);
     const signature = boardSignature(board);
     lastBoard = board;
+    renderHumanPresences();
     if (signature === lastBoardSignature && grid.childElementCount) {
       renderConnection();
       // 표를 다시 그리지 않아도 흘러가는 시간은 계속 보여 줘야 한다.
@@ -1810,12 +1997,14 @@ export function mountProductionBoard(runtime, {
       if (focusedSurface.surface === 'intake') nodes.push(renderProductValueForm(row, { surface: 'intake', sourceJob }));
       if (focusedSurface.surface === 'values') nodes.push(renderProductValueForm(row, { surface: 'required', sourceJob }));
       if (focusedSurface.surface === 'cuts') {
-        for (const stageKey of ['representative', 'size', 'option_color', 'general']) {
-          const cell = row.cells.find(item => item.stageKey === stageKey);
-          nodes.push(cell?.candidates.length
-            ? renderCandidateStrip(row, cell)
-            : element('p', 'factory-empty-state', `${cell?.stageLabel || stageKey} · 아직 생성된 후보가 없습니다.`));
-        }
+        const cutStages = ['representative', 'size', 'option_color', 'general'];
+        const stageKey = cutStages.includes(focusedSurface.stageKey)
+          ? focusedSurface.stageKey
+          : cutStages.includes(row.waitingStageKey) ? row.waitingStageKey : 'representative';
+        const cell = row.cells.find(item => item.stageKey === stageKey);
+        nodes.push(cell?.candidates.length
+          ? renderCandidateStrip(row, cell)
+          : element('p', 'factory-empty-state', `${cell?.stageLabel || stageKey} · 아직 생성된 후보가 없습니다.`));
       }
       if (focusedSurface.surface === 'sections') {
         for (const stageKey of ['sections', 'final_detail']) {
@@ -1834,16 +2023,23 @@ export function mountProductionBoard(runtime, {
       return board;
     }
     const nodes = [renderHeaderRow()];
-    if (!board.rows.length) {
-      const empty = element('p', 'factory-empty-state', '아직 투입된 작업이 없습니다. 입력·소스에서 제품을 투입하면 이 표에 나란히 쌓입니다.');
+    if (!displayRows.length) {
+      const hiddenCount = board.rows.length - displayRows.length;
+      const empty = element(
+        'p',
+        'factory-empty-state',
+        hiddenCount
+          ? `이전 기록 ${hiddenCount}건은 접혀 있습니다. 위의 「이전 기록 보기」를 누르면 전체 이력을 확인할 수 있습니다.`
+          : '아직 투입된 작업이 없습니다. 입력·소스에서 제품을 투입하면 이 표에 나란히 쌓입니다.',
+      );
       grid.replaceChildren(nodes[0], empty);
       return board;
     }
-    const liveJobIds = new Set(board.rows.map(row => row.jobId));
+    const liveJobIds = new Set(displayRows.map(row => row.jobId));
     for (const jobId of [...rowNodes.keys()]) {
       if (!liveJobIds.has(jobId)) rowNodes.delete(jobId);
     }
-    for (const row of board.rows) {
+    for (const row of displayRows) {
       const signature = rowSignature(row);
       const cached = rowNodes.get(row.jobId);
       const stale = !cached || cached.signature !== signature;
@@ -1884,6 +2080,7 @@ export function mountProductionBoard(runtime, {
       const incomingJobs = Array.isArray(response?.jobs) ? response.jobs : null;
       const retainedQueue = jobs.length > 0 && (!incomingJobs || incomingJobs.length === 0);
       if (!incomingJobs && !retainedQueue) throw new Error('factory_jobs_invalid');
+      if (Array.isArray(response?.humanPresences)) humanPresences = response.humanPresences;
       if (!retainedQueue) jobs = incomingJobs;
       projectionState = state;
       connected = state ? state.connected === true : connected;
@@ -1997,7 +2194,7 @@ export function mountProductionBoard(runtime, {
       ?.find(cell => cell.stageKey === selection.stageKey);
     const selectedCandidate = selection && selectedCell?.candidates?.find(candidate => candidate.id === selection.candidateId);
     if (selection && !selectedCandidate) return;
-    if (selection?.stageKey === 'final_detail'
+    if (selection?.stageKey === 'final_detail' && !selectedCandidate.documentArchiveId
       && resolveCandidateAsset(selectedCandidate, resultCache.get(String(selection.jobId))?.assets, selection.stageKey).status !== 'matched') return;
     const baselineRevision = selection && projectionState?.registration?.jobId === selection.jobId
       ? projectionState?.session?.revision
@@ -2006,6 +2203,19 @@ export function mountProductionBoard(runtime, {
     busy = true;
     try {
       render();
+      const completedLiveJob = selection && jobs.some(job => job.jobId === selection.jobId && job.status === 'completed')
+        && projectionState?.registration?.jobId === selection.jobId;
+      if (completedLiveJob) {
+        const command = buildACutSelectionCommand(projectionState, selection);
+        const response = await apiRequest(`/api/factory/jobs/${encodeURIComponent(selection.jobId)}/select`, {
+          method: 'POST',
+          body: JSON.stringify({ ...command, jobId: selection.jobId, decisionMode: 'manual' }),
+        });
+        if (response?.accepted !== true || response.selectionStatus !== 'saving') throw new Error('factory_selection_not_accepted');
+        pendingManualAdvance = null;
+        setStatus('A컷 변경 지시를 전달했습니다. 저장된 선택이 화면에 반영될 때까지 기다려 주세요.', 'ok');
+        return;
+      }
       receipt = await apiRequest('/api/factory/jobs/selections', {
         method: 'POST',
         body: JSON.stringify({ ...body, autoResume }),
@@ -2118,17 +2328,17 @@ export function mountProductionBoard(runtime, {
     }
   }
 
-  async function registerCafe24(jobId, values = {}) {
+  async function saveCafe24Values(jobId, values = {}) {
     busy = true;
     try {
       render();
-      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/cafe24/register`, {
+      await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/cafe24/values`, {
         method: 'POST',
         body: JSON.stringify(values),
       });
-      setStatus('Cafe24 등록을 조립공장에 지시했습니다. 완료되면 이 줄의 상태가 바뀝니다.', 'ok');
+      setStatus('Cafe24 값을 저장했습니다. 작업대에서 사전점검 · 승인 대상 만들기 · 일회 승인 후 등록하세요.', 'ok');
     } catch (error) {
-      setStatus(`Cafe24 등록 지시 실패 · ${String(error?.code || error?.message || error)}`, 'error');
+      setStatus(`Cafe24 값 저장 실패 · ${String(error?.code || error?.message || error)}`, 'error');
     } finally {
       busy = false;
       await refresh();
@@ -2139,7 +2349,7 @@ export function mountProductionBoard(runtime, {
     // 진행 스냅샷이 있어도 보관함은 읽어야 한다. 섹션처럼 스냅샷에 그림이 없는 단계는
     // 보관함에만 이미지가 있어서, 스냅샷이 있다는 이유로 건너뛰면 그 칸은 영영 체크표시뿐이다.
     const pending = jobs
-      .filter(job => !resultCache.has(String(job.jobId)))
+      .filter(job => job.checkpointAvailable === true && !resultCache.has(String(job.jobId)))
       .slice(0, 8);
     if (!pending.length) return;
     // 한 건씩 순서대로 받으면 건당 수백 KB 라 그림이 2~3장씩 뒤늦게 뜬다. 나란히 받는다.
@@ -2150,6 +2360,8 @@ export function mountProductionBoard(runtime, {
   }
 
   async function loadResults(jobId, { quiet = false } = {}) {
+    const job = jobs.find(item => String(item.jobId) === String(jobId));
+    if (job?.checkpointAvailable !== true) return;
     try {
       const response = await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/history`);
       const assets = Array.isArray(response?.workBundle?.assets) ? response.workBundle.assets : [];
@@ -2387,6 +2599,16 @@ export function mountProductionBoard(runtime, {
       return;
     }
     if (!target) return;
+    if (target.dataset.action === 'zoom-candidate') {
+      const row = lastBoard?.rows.find(item => item.jobId === target.dataset.jobId);
+      const cell = row?.cells.find(item => item.stageKey === target.dataset.stageKey);
+      if (!cell) return;
+      const payload = buildZoomPayload(row, cell);
+      const startIndex = payload.candidates.findIndex(item => item.id === target.dataset.candidateId);
+      if (startIndex < 0) return;
+      openZoom({ ...payload, startIndex });
+      return;
+    }
     if (busy && target.dataset.action !== 'open') {
       // 처리 중이라고 눌린 것을 조용히 버리면, 사람은 버튼이 고장 난 줄 안다. 실측:
       // "다시 시도" 를 눌러도 아무 반응이 없다는 신고가 있었고 원인이 이것이었다.
@@ -2395,8 +2617,18 @@ export function mountProductionBoard(runtime, {
     }
     const action = target.dataset.action;
     if (action === 'toggle-auto-resume') return;
+    if (action === 'toggle-history') {
+      showHistory = !showHistory;
+      lastBoardSignature = '';
+      render();
+      return;
+    }
     if (action === 'resume') {
-      void resumeSelected(null);
+      const board = projectProductionBoard(jobs);
+      const jobIds = operatorVisibleRows(board.rows)
+        .filter(row => row.status === 'waiting_manual' && row.nextAction?.kind === 'resume')
+        .map(row => row.jobId);
+      void resumeSelected(jobIds);
       return;
     }
     if (action === 'retry') {
@@ -2404,7 +2636,8 @@ export function mountProductionBoard(runtime, {
       return;
     }
     if (action === 'cafe24') {
-      void registerCafe24(target.dataset.jobId);
+      setStatus('Cafe24 등록은 작업대의 사전점검 · 승인 대상 · 일회 승인 단계에서 실행합니다.', 'warning');
+      render();
       return;
     }
     if (action === 'product-values') {
@@ -2460,7 +2693,7 @@ export function mountProductionBoard(runtime, {
         return;
       }
       openCafe24Values = '';
-      void registerCafe24(target.dataset.jobId, values);
+      void saveCafe24Values(target.dataset.jobId, values);
       return;
     }
     if (action === 'stitch-sections') {
@@ -2575,7 +2808,7 @@ export function mountProductionBoard(runtime, {
     }
     if (action === 'auto') {
       const board = projectProductionBoard(jobs);
-      const body = buildBatchSelectionRequest(board, { mode: 'auto' });
+      const body = buildBatchSelectionRequest({ ...board, rows: operatorVisibleRows(board.rows) }, { mode: 'auto' });
       if (!body.jobIds.length) {
         setStatus('선택할 대기 작업이 없습니다.', 'warning');
         render();
@@ -2589,7 +2822,9 @@ export function mountProductionBoard(runtime, {
       return;
     }
     if (action === 'clear') {
-      const reserved = projectProductionBoard(jobs).rows.filter(row => row.hasReservation).map(row => row.jobId);
+      const reserved = operatorVisibleRows(projectProductionBoard(jobs).rows)
+        .filter(row => row.hasReservation)
+        .map(row => row.jobId);
       if (reserved.length) void clearReservations(reserved);
     }
   }
@@ -2597,7 +2832,13 @@ export function mountProductionBoard(runtime, {
   function connectEvents() {
     eventSource?.close?.();
     eventSource = null;
-    if (document.hidden || typeof EventSourceImpl !== 'function') return;
+    releaseEventStreamLease();
+    stopBoardPolling();
+    if (document.hidden) return;
+    if (typeof EventSourceImpl !== 'function' || !acquireEventStreamLease()) {
+      startBoardPolling();
+      return;
+    }
     try {
       // cursor=0 으로 붙으면 관제탑이 쌓아 둔 이벤트를 전부 되돌려준다. 실측 2026-08-28:
       // 화면을 열 때마다 4초 동안 1,300건(초당 350건)이 쏟아져 크롬의 호스트당 연결이
@@ -2609,9 +2850,43 @@ export function mountProductionBoard(runtime, {
       );
     } catch {
       eventSource = null;
+      releaseEventStreamLease();
+      startBoardPolling();
       return;
     }
+    eventStreamLeaseTimer = globalThis.setInterval(() => {
+      if (!renewEventStreamLease()) {
+        eventSource?.close?.();
+        eventSource = null;
+        releaseEventStreamLease();
+        startBoardPolling();
+      }
+    }, Math.floor(EVENT_STREAM_LEASE_MS / 2));
     for (const type of BOARD_EVENT_TYPES) eventSource.addEventListener(type, scheduleEventRefresh);
+  }
+
+  async function pollHumanPresences() {
+    if (stopped || document.hidden) return;
+    try {
+      const response = await loadJobs();
+      if (Array.isArray(response?.humanPresences)) {
+        humanPresences = response.humanPresences;
+        renderHumanPresences();
+      }
+    } catch {
+      // 사람 세션은 보조 관측값이므로 일시적인 폴링 실패로 작업판을 지우지 않는다.
+    } finally {
+      scheduleHumanPresencePoll();
+    }
+  }
+
+  function scheduleHumanPresencePoll() {
+    if (stopped || document.hidden) return;
+    if (humanPresencePollTimer) clearTimeout(humanPresencePollTimer);
+    humanPresencePollTimer = setTimeout(() => {
+      humanPresencePollTimer = null;
+      void pollHumanPresences();
+    }, HUMAN_PRESENCE_POLL_MS);
   }
 
   /**
@@ -2633,9 +2908,12 @@ export function mountProductionBoard(runtime, {
     if (document.hidden) {
       eventSource?.close?.();
       eventSource = null;
+      releaseEventStreamLease();
+      stopBoardPolling();
+      if (humanPresencePollTimer) { clearTimeout(humanPresencePollTimer); humanPresencePollTimer = null; }
       return;
     }
-    void refresh().then(connectEvents);
+    void refresh().then(() => { connectEvents(); scheduleHumanPresencePoll(); });
   }
 
   function apiOrigin() {
@@ -2659,7 +2937,6 @@ export function mountProductionBoard(runtime, {
     };
     statusLine = statusByJob.get(jobId) || { copy: '', tone: '' };
     moveGrid(target);
-    lastBoardSignature = '';
     if (focusedSurface.surface === 'sections' && !resultCache.has(focusedSurface.jobId)) {
       void loadResults(focusedSurface.jobId, { quiet: true });
     }
@@ -2681,7 +2958,7 @@ export function mountProductionBoard(runtime, {
 
   const activeMenuObserver = typeof MutationObserver === 'function'
     ? new MutationObserver(() => {
-      if (document.getElementById('app')?.dataset.activeMenu !== 'overview') restoreBoardSurface();
+      if (document.getElementById('app')?.dataset.activeMenu !== 'queue') restoreBoardSurface();
     })
     : null;
   activeMenuObserver?.observe(document.getElementById('app'), { attributes: true, attributeFilter: ['data-active-menu'] });
@@ -2707,6 +2984,7 @@ export function mountProductionBoard(runtime, {
   document.addEventListener('control-tower:production-board-restore', restoreBoardSurface);
   void refresh().then(() => {
     connectEvents();
+    scheduleHumanPresencePoll();
     const target = document.querySelector('[data-production-board-focus="true"]');
     if (target) focusBoardSurface({ detail: {
       target,
@@ -2718,7 +2996,10 @@ export function mountProductionBoard(runtime, {
   return () => {
     stopped = true;
     if (eventRefreshTimer) { clearTimeout(eventRefreshTimer); eventRefreshTimer = null; }
+    if (humanPresencePollTimer) { clearTimeout(humanPresencePollTimer); humanPresencePollTimer = null; }
     eventSource?.close?.();
+    releaseEventStreamLease();
+    stopBoardPolling();
     activeMenuObserver?.disconnect();
     restoreGrid();
     root.removeEventListener('click', onClick);
@@ -2731,6 +3012,13 @@ export function mountProductionBoard(runtime, {
   };
 }
 
-if (globalThis.controlTowerRuntime && document.getElementById('production-board')) {
+let productionBoardMounted = false;
+const mountBoardWhenRuntimeReady = () => {
+  if (productionBoardMounted || !globalThis.controlTowerRuntime) return;
+  productionBoardMounted = true;
   mountProductionBoard(globalThis.controlTowerRuntime);
-}
+};
+const productionBoardWindow = typeof window === 'undefined' ? null : window;
+productionBoardWindow?.addEventListener?.('control-tower:runtime-ready', mountBoardWhenRuntimeReady, { once: true });
+productionBoardWindow?.setTimeout?.(mountBoardWhenRuntimeReady, 0);
+mountBoardWhenRuntimeReady();

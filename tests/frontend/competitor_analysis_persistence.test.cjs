@@ -16,6 +16,87 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+test('같은 입력 primary의 strip/merge는 메타 shell을 늘리지 않고 다른 원본은 보존한다', () => {
+  const sources = [1, 2, 3].map(n => read(`src/app-core-0${n}.js`));
+  const names = ['applyProductImageBackupPayload', 'productImageBackupItem', 'productImageBackupConflictsWithCurrentWork', 'lastWorkIdentityKeysCompatible', 'lastWorkNormalizeIdentityText', 'factoryImagePayloadFingerprint', 'imageBase64Only', 'hasRestoredImagePayloadValue', 'hasInlineImagePayload', 'countSessionAssetRestoreRefs', 'stripImageItem', 'stripAnalysisImages', 'preserveSameWorkWorkspacePayload'];
+  const original = names.map(name => {
+    const source = sources.find(text => text.includes(`function ${name}(`));
+    const start = source.indexOf(`function ${name}(`);
+    return source.slice(start, source.indexOf('\n}', start) + 2);
+  }).join('\n');
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const saved = process.env.ANALYSIS_SAVED_A_FIXTURE
+    ? JSON.parse(fs.readFileSync(process.env.ANALYSIS_SAVED_A_FIXTURE, 'utf8')) : null;
+  const body = saved?.productImageBackup.primary.base64 || 'a'.repeat(300);
+  const state = saved ? clone(saved.assets) : {
+    step: 'factory', productName: 'C', analysisImages: [{ name: 'same.jpg', mime: 'image/jpeg', hasImageData: true }],
+    factory: { product: { productName: 'C' }, assets: [{ id: 'kept-asset', imageUrl: '/api/local-archive/assets/kept/image', hasImage: true }] },
+    compPage: { analysisResult: { sections: [{ id: 'kept-analysis' }] } },
+  };
+  const factory = state.factory;
+  const context = { state, cloneData: clone, uid: () => 'fixture-input', workspaceBlankResetInProgress: false, IMAGE_STORED_MARKER: '__stored_in_indexeddb__', restoreCutsSourceFromCurrentProductImage: () => false, factoryRuntimeReadFactory: () => factory };
+  const runtime = Function('context', `with(context) { ${original}; return { apply: applyProductImageBackupPayload, strip: stripAnalysisImages, merge: preserveSameWorkWorkspacePayload, count: countSessionAssetRestoreRefs, fp: factoryImagePayloadFingerprint }; }`)(context);
+  const backup = saved?.productImageBackup || { productName: 'C', primary: { base64: body, mime: 'image/jpeg', name: 'same.jpg' } };
+  const beforeAssets = clone(factory.assets);
+  const beforeAnalysis = clone(state.compPage.analysisResult);
+  runtime.apply(backup, { factory, restoreInline: true, syncMarket: false });
+  const inputsAfterRestore = clone(factory.product.inputImages);
+  const scope = { currentProjectId: 'C', workspaceScope: { id: 'project:C' } };
+  const payload = images => ({ ...scope, analysisImages: images });
+  const restored = clone(state.analysisImages);
+  state.analysisImages = runtime.merge(payload(runtime.strip(restored)), payload(restored)).analysisImages;
+  console.log(JSON.stringify({ primaryMergeCount: state.analysisImages.length, missing: runtime.count() }));
+  assert.equal(state.analysisImages.length, 2, 'retain original legacy row plus one hydrated primary');
+  assert.equal(runtime.count(), 0);
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    const current = clone(state.analysisImages);
+    state.analysisImages = runtime.merge(payload(runtime.strip(current)), payload(current)).analysisImages;
+    runtime.apply(backup, { factory, restoreInline: true, syncMarket: false });
+    assert.equal(state.analysisImages.length, 2);
+    assert.equal(runtime.count(), 0);
+  }
+  assert.ok(require('node:util').isDeepStrictEqual(factory.assets, beforeAssets));
+  assert.ok(require('node:util').isDeepStrictEqual(state.compPage.analysisResult, beforeAnalysis));
+  assert.ok(require('node:util').isDeepStrictEqual(factory.product.inputImages, inputsAfterRestore));
+  const primary = { name: 'same.jpg', mime: 'image/jpeg', base64: body, inputImageFingerprint: runtime.fp(body) };
+  const foreign = { ...primary, base64: 'b'.repeat(301), inputImageFingerprint: runtime.fp('b'.repeat(301)) };
+  assert.equal(runtime.merge(payload([primary]), payload([foreign])).analysisImages.length, 2, 'same name with different bodies stays separate');
+  const shared = 'x'.repeat(150);
+  const collisionA = { ...primary, base64: shared + 'AAAA' + shared };
+  const collisionB = { ...primary, base64: shared + 'BBBB' + shared };
+  collisionA.inputImageFingerprint = runtime.fp(collisionA.base64);
+  collisionB.inputImageFingerprint = runtime.fp(collisionB.base64);
+  assert.equal(runtime.fp(collisionA.base64), runtime.fp(collisionB.base64));
+  let collisionRows = runtime.merge(payload([collisionA]), payload([collisionB])).analysisImages;
+  assert.equal(collisionRows.length, 2, 'different complete bodies survive a legacy fingerprint collision');
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    collisionRows = runtime.merge(payload(collisionRows), payload(collisionRows)).analysisImages;
+    assert.equal(collisionRows.length, 2, 'repeated collision does not append another copy');
+  }
+  const falseDeclaration = { ...primary, inputImageFingerprint: foreign.inputImageFingerprint };
+  const conflicting = runtime.merge(payload([falseDeclaration]), payload([primary])).analysisImages;
+  assert.equal(conflicting.length, 2);
+  assert.ok(require('node:util').isDeepStrictEqual(conflicting[0], falseDeclaration), 'a mismatched declaration is preserved, not rewritten');
+  assert.equal(runtime.strip([falseDeclaration])[0].inputImageFingerprint, foreign.inputImageFingerprint);
+  assert.equal(runtime.merge(payload(runtime.strip([primary])), { ...payload([primary]), workspaceScope: { id: 'project:foreign' } }).analysisImages.length, 2, 'foreign scope cannot hydrate');
+  const mismatched = { ...runtime.strip([primary])[0], inputImageFingerprint: foreign.inputImageFingerprint };
+  assert.equal(runtime.merge(payload([mismatched]), payload([primary])).analysisImages.length, 2, 'foreign fingerprint cannot hydrate');
+  const legacy = [{ name: 'same.jpg', hasImageData: true }, { name: 'same.jpg', hasImageData: true, restoredFrom: 'lastProductImageBackup' }];
+  state.analysisImages = runtime.merge(payload(legacy), payload([primary])).analysisImages;
+  assert.equal(state.analysisImages.length, 3, 'unbound legacy rows cannot be repaired by name');
+  assert.equal(runtime.count(), 2);
+  if (process.env.ANALYSIS_DAMAGED_FIXTURE) {
+    const damaged = JSON.parse(fs.readFileSync(process.env.ANALYSIS_DAMAGED_FIXTURE, 'utf8'));
+    state.analysisImages = clone(damaged.assets.analysisImages);
+    runtime.apply(damaged.productImageBackup, { factory, restoreInline: true, syncMarket: false });
+    const current = clone(state.analysisImages);
+    state.analysisImages = runtime.merge(payload(runtime.strip(current)), payload(current)).analysisImages;
+    assert.equal(state.analysisImages.length, 3);
+    assert.equal(runtime.count(), 2);
+    console.log(JSON.stringify({ damagedLegacyCount: state.analysisImages.length, missing: runtime.count(), automaticRepairProven: false }));
+  }
+});
+
 test('작업파일에 연결된 초안의 후보 선택은 서버 프로젝트 스냅샷으로 저장한다', async () => {
   const core02 = read('src/app-core-02.js');
   const saveSource = sourceBetween(
@@ -40,6 +121,7 @@ test('작업파일에 연결된 초안의 후보 선택은 서버 프로젝트 �
     serverLastWorkLastSavedAt: 0,
     getCurrentDocumentWorkspaceScope: () => 'project:current',
     getCurrentLastWorkWorkspaceScope: () => 'draft:tab',
+    factoryArchiveWritesInFlight: () => false,
     ensureWorkspaceEditAuthority: async scopeId => {
       authorityScopes.push(scopeId);
       return { mode: 'editing', scopeId };
@@ -84,6 +166,8 @@ test('작업파일 프로젝트 스냅샷은 draft 전용 branch를 만들지 �
   const context = vm.createContext({
     state: { currentProjectId: 'current', productName: '모시꽃수파우치' },
     lastLightweightSessionPayload: null,
+    getLastLightweightSessionPayloadForScope: () => null,
+    cacheLastLightweightSessionPayload() {},
     getCurrentDocumentWorkspaceScope: () => 'project:current',
     getCurrentLastWorkWorkspaceScope: () => 'draft:tab',
     factoryRuntimeReadCommittedFactory: () => ({ product: { productName: '모시꽃수파우치' } }),
@@ -500,6 +584,61 @@ test('같은 작업의 얇거나 동수인 빈 경쟁사 snapshot은 기존 분�
   assert.deepEqual(page.analysisImageSelection, { key: 'detail-1' });
 });
 
+test('같은 작업 리포트 복원은 현재 선택한 상세 이미지 수를 낮추지 않는다', () => {
+  const core02 = read('src/app-core-02.js');
+  const mergeSource = sourceBetween(
+    core02,
+    'function mergeSameWorkDerivedValue(',
+    'function recoverStaleSessionInlineImages(',
+  );
+  const applySource = sourceBetween(
+    core02,
+    'function applyCompAnalysisSnapshot(',
+    'function saveCompAnalysis(',
+  );
+  const scope = { scopeKey: 'project:batch:C' };
+  const currentSelectedImageIds = ['detail-1', 'detail-2', 'detail-3', 'detail-4', 'detail-5'];
+  const state = {
+    compPage: {
+      sectionWorkScope: scope,
+      analysisResult: { analyzedAt: 100, analysisProductScope: scope },
+      marketScrape: { selectedImageIds: currentSelectedImageIds, detailSelectionVersion: 8 },
+    },
+  };
+  const context = vm.createContext({
+    state,
+    sectionWorkScopeMeta: () => scope,
+    sectionWorkScopeMatches: () => true,
+    sanitizeCompMarketScrapeForPersistence: value => value,
+    compImagePersistenceWarningMessage: () => 'warning',
+  });
+  vm.runInContext(`${mergeSource}\n${applySource}\nglobalThis.apply = applyCompAnalysisSnapshot;`, context);
+
+  const cachedReport = {
+    sectionWorkScope: scope,
+    analysisResult: {
+      analyzedAt: 100,
+      analysisProductScope: scope,
+      compMarketImageSelection: { selectedImageIds: currentSelectedImageIds },
+    },
+    marketScrape: { selectedImageIds: ['detail-1'], detailSelectionVersion: 9 },
+  };
+  assert.equal(context.apply(cachedReport, 'report'), true);
+  assert.deepEqual(
+    Array.from(state.compPage.marketScrape.selectedImageIds),
+    currentSelectedImageIds,
+    'cached report must not reduce the current same-work selection',
+  );
+
+  state.compPage.marketScrape = { selectedImageIds: currentSelectedImageIds, detailSelectionVersion: 8 };
+  assert.equal(context.apply(cachedReport, 'report', { replaceWorkspace: true }), true);
+  assert.deepEqual(
+    Array.from(state.compPage.marketScrape.selectedImageIds),
+    ['detail-1'],
+    'an explicit workspace replacement may restore the saved selection',
+  );
+});
+
 test('명시적 작업 교체만 빈 경쟁사 snapshot 적용을 허용한다', () => {
   const core02 = read('src/app-core-02.js');
   const mergeSource = sourceBetween(core02, 'function mergeSameWorkDerivedValue(', 'function recoverStaleSessionInlineImages(');
@@ -749,6 +888,8 @@ test('동일 작업 자산 저장은 선택·상세·분석·섹션 플랜을 �
     IMAGE_STORED_MARKER: '__stored__',
     cloneData,
     workspacePersistenceApi: () => ({ normalizeWorkspaceScope: value => value || '' }),
+    getLastLightweightSessionPayloadForScope: () => null,
+    loadOptionSorterLiveRecovery: () => null,
     getCurrentLastWorkWorkspaceScope: () => 'project:current',
     getCurrentDocumentWorkspaceScope: () => '',
     factoryRuntimeReadCommittedFactory: () => state.factory,
@@ -1064,6 +1205,265 @@ test('같은 작업파일 복원은 빈 파생 상태만 현재 A로 보강하�
   assert.equal(result.compPage.marketScrape.results[0].id, 'candidate-a');
   assert.equal(result.compPage.marketScrape.selectedIds[0], 'candidate-a');
   assert.equal(result.compPage.marketScrape.scrapedImages[0].id, 'detail-a');
+});
+
+test('같은 작업 분석 섹션은 객체 키 순서가 달라도 중복되지 않고 반복 복원이 멱등이다', () => {
+  const core03 = read('src/app-core-03.js');
+  const helper = sourceBetween(
+    core03,
+    'function preserveSameWorkWorkspacePayload(',
+    'function resetLiveWorkspaceForProjectFileReplacement(',
+  );
+  const context = vm.createContext({ cloneData: value => structuredClone(value) });
+  vm.runInContext(`${helper}\nglobalThis.preserve = preserveSameWorkWorkspacePayload;`, context);
+  const plain = value => JSON.parse(JSON.stringify(value));
+
+  const sections = Array.from({ length: 16 }, (_, index) => ({
+    title: `섹션 ${index + 1}`,
+    summary: `요약 ${index + 1}`,
+    evidence: [`근거 ${index + 1}`],
+  }));
+  const reordered = sections.map(row => ({
+    evidence: [...row.evidence],
+    summary: row.summary,
+    title: row.title,
+  }));
+  const incoming = { compPage: { analysisResult: { sections_found: sections } } };
+  const current = { compPage: { analysisResult: { sections_found: reordered } } };
+
+  const restored = context.preserve(incoming, current);
+  const repeated = context.preserve(restored, current);
+  const cleaned = context.preserve({
+    compPage: { analysisResult: { sections_found: [...sections, ...reordered] } },
+  }, current);
+
+  assert.equal(restored.compPage.analysisResult.sections_found.length, 16);
+  assert.deepEqual(plain(restored), incoming);
+  assert.deepEqual(plain(repeated), plain(restored));
+  assert.deepEqual(plain(cleaned), incoming);
+});
+
+for (const selectionState of ['intact', 'damaged-current', 'damaged-both']) {
+test(`같은 작업 분석 복원은 섹션16·기준10과 ID별 반복 제목5를 저장까지 유지한다 (${selectionState})`, t => {
+  const core02 = read('src/app-core-02.js');
+  const core03 = read('src/app-core-03.js');
+  const core05 = read('src/app-core-05.js');
+  const scope = { scopeKey: 'project:batch:C' };
+  const titleA = '색동 사각 동전지갑';
+  const titleB = '두 번째 상품';
+  const titleC = '미니 월렛 여행용 카드 동전 지갑 지퍼 가방 결합 파우치';
+  const titles = [titleA, titleB, titleA, titleC, titleA];
+  const images = titles.map((title, index) => ({
+    id: `screenshots_${index + 2}`, candidateId: 'coupang_9533531381', captureIndex: 0,
+    title, productUrl: 'https://example.test/products/9533531381', src: `https://example.test/detail-${index + 1}.png`,
+  }));
+  const ids = images.map(image => `detail:${image.id}:${image.candidateId}:0`);
+  assert.equal(ids[2], 'detail:screenshots_4:coupang_9533531381:0');
+  const sections = Array.from({ length: 16 }, (_, index) => ({
+    title: `섹션 ${index + 1}`,
+    content: { text: `본문 ${index + 1}`, evidence: [{ quote: '근거', order: [1, 2] }] },
+  }));
+  const reordered = sections.map(row => ({
+    content: { evidence: [{ order: [1, 2], quote: '근거' }], text: row.content.text },
+    title: row.title,
+  }));
+  const criteria = Array.from({ length: 10 }, (_, index) => ({
+    name: `기준 ${index + 1}`, score: index, evidence: { text: '평가 근거', positions: [1, 2] },
+  }));
+  const reorderedCriteria = criteria.map(row => ({
+    evidence: { positions: [1, 2], text: '평가 근거' }, score: row.score, name: row.name,
+  }));
+  const storedCompPage = {
+    sectionWorkScope: scope,
+    analysisResult: {
+      analyzedAt: 100,
+      analyzeModel: 'same-model',
+      analysisProductScope: scope,
+      total_sections_count: 16,
+      sections_found: [...sections, ...reordered],
+      page_score: { total: 74, criteria: [...criteria, ...reorderedCriteria] },
+    },
+    marketScrape: {
+      selectedImageIds: ids,
+      scrapedImages: images,
+    },
+  };
+  const state = { currentProjectId: 'batch:C', compPage: structuredClone(storedCompPage) };
+  const context = vm.createContext({
+    state,
+    cloneData: value => structuredClone(value),
+    sectionWorkScopeMeta: () => scope,
+    sectionWorkScopeMatches: (left, right) => left?.scopeKey === right?.scopeKey,
+    sanitizeCompMarketScrapeForPersistence: value => value,
+    compImagePersistenceWarningMessage: () => 'warning',
+    workspacePersistenceApi: () => ({ normalizeWorkspaceScope: value => value }),
+    getCurrentLastWorkWorkspaceScope: () => scope.scopeKey,
+    factoryRuntimeReadCommittedFactory: () => ({}),
+    factoryStampWorkspaceIdentity() {},
+    currentWorkspaceInputImageFingerprint: () => 'same-image',
+    ensureActiveWorkIdentity: () => ({ workspaceId: scope.scopeKey }),
+    deriveProjectName: () => 'C',
+    normalizeAnalysisMatchSettings: () => ({}),
+    normalizeProductInfoFieldSettings: () => ({}),
+    loadFixedDetailImages: () => [],
+    currentWorkspaceRevision: () => null,
+    currentWorkspaceBranch: () => null,
+    currentSessionAssetsPayload: options => ({ compPage: options.compPageSnapshot }),
+    buildLightweightSessionPayload: value => value,
+    productImageBackupReferencePayload: () => ({}),
+    Date: { now: () => 100 },
+  });
+  vm.runInContext([
+    sourceBetween(core05, 'function compMarketStableKey(', 'function compMarketResultId('),
+    sourceBetween(core05, 'function compMarketScrapedImageId(', 'const COMP_MARKET_IMAGE_SELECTION_STORAGE_KEY'),
+    sourceBetween(core05, 'function compMarketScrapedImageIdInMarket(', 'function compMarketSelectedScrapedImages('),
+    sourceBetween(core05, 'function compMarketProductUrlFromItem(', 'function compMarketScrapedImagePageCaptureKey('),
+    sourceBetween(core02, 'function mergeSameWorkDerivedValue(', 'function recoverStaleSessionInlineImages('),
+    sourceBetween(core02, 'function applyCompAnalysisSnapshot(', 'function saveCompAnalysis('),
+    sourceBetween(core03, 'function preserveSameWorkWorkspacePayload(', 'function resetLiveWorkspaceForProjectFileReplacement('),
+    sourceBetween(core03, 'function buildWorkspacePayload(', 'function restoreProjectFileFactoryAssetsFromPayload('),
+    'globalThis.restore = preserveSameWorkWorkspacePayload; globalThis.apply = applyCompAnalysisSnapshot; globalThis.build = buildWorkspacePayload; globalThis.signature = compMarketImageSelectionSignatureFromImages;',
+  ].join('\n'), context);
+
+  const signature = JSON.parse(JSON.stringify(context.signature(images, storedCompPage.marketScrape, 'selected')));
+  assert.deepEqual(signature.ids, ids);
+  assert.deepEqual(signature.titles, titles);
+  storedCompPage.analysisImageSelection = structuredClone(signature);
+  storedCompPage.analysisResult.compMarketImageSelection = structuredClone(signature);
+  state.compPage = structuredClone(storedCompPage);
+  if (selectionState !== 'intact') {
+    state.compPage.analysisImageSelection.titles = [titleA, titleB, titleC];
+    state.compPage.analysisResult.compMarketImageSelection.titles = [titleA, titleB, titleC, titleC, titleA];
+  }
+  if (selectionState === 'damaged-both') {
+    storedCompPage.analysisImageSelection.titles = [titleA, titleB, titleC];
+    storedCompPage.analysisResult.compMarketImageSelection.titles = [titleA, titleB, titleC, titleC, titleA];
+  }
+
+  const normalized = context.restore({ compPage: storedCompPage }, { compPage: state.compPage });
+  assert.equal(context.apply(normalized.compPage, 'report', { replaceWorkspace: false, currentScope: scope }), true);
+  const payload = context.build({ storedCompPage });
+  const counts = [normalized.compPage, state.compPage, payload.compPage, payload.assetPayload.compPage]
+    .map(page => [page.analysisResult.sections_found.length, page.analysisResult.page_score.criteria.length]);
+  t.diagnostic(JSON.stringify({ stages: ['preserve', 'apply', 'build', 'assetPayload'], counts }));
+  t.diagnostic(JSON.stringify({
+    selectionState,
+    selectionTitles: normalized.compPage.analysisImageSelection.titles,
+    restoredAnalysisTitles: state.compPage.analysisResult.compMarketImageSelection.titles,
+    savedAnalysisTitles: payload.compPage.analysisResult.compMarketImageSelection.titles,
+  }));
+  assert.deepEqual(counts, [[16, 10], [16, 10], [16, 10], [16, 10]]);
+  for (const page of [normalized.compPage, state.compPage, payload.compPage, payload.assetPayload.compPage]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(page.analysisResult)), {
+      ...storedCompPage.analysisResult, sections_found: sections, page_score: { total: 74, criteria },
+      compMarketImageSelection: signature,
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(page.analysisImageSelection)), signature);
+    assert.deepEqual(Array.from(page.marketScrape.selectedImageIds), storedCompPage.marketScrape.selectedImageIds);
+    assert.deepEqual(JSON.parse(JSON.stringify(page.marketScrape.scrapedImages)), storedCompPage.marketScrape.scrapedImages);
+  }
+  assert.equal(context.apply(payload.compPage, 'report', { replaceWorkspace: false, currentScope: scope }), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.build({ storedCompPage }).compPage)), JSON.parse(JSON.stringify(payload.compPage)));
+  assert.equal(storedCompPage.analysisResult.sections_found.length, 32);
+  assert.equal(storedCompPage.analysisResult.page_score.criteria.length, 20);
+  if (selectionState === 'damaged-both') {
+    for (const mismatch of ['key', 'image-id', 'image-title']) {
+      const unsupported = structuredClone(storedCompPage);
+      if (mismatch === 'key') {
+        unsupported.analysisImageSelection.key = 'another-selection';
+        unsupported.analysisResult.compMarketImageSelection.key = 'another-selection';
+      } else if (mismatch === 'image-id') {
+        unsupported.marketScrape.scrapedImages[2].id = 'unknown-image';
+      } else {
+        unsupported.marketScrape.scrapedImages[2].title = '다른 이미지 제목';
+      }
+      const preserved = context.restore({ compPage: unsupported }, { compPage: structuredClone(unsupported) });
+      assert.deepEqual(JSON.parse(JSON.stringify(preserved.compPage.analysisImageSelection)), unsupported.analysisImageSelection, mismatch);
+      assert.deepEqual(JSON.parse(JSON.stringify(preserved.compPage.analysisResult.compMarketImageSelection)), unsupported.analysisResult.compMarketImageSelection, mismatch);
+    }
+  }
+});
+}
+
+test('같은 작업 선택 metadata만 스냅샷 쌍으로 보존하고 실제 선택 집합과 일반 문자열 배열은 기존대로 합친다', () => {
+  const core03 = read('src/app-core-03.js');
+  const context = vm.createContext({ cloneData: value => structuredClone(value) });
+  vm.runInContext(`${sourceBetween(core03, 'function preserveSameWorkWorkspacePayload(', 'function resetLiveWorkspaceForProjectFileReplacement(')}\nglobalThis.restore = preserveSameWorkWorkspacePayload;`, context);
+  const signature = { key: 'same-selection', count: 5, ids: ['i1', 'i2', 'i3', 'i4', 'i5'], titles: ['A', 'B', 'A', 'C', 'A'] };
+  const result = context.restore({
+    compPage: {
+      analysisImageSelection: signature,
+      analysisResult: { compMarketImageSelection: signature },
+      marketScrape: { selectedImageIds: ['i1'] },
+    },
+    other: { titles: ['A', 'B', 'A'] },
+  }, {
+    compPage: {
+      analysisImageSelection: { ...signature, titles: ['A', 'B', 'C'] },
+      analysisResult: { compMarketImageSelection: { ...signature, titles: ['A', 'B', 'C', 'C', 'A'] } },
+      marketScrape: { selectedImageIds: signature.ids },
+    },
+    other: { titles: ['A', 'B', 'C'] },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.compPage.analysisImageSelection)), signature);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.compPage.analysisResult.compMarketImageSelection)), signature);
+  assert.deepEqual(Array.from(result.compPage.marketScrape.selectedImageIds), signature.ids);
+  assert.deepEqual(Array.from(result.other.titles), ['A', 'B', 'C']);
+});
+
+test('분석의 두 경로만 정확한 객체 중복을 합치고 고유 행과 다른 배열 의미는 보존한다', () => {
+  const core02 = read('src/app-core-02.js');
+  const context = vm.createContext({});
+  vm.runInContext(`${sourceBetween(core02, 'function mergeSameWorkDerivedValue(', 'function mergeCompMarketStoredState(')}\nglobalThis.merge = mergeSameWorkDerivedValue;`, context);
+  const incoming = { title: 'A', content: { body: '본문', order: [1, 2], active: true } };
+  const reordered = { content: { active: true, order: [1, 2], body: '본문' }, title: 'A' };
+  const distinct = [
+    { title: 'A', content: { body: '다른 본문', order: [1, 2], active: true } },
+    { title: 'A', content: { body: '본문', order: [2, 1], active: true } },
+    { title: 'A', content: { body: '본문', order: [1, 2], active: 1 } },
+    { title: 'A', content: { order: [1, 2], active: true } },
+  ];
+  for (const wrap of [rows => ({ sections_found: rows }), rows => ({ page_score: { total: 74, criteria: rows } })]) {
+    const currentRows = [reordered, ...distinct, reordered];
+    const current = wrap(currentRows);
+    const actual = context.merge(current, wrap([incoming]));
+    assert.deepEqual(JSON.parse(JSON.stringify(actual)), wrap([incoming, ...distinct]));
+    assert.deepEqual(JSON.parse(JSON.stringify(context.merge(current, actual))), JSON.parse(JSON.stringify(actual)));
+    assert.equal(currentRows.length, 6);
+  }
+
+  for (const field of ['criteria', 'rows', 'optionResults', 'selectedIds']) {
+    const merged = context.merge({ [field]: [incoming, incoming] }, { [field]: [incoming] });
+    assert.deepEqual(JSON.parse(JSON.stringify(merged[field])), [incoming, incoming], field);
+  }
+  const strings = context.merge({ sections_found: ['a', 'a'] }, { sections_found: ['a'] });
+  assert.deepEqual(Array.from(strings.sections_found), ['a', 'a']);
+  const unrelated = context.merge(
+    { history: { page_score: { criteria: [incoming, incoming] } } },
+    { history: { page_score: { criteria: [incoming] } } },
+  );
+  assert.equal(unrelated.history.page_score.criteria.length, 2);
+});
+
+test('같은 작업 분석 병합은 실제 다른 익명 행의 순서와 기존 ID 우선 의미를 보존한다', () => {
+  const core03 = read('src/app-core-03.js');
+  const helper = sourceBetween(
+    core03,
+    'function preserveSameWorkWorkspacePayload(',
+    'function resetLiveWorkspaceForProjectFileReplacement(',
+  );
+  const context = vm.createContext({ cloneData: value => structuredClone(value) });
+  vm.runInContext(`${helper}\nglobalThis.preserve = preserveSameWorkWorkspacePayload;`, context);
+
+  const result = context.preserve({ rows: [{ title: '첫째' }, { id: 'same', title: '저장본' }] }, {
+    rows: [{ title: '둘째' }, { id: 'same', title: '현재값' }],
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.rows)), [
+    { title: '첫째' },
+    { id: 'same', title: '저장본' },
+    { title: '둘째' },
+  ]);
 });
 
 test('같은 작업 복원은 이전 탭 브랜치를 현재 작업 내용과 섞지 않는다', () => {

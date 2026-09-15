@@ -4,7 +4,7 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
-from services.public_automation import PublicAutomationError, PublicAutomationService
+from services.public_automation import DEFAULT_BACKEND_ORIGIN, PublicAutomationError, PublicAutomationService
 
 
 public_api = Blueprint("public_automation_api", __name__)
@@ -138,7 +138,7 @@ def openapi_document() -> dict[str, Any]:
                 "상태와 로그를 분리한 로컬 자동화 API입니다."
             ),
         },
-        "servers": [{"url": "http://127.0.0.1:5050/api/v1"}],
+        "servers": [{"url": f"{DEFAULT_BACKEND_ORIGIN}/api/v1"}],
         "x-launcher": service.launcher_info(),
         "paths": {
             "/health": {"get": operation("서버 상태와 런처 정보 조회")},
@@ -503,4 +503,3 @@ def status(job_id: str):
 def logs(job_id: str):
     job_value = service.get_job(job_id)
     return jsonify({"job_id": job_id, "logs": job_value.get("logs", [])})
-

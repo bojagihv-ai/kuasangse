@@ -131,10 +131,15 @@ export function createSectionsFactoryTab(capabilities = {}) {
   });
 
   const commands = {
-    guideAction: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.guideAction(value) },
-    runStage: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.runStage(value) },
-    applySectionVariant: { capability: `${DETAIL_OWNER}:write`, execute: value => actionMap.applySectionVariant(value) },
+    guideAction: { capability: `${DETAIL_OWNER}:write`, execute: (value, context) => actionMap.guideAction(value, context) },
+    runStage: { capability: `${DETAIL_OWNER}:write`, execute: (value, context) => actionMap.runStage(value, context) },
+    applySectionVariant: { capability: `${DETAIL_OWNER}:write`, execute: (value, context) => actionMap.applySectionVariant(value, context) },
   };
+  for (const name of ['updateSectionInstruction', 'updateSectionAssemblySource', 'updateSectionAssemblyCutUsage',
+    'updateSectionAssemblyCut', 'updateSectionAssemblyNote', 'saveManualSection', 'generateSection',
+    'setSectionBasisMode', 'setSectionGenerationMode', 'updateSectionOrder', 'setSectionEnabled']) {
+    commands[name] = { capability: `${DETAIL_OWNER}:write`, execute: (value, context) => requiredFunction(actions, name)(value, context) };
+  }
   let contract;
   const fire = (name, ...args) => {
     try {

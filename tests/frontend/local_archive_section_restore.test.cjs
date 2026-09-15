@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const CORE = fs.readFileSync(path.join(ROOT, 'src', 'app-core-06.js'), 'utf8');
+const SESSION_CORE = fs.readFileSync(path.join(ROOT, 'src', 'app-core-02.js'), 'utf8');
 const PREVIEW_MENU = fs.readFileSync(path.join(ROOT, 'src', 'menus', 'preview-menu.mjs'), 'utf8');
 
 function sourceBetween(source, startMarker, endMarker) {
@@ -353,7 +354,7 @@ test('archive request fence rejects a changed PSD tab branch or authority token'
   assert.equal(context.isCurrent(identity, 'draft:branch-a', 31), false);
 });
 
-test('explicit preview recovery imports only the most complete matching product archive', async () => {
+test('explicit preview recovery imports matching archive images and preserves current section copy', async () => {
   const source = sourceBetween(
     CORE,
     'async function factoryRecoverPreviewSectionsFromLocalArchive(',
@@ -415,7 +416,12 @@ test('explicit preview recovery imports only the most complete matching product 
   const outcome = await context.recover();
 
   assert.deepEqual(restored.map(item => item.sectionId), ['header', 'hook', 'size_color']);
-  assert.deepEqual(restored.map(item => item.content.headline), ['header-1 headline', 'hook-1 headline', 'options-latest headline']);
+  assert.deepEqual(restored.map(item => item.content.headline), ['header-1 headline', 'hook-1 headline', '기존 색상옵션']);
+  assert.deepEqual(restored.map(item => item.image), [
+    'http://archive.test/image/header-1',
+    'http://archive.test/image/hook-1',
+    'http://archive.test/image/options-latest',
+  ], '현재 문구를 보존하더라도 가장 완전한 같은 상품 보관본의 이미지 복원은 빠지면 안 됩니다.');
   assert.equal(outcome.restored, 3);
   assert.equal(state.persisted, true);
   assert.equal(state.saved, true);
@@ -548,4 +554,38 @@ test('preview entry automatically recovers non-displayable stored section image 
     PREVIEW_MENU,
     /runCommand\(menuActions\.recoverPreviewArchiveSections,\s*undefined,\s*isCurrent\)/,
   );
+});
+
+test('lightweight section image save preserves durable URLs and strips transient image payloads', () => {
+  const source = [
+    sourceBetween(SESSION_CORE, 'function runtimeExternalImageSrc(', 'function stripRuntimeImageItem('),
+    sourceBetween(SESSION_CORE, 'function stripSectionImages(', 'function isDisplayableImageSrc('),
+  ].join('\n');
+  const context = {
+    IMAGE_STORED_MARKER: '__stored_in_indexeddb__',
+    isLikelyLargeBinaryString: () => false,
+  };
+  vm.createContext(context);
+  vm.runInContext(`${source}\nthis.strip = stripSectionImages;`, context);
+
+  const marker = '__stored_in_indexeddb__';
+  assert.deepEqual({ ...context.strip({
+    empty: null,
+    blank: '',
+    stored: marker,
+    http: 'http://archive.test/image/section-1',
+    https: 'https://archive.test/image/section-2',
+    relativeArchive: '/api/local-archive/assets/section-3/image',
+    inlineData: 'data:image/png;base64,iVBORw0KGgo=',
+    transientBlob: 'blob:https://app.test/section-4',
+  }) }, {
+    empty: null,
+    blank: null,
+    stored: marker,
+    http: 'http://archive.test/image/section-1',
+    https: 'https://archive.test/image/section-2',
+    relativeArchive: '/api/local-archive/assets/section-3/image',
+    inlineData: marker,
+    transientBlob: marker,
+  });
 });

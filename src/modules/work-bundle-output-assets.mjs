@@ -3,6 +3,7 @@ import {
   binaryText,
   filenameFor,
   hasValue,
+  isDocumentAsset,
   list,
   mimeFromSource,
   pushAsset,
@@ -18,9 +19,8 @@ function identityKey(value) {
   return text(value).replace(/\s+/gu, '').toLowerCase();
 }
 
-function restoredCandidateMatchesCurrentWork(asset, factory) {
+function candidateMatchesCurrentWork(asset, factory, strict = false) {
   const metadata = record(asset.metadata);
-  if (metadata.isolatedOnProjectFileRestore !== true) return false;
   const sourceMap = record(asset.sourceMap);
   const product = record(factory.product);
   const expected = {
@@ -33,10 +33,9 @@ function restoredCandidateMatchesCurrentWork(asset, factory) {
     productKey: identityKey(asset.productKey || metadata.productKey || sourceMap.productKey),
     fingerprint: text(asset.inputImageFingerprint || metadata.inputImageFingerprint || sourceMap.inputImageFingerprint),
   };
-  return Object.values(expected).every(Boolean)
-    && actual.workspaceId === expected.workspaceId
-    && actual.productKey === expected.productKey
-    && actual.fingerprint === expected.fingerprint;
+  return Object.entries(expected).every(([key, value]) => (
+    strict ? Boolean(value) && actual[key] === value : !actual[key] || actual[key] === value
+  ));
 }
 
 function factoryOutputAssetRows(factory) {
@@ -50,7 +49,8 @@ function factoryOutputAssetRows(factory) {
       value,
       sourceLocator: `project.payload.assetPayload.factory.previousAssets[${index}]`,
     }))
-    .filter(({ value }) => restoredCandidateMatchesCurrentWork(record(value), factory))
+    .filter(({ value }) => record(record(value).metadata).isolatedOnProjectFileRestore === true
+      && candidateMatchesCurrentWork(record(value), factory, true))
     .filter(({ value }) => {
       const id = text(record(value).id);
       if (!id || seen.has(id)) return false;
@@ -66,9 +66,14 @@ export function addFactoryOutputAssets(plan, factory) {
     const asset = record(value);
     const id = text(asset.id) || `asset-${index + 1}`;
     const stage = text(asset.stageId) || 'cuts';
+    const document = isDocumentAsset(asset);
+    const documentArchiveId = document ? text(asset.documentArchiveId || asset.archiveId) : '';
+    if (document && !/^[\w-]{1,250}$/u.test(documentArchiveId)) {
+      throw new Error(`work_bundle_document_source_invalid:${id}`);
+    }
     const source = binarySource(asset);
-    if (!source) return;
-    const mimeType = mimeFromSource(source, text(asset.mime));
+    if (!source && !document) return;
+    const mimeType = document ? 'text/html' : mimeFromSource(source, text(asset.mime));
     const selectionState = asset.rejected === true
       ? 'rejected'
       : asset.archived === true
@@ -94,6 +99,10 @@ export function addFactoryOutputAssets(plan, factory) {
           parentAssetIds: list(asset.parentAssetIds).map(text).filter(Boolean),
           mimeType,
           sourceKind: 'factory-output',
+          ...(document ? {
+            documentArchiveId,
+            documentReference: `/api/local-archive/assets/${encodeURIComponent(documentArchiveId)}`,
+          } : {}),
         },
       },
       source,
@@ -110,6 +119,7 @@ export function addMappedOutputAssets(
   sourceLocator,
   selectedMap = {},
   archiveAssets = [],
+  { factory = {}, sectionVariants = {} } = {},
 ) {
   Object.entries(record(sourceRecord)).forEach(([key, value], index) => {
     const sourceValue = record(value);
@@ -118,8 +128,22 @@ export function addMappedOutputAssets(
       : binarySource(sourceValue);
     const storedImageKnown = text(value) === STORED_IMAGE_MARKER;
     if (!source && storedImageKnown) {
+      const variant = list(record(sectionVariants)[key]).map(record)
+        .find(item => text(item.id) === text(record(selectedMap)[key]));
+      const placedKey = text(record(variant?.content).placed_asset_key);
+      if (text(variant?.imageRef) === 'current-section-image' && placedKey.startsWith('factory:')) {
+        const placed = factoryOutputAssetRows(factory).map(row => record(row.value))
+          .find(item => text(item.id) === placedKey.slice('factory:'.length));
+        if (!placed || !candidateMatchesCurrentWork(placed, factory) || !binarySource(placed)) {
+          throw new Error(`work_bundle_section_source_invalid:${key}`);
+        }
+        source = binarySource(placed);
+      }
+    }
+    if (!source && storedImageKnown) {
       const archived = list(archiveAssets).find((item) => (
         text(record(item).sectionId) === key
+        && candidateMatchesCurrentWork(record(item), factory)
         && binarySource(record(item))
       ));
       source = binarySource(record(archived));

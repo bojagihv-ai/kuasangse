@@ -327,51 +327,118 @@ test('workspace mutations are serialized and a rejected mutation does not poison
   assert.deepEqual(order, ['first-start', 'first-end', 'second']);
 });
 
-
-// ── 반납은 쓰기 큐에 서지 않는다 ────────────────────────────────────────
-//
-// 이 사실 하나가 지금 이 시스템에 교착이 없는 **유일한 근거**인데,
-// 코드 어디에도 계약으로 박혀 있지 않았다.
-//
-// 2026-08-31 에 누군가(나였다) release 를 mutationQueue 에 세웠다가
-// 회귀 SAVE-04 가 깨져 커밋 eab33d7 로 되돌렸다. 되돌렸다는 사실만 남고
-// "왜 그러면 안 되는지" 는 아무 데도 안 남아, 다음 사람이 같은 수정을 또 할 수 있다.
-//
-// 더 나쁜 것은 교착이다: 보관 쓰기는 archive-adapter 가 runMutation 으로 큐에 세운다.
-// release 도 그 큐에 세우면, runMutation 안에서 release 를 기다리는 코드가
-// 하나라도 생기는 순간 **영원히 안 풀린다.**
-// 지금 호출부 다섯 곳이 전부 큐 밖인 것은 우연이지 계약이 아니었다 - 이제 계약이다.
-//
-// (2026-09-04 적대적 검증에서 409 경합 수정안 다섯 개 중 이것만 3인 만장일치로 살아남았다.)
-
-test('반납(release)은 쓰기 큐(runMutation)를 거치지 않는다 - 교착 방지', async () => {
-  const fs = require('node:fs');
-  const source = fs.readFileSync(LOCK_PATH, 'utf8');
-
-  // (1) 소스 계약: 반환 객체가 transitions.release 를 그대로 내보낸다.
-  assert.match(source, /release:\s*transitions\.release/,
-    'release 가 runMutation 같은 것으로 감싸였습니다.\n'
-    + '보관 쓰기는 runMutation 으로 같은 큐에 섭니다. release 를 그 큐에 세우면\n'
-    + 'runMutation 안에서 release 를 기다리는 코드가 하나라도 생기는 순간 영구 교착입니다.\n'
-    + '2026-08-31 에 같은 수정으로 회귀 SAVE-04 가 깨져 eab33d7 로 되돌렸습니다.');
-
-  // (2) 동작 계약: 진행 중인 쓰기가 안 끝나도 반납은 나간다.
-  const { root, requests } = harness();
+test('이미지 보관 쓰기가 완료되기 전에 자동 저장이 편집권을 반납하지 않는다', async () => {
   const { createWorkspaceLockCoordinator } = await loadLock();
-  const lock = createWorkspaceLockCoordinator({ root });
+  const { fetchArchiveWithAuthority } = await import('../../src/modules/persistence/archive-adapter.mjs');
+  const { root, requests } = harness();
+  const coordinator = createWorkspaceLockCoordinator({ root });
+  await coordinator.acquire({ scopeId: 'project:alpha' });
+  let finishUpload;
+  let uploadStarted;
+  const started = new Promise(resolve => { uploadStarted = resolve; });
+  const gate = new Promise(resolve => { finishUpload = resolve; });
+  const upload = fetchArchiveWithAuthority({
+    authority: coordinator,
+    adapter: { async fetchResponse() {
+      uploadStarted();
+      await gate;
+      return response(requests.some(request => request.url.includes('/release')) ? 409 : 200, { ok: true });
+    } },
+    url: '/api/local-archive/assets',
+    options: { method: 'POST', body: JSON.stringify({ workspaceId: 'alpha' }) },
+    createAuthorityError: (code, message) => Object.assign(new Error(message), { code }),
+  });
+  await started;
+  const release = coordinator.release();
+  await new Promise(resolve => setImmediate(resolve));
+  finishUpload();
+  const [stored, released] = await Promise.allSettled([upload, release]);
+  assert.equal(stored.status, 'fulfilled', stored.reason?.message);
+  assert.equal(stored.value.status, 200);
+  assert.equal(released.status, 'fulfilled');
+  assert.equal(coordinator.snapshot().mode, 'released');
+});
 
-  let releaseWrite = null;
-  const blocked = lock.runMutation(() => new Promise(resolve => { releaseWrite = resolve; }));
-  // 쓰기가 큐에서 멈춰 있는 동안 반납을 부른다.
-  const released = lock.release();
-  const settled = await Promise.race([
-    released.then(() => 'released'),
-    new Promise(resolve => setTimeout(() => resolve('stuck'), 500)),
-  ]);
-  assert.equal(settled, 'released',
-    '진행 중인 쓰기가 안 끝났는데 반납이 막혔습니다 - release 가 쓰기 큐에 선 것입니다');
+test('대기 중이던 이전 반납은 새로 획득한 편집권을 반납하지 않는다', async () => {
+  const { createWorkspaceLockCoordinator } = await loadLock();
+  const { root, requests } = harness();
+  const coordinator = createWorkspaceLockCoordinator({ root });
+  await coordinator.acquire({ scopeId: 'project:alpha' });
+  let finishWrite;
+  const gate = new Promise(resolve => { finishWrite = resolve; });
+  const write = coordinator.runMutation(() => gate);
+  const release = coordinator.release();
+  await coordinator.acquire({ scopeId: 'project:alpha' });
+  finishWrite();
+  await Promise.all([write, release]);
+  assert.equal(coordinator.snapshot().mode, 'editing');
+  assert.equal(requests.filter(request => request.url.includes('/release')).length, 0);
+});
 
-  releaseWrite?.();
-  await blocked.catch(() => {});
-  assert.ok(Array.isArray(requests), '하네스가 요청을 기록해야 합니다');
+test('편집권 acquire는 대기 중인 이미지 보관 쓰기를 추월하지 않는다', async () => {
+  // Given: A의 mutation이 실행 중이고 A archive write가 그 뒤에 대기한다.
+  const { createWorkspaceLockCoordinator } = await loadLock();
+  const { fetchArchiveWithAuthority } = await import('../../src/modules/persistence/archive-adapter.mjs');
+  const { root, requests } = harness();
+  root.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (!url.includes('/acquire')) return response(200, { ok: true });
+    const { workspaceId } = JSON.parse(options.body);
+    return response(200, {
+      ok: true, granted: true, state: 'editing', scopeId: workspaceId,
+      leaseId: `lease-${workspaceId}`, fencingToken: workspaceId === 'project:alpha' ? 7 : 8,
+      ownerId: '이 창', sessionId: 'session-a', expiresAt: 99_999, revision: 3,
+    });
+  };
+  const coordinator = createWorkspaceLockCoordinator({ root });
+  await coordinator.acquire({ scopeId: 'project:alpha' });
+  let continueMutation;
+  let mutationStarted;
+  const started = new Promise(resolve => { mutationStarted = resolve; });
+  const gate = new Promise(resolve => { continueMutation = resolve; });
+  const blockingMutation = coordinator.runMutation(async () => {
+    mutationStarted();
+    await gate;
+  });
+  await started;
+  const writes = [];
+  const archive = fetchArchiveWithAuthority({
+    authority: coordinator,
+    adapter: { async fetchResponse(url, options) {
+      writes.push({ url, body: JSON.parse(options.body) });
+      return response(200, { ok: true });
+    } },
+    url: '/api/local-archive/assets',
+    options: { method: 'POST', body: JSON.stringify({ workspaceId: 'alpha' }) },
+    createAuthorityError: (code, message) => Object.assign(new Error(message), { code }),
+  });
+
+  // When: B acquire가 A write보다 나중에 요청된다.
+  const retained = coordinator.acquire({ scopeId: 'project:alpha' });
+  const acquired = coordinator.acquire({ scopeId: 'project:beta' });
+  const authorityWhileBlocked = coordinator.snapshot();
+  continueMutation();
+  const settled = await Promise.allSettled([blockingMutation, archive, retained, acquired]);
+
+  // Then: A는 한 번만 저장되고 그 다음 B가 편집권을 얻으며, 이후 A 쓰기는 차단된다.
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled', 'fulfilled', 'fulfilled']);
+  assert.equal(settled[2].value.leaseId, 'lease-project:alpha');
+  assert.equal(authorityWhileBlocked.scopeId, 'project:alpha');
+  assert.equal(authorityWhileBlocked.mode, 'editing');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.authorityWorkspaceId, 'project:alpha');
+  assert.equal(writes[0].body.leaseId, 'lease-project:alpha');
+  assert.equal(coordinator.snapshot().scopeId, 'project:beta');
+  assert.equal(coordinator.snapshot().mode, 'editing');
+  await assert.rejects(
+    fetchArchiveWithAuthority({
+      authority: coordinator,
+      adapter: { async fetchResponse() { throw new Error('stale A write reached adapter'); } },
+      url: '/api/local-archive/assets',
+      options: { method: 'POST', body: JSON.stringify({ workspaceId: 'alpha' }) },
+      createAuthorityError: (code, message) => Object.assign(new Error(message), { code }),
+    }),
+    error => error?.code === 'READ_ONLY',
+  );
+  assert.equal(writes.length, 1);
 });

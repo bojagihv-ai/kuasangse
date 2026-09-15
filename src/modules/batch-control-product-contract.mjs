@@ -85,6 +85,7 @@ const PRODUCT_RUN_KEYS = Object.freeze([
   'imageModel',
   'requiredValues',
   'inputImages',
+  'cafe24Registration',
   'decisionModes',
   'schema',
   'jobId',
@@ -95,6 +96,7 @@ const PRODUCT_RUN_KEYS = Object.freeze([
   'hydratedRevision',
   'checkpoint',
   'regenerateStage',
+  'restoreBaseline',
 ]);
 const POLICY_DECISION_KEYS = Object.freeze([
   'sinhwa_db_product',
@@ -121,6 +123,10 @@ const PRODUCT_REQUIRED_VALUE_KEYS = Object.freeze([
   // factory_product_payload_invalid 로 거절해, 화면에는 성공처럼 보이고 실행만 안 된다.
   'widthMm', 'depthMm',
 ]);
+const CAFE24_REGISTRATION_KEYS = Object.freeze([
+  'categoryId', 'salePrice', 'supplyPrice', 'displayStatus', 'sellingStatus',
+  'registrationMode', 'targetProductNo',
+]);
 const PRODUCT_IMAGE_KEYS = Object.freeze([
   'role', 'ordinal', 'name', 'fileName', 'colorName', 'sha256', 'dataUrl',
 ]);
@@ -145,12 +151,32 @@ export function validateProductRunPayload(payload) {
     || !['manual', 'auto'].includes(payload.mode)
     || (payload.imageModel !== undefined && !PRODUCT_IMAGE_MODELS.includes(payload.imageModel))
     || typeof payload.startFresh !== 'boolean'
+    || (payload.restoreBaseline !== undefined && (
+      !Array.isArray(payload.restoreBaseline) || payload.restoreBaseline.length !== 6
+      || new Set(payload.restoreBaseline.map(stage => stage?.key)).size !== 6
+      || payload.restoreBaseline.some(stage => !record(stage)
+        || !['representative', 'size', 'option_color', 'general', 'sections', 'final_detail'].includes(stage.key)
+        || Object.keys(stage).some(key => !['key', 'candidates', 'selectedIds'].includes(key))
+        || !Array.isArray(stage.candidates) || !Array.isArray(stage.selectedIds)
+        || stage.candidates.some(candidate => !record(candidate) || !text(candidate.id)
+          || typeof candidate.digest !== 'string' || Object.keys(candidate).some(key => !['id', 'digest'].includes(key)))
+        || stage.selectedIds.some(id => typeof id !== 'string' || !stage.candidates.some(candidate => candidate.id === id)))
+    ))
     || (payload.restoreOnly !== undefined && typeof payload.restoreOnly !== 'boolean')
     || (payload.adoptHydratedWorkfile !== undefined && typeof payload.adoptHydratedWorkfile !== 'boolean')
     || (payload.hydratedRevision !== undefined && (
       !Number.isInteger(payload.hydratedRevision) || payload.hydratedRevision < 0
     ))
     || (payload.expectedStageKey !== undefined && payload.expectedStageKey !== text(payload.expectedStageKey))
+    || (payload.cafe24Registration !== undefined && (
+      !record(payload.cafe24Registration)
+      || Object.keys(payload.cafe24Registration).some(key => !CAFE24_REGISTRATION_KEYS.includes(key))
+      || Object.values(payload.cafe24Registration).some(value => typeof value !== 'string' || value.length > 200)
+      || (payload.cafe24Registration.registrationMode !== undefined
+        && !['create', 'update'].includes(payload.cafe24Registration.registrationMode))
+      || (payload.cafe24Registration.targetProductNo !== undefined
+        && !/^\\d+$/u.test(payload.cafe24Registration.targetProductNo))
+    ))
     || (payload.workfileName !== undefined && (
       typeof payload.workfileName !== 'string'
       || !/^[^\\/:*?"<>|]+\.kuasangse$/u.test(payload.workfileName)

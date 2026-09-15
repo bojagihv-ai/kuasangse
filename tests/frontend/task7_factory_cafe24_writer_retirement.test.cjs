@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..', '..');
+const appCore01Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-01.js'), 'utf8');
 const appCore03Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
 const appCore05Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-05.js'), 'utf8');
 const appCore06Source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-06.js'), 'utf8');
@@ -99,6 +100,12 @@ function sourceFunction(source, name) {
 function compileFunction(source, name, globals = {}) {
   const context = vm.createContext({ Promise, TypeError, console, ...globals });
   vm.runInContext(`${sourceFunction(source, name)}\nthis.target = ${name};`, context);
+  return context.target;
+}
+
+function compileAsyncFunction(source, name, globals = {}) {
+  const context = vm.createContext({ Promise, TypeError, console, ...globals });
+  vm.runInContext(`async ${sourceFunction(source, name)}\nthis.target = ${name};`, context);
   return context.target;
 }
 
@@ -272,6 +279,45 @@ test('Cafe24 payload core writers require an explicit transaction draft', () => 
   ]) {
     assert.doesNotMatch(sourceFunction(payloadSource, name), /factoryRuntimeReadFactory\s*\(/);
   }
+});
+
+test('generated PC and mobile detail copies record separate mobile registration without changing either HTML', () => {
+  const html = '<p>현재 시험상품</p><img src="https://example.com/detail.jpg">';
+  const globals = {
+    FACTORY_CAFE24_DETAIL_HTML_FIELDS: ['description', 'mobile_description'],
+    factoryCafe24StripDetailAdminLabels: value => value,
+    factoryCafe24BuildMarketSafeDetailHtml: () => html,
+  };
+  for (const [scoped, product] of [
+    [{ html }, {}],
+    [{ blocked: true }, {}],
+    [{}, {}],
+    [{}, { description: 'old unscoped HTML' }],
+  ]) {
+    const ensure = compileFunction(payloadSource, 'factoryCafe24EnsureScopedDetailHtmlPayload', {
+      ...globals,
+      factoryCafe24CurrentScopedDetailHtml: () => scoped,
+    });
+    const result = ensure(product, {}, { product: {} }, { allowSafeDetailFallback: true });
+    assert.equal(result.description, html);
+    assert.equal(result.mobile_description, html);
+    assert.equal(result.separated_mobile_description, 'T');
+  }
+  const sanitize = compileFunction(payloadSource, 'factoryCafe24SanitizeDetailHtmlPayload', {
+    ...globals,
+    factoryCafe24DetailPayloadPreflight: () => ({ ok: false }),
+  });
+  const sanitized = sanitize({ description: 'unsafe' }, {}, { product: {} }, { allowSafeDetailFallback: true });
+  assert.equal(sanitized.description, html);
+  assert.equal(sanitized.mobile_description, html);
+  assert.equal(sanitized.separated_mobile_description, 'T');
+  const publishSource = sourceFunction(syncSource, 'factoryPublishCafe24ScopedDetailHtml');
+  const productBlock = publishSource.match(/const product = \{[\s\S]*?\n  \};/);
+  assert.ok(productBlock);
+  const published = vm.runInNewContext(`${productBlock[0]} product;`, { html });
+  assert.equal(published.description, html);
+  assert.equal(published.mobile_description, html);
+  assert.equal(published.separated_mobile_description, 'T');
 });
 
 test('reference auto-load uses one owned transaction, one draft, and saves after commit', async () => {
@@ -723,7 +769,45 @@ test('Cafe24 product image payload uses official data URLs and request envelope'
 
   const syncImagesSource = sourceFunction(syncSource, 'factorySyncCafe24ProductImages');
   assert.match(syncImagesSource, /body:\s*\{\s*shop_no:\s*1,\s*request:\s*payload,\s*\}/s);
-  assert.match(syncImagesSource, /executeDirect:\s*true/);
+  assert.doesNotMatch(syncImagesSource, /executeDirect:\s*true/);
+  assert.match(syncImagesSource, /factoryExecuteCafe24ControlBody\(body,/);
+});
+
+test('Cafe24 후속 이미지·재고 전송은 기존 변경안 승인 실행을 사용한다', () => {
+  for (const name of ['factorySyncCafe24ProductImages', 'factorySyncCafe24AdditionalImages',
+    'factoryUploadCafe24DetailInlineImages', 'factorySyncCafe24OptionsAndVariants']) {
+    let source = sourceFunction(syncSource, name);
+    if (name === 'factoryUploadCafe24DetailInlineImages') {
+      assert.match(source, /factoryUploadCafe24Image\(/);
+      source += sourceFunction(syncSource, 'factoryUploadCafe24Image');
+    }
+    assert.doesNotMatch(source, /executeDirect:\s*true/, `${name}: 승인 없는 직접 실행을 요청하면 안 됩니다.`);
+    assert.match(source, /factoryExecuteCafe24ControlBody\(/, `${name}: 기존 변경안 승인 실행을 유지해야 합니다.`);
+  }
+});
+
+test('배치 분류 표시명은 같은 입력 자료의 분류 번호를 사용하고 직접 선택한 번호는 유지한다', () => {
+  const category = compileFunctions(syncSource, ['factorySelectedCafe24CategoryRows'], {
+    factoryCafe24CategoryFallbackValue: () => '',
+    factoryCafe24ReferenceList: () => [],
+    factoryCafe24CategoryRows: value => Array.isArray(value) ? value : [{ category_no: String(value) }],
+    factoryDbNormalizeKey: value => String(value || '').trim(),
+  }).factorySelectedCafe24CategoryRows;
+  const factory = { batchJobId: 'job-3027', product: {
+    requirementsSnapshot: { category: '지갑', cafe24CategoryId: '84' },
+    dbFieldSettings: { category: { manualTouched: true, manualValue: '지갑' } },
+    finalDb: { category: '지갑' },
+  } };
+  assert.equal(category(factory)[0].category_no, '84');
+  factory.product.dbFieldSettings.category.manualValue = '107';
+  assert.equal(category(factory)[0].category_no, '107');
+  factory.product.dbFieldSettings.category.manualValue = [{ category_no: '108' }];
+  assert.equal(category(factory)[0].category_no, '108');
+  factory.product.dbFieldSettings.category.manualValue = '다른 분류';
+  assert.notEqual(category(factory)[0].category_no, '84');
+  factory.product.dbFieldSettings.category.manualValue = '지갑';
+  factory.product.requirementsSnapshot.cafe24CategoryId = '잘못된 번호';
+  assert.notEqual(category(factory)[0].category_no, '잘못된 번호');
 });
 
 test('Cafe24 DOM/form drafts share one explicit draft and preserve post-commit save mode', () => {
@@ -1216,14 +1300,101 @@ test('candidate collection captures the existing Cafe24 receipt before clearing 
       /const retainedCafe24Selection = restoredSelection && !!previousSelection\.selectedCafe24CandidateKey;/,
       'a restored Cafe24 receipt must outrank candidate auto-apply',
     );
-    assert.match(
-      collector,
-      /if \([^)]*!retainedCafe24Selection\)/,
-      'candidate auto-apply must not replace the restored Cafe24 product',
-    );
+    if (collector === collectAll) {
+      assert.match(
+        collector,
+        /if \(cafeCount && !retainedCafe24Selection && cafeShares\)[\s\S]*else if \(cafeCount && !retainedCafe24Selection && !cafeShares\)/,
+        'candidate auto-apply must not replace the restored Cafe24 product',
+      );
+    } else {
+      assert.match(collector, /if \(!retainedCafe24Selection\)\s*\{/,
+        'Cafe24-only auto-apply must not replace the restored Cafe24 product');
+    }
   }
   assert.doesNotMatch(runCafe24, /factoryResetDbContextForNewCollection\(/);
   assert.doesNotMatch(runDbStage, /factoryResetDbContextForNewCollection\(/);
+});
+
+test('candidate auto-apply preserves a retained Cafe24 target for both identity outcomes', async () => {
+  const factoryFor = selectedCafe24CandidateKey => ({
+    product: {
+      productName: '원본 제품',
+      candidateAutoApply: true,
+      selectedCafe24CandidateKey,
+      confirmedCafe24ProductKey: selectedCafe24CandidateKey,
+      cafe24DraftProductKey: selectedCafe24CandidateKey,
+      cafe24CandidateResolution: selectedCafe24CandidateKey ? 'selected' : '',
+      pendingDbCandidates: [],
+      pendingCafe24Candidates: [],
+      dbCandidates: [],
+      cafe24Candidates: selectedCafe24CandidateKey ? [{ product_no: selectedCafe24CandidateKey, product_name: '기존 확정 상품' }] : [],
+    },
+  });
+  const run = async ({ selectedCafe24CandidateKey, candidateName }) => {
+    const factory = factoryFor(selectedCafe24CandidateKey);
+    let applyCount = 0;
+    const collect = compileAsyncFunction(syncSource, 'factoryCollectProductCandidatesForReview', {
+      CAFE24_CONTROL_API: { defaultMallId: 'test-mall' },
+      fetchSinhwaDbLocalStatus: async () => ({ ok: true, running: true }),
+      fetchCafe24ControlStatus: async () => ({ ok: true, running: true }),
+      fetchCafe24OAuthStatus: async () => ({ mallId: 'test-mall', needsReauth: false, state: 'ready', message: 'ready' }),
+      fetchSinhwaPdpServiceStatus: async () => ({ configured: true }),
+      factoryCandidateCollectionScope: () => 'same-work',
+      factoryCandidateCollectionScopeMatches: () => true,
+      factoryCandidateSearchTerms: () => ['원본 제품'],
+      factoryCaptureCandidateReviewSelection: current => ({
+        identityKey: 'same-work',
+        selectedCafe24CandidateKey: current.product.selectedCafe24CandidateKey || '',
+        confirmedCafe24ProductKey: current.product.confirmedCafe24ProductKey || '',
+        cafe24DraftProductKey: current.product.cafe24DraftProductKey || '',
+        cafe24CandidateResolution: current.product.cafe24CandidateResolution || '',
+        cafe24Candidates: current.product.cafe24Candidates.slice(),
+      }),
+      factoryResetDbContextForNewCollection: current => {
+        current.product.selectedCafe24CandidateKey = '';
+        current.product.confirmedCafe24ProductKey = '';
+        current.product.cafe24DraftProductKey = '';
+        current.product.cafe24Candidates = [];
+        current.product.pendingCafe24Candidates = [];
+        current.product.cafe24CandidateResolution = '';
+      },
+      factoryRestoreCandidateReviewSelection: (current, snapshot) => {
+        if (!snapshot.selectedCafe24CandidateKey) return false;
+        current.product.selectedCafe24CandidateKey = snapshot.selectedCafe24CandidateKey;
+        current.product.confirmedCafe24ProductKey = snapshot.confirmedCafe24ProductKey;
+        current.product.cafe24DraftProductKey = snapshot.cafe24DraftProductKey;
+        current.product.cafe24CandidateResolution = snapshot.cafe24CandidateResolution;
+        current.product.cafe24Candidates = snapshot.cafe24Candidates.slice();
+        return true;
+      },
+      factorySearchSinhwaReviewCandidates: async () => [],
+      factorySearchCafe24ReviewCandidates: async () => [{ product_no: 'new-cafe24', product_name: candidateName }],
+      factorySlimReviewCandidateList: candidates => candidates,
+      factoryCandidateSharesProductIdentity: (_productName, name) => name === '원본 제품 후보',
+      factoryApplyDbCandidateFromReview: async () => true,
+      factoryApplyCafe24CandidateFromReview: async (_index, options) => {
+        applyCount += 1;
+        options.factory.product.selectedCafe24CandidateKey = 'new-cafe24';
+        options.factory.product.cafe24Candidates = options.factory.product.pendingCafe24Candidates.slice();
+        return true;
+      },
+      factoryCandidateName: candidate => candidate?.product_name || '',
+      factoryUpdateFinalDbFromFields: () => {},
+      factoryReportCandidateParallelProgress: () => {},
+      factoryUpdateCandidateReviewStageStatus: () => {},
+      factoryStartCafe24CandidateRerank: () => {},
+      factoryLog: () => {},
+    });
+    await collect({ factory, render: false });
+    return { selectedCafe24CandidateKey: factory.product.selectedCafe24CandidateKey, applyCount };
+  };
+
+  for (const candidateName of ['원본 제품 후보', '전혀 다른 후보']) {
+    const retained = await run({ selectedCafe24CandidateKey: 'old-cafe24', candidateName });
+    assert.deepEqual(retained, { selectedCafe24CandidateKey: 'old-cafe24', applyCount: 0 }, candidateName);
+  }
+  const fresh = await run({ selectedCafe24CandidateKey: '', candidateName: '원본 제품 후보' });
+  assert.deepEqual(fresh, { selectedCafe24CandidateKey: 'new-cafe24', applyCount: 1 });
 });
 
 test('Cafe24 candidate searches await persistence before reporting completion', () => {
@@ -1290,12 +1461,160 @@ test('final registration status shell exists before the first progress update', 
 });
 
 test('detail HTML images use the Cafe24 description-image upload resource', () => {
-  const uploadSource = sourceFunction(syncSource, 'factoryUploadCafe24DetailInlineImages');
+  const wrapperSource = sourceFunction(syncSource, 'factoryUploadCafe24DetailInlineImages');
+  assert.match(wrapperSource, /factoryUploadCafe24Image\(dataUrl, mallId, factory,/);
+  const uploadSource = wrapperSource + sourceFunction(syncSource, 'factoryUploadCafe24Image');
   assert.match(uploadSource, /['"]\/api\/v2\/admin\/products\/images['"]/);
   assert.match(uploadSource, /body:\s*\{\s*request:\s*null,/);
-  assert.match(uploadSource, /requests:\s*payloadImages\.map\(image\s*=>\s*\(\{\s*image\s*\}\)\)/);
+  assert.match(uploadSource, /requests:\s*\[\{\s*image:\s*factoryCafe24DetailBase64FromDataUrl\(prepared\)\s*\}\]/);
   assert.doesNotMatch(uploadSource, /body:\s*\{\s*image:/);
   assert.doesNotMatch(uploadSource, /\/additionalimages/);
+});
+
+test('detail image approvals stay below the D1 row limit without dropping or reordering originals', async () => {
+  const originals = Array.from({ length: 15 }, (_, index) => `data:image/png;base64,${String.fromCharCode(65 + index).repeat(1200000)}`);
+  const uploaded = [];
+  const approved = [];
+  const context = vm.createContext({ Promise, TypeError, console,
+    factoryCafe24DetailInlineImageDataUrls: () => originals,
+    factoryCafe24DetailBase64FromDataUrl: value => value.split(',')[1],
+    factoryCafe24ApprovedImageDataUrl: async value => value.slice(0, value.indexOf(',') + 1) + value.split(',')[1].slice(0, 300000),
+    callCafe24Console: async (method, endpoint, input) => {
+      assert.equal(method, 'POST');
+      assert.equal(endpoint, '/api/v2/admin/products/images');
+      const operation = { after: { payload: input.body }, payload: input.body };
+      assert.ok(Buffer.byteLength(JSON.stringify(operation)) < 2000000, 'D1_ERROR: string or blob too big: SQLITE_TOOBIG');
+      uploaded.push(...input.body.requests.map(item => item.image[0]));
+      return { plan: { id: `image-${uploaded.length}` } };
+    },
+    factoryCafe24ControlPlanFromBody: body => body.plan,
+    factoryExecuteCafe24ControlBody: async body => {
+      approved.push(body.plan.id);
+      return { job: { urls: [`https://cdn.example/${uploaded.at(-1)}.png`] } };
+    },
+    factoryCafe24DescriptionImageUrlsFromBody: body => body.urls || [],
+    factoryCafe24ReplaceDetailInlineImages: (html, sources, urls) => {
+      assert.strictEqual(sources, originals);
+      return urls.join('|');
+    },
+  });
+  vm.runInContext(['factoryUploadCafe24Image', 'factoryUploadCafe24DetailInlineImages']
+    .map(name => `async ${sourceFunction(syncSource, name)}`).join('\n'), context);
+  const run = context.factoryUploadCafe24DetailInlineImages;
+  const result = await run('3027', 'bojagi1928', 'original-html', { factory: { product: {} } });
+  assert.deepEqual(uploaded, Array.from({ length: 15 }, (_, index) => String.fromCharCode(65 + index)));
+  assert.equal(approved.length, 15);
+  assert.equal(result.uploadedUrls.length, 15);
+  assert.ok(originals.every(value => value.length === 1200022), 'source image strings must remain untouched');
+  assert.match(result.html, /^https:\/\/cdn\.example\/A\.png\|/);
+  assert.match(result.html, /https:\/\/cdn\.example\/O\.png$/);
+});
+
+test('approved image preparation keeps small originals and fails closed if the export copy still exceeds its budget', async () => {
+  const original = `data:image/png;base64,${'A'.repeat(900000)}`;
+  const resized = [];
+  const prepare = compileAsyncFunction(syncSource, 'factoryCafe24ApprovedImageDataUrl', {
+    loadImageElement: async () => ({ naturalWidth: 1600 }),
+    resizeImageDataUrl: async (source, width, height, options) => {
+      assert.strictEqual(source, original);
+      assert.equal(height, null);
+      assert.equal(options.background, '#ffffff');
+      assert.equal(options.mime, 'image/jpeg');
+      resized.push(width);
+      return 'data:image/jpeg;base64,AAAA';
+    },
+  });
+  assert.equal(await prepare('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
+  assert.equal(resized.length, 0);
+  assert.equal(await prepare(original), 'data:image/jpeg;base64,AAAA');
+  assert.deepEqual(resized, [1600]);
+  assert.equal(original.length, 900022);
+  await assert.rejects(prepare('https://example.com/image.png'), /원본을 읽지 못했습니다/);
+  const refused = compileAsyncFunction(syncSource, 'factoryCafe24ApprovedImageDataUrl', {
+    loadImageElement: async () => ({ naturalWidth: 1200 }),
+    resizeImageDataUrl: async () => original,
+  });
+  await assert.rejects(refused(original), /승인 기록 용량을 초과/);
+});
+
+test('an approved image job without inline results reads its exact audit response before continuing', async () => {
+  const plan = { id: 'plan-one' };
+  const job = { id: 'job-one', change_plan_id: plan.id, status: 'succeeded' };
+  let auditReads = 0;
+  const context = vm.createContext({ Promise, TypeError, console,
+    factoryCafe24DetailInlineImageDataUrls: () => ['data:image/png;base64,AAAA'],
+    factoryCafe24DetailBase64FromDataUrl: value => value.split(',')[1],
+    factoryCafe24ApprovedImageDataUrl: async value => value,
+    callCafe24Console: async () => ({ plan }),
+    factoryCafe24ControlPlanFromBody: body => body.plan,
+    factoryExecuteCafe24ControlBody: async () => ({ plan, job }),
+    factoryCafe24DescriptionImageUrlsFromBody: body => (body.images || []).map(image => image.path),
+    factoryCafe24ReadApprovedImageResponse: async execution => {
+      assert.strictEqual(execution.plan, plan);
+      assert.strictEqual(execution.job, job);
+      auditReads += 1;
+      return { images: [{ path: 'https://cdn.example/approved.jpg' }] };
+    },
+    factoryCafe24ReplaceDetailInlineImages: (html, sources, urls) => urls.join(''),
+  });
+  vm.runInContext(['factoryUploadCafe24Image', 'factoryUploadCafe24DetailInlineImages']
+    .map(name => `async ${sourceFunction(syncSource, name)}`).join('\n'), context);
+  const run = context.factoryUploadCafe24DetailInlineImages;
+  const result = await run('3027', 'bojagi1928', 'source-html', { factory: {} });
+  assert.equal(auditReads, 1);
+  assert.equal(result.html, 'https://cdn.example/approved.jpg');
+});
+
+test('approved image audit readback rejects another request, time window, mall, or ambiguous receipt', async () => {
+  const requested = { method: 'POST', path: '/api/v2/admin/products/images', payload: { request: null, requests: [{ image: 'AAAA' }] } };
+  const plan = { id: 'plan-one', mall_id: 'bojagi1928', operations: [{ type: 'cafe24_api', method: requested.method, path: requested.path, after: requested }] };
+  const job = { change_plan_id: plan.id, status: 'succeeded', started_at: '2026-09-13T10:48:00Z', finished_at: '2026-09-13T10:48:10Z' };
+  const good = { mall_id: plan.mall_id, action: 'cafe24_api:succeeded', target_id: `POST ${requested.path}`, created_at: '2026-09-13T10:48:09Z', after: { requested, cafe24: { images: [{ path: 'https://cdn.example/right.jpg' }] } } };
+  let rows = [good];
+  let reads = 0;
+  const read = compileAsyncFunction(syncSource, 'factoryCafe24ReadApprovedImageResponse', {
+    CAFE24_CONTROL_API: { connectorId: 'cafe24_control_tower' },
+    invokeApiHubConnector: async (connector, endpoint, input) => {
+      assert.equal(connector, 'cafe24_control_tower');
+      assert.equal(endpoint, 'get-api-audit-logs_7352cb66f2d64753');
+      assert.equal(input.query.mall_id, plan.mall_id);
+      assert.equal(input.query.q, good.target_id);
+      reads += 1;
+      return { data: rows };
+    },
+  });
+  assert.deepEqual(await read({ plan, job }), good.after.cafe24);
+  for (const bad of [
+    { ...good, mall_id: 'another-mall' },
+    { ...good, created_at: '2026-09-13T10:47:59Z' },
+    { ...good, after: { ...good.after, requested: { ...requested, payload: { requests: [{ image: 'BBBB' }] } } } },
+  ]) {
+    rows = [bad];
+    await assert.rejects(read({ plan, job }), /감사기록/);
+  }
+  rows = [good, good];
+  await assert.rejects(read({ plan, job }), /감사기록/);
+  const before = reads;
+  await assert.rejects(read({ plan, job: { ...job, change_plan_id: 'another-plan' } }), /승인 실행/);
+  assert.equal(reads, before, 'wrong plan must be rejected before reading records');
+});
+
+test('JPEG upload copies can use white backing without changing default transparent resize behavior', async () => {
+  const painted = [];
+  const context = { drawImage() {}, fillRect() { painted.push(this.fillStyle); } };
+  class TestImage {
+    naturalWidth = 800;
+    naturalHeight = 600;
+    set src(value) { this.onload(); }
+  }
+  const resize = compileFunction(appCore01Source, 'resizeImageDataUrl', {
+    Image: TestImage,
+    document: { createElement: () => ({ getContext: () => context, toDataURL: () => 'data:image/jpeg;base64,AAAA' }) },
+  });
+  await resize('original', 800, null);
+  assert.deepEqual(painted, []);
+  await resize('original', 800, null, { mime: 'image/jpeg', background: '#ffffff' });
+  assert.deepEqual(painted, ['#ffffff']);
 });
 
 test('final registration update mode finishes detail HTML and product image synchronization', () => {
@@ -1303,6 +1622,21 @@ test('final registration update mode finishes detail HTML and product image sync
   assert.match(runSource, /factoryPublishCafe24ScopedDetailHtml\s*\(/);
   assert.match(runSource, /factoryRunCafe24PostCreateSync\s*\(/);
   assert.match(runSource, /Cafe24 기존 상품 후속 등록 검증 완료/);
+});
+
+test('final registration carries the stock input into initial and resumed option inventories', () => {
+  const source = sourceFunction(appCore05Source, 'factoryRunFinalRegistration');
+  const start = source.indexOf('const inventoryQuantityInput =');
+  const end = source.indexOf('if (!detailModel.canProceed)', start);
+  assert.ok(start > 0 && end > start);
+  const resolve = (finalDb, options = {}) => vm.runInNewContext(`${source.slice(start, end)}\nforceInventoryQuantity`, { factory: { product: { finalDb } }, options });
+  assert.equal(resolve({ stock: '99' }), '99', 'stock=99 must not omit the option inventory step');
+  assert.equal(resolve({ stock: '0' }), '0');
+  assert.equal(resolve({ quantity: '12', stock: '99' }), '12');
+  assert.equal(resolve({ stock: '99' }, { forceInventoryQuantity: '5' }), '5');
+  assert.equal(resolve({ stock: '99' }, { forceInventoryQuantity: 0 }), '0');
+  assert.equal(resolve({}), '');
+  assert.equal(resolve({ stock: 'not-a-number' }), '');
 });
 
 test('final registration can recover the latest exact-name Cafe24 product through a visible control', () => {

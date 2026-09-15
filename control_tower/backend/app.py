@@ -86,8 +86,8 @@ def create_app(
         response.headers["Vary"] = "Origin"
         if request.method == "OPTIONS":
             requested_method = request.headers.get("Access-Control-Request-Method", "")
-            if requested_method == "POST":
-                response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS, POST"
+            if requested_method in {"POST", "DELETE"}:
+                response.headers["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS, POST, DELETE"
                 response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Control-Tower-CSRF, X-Control-Tower-Session"
             else:
                 response.headers["Access-Control-Allow-Methods"] = SAFE_CORS_METHODS

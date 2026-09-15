@@ -74,6 +74,14 @@ Pretendard와 Noto Sans KR을 사용한다. 제목은 18-26px 범위에서 굵�
 - grouping/visibility: Input source와 intake는 `입력·소스`, 시장별 수집은 `경쟁사`, factory stages와 A컷은 `생산·A컷`, GPT/policy는 `자동판단`, 기존 Task15 preflight/approval/readback은 `Cafe24`, SSE/event/receipt는 `감사·동기화`에만 둔다. 메뉴 badge는 projection의 missing/manual/blocked/synced 상태와 count에서만 계산한다.
 - responsive/accessibility: 1280/1024px에서는 메뉴와 패널 내부 grid를 compact하게 유지하고 375px에서는 tab/stage control을 wrap/stack한다. 고정 높이·주요 nested scroll·sticky로 콘텐츠를 가리지 않으며 CJK는 `word-break: keep-all`, focus-visible outline, semantic heading/nav/button을 보장한다.
 
+### 입력 메뉴의 제품 중심 작업 순서
+- `bulk-intake`는 제품명·사진·상품정보가 자동화 설명보다 먼저 보이게 배치한다. 첫 행동은 제품명 입력이며 이미 작성 중인 제품은 이름을 카드의 가장 큰 입력으로 표시한다.
+- `bulk-product-fields`는 제품별 Cafe24 상품분류 선택과 치수·가격·재고를 사진 옆의 조밀한 grid로 보여준다. `--bulk-editor-min` 24rem, `--bulk-field-min` 9rem을 사용하며 좁은 화면에서는 한 열로 쌓는다. 행 간격은 기존 8px, 패널 간격은 16px, 행동 최소 높이는 44px를 유지한다.
+- `intake-category-picker`는 API Hub에 저장된 Cafe24 연결에서 이름·상위 경로·분류번호를 읽는다. 검색과 네이티브 select로 고르며, 조회 중·오류·결과 없음·기존 미연결값 상태를 제공한다. 조회만으로 기존 상품 종류나 분류번호를 변경하지 않는다.
+- `bulk-queue-actions`의 핵심 문구는 `작업큐에 N개 추가`다. 추가 전 확인은 같은 위치에서 제품명·모델·자동화 방식과 실제 전송 버튼을 함께 보여준다. 큐 이동은 기존 `controlTowerMenu.activate('queue')` 경로를 사용한다.
+- 파일명 자동 묶기·CSV·전체 공통값·색상명 규칙은 보조 `details`로 남긴다. 제품별 입력 > CSV > 전체 공통값의 우선순위를 쓰고, 제품별 수정·추가 후 새로고침해도 입력과 사진을 보존한다. 큐에 추가된 제품과 실패한 제품 모두 입력면에 남기며, 성공한 제품은 중복 전송하지 않는다.
+- 세로 스크롤 소유자는 기존 `.page` 하나다. 상단 행동은 문서 흐름 안에 두고 화면을 가리는 고정 footer를 만들지 않는다. 375/768/1280px와 작은 높이에서 제품명·분류·큐 행동의 도달성을 확인한다.
+
 ## 6. 상태 표현
 작업 중, 대기, 완료, 검수 필요, 오류를 숨기지 않는다. 자동화 UI는 다음 행동을 명확히 제시하고, 기존 수동 전광판은 항상 남겨서 사용자가 원하면 직접 개입할 수 있게 한다.
 

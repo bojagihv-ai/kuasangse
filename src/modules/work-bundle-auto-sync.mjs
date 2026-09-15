@@ -66,6 +66,7 @@ function hasCurrentSectionArchive(asset, sectionId, source, workspaceId, runId) 
 function recordStaleSectionLocators(plan, directSections, assetSections, archiveAssets, workspaceId, runId) {
   for (const [sectionId, directValue] of Object.entries(record(directSections))) {
     if (text(directValue) !== STORED_IMAGE_MARKER) continue;
+    if (plan.uploads.some(upload => upload.assetKey === `output:sections:${sectionId}`)) continue;
     const fallbackSource = sourceFor(record(assetSections)[sectionId]);
     if (!fallbackSource) continue;
     const valid = list(archiveAssets).some(asset => hasCurrentSectionArchive(
@@ -144,6 +145,19 @@ export function buildWorkBundleSyncPlan(value, options = {}) {
     `${compPageSourceLocator}.marketScrape.scrapedImages`,
   );
   addFactoryOutputAssets(plan, factory);
+  addMappedOutputAssets(
+    plan,
+    Object.keys(directSectionImages).length ? directSectionImages : assetSectionImages,
+    'sections',
+    'project.payload.sectionImages',
+    payload.currentSectionVariantIds,
+    archiveAssets,
+    {
+      factory: { ...factory, workspace: { id: workspaceId } },
+      sectionVariants: Object.keys(record(payload.sectionVariants)).length
+        ? payload.sectionVariants : assetPayload.sectionVariants,
+    },
+  );
   recordStaleSectionLocators(
     plan,
     directSectionImages,
@@ -154,14 +168,6 @@ export function buildWorkBundleSyncPlan(value, options = {}) {
   );
   addMappedOutputAssets(
     plan,
-    Object.keys(directSectionImages).length ? directSectionImages : assetSectionImages,
-    'sections',
-    'project.payload.sectionImages',
-    payload.currentSectionVariantIds,
-    archiveAssets,
-  );
-  addMappedOutputAssets(
-    plan,
     Object.keys(record(payload.fixedDetailImages)).length
       ? payload.fixedDetailImages
       : assetPayload.fixedDetailImages,
@@ -169,6 +175,7 @@ export function buildWorkBundleSyncPlan(value, options = {}) {
     'project.payload.fixedDetailImages',
     {},
     archiveAssets,
+    { factory: { ...factory, workspace: { id: workspaceId } } },
   );
   addListOutputAssets(
     plan,

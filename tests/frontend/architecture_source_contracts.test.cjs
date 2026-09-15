@@ -455,7 +455,8 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
   const protectedRecoveryIndex = savePersistentState.indexOf('saveRejectedWorkRecoverySnapshot(', protectedNoOpIndex);
   const protectedReturnIndex = savePersistentState.indexOf('return true;', protectedNoOpIndex);
   const commitIndex = savePersistentState.indexOf('commitCurrentWorkspaceRevision(commitResult.envelope.metadata.revision)');
-  const bootstrapIndex = savePersistentState.indexOf('saveLastWorkBootstrap(', commitIndex);
+  const commitRequestIndex = savePersistentState.indexOf('return workspacePersistenceApi().commit(');
+  const bootstrapIndex = savePersistentState.indexOf('session: { writeBootstrap: true }', commitRequestIndex);
   const completionReturnIndex = savePersistentState.lastIndexOf('return persistenceCompletion;');
   assert.ok(
     protectedNoOpIndex > acceptedIndex
@@ -470,8 +471,11 @@ test('가벼운 저장본도 작업파일 범위와 commit된 revision을 잃지
     false,
     '서버가 거절했는데 경고를 지우면 저장된 줄로 오해합니다.',
   );
-  assert.ok(acceptedIndex >= 0 && commitIndex > acceptedIndex && bootstrapIndex > commitIndex);
-  assert.ok(completionReturnIndex > bootstrapIndex, 'savePersistentState must return durable completion');
+  assert.ok(commitRequestIndex >= 0 && bootstrapIndex > commitRequestIndex && bootstrapIndex < acceptedIndex);
+  assert.ok(acceptedIndex >= 0 && commitIndex > acceptedIndex);
+  assert.doesNotMatch(savePersistentState, /saveLastWorkBootstrap\(/,
+    '본문과 복원 포인터는 한 session commit에서 발행하며 후속 비동기 쓰기로 분리하지 않습니다.');
+  assert.ok(completionReturnIndex > commitIndex, 'savePersistentState must return durable completion');
   assert.match(sessionAssetsCommit, /currentFingerprint\s*===\s*lastSessionAssetFingerprint[\s\S]*return existing/);
   assert.match(
     savePersistentState,
@@ -507,6 +511,7 @@ test('수동 저장은 비동기 저장 경합으로 false가 반환되면 최�
   let flushCount = 0;
   const environment = {
     lastWorkSaveTimer: null,
+    optionSorterLiveSaveTimer: null,
     captureWorkspaceDocumentFence() { return { scopeId: 'draft:test', resetToken: 0, allowBlankResetCheckpoint: false }; },
     workspaceDocumentFenceIsCurrent() { return true; },
     lastWorkSyncingVisibleInputs: false,
@@ -682,7 +687,7 @@ test('서버 저장 후보에는 빈 상대 URL이나 같은 로컬 백엔드 �
     `${basesSource}\nreturn getServerLastWorkBases;`,
   )({ backendBaseUrl: 'http://127.0.0.1:5050/' }, () => 'http://127.0.0.1:5050');
 
-  assert.deepEqual(getServerLastWorkBases(), ['http://127.0.0.1:5050']);
+  assert.deepEqual(getServerLastWorkBases(), ['http://127.0.0.1:43030']);
 });
 
 test('서버 권위 lease가 없는 로컬 초안은 서버 복제본 쓰기를 시도하지 않는다', () => {
@@ -719,6 +724,7 @@ test('수동 저장은 장시간 명령 draft를 비동기 저장 경계 전에 
   let capturedFactory = null;
   const environment = {
     lastWorkSaveTimer: null,
+    optionSorterLiveSaveTimer: null,
     captureWorkspaceDocumentFence() { return { scopeId: 'draft:test', resetToken: 0, allowBlankResetCheckpoint: false }; },
     workspaceDocumentFenceIsCurrent() { return true; },
     lastWorkSyncingVisibleInputs: false,
@@ -761,6 +767,7 @@ test('저장 flush는 비동기 경합이 한 번 더 발생해도 최신 상태
     serverLastWorkHydrationPromise: null,
     persistentStateSaveRetryTimer: null,
     workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: false },
+    waitForWorkspaceScopeTransition: () => Promise.resolve(true),
     savePersistentState() {
       saveCount += 1;
       return Promise.resolve(saveCount >= 2);
@@ -793,6 +800,7 @@ test('저장 flush는 서버 last-work 복원이 끝난 뒤에 최신 상태를 
     serverLastWorkHydrationPromise: hydration,
     persistentStateSaveRetryTimer: null,
     workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: true },
+    waitForWorkspaceScopeTransition: () => Promise.resolve(true),
     savePersistentState() {
       saveCount += 1;
       return Promise.resolve(true);
@@ -830,6 +838,7 @@ test('저장 flush는 지연된 서버 복원이 시작되기 전 공백에서�
     classicRuntimeDeferredHydrationPromise: deferredHydration,
     persistentStateSaveRetryTimer: null,
     workspaceScopeTransitionState: { inProgress: false, persistentSaveQueued: true },
+    waitForWorkspaceScopeTransition: () => Promise.resolve(true),
     savePersistentState() {
       saveCount += 1;
       return Promise.resolve(true);

@@ -100,12 +100,13 @@ function progressStages(progress) {
     const source = record(stage);
     const key = text(source.key);
     if (!key) continue;
+    const selectedIds = list(source.selectedIds).map(text).filter(Boolean);
     byKey.set(key, {
       key,
       status: text(source.status),
-      selectedId: text(source.selectedId),
+      selectedId: text(source.selectedId) || selectedIds[0] || '',
       // 섹션 단계의 선택은 섹션마다 하나씩이라 selectedId 하나로는 다 담기지 않는다.
-      selectedIds: list(source.selectedIds).map(text).filter(Boolean),
+      selectedIds,
       candidates: list(source.candidates).map(normalizeCandidate).filter(Boolean),
     });
   }
@@ -335,6 +336,10 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     const jobId = text(job.jobId);
     const status = text(job.status) || 'queued';
     const progress = record(job.progress);
+    const registration = record(progress.registration);
+    const approvalRequired = status === 'waiting_manual'
+      && (['export', 'cafe24_preflight', 'registration'].includes(text(job.stageKey || progress.stageKey))
+        || text(registration.status) === 'approval_required');
     const stages = progressStages(progress);
     // 보관함은 언제나 읽는다. 진행 스냅샷이 있어도 섹션처럼 썸네일이 빠진 단계가 있어,
     // 스냅샷이 있다는 이유로 보관함을 건너뛰면 그 칸은 이미지가 있는데도 체크표시만 뜬다.
@@ -431,7 +436,6 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     // 등록이 막혀 있다는 사실은 진행 스냅샷에 있는데 보드까지 오지 않았다. 그래서 작업이
     // "내 선택 대기" 인 동안에는 차단 사유가 보이는데도 그것을 푸는 버튼이 없었다 -
     // 실측 2026-08-31: 섹션에 남의 상품명이 박힌 것을 보고도 「Cafe24 대상 떼기」 를 누를 수 없었다.
-    const registration = record(progress.registration);
     const registrationBlockers = list(registration.blockers).map(text).filter(Boolean);
     const registrationBlocked = text(registration.status) === 'blocked' || registrationBlockers.length > 0;
     // "5/6단계" 는 다음에 무엇을 해야 하는지 말해 주지 않는다. 행마다 다음 할 일
@@ -452,6 +456,7 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       if (status === 'completed' || cafe24Declined) {
         return { kind: 'cafe24', copy: '다음: Cafe24 등록', tone: 'attention' };
       }
+      if (approvalRequired) return { kind: 'approval', copy: '다음: Cafe24 사전점검', tone: 'attention' };
       if (pickableCell) {
         return {
           kind: 'pick',
@@ -495,7 +500,7 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       jcode: job.jcode ?? null,
       mode: text(job.mode),
       status,
-      statusLabel: STATUS_LABELS[status] || status,
+      statusLabel: approvalRequired ? '승인 필요' : STATUS_LABELS[status] || status,
       statusTone: STATUS_TONES[status] || 'neutral',
       dispatched: job.dispatched === true,
       message: messageInfo.copy,
@@ -513,6 +518,7 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
       cafe24Registered,
       registrationBlocked,
       registrationBlockers,
+      approvalRequired,
       // 분류 입력이 생기기 전에 투입된 작업은 등록 대상 값이 비어 있다. 그대로 등록을
       // 지시하면 조립공장 깊은 곳에서 "등록 차단: category_id" 로 끝나, 사람이 어디를
       // 고쳐야 하는지 알 수 없다.
@@ -543,7 +549,8 @@ export function projectProductionBoard(jobsValue, optionsValue = {}) {
     total: rows.length,
     queued: rows.filter(row => row.status === 'queued').length,
     running: rows.filter(row => row.status === 'running').length,
-    waiting: rows.filter(row => row.status === 'waiting_manual').length,
+    waiting: rows.filter(row => row.status === 'waiting_manual' && !row.approvalRequired).length,
+    approval: rows.filter(row => row.approvalRequired).length,
     blocked: rows.filter(row => row.status === 'blocked').length,
     completed: rows.filter(row => row.status === 'completed').length,
     reserved: rows.filter(row => row.hasReservation).length,
@@ -842,6 +849,7 @@ export function boardRowSignature(rowValue, contextValue = {}) {
       const cell = record(cellValue);
       return [
         text(cell.stageKey), text(cell.state), integer(cell.candidateCount),
+        text(cell.selectedId), list(cell.selectedIds),
         integer(cell.selectedIndex), text(cell.selectedThumbnailUrl),
         cell.selectedIsDocument === true,
         cell.pickable === true, cell.changeable === true, text(cell.reservedCandidateId),

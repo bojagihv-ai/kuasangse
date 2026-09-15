@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { isDeepStrictEqual } = require('node:util');
 const {
   assertChecks,
   connectCdp,
@@ -31,15 +32,7 @@ async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const count = Number(process.env.FACTORY_PERF_ASSETS || 96);
   const stageIds = ['hero', 'size', 'cuts', 'options', 'detail'];
-  const stageRetentionCaps = { hero: 12, size: 10, cuts: 18, options: 10, detail: 4 };
-  const requestedAssetsByStage = Object.fromEntries(stageIds.map(stageId => [stageId, 0]));
-  for (let index = 0; index < count; index += 1) {
-    requestedAssetsByStage[stageIds[index % stageIds.length]] += 1;
-  }
-  const expectedRuntimeAssetCount = stageIds.reduce(
-    (total, stageId) => total + Math.min(requestedAssetsByStage[stageId], stageRetentionCaps[stageId]),
-    0,
-  );
+  const expectedRuntimeAssetCount = count;
   const cdpRuntime = await ensureCdp(CDP_URL);
   const targets = cdpRuntime.targets;
   const target = targets.find(item => item.type === 'page') || targets[0];
@@ -165,7 +158,7 @@ async function main() {
         title: '성능 측정 이미지 ' + (index + 1),
         image,
         html: '',
-        used: index % 13 === 0,
+        used: index % 13 !== 0,
         currentRunId: 'perf_run_v79',
         workspaceId,
         productKey,
@@ -175,6 +168,12 @@ async function main() {
         sourceMap: { ...meta },
       };
     });
+    const assetsByStage = Object.fromEntries(stages.map(stageId => {
+      const assets = f.assets.filter(asset => asset.stageId === stageId);
+      const selectedIds = assets.filter(asset => asset.used).map(asset => asset.id).sort();
+      f.stages[stageId].selectedAssetIds = [...selectedIds];
+      return [stageId, { assetIds: assets.map(asset => asset.id).sort(), selectedIds }];
+    }));
     const archiveResponse = await window.factoryBackendArchiveAsset(f.assets[0], 'perf-lightweight-url-proof');
     const archiveApplied = window.factoryApplyLocalArchiveRecordToAsset(
       f.assets[0],
@@ -204,6 +203,7 @@ async function main() {
     }
     return {
       renderCallMs: Math.round(performance.now() - start),
+      assetsByStage,
       displayImageNormalizationCalls,
       displayImageNormalizationByAssetId,
     };
@@ -309,6 +309,9 @@ async function main() {
         : null;
       return {
         raw: raw.length,
+        assetIds: raw.map(asset => asset.id).sort(),
+        selectedIds: [...(f.stages?.[stageId]?.selectedAssetIds || [])].sort(),
+        usedIds: raw.filter(asset => asset.used).map(asset => asset.id).sort(),
         usable: typeof window.factoryUsableAssetsForStage === 'function'
           ? window.factoryUsableAssetsForStage(stageId, f).length
           : 0,
@@ -410,7 +413,11 @@ async function main() {
     const stage = debugState.stages[stageId] || {};
     const sample = stage.sample || {};
     const job = sample.job || {};
+    const expected = initial.assetsByStage[stageId];
     return [
+      { ok: isDeepStrictEqual(stage.assetIds, expected.assetIds), message: `${stageId} 전체 후보 ID가 변경되었습니다: ${JSON.stringify(stage.assetIds)} / ${JSON.stringify(expected.assetIds)}` },
+      { ok: isDeepStrictEqual(stage.selectedIds, expected.selectedIds), message: `${stageId} 선택 ID가 변경되었습니다: ${JSON.stringify(stage.selectedIds)} / ${JSON.stringify(expected.selectedIds)}` },
+      { ok: isDeepStrictEqual(stage.usedIds, expected.selectedIds), message: `${stageId} 후보 사용 표시가 선택과 다릅니다: ${JSON.stringify(stage.usedIds)} / ${JSON.stringify(expected.selectedIds)}` },
       { ok: stage.raw > 0, message: `${stageId} 후보가 없습니다.` },
       { ok: stage.usable > 0, message: `${stageId} 현재 작업 후보가 없습니다.` },
       { ok: sample.hasImage === true, message: `${stageId} 후보 이미지 표시 원본이 없습니다.` },
@@ -432,7 +439,7 @@ async function main() {
     { ok: afterRender.heapUsed <= 180 * 1024 * 1024, message: `힙 사용량이 너무 큽니다: ${afterRender.heapUsed}` },
     {
       ok: debugState.totalAssets === expectedRuntimeAssetCount,
-      message: `단계별 런타임 후보 보존 한도가 어긋났습니다: ${debugState.totalAssets}/${expectedRuntimeAssetCount} (입력 ${count})`,
+      message: `입력한 전체 런타임 후보가 보존되지 않았습니다: ${debugState.totalAssets}/${expectedRuntimeAssetCount} (입력 ${count})`,
     },
     {
       ok: afterRender.assetCards >= Math.min(expectedRuntimeAssetCount, 30),

@@ -517,9 +517,9 @@ test('같은 작업 복원은 비어 있는 서버 필드가 현재 확정 상�
   });
 });
 
-test('동일 제목의 선택된 상세 HTML 3개는 정규화 중 중복 제거되지 않는다', async () => {
+test('동일 제목의 상세 HTML은 종전 한도를 넘는 선택과 미선택 후보까지 정규화 후 모두 보존한다', async () => {
   const result = await browser.call(() => {
-    const selectedIds = ['detail-a', 'detail-b', 'detail-c'];
+    const selectedIds = ['detail-a', 'detail-b', 'detail-c', 'detail-d', 'detail-e', 'detail-f'];
     const scope = {
       workspaceId: 'workspace-detail',
       currentProjectId: 'workspace-detail',
@@ -558,12 +558,19 @@ test('동일 제목의 선택된 상세 HTML 3개는 정규화 중 중복 제거
     return {
       assetIds: normalized.assets.filter(asset => asset.stageId === 'detail').map(asset => asset.id).sort(),
       selectedIds: [...normalized.stages.detail.selectedAssetIds].sort(),
+      htmlById: Object.fromEntries(normalized.assets.map(asset => [asset.id, asset.html])),
+      usedIds: normalized.assets.filter(asset => asset.used).map(asset => asset.id).sort(),
     };
   });
 
   assert.deepEqual(result, {
-    assetIds: ['detail-a', 'detail-b', 'detail-c'],
-    selectedIds: ['detail-a', 'detail-b', 'detail-c'],
+    assetIds: ['detail-a', 'detail-b', 'detail-c', 'detail-d', 'detail-e', 'detail-f', 'detail-unselected'],
+    selectedIds: ['detail-a', 'detail-b', 'detail-c', 'detail-d', 'detail-e', 'detail-f'],
+    htmlById: Object.fromEntries(
+      ['detail-a', 'detail-b', 'detail-c', 'detail-d', 'detail-e', 'detail-f', 'detail-unselected']
+        .map(id => [id, `<section>${id}</section>`]),
+    ),
+    usedIds: ['detail-a', 'detail-b', 'detail-c', 'detail-d', 'detail-e', 'detail-f'],
   });
 });
 
@@ -1351,6 +1358,49 @@ test('공장 복구 스냅샷의 재조정 실패는 두 번에서 멈추고 경
   assert.equal(result.observations, 1);
   assert.deepEqual(result.warnings, ['Workspace recovery write failed (factory_last_snapshot_v1): still stale']);
   assert.equal(result.authority.revision, 8);
+});
+
+test('이미지 저장 실패가 남으면 같은 내용도 실제 저장을 재시도하고 성공 뒤에만 경고를 해제한다', async () => {
+  const result = await browser.call(async () => {
+    await Promise.resolve(classicRuntimeDeferredHydrationPromise);
+    const original = {
+      images: state.sectionImages, warning: state.storageWarning,
+      fingerprint: lastSessionAssetFingerprint, put: window.workspacePutSessionAssets,
+      warn: console.warn,
+    };
+    const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAADUlEQVR4nGP8z8DwnwEIAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
+    const failureWarning = '이미지 저장소 저장에 실패했습니다. 현재 화면은 유지되지만, 새로고침 전에 현재 작업 저장을 한 번 눌러주세요.';
+    try {
+      state.sectionImages = { ...(state.sectionImages || {}), header: image };
+      markSessionAssetFingerprintSaved();
+      state.storageWarning = failureWarning;
+      await saveSessionAssetsToDbIfChanged();
+      const saved = await workspaceGetSessionAssets();
+      const success = {
+        image: saved?.sectionImages?.header || '', warning: state.storageWarning,
+        scope: saved?.workspaceScope?.id || '', expectedScope: currentSessionAssetScope(),
+      };
+      state.sectionImages.header = 'data:image/png;base64,unsaved-retry';
+      markSessionAssetFingerprintSaved();
+      state.storageWarning = failureWarning;
+      window.workspacePutSessionAssets = async () => { throw new Error('image retry storage unavailable'); };
+      console.warn = () => {};
+      await saveSessionAssetsToDbIfChanged();
+      const afterFailure = await workspaceGetSessionAssets();
+      return { image, success, failedWarning: state.storageWarning, retainedImage: afterFailure?.sectionImages?.header || '' };
+    } finally {
+      state.sectionImages = original.images;
+      state.storageWarning = original.warning;
+      lastSessionAssetFingerprint = original.fingerprint;
+      window.workspacePutSessionAssets = original.put;
+      console.warn = original.warn;
+    }
+  });
+  assert.equal(result.success.image, result.image);
+  assert.equal(result.success.scope, result.success.expectedScope);
+  assert.equal(result.success.warning, '');
+  assert.match(result.failedWarning, /이미지 저장소 저장에 실패/);
+  assert.equal(result.retainedImage, result.image);
 });
 
 test('세션 이미지 자동 저장은 같은 편집권의 앞선 replica revision을 관찰한 뒤 한 번 재시도한다', async () => {

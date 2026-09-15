@@ -17,11 +17,42 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+from subprocess import CompletedProcess, TimeoutExpired
+from unittest.mock import Mock
+
+import pytest
+from flask import Flask
+from flask.testing import FlaskClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from routes import api_shared  # noqa: E402
 from services import vm_candidate_bridge  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_transport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(vm_candidate_bridge, "_BRIDGE_ROOT", tmp_path)
+    monkeypatch.setattr(vm_candidate_bridge, "_vboxmanage_path", lambda: Path("mock-VBoxManage.exe"))
+    monkeypatch.setenv("KUASANGSE_VM_NAME", "test-power-offer")
+    for target, name in (
+        (vm_candidate_bridge.subprocess, "run"),
+        (vm_candidate_bridge.subprocess, "Popen"),
+        (api_shared.requests.sessions.Session, "request"),
+        (api_shared.socket, "create_connection"),
+    ):
+        monkeypatch.setattr(target, name, Mock(side_effect=AssertionError("Unmocked transport")))
+
+
+@pytest.fixture
+def client() -> FlaskClient:
+    from routes.api import api
+
+    app = Flask(__name__)
+    app.config["TESTING"] = True
+    app.register_blueprint(api, url_prefix="/api")
+    return app.test_client()
 
 
 def _stub_scraper(monkeypatch, *, port_open=True):
@@ -95,9 +126,8 @@ def test_watcher_alive_does_not_pay_for_a_vm_lookup(monkeypatch):
     assert verdict["canStartVm"] is False
 
 
-def test_start_route_starts_the_vm_when_scraper_is_already_running(monkeypatch):
+def test_start_route_starts_the_vm_when_scraper_is_already_running(monkeypatch, client):
     """`이미 실행 중` 이라며 그냥 돌아가지 않는다 - VM 이 꺼졌으면 켠다."""
-    from app import create_app
     from routes import api_core
 
     monkeypatch.setattr(api_core, "_jepum_scraper_status_payload", lambda: {
@@ -110,7 +140,6 @@ def test_start_route_starts_the_vm_when_scraper_is_already_running(monkeypatch):
         lambda: started.append(1) or {"ok": True, "started": True, "vmPowerState": "running", "message": "VM 을 켰습니다."},
     )
 
-    client = create_app().test_client()
     result = client.post("/api/jepum-scraper/start", json={},
                          headers={"Sec-Fetch-Site": "same-origin"})
     assert started == [1], "VM 을 켜지 않고 그냥 돌아갔습니다"
@@ -119,9 +148,8 @@ def test_start_route_starts_the_vm_when_scraper_is_already_running(monkeypatch):
     assert "VM" in payload["message"]
 
 
-def test_start_route_leaves_a_running_vm_alone(monkeypatch):
+def test_start_route_leaves_a_running_vm_alone(monkeypatch, client):
     """VM 이 이미 켜져 있으면 건드리지 않는다."""
-    from app import create_app
     from routes import api_core
 
     monkeypatch.setattr(api_core, "_jepum_scraper_status_payload", lambda: {
@@ -133,7 +161,6 @@ def test_start_route_leaves_a_running_vm_alone(monkeypatch):
         lambda: (_ for _ in ()).throw(AssertionError("켜져 있는 VM 을 또 켰습니다")),
     )
 
-    client = create_app().test_client()
     result = client.post("/api/jepum-scraper/start", json={},
                          headers={"Sec-Fetch-Site": "same-origin"})
     assert "이미 실행 중" in result.get_json()["message"]
@@ -152,3 +179,106 @@ def test_start_vm_is_a_real_function_not_a_name(monkeypatch):
     result = vm_candidate_bridge.start_vm()
     assert result["ok"] is False
     assert "VirtualBox" in result["message"]
+
+
+@pytest.mark.parametrize("state", ["poweroff", "saved", "aborted"])
+def test_public_routes_offer_start_and_read_back_vm(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient, state: str,
+) -> None:
+    # Given: host alive, watcher missing; only the VBox transport is substituted.
+    _stub_scraper(monkeypatch)
+    powered_off = CompletedProcess([], 0, f'VMState="{state}"\n', "")
+    running = CompletedProcess([], 0, 'VMState="running"\n', "")
+    transport = Mock(side_effect=[
+        powered_off, powered_off, powered_off,
+        CompletedProcess([], 0, "", ""), running, running,
+    ])
+    monkeypatch.setattr(vm_candidate_bridge.subprocess, "run", transport)
+
+    # When: follow the public status -> start -> status flow.
+    before = client.get("/api/jepum-scraper/status")
+    assert before.status_code == 200
+    assert before.json["canStartVm"] is True
+    assert before.json["vmPowerState"] == "poweroff"
+    result = client.post("/api/jepum-scraper/start", json={},
+                         headers={"Sec-Fetch-Site": "same-origin"})
+    after = client.get("/api/jepum-scraper/status")
+
+    # Then: boot was requested once, but readiness stays false until the heartbeat.
+    assert result.status_code == 200
+    assert result.json["ok"] is True
+    assert result.json["vmStarted"] is True
+    assert after.json["vmPowerState"] == "running"
+    assert after.json["canStartVm"] is False
+    assert after.json["running"] is True
+    assert after.json["usable"] is False
+    assert after.json["candidateWatcherAlive"] is False
+    commands = [call.args[0] for call in transport.call_args_list]
+    assert [cmd for cmd in commands if cmd[1] == "startvm"] == [
+        ["mock-VBoxManage.exe", "startvm", "test-power-offer", "--type", "gui"],
+    ]
+    assert all(cmd[1] in {"showvminfo", "startvm"} for cmd in commands)
+
+
+@pytest.mark.parametrize("failure", [
+    CompletedProcess([], 1, "", "mock start denied"),
+    TimeoutExpired("mock-VBoxManage.exe", 120),
+])
+def test_public_start_reports_transport_failure(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient,
+    failure: CompletedProcess[str] | TimeoutExpired,
+) -> None:
+    # Given: the real service sees a powered-off VM but start transport fails.
+    _stub_scraper(monkeypatch)
+    powered_off = CompletedProcess([], 0, 'VMState="poweroff"\n', "")
+    monkeypatch.setattr(vm_candidate_bridge.subprocess, "run", Mock(side_effect=[
+        powered_off, powered_off, failure, powered_off, powered_off,
+    ]))
+    # When: request the start through the guarded public route.
+    result = client.post("/api/jepum-scraper/start", json={},
+                         headers={"Sec-Fetch-Site": "same-origin"})
+    # Then: never report a failed start as success.
+    assert result.status_code == 502
+    assert result.json["ok"] is False
+    assert result.json["vmStarted"] is False
+    assert result.json["canStartVm"] is True
+
+
+def test_public_start_rejects_cross_site_before_transport(client: FlaskClient) -> None:
+    # Given/When: an untrusted site requests the process-changing endpoint.
+    result = client.post("/api/jepum-scraper/start", json={},
+                         headers={"Sec-Fetch-Site": "cross-site"})
+    # Then: the fixture's fail-closed transport guards are never reached.
+    assert result.status_code == 403
+    assert result.json["code"] == "LOCAL_ACTION_ORIGIN_REQUIRED"
+
+
+@pytest.mark.parametrize("failure", [
+    CompletedProcess([], 2, "", "mock recheck denied"),
+    TimeoutExpired("mock-VBoxManage.exe", 15),
+    OSError("mock recheck unavailable"),
+], ids=["nonzero", "timeout", "oserror"])
+def test_public_start_fails_closed_when_power_recheck_fails(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient,
+    failure: CompletedProcess[str] | TimeoutExpired | OSError,
+) -> None:
+    # Given: the first lookup is off, but the start-time lookup fails.
+    _stub_scraper(monkeypatch)
+    transport = Mock(side_effect=[
+        CompletedProcess([], 0, 'VMState="poweroff"\n', ""),
+        failure,
+        CompletedProcess([], 0, "", ""),
+        CompletedProcess([], 0, 'VMState="running"\n', ""),
+    ])
+    monkeypatch.setattr(vm_candidate_bridge.subprocess, "run", transport)
+    # When: the real public route rechecks power immediately before starting.
+    result = client.post("/api/jepum-scraper/start", json={},
+                         headers={"Sec-Fetch-Site": "same-origin"})
+    # Then: no start command, no success claim, and a Korean recheck instruction.
+    commands = [call.args[0][1] for call in transport.call_args_list]
+    assert (commands.count("startvm"), result.status_code,
+            result.json["ok"], result.json["vmStarted"]) == (0, 502, False, False)
+    assert commands == ["showvminfo"] * 3
+    assert result.json["vmPowerState"] == "unknown"
+    assert result.json["canStartVm"] is False
+    assert "다시 확인" in result.json["message"]

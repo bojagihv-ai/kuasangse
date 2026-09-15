@@ -6,123 +6,10 @@
   <meta name="description" content="제품 투입부터 조립공장 단계 진행과 Cafe24 승인까지 연결하는 생산 작업자 콘솔">
   <link rel="icon" href="data:,">
   <title>생산관제</title>
+  <link href="/factory-native/src/factory-theme.css" rel="stylesheet">
+  <link href="./src/bulk-intake.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
   <style>
-    :root {
-      --bg: #0f0f13;
-      --bg-card: #1a1a23;
-      --bg-input: #13131a;
-      --border: #2a2a36;
-      --primary: #6366f1;
-      --primary-h: #818cf8;
-      --ok: #34d399;
-      --warn: #fbbf24;
-      --err: #fb7185;
-      --text: #f4f4f5;
-      --text-d: #d4d4d8;
-      --text-m: #a1a1aa;
-      --color-page-background: var(--bg);
-      --color-card-background: var(--bg-card);
-      --color-input-background: var(--bg-input);
-      --color-border-default: var(--border);
-      --color-accent-primary: var(--primary);
-      --color-accent-highlight: var(--primary-h);
-      --color-status-ok: var(--ok);
-      --color-status-warn: var(--warn);
-      --color-status-error: var(--err);
-      --color-text-primary: var(--text);
-      --color-text-secondary: var(--text-d);
-      --color-text-muted: var(--text-m);
-      --color-primary-glow: radial-gradient(circle at 12% 0%, rgb(99 102 241 / 0.16), transparent 34rem);
-      --color-surface-sheen: linear-gradient(145deg, rgb(255 255 255 / 0.035), transparent 42%);
-      --color-accent-wash: rgb(99 102 241 / 0.14);
-      --color-ok-border: rgb(52 211 153 / 0.34);
-      --color-error-border: rgb(251 113 133 / 0.34);
-      --color-danger-wash: rgb(251 113 133 / 0.12);
-      --color-dialog-backdrop: rgb(0 0 0 / 0.74);
-      --color-ok-wash: rgb(52 211 153 / 0.16);
-      --color-warn-wash: rgb(251 191 36 / 0.16);
-      --color-warn-border: rgb(251 191 36 / 0.42);
-      --color-accent-border: rgb(99 102 241 / 0.5);
-      --board-fact-file-max-width: 22ch;
-      --board-cafe24-field-min: 11rem;
-      --board-intake-thumb-size: 92px;
-      --board-intake-card-min: 9rem;
-      --bulk-thumb-size: 132px;
-    --bulk-row-thumb-size: 40px;
-    --bulk-ai-thumb-size: 44px;
-    --bulk-mini-action-size: 32px;
-      --bulk-name-field-basis: 25rem;
-      --bulk-lightbox-max-width: 1100px;
-      --space-1: 8px;
-      --space-half: 4px;
-      --space-2: 16px;
-      --space-3: 24px;
-      --space-4: 32px;
-      --space-page-bottom: 48px;
-      --page-gutter: 32px;
-      --page-gutter-compact: 24px;
-      --border-width-default: 1px;
-      --border-width-emphasis: 3px;
-      --focus-outline-width: 2px;
-      --focus-outline-offset: 2px;
-      --badge-padding-block: 2px;
-      --badge-padding-inline: 6px;
-      --radius-card: 16px;
-      --radius-compact: 8px;
-      --radius-pill: 999px;
-      --radius-circle: 50%;
-      /* 1160px 는 화면 좌우를 통째로 비웠다. 넓은 화면에서는 넓게 쓰되,
-         본문이 무한정 퍼지지는 않게 상한만 둔다. */
-      --content-max-width: 1800px;
-      --content-copy-wide: 62ch;
-      --content-copy-narrow: 52ch;
-      --status-dot-size: 8px;
-      --status-mark-size: 36px;
-      --visually-hidden-size: 1px;
-      --grid-min-detail: 240px;
-      --grid-min-card: 304px;
-      --operator-queue-min: 19rem;
-      --operator-stage-min: 7rem;
-      --card-min-block-size: 144px;
-      --scope-row-min-block-size: 96px;
-      --virtual-queue-min-block-size: 240px;
-      --virtual-row-min-block-size: 112px;
-      --lazy-thumb-size: 32px;
-      --board-thumb-size: 112px;
-      --board-thumb-loading-opacity: 0.35;
-      --board-stage-min-block-size: 132px;
-      --board-stage-max-block-size: 208px;
-      --z-index-overlay: 90;
-      --board-zoom-backdrop: rgba(6, 8, 14, 0.86);
-      --board-zoom-max-inline: min(88vw, 1100px);
-      --board-zoom-max-block: 78vh;
-      --board-zoom-min-block: 52vh;
-      --image-intake-thumb-size: 72px;
-      --font-family-sans: Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
-      --font-family-mono: "SFMono-Regular", Consolas, monospace;
-      --font-size-kicker: 11px;
-      --font-size-compact: 12px;
-      --font-size-panel-copy: 13px;
-      --font-size-card-title: 15px;
-      --font-size-status-mark: 16px;
-      --font-size-section-title: 20px;
-      --font-size-page-title: clamp(22px, 3vw, 26px);
-      --line-height-body: 1.5;
-      --line-height-tight: 1.15;
-      --line-height-page-title: 1.2;
-      --line-height-section-title: 1.3;
-      --line-height-card-title: 1.35;
-      --tracking-kicker: 0.12em;
-      --tracking-label: 0.06em;
-      --font-weight-strong: 700;
-      --font-weight-emphasis: 800;
-      --font-weight-normal: 400;
-      --control-min-block-size: 44px;
-      --compact-control-min-block-size: 36px;
-      --progress-track-size: 8px;
-      --review-row-min-block-size: 112px;
-      --timeline-max-block-size: 240px;
-    }
 
     * {
       box-sizing: border-box;
@@ -144,6 +31,7 @@
         var(--color-page-background);
       color: var(--color-text-primary);
       font-family: var(--font-family-sans);
+      font-size: var(--font-size-panel-copy);
       line-height: var(--line-height-body);
     }
 
@@ -152,7 +40,7 @@
          아래가 통째로 비어 보이므로, 부모(html·body 가 100%)를 그대로 채운다. */
       height: 100%;
       min-height: 100%;
-      padding: var(--space-3) 0 var(--space-page-bottom);
+      padding: var(--space-1) 0 var(--space-page-bottom);
       overflow-y: auto;
       scrollbar-gutter: stable;
     }
@@ -180,10 +68,10 @@
     .masthead {
       order: -2;
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       justify-content: space-between;
       gap: var(--space-2);
-      padding: var(--space-1) 0 var(--space-2);
+      padding: var(--space-half) 0 var(--space-1);
       border-bottom: var(--border-width-default) solid var(--color-border-default);
     }
 
@@ -291,6 +179,10 @@
       flex-direction: column;
       gap: var(--space-3);
     }
+
+    .shell.stack { gap: var(--space-1); }
+    .masthead h1 { margin-bottom: 0; }
+    .masthead .lede { margin: 0; }
 
     .section {
       padding-top: var(--space-2);
@@ -1261,341 +1153,6 @@
       flex: 0 0 auto;
     }
 
-    /* 대량 투입: 사진 한 장이 한 줄, 구역이 곧 역할이다. */
-    .bulk-color-rule,
-    .bulk-defaults-extra,
-    .bulk-batch-bar {
-      padding: var(--space-2);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-card-background);
-    }
-
-    .bulk-color-rule > summary,
-    .bulk-defaults-extra > summary {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-      cursor: pointer;
-    }
-
-    .bulk-color-rule[open] > summary,
-    .bulk-defaults-extra[open] > summary {
-      margin-block-end: var(--space-1);
-    }
-
-    .bulk-color-rule-body {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-1);
-    }
-
-    .bulk-defaults-row {
-      display: flex;
-      align-items: end;
-      gap: var(--space-1);
-      flex-wrap: wrap;
-    }
-
-    .bulk-defaults-label {
-      align-self: center;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-      inline-size: 8rem;
-    }
-
-    .bulk-defaults-extra {
-      margin-block-start: var(--space-1);
-    }
-
-    .bulk-batch-bar {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      flex-wrap: wrap;
-    }
-
-    .bulk-color-rule-row {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      flex-wrap: wrap;
-    }
-
-    .bulk-color-rule-label {
-      inline-size: 6rem;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-rule-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--space-half);
-      min-block-size: var(--compact-control-min-block-size);
-      padding: 0 var(--space-2);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      color: var(--color-text-secondary);
-      cursor: pointer;
-    }
-
-    .bulk-rule-chip[data-on="true"] {
-      border-color: var(--color-accent-border);
-      background: var(--color-accent-wash);
-      color: var(--color-text-primary);
-    }
-
-    .bulk-rule-chip-hint {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-kicker);
-    }
-
-    .bulk-rule-custom {
-      inline-size: 11rem;
-      min-block-size: var(--compact-control-min-block-size);
-    }
-
-    .bulk-rule-preview {
-      padding: var(--space-half) var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-pill);
-      background: var(--color-input-background);
-      font-family: var(--font-family-mono);
-    }
-
-    .bulk-card-head {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      flex-wrap: wrap;
-    }
-
-    .bulk-card-rail {
-      inline-size: var(--border-width-emphasis);
-      align-self: stretch;
-      border-radius: var(--radius-pill);
-      background: var(--color-status-ok);
-    }
-
-    .bulk-product-card[data-state="warn"] .bulk-card-rail {
-      background: var(--color-status-warn);
-    }
-
-    .bulk-card-spacer {
-      flex-grow: 1;
-    }
-
-    .bulk-card-fact,
-    .bulk-card-verdict {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-card-verdict {
-      padding: var(--badge-padding-block) var(--space-1);
-      border: var(--border-width-default) solid var(--color-ok-border);
-      border-radius: var(--radius-pill);
-      background: var(--color-ok-wash);
-      color: var(--color-status-ok);
-      font-weight: var(--font-weight-strong);
-    }
-
-    .bulk-card-verdict[data-tone="warn"] {
-      border-color: var(--color-warn-border);
-      background: var(--color-warn-wash);
-      color: var(--color-status-warn);
-    }
-
-    .bulk-card-verdict[data-tone="blocked"] {
-      border-color: var(--color-error-border);
-      background: var(--color-danger-wash);
-      color: var(--color-status-error);
-    }
-
-    /* 두 구역이 나란히: 기본 이미지 | 색상 옵션. 구역이 곧 역할이라 select 가 필요 없다. */
-    .bulk-zones {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(30rem, 100%), 1fr));
-      gap: var(--space-1);
-    }
-
-    .bulk-zone {
-      display: flex;
-      flex-direction: column;
-      padding: var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-    }
-
-    .bulk-zone-label {
-      padding-block-end: var(--space-half);
-      color: var(--color-text-muted);
-      font-size: var(--font-size-kicker);
-      letter-spacing: var(--tracking-label);
-    }
-
-    .bulk-zone-head {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-    }
-
-    /* 구역이 곧 역할 — 이 버튼으로 넣으면 분류가 끝난다. */
-    .bulk-zone-add {
-      display: inline-flex;
-      align-items: center;
-      min-block-size: var(--bulk-mini-action-size);
-      padding: 0 var(--space-1);
-      border: var(--border-width-default) dashed var(--color-accent-border);
-      border-radius: var(--radius-compact);
-      color: var(--color-accent-highlight);
-      font-size: var(--font-size-compact);
-      cursor: pointer;
-    }
-
-    /* 기본 사진은 제품의 얼굴이다. 크게 보여 무엇이 대표인지 한눈에 알게 한다. */
-    .bulk-base-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-1);
-      padding-block-start: var(--space-half);
-    }
-
-    .bulk-base-cell {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-half);
-      inline-size: var(--bulk-thumb-size);
-    }
-
-    .bulk-base-cell .bulk-thumb {
-      inline-size: var(--bulk-thumb-size);
-      block-size: var(--bulk-thumb-size);
-      padding: 0;
-    }
-
-    .bulk-base-cell .bulk-shot-name {
-      flex: none;
-      inline-size: var(--bulk-thumb-size);
-    }
-
-    .bulk-base-tools {
-      display: flex;
-      align-items: center;
-      gap: var(--space-half);
-      flex-wrap: wrap;
-    }
-
-    .bulk-base-cell .bulk-color-input {
-      inline-size: var(--bulk-thumb-size);
-    }
-
-    .bulk-zone-empty {
-      margin: 0;
-      padding: var(--space-1) 0;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-shot-row {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      padding: var(--space-half) 0;
-      border-block-start: var(--border-width-default) solid var(--color-border-default);
-    }
-
-    .bulk-shot-row .bulk-thumb {
-      inline-size: var(--bulk-row-thumb-size);
-      block-size: var(--bulk-row-thumb-size);
-      flex: none;
-      padding: 0;
-    }
-
-    .bulk-shot-name {
-      flex: 0 1 11rem;
-      min-inline-size: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--font-size-compact);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .bulk-shot-row .bulk-color-input {
-      inline-size: 9rem;
-    }
-
-    .bulk-color-input[data-missing="true"] {
-      border-color: var(--color-warn-border);
-    }
-
-    .bulk-move-action {
-      min-block-size: var(--bulk-mini-action-size);
-      padding: 0 var(--space-1);
-      border: 0;
-      background: none;
-      color: var(--color-accent-highlight);
-      font-size: var(--font-size-compact);
-      cursor: pointer;
-      white-space: nowrap;
-    }
-
-    .bulk-mini-action[data-on="true"] {
-      border-color: var(--color-accent-border);
-      background: var(--color-accent-wash);
-      color: var(--color-text-primary);
-    }
-
-    .bulk-mini-action {
-      min-block-size: var(--bulk-mini-action-size);
-      padding: 0 var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      color: var(--color-text-secondary);
-      font-size: var(--font-size-compact);
-      cursor: pointer;
-    }
-
-    .bulk-ai-panel {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2);
-      inline-size: min(52rem, 92vw);
-      padding: var(--space-3);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-card);
-      background: var(--color-card-background);
-    }
-
-    .bulk-ai-rows {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .bulk-ai-row {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      padding: var(--space-1) 0;
-      border-block-start: var(--border-width-default) solid var(--color-border-default);
-    }
-
-    .bulk-ai-row img {
-      inline-size: var(--bulk-ai-thumb-size);
-      block-size: var(--bulk-ai-thumb-size);
-      border-radius: var(--radius-compact);
-      object-fit: cover;
-    }
-
-    .bulk-ai-actions {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-    }
 
     /* 식별자는 찾아볼 때만 필요하다. 이름을 가리지 않게 작고 흐리게 둔다. */
     .a-cut-candidate-id {
@@ -1823,382 +1380,6 @@
       background: var(--color-accent-wash);
     }
 
-    .bulk-intake {
-      display: grid;
-      gap: var(--space-2);
-      block-size: auto;
-      min-inline-size: 0;
-      overflow: visible;
-    }
-
-    .bulk-intake > * {
-      min-inline-size: 0;
-      max-inline-size: 100%;
-    }
-
-    .bulk-pickers {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-      gap: var(--space-2);
-    }
-
-    .bulk-picker,
-    .bulk-default-field {
-      display: grid;
-      gap: var(--space-half);
-      min-inline-size: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--font-size-panel-copy);
-    }
-
-    .bulk-picker input,
-    .bulk-default-field input {
-      min-inline-size: 0;
-      padding: var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      color: var(--color-text-primary);
-      font: inherit;
-    }
-
-    /* 제품을 설명하는 값과 Cafe24 등록 대상 값을 눈으로 갈라 준다. */
-    .bulk-default-field[data-group="cafe24"] > span {
-      color: var(--color-accent-highlight);
-    }
-
-    .bulk-default-field[data-group="cafe24"] input {
-      border-color: var(--color-accent-border);
-    }
-
-    /* 제품마다 카드로 보여 준다. 사진을 눈으로 확인하고 이름과 역할을 그 자리에서 고친다. */
-    .bulk-product-card {
-      display: grid;
-      gap: var(--space-1);
-      padding: var(--space-2);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-card);
-      background: var(--color-card-background);
-    }
-
-    /* 흠은 왼쪽 세로줄(.bulk-card-rail)로 알린다. 카드 전체를 물들이면 무엇이 문제인지가
-       아니라 카드가 통째로 노래져서, 정작 어느 칸이 비었는지는 여전히 안 보인다. */
-    .bulk-product-card[data-state="warn"] {
-      border-color: var(--color-warn-border);
-    }
-
-    .bulk-card-head {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-1);
-      align-items: center;
-    }
-
-    /* 다섯 글자짜리 제품명에 화면 폭을 다 내주지 않는다. 실측 2026-08-27: 1412px 였다. */
-    .bulk-name-field {
-      display: grid;
-      gap: var(--space-half);
-      flex: 0 1 var(--bulk-name-field-basis);
-      max-inline-size: var(--bulk-name-field-basis);
-    }
-
-    .bulk-name-field > span {
-      color: var(--color-accent-highlight);
-      font-size: var(--font-size-compact);
-    }
-
-    /* 제품명은 사람이 직접 정하는 값이다. 파일명에서 온 임시 이름을 지우고 칠 수 있게
-       카드에서 가장 도드라지는 입력칸으로 둔다. */
-    .bulk-name-field input {
-      min-block-size: var(--control-min-block-size);
-      padding: 0 var(--space-2);
-      font-size: var(--font-size-card-title);
-      font-weight: var(--font-weight-strong);
-      border: var(--border-width-default) solid var(--color-accent-border);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      color: var(--color-text-primary);
-    }
-
-    .bulk-card-summary,
-    .bulk-card-badge {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-thumb-shelf {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2);
-    }
-
-    .bulk-thumb-cell {
-      display: grid;
-      gap: var(--space-1);
-      width: var(--bulk-thumb-size);
-    }
-
-    .bulk-thumb {
-      display: block;
-      width: var(--bulk-thumb-size);
-      height: var(--bulk-thumb-size);
-      padding: 0;
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      cursor: zoom-in;
-      overflow: hidden;
-    }
-
-    .bulk-thumb img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-
-    .bulk-thumb-name {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .bulk-role-select,
-    .bulk-color-input {
-      width: 100%;
-      padding: var(--space-1) var(--space-2);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-input-background);
-      color: var(--color-text-primary);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-card-facts {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-1);
-    }
-
-    .bulk-lightbox {
-      position: fixed;
-      inset: 0;
-      z-index: var(--z-index-overlay);
-      display: grid;
-      gap: var(--space-2);
-      place-content: center;
-      justify-items: center;
-      padding: var(--space-4);
-      background: var(--color-dialog-backdrop);
-      cursor: zoom-out;
-    }
-
-    .bulk-lightbox img {
-      max-width: min(92vw, var(--bulk-lightbox-max-width));
-      max-height: 82vh;
-      object-fit: contain;
-      border-radius: var(--radius-card);
-    }
-
-    .bulk-lightbox-caption {
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--font-size-panel-copy);
-    }
-
-    /* 필수값 한 줄 아래에 Cafe24 접힘 상자가 온다. 옆에 붙이면 빈 상자가 자리만 차지한다. */
-    .bulk-defaults {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-1);
-    }
-
-    /* 자동화 방식·이미지 모델 — 예전엔 숨은 옛 폼에서 조용히 물려받던 값이라 눈에 띄게 둔다. */
-    .bulk-automation-box {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-1);
-      padding: var(--space-2);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-card-background);
-    }
-
-    .bulk-automation-head {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: var(--space-1);
-    }
-
-    .bulk-automation-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-1);
-    }
-
-    .bulk-automation-row .field-stack {
-      min-inline-size: 12rem;
-      flex: 1 1 12rem;
-    }
-
-    .bulk-automation-copy {
-      color: var(--color-text-secondary);
-    }
-
-    /* 큐로 투입하기 전 확인 화면. 회색 버튼만 보고 아무 일도 안 일어난 줄 알면 안 된다. */
-    .bulk-confirm-box {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-1);
-      padding: var(--space-2);
-      border: var(--border-width-emphasis) solid var(--color-accent-primary);
-      border-radius: var(--radius-compact);
-      background: var(--color-accent-wash);
-    }
-
-    .bulk-confirm-settings {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: var(--space-half) var(--space-1);
-      margin: 0;
-    }
-
-    .bulk-confirm-settings dt {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-compact);
-    }
-
-    .bulk-confirm-settings dd {
-      margin: 0;
-      font-weight: var(--font-weight-strong);
-    }
-
-    .bulk-confirm-warning {
-      margin: 0;
-      padding: var(--space-1);
-      border: var(--border-width-default) solid var(--color-warn-border);
-      border-radius: var(--radius-compact);
-      background: var(--color-warn-wash);
-      color: var(--color-status-warn);
-    }
-
-    .bulk-confirm-list {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-half);
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      max-inline-size: 100%;
-    }
-
-    .bulk-confirm-list li {
-      display: flex;
-      align-items: center;
-      gap: var(--space-1);
-      padding: var(--space-half) var(--space-1);
-      border-radius: var(--radius-compact);
-      background: var(--color-card-background);
-    }
-
-    .bulk-confirm-flag {
-      padding: var(--badge-padding-block) var(--space-1);
-      border: var(--border-width-default) solid var(--color-warn-border);
-      border-radius: var(--radius-pill);
-      background: var(--color-warn-wash);
-      color: var(--color-status-warn);
-      font-size: var(--font-size-compact);
-      font-weight: var(--font-weight-strong);
-    }
-
-    .bulk-confirm-actions {
-      display: flex;
-      gap: var(--space-1);
-    }
-
-    .bulk-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-1);
-      align-items: center;
-      padding: var(--space-1);
-      border: var(--border-width-default) solid var(--color-accent-primary);
-      border-radius: var(--radius-compact);
-      background: var(--color-accent-wash);
-    }
-
-    .bulk-actions [data-action="submit"] {
-      min-block-size: var(--control-min-block-size);
-      padding-inline: var(--space-3);
-      font-weight: var(--font-weight-strong);
-    }
-
-    .bulk-note {
-      margin: 0;
-      color: var(--color-status-warn);
-      font-size: var(--font-size-panel-copy);
-      overflow-wrap: anywhere;
-    }
-
-    .bulk-plan {
-      display: grid;
-      gap: var(--space-half);
-      block-size: auto;
-      overflow: visible;
-    }
-
-    .bulk-row {
-      display: grid;
-      grid-template-columns: minmax(10rem, 2fr) minmax(4rem, 0.6fr) minmax(6rem, 1fr) minmax(6rem, 1fr) minmax(9rem, 1.4fr);
-      gap: var(--space-half);
-      align-items: stretch;
-    }
-
-    .bulk-cell {
-      display: grid;
-      align-content: center;
-      gap: var(--space-half);
-      min-inline-size: 0;
-      padding: var(--space-1);
-      border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-compact);
-      background: var(--color-card-background);
-      overflow-wrap: anywhere;
-    }
-
-    .bulk-row-header .bulk-cell {
-      padding-block: var(--space-half);
-      border-color: transparent;
-      background: transparent;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-kicker);
-      letter-spacing: var(--tracking-label);
-    }
-
-    .bulk-row[data-state="warn"] .bulk-cell {
-      border-color: var(--color-warn-border);
-    }
-
-    .bulk-row[data-state="ready"] .bulk-cell:last-child {
-      color: var(--color-status-ok);
-    }
-
-    @media (max-width: 720px) {
-      .bulk-row {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .bulk-row .bulk-cell:first-child {
-        grid-column: 1 / -1;
-      }
-
-      .bulk-row-header {
-        display: none;
-      }
-    }
 
     .production-board {
       display: grid;
@@ -2393,6 +1574,11 @@
       background: var(--color-card-background);
     }
 
+    .board-human-presence-card {
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+    }
+
     .board-summary-label {
       color: var(--color-text-muted);
       font-size: var(--font-size-compact);
@@ -2428,7 +1614,7 @@
     .board-action {
       padding: var(--space-1) var(--space-2);
       border: var(--border-width-default) solid var(--color-border-default);
-      border-radius: var(--radius-pill);
+      border-radius: var(--radius-sm);
       background: var(--color-card-background);
       color: var(--color-text-primary);
       font: inherit;
@@ -3726,48 +2912,6 @@
         text-align: start;
       }
 
-      #bulk-intake .bulk-pickers,
-      #bulk-intake .bulk-zones {
-        grid-template-columns: minmax(0, 1fr);
-      }
-
-      #bulk-intake .bulk-product-card,
-      #bulk-intake .bulk-card-head,
-      #bulk-intake .bulk-zones,
-      #bulk-intake .bulk-zone,
-      #bulk-intake .bulk-zone-head,
-      #bulk-intake .bulk-base-grid,
-      #bulk-intake .bulk-shot-row {
-        min-inline-size: 0;
-        max-inline-size: 100%;
-      }
-
-      #bulk-intake .bulk-shot-row {
-        flex-wrap: wrap;
-      }
-
-      #bulk-intake .bulk-name-field {
-        flex: 1 1 100%;
-        max-inline-size: 100%;
-      }
-
-      #bulk-intake .bulk-shot-name,
-      #bulk-intake .bulk-shot-row .bulk-color-input {
-        flex: 1 1 8rem;
-        inline-size: auto;
-        max-inline-size: 100%;
-      }
-
-      #bulk-intake .bulk-move-action {
-        flex: 1 1 100%;
-        inline-size: 100%;
-        max-inline-size: 100%;
-        text-align: start;
-      }
-
-      #bulk-intake .bulk-actions [data-action="submit"] {
-        flex: 1 1 100%;
-      }
 
       /* operator 콘솔의 나머지 모바일 규칙은 파일 끝의 같은 조건 블록에 있다.
          베이스 규칙(3900행대)이 이 블록보다 뒤라, 여기 두면 소스 순서에 져서 죽는다. */
@@ -3852,10 +2996,10 @@
       justify-content: space-between;
       gap: var(--space-half);
       padding: var(--space-1) var(--space-1);
-      border: 0;
-      border-bottom: var(--border-width-emphasis) solid transparent;
-      border-radius: var(--radius-compact) var(--radius-compact) 0 0;
-      background: transparent;
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-bottom: 0;
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      background: var(--color-menu-tab-background);
       color: var(--color-text-muted);
       font: inherit;
       font-size: var(--font-size-compact);
@@ -3872,7 +3016,9 @@
     }
 
     .menu-tab[aria-selected="true"] {
-      border-bottom-color: var(--color-accent-highlight);
+      background: var(--bg-card);
+      border-color: var(--color-accent-border);
+      box-shadow: var(--shadow-menu-tab-selected-inset);
     }
 
     .menu-tab:focus-visible,
@@ -4172,7 +3318,7 @@
     .operator-console-grid {
       display: grid;
       gap: var(--space-2);
-      grid-template-columns: minmax(min(calc(var(--operator-queue-min) + var(--operator-stage-min)), 100%), 1fr) minmax(0, 1.65fr);
+      grid-template-columns: minmax(min(var(--operator-queue-min), 100%), 22rem) minmax(0, 1fr);
       align-items: start;
     }
 
@@ -4263,6 +3409,21 @@
       box-shadow: inset var(--space-half) 0 0 var(--color-accent-highlight);
     }
 
+    /* 기본 목록은 지금 손댈 수 있는 작업에 집중한다. 저장된 차단 기록은 데이터는 보존하고
+       ‘차단만’ 필터에서 다시 열 수 있게 숨긴다. */
+    .operator-queue-list[data-queue-view-filter="all"] .operator-job-row[data-historical="true"] {
+      display: none;
+    }
+
+    .operator-queue-history-hint {
+      margin: 0;
+      padding: var(--space-half) var(--space-1);
+      border: var(--border-width-default) dashed var(--color-border-default);
+      border-radius: var(--radius-compact);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-compact);
+    }
+
     .operator-job-row[data-status="waiting_manual"],
     .operator-job-row[data-status="blocked"] {
       border-color: var(--color-error-border);
@@ -4340,7 +3501,7 @@
     .operator-summary-strip {
       display: grid;
       gap: var(--space-half);
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
     }
 
     .operator-metric {
@@ -4435,6 +3596,66 @@
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: var(--space-half);
+    }
+
+    .operator-cut-groups button[aria-pressed="true"] {
+      background: var(--color-accent-wash);
+      border-color: var(--color-accent-primary);
+      color: var(--color-text-primary);
+    }
+
+    .operator-inline-fields, .operator-source-columns, .operator-choice-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(var(--grid-min-detail), 100%), 1fr));
+      gap: var(--space-2);
+      align-items: start;
+      margin-bottom: var(--space-2);
+    }
+
+    .operator-choice-card, .operator-section-editor, .operator-section-settings, .operator-field-details {
+      min-inline-size: 0;
+      padding: var(--space-2);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      background: var(--color-input-background);
+      overflow-wrap: anywhere;
+      margin-bottom: var(--space-2);
+    }
+
+    .operator-choice-card[data-selected="true"] {
+      border-color: var(--color-accent-primary);
+      background: var(--color-accent-wash);
+    }
+
+    .operator-choice-card { display: grid; gap: var(--space-1); }
+    .operator-image-preview { width: 100%; padding: 0; background: transparent; border: 0; }
+    .operator-image-preview img { width: 100%; height: 200px; object-fit: contain; border-radius: var(--radius-compact); }
+    .operator-section-settings summary, .operator-section-editor summary, .operator-field-details summary {
+      cursor: pointer;
+      min-block-size: var(--control-min-block-size);
+      font-weight: var(--font-weight-strong);
+    }
+
+    .operator-image-dialog {
+      width: var(--board-zoom-max-inline);
+      max-height: calc(100dvh - var(--space-4));
+      padding: var(--space-2);
+      color: var(--color-text-primary);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-card);
+      background: var(--color-card-background);
+    }
+    .operator-image-dialog::backdrop { background: var(--color-dialog-backdrop); }
+    .operator-image-dialog img { display: block; width: 100%; max-height: 65dvh; object-fit: contain; margin-bottom: var(--space-1); }
+
+    .board-candidate-zoom {
+      min-block-size: var(--compact-control-min-block-size);
+      margin-top: var(--space-half);
+      border: var(--border-width-default) solid var(--color-border-default);
+      border-radius: var(--radius-compact);
+      color: var(--color-text-secondary);
+      background: var(--color-input-background);
+      padding: var(--space-half) var(--space-1);
     }
 
     .operator-live-surface .board-grid,
@@ -4697,7 +3918,7 @@
 
     /* operator 콘솔 좁은 화면 규칙은 반드시 베이스 규칙 뒤인 여기 있어야 한다.
        앞쪽 반응형 블록에 두면 같은 특이성의 베이스가 소스 순서로 이긴다. */
-    @media (max-width: 960px) {
+    @media (max-width: 1100px) {
       .operator-console-grid {
         grid-template-columns: minmax(0, 1fr);
       }
@@ -4842,14 +4063,13 @@
     }
   </style>
 </head>
-<body>
+<body class="production-control">
   <main class="page" id="app" data-state="loading">
     <div class="shell stack">
       <header class="masthead">
         <div>
-          <p class="eyebrow">대량 생산 관제</p>
           <h1>생산관제</h1>
-          <p class="lede">신화사 상세페이지 원장을 기준으로 제품 투입, 정책, 검수, 작업자 진행과 Cafe24 비공개 등록 점검을 연결합니다.</p>
+          <p class="lede">제품별 입력 · 컷 선택 · 상세페이지 · Cafe24</p>
         </div>
         <span class="factory-pill health-chip" id="health-chip" role="status" aria-live="polite">상태 확인 중</span>
         <!-- 창마다 다른 판이 열려 있으면 사람이 판별할 방법이 있어야 한다. 창이 들고 있는
@@ -4859,8 +4079,8 @@
 
       <nav id="primary-menu" class="menu-shell" aria-label="생산관제 메뉴">
         <div class="menu-tablist" role="tablist" aria-label="생산관제 작업 메뉴">
-          <button id="menu-tab-overview" class="menu-tab" type="button" role="tab" aria-selected="true" aria-controls="menu-panel-overview" data-menu-key="overview" tabindex="0">개요<span class="menu-tab-badge" data-menu-badge="overview">확인 중</span></button>
-          <button id="menu-tab-queue" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-queue" data-menu-key="queue" tabindex="-1">작업 큐<span class="menu-tab-badge" data-menu-badge="queue">확인 중</span></button>
+          <button id="menu-tab-overview" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-overview" data-menu-key="overview" tabindex="-1">개요<span class="menu-tab-badge" data-menu-badge="overview">확인 중</span></button>
+          <button id="menu-tab-queue" class="menu-tab" type="button" role="tab" aria-selected="true" aria-controls="menu-panel-queue" data-menu-key="queue" tabindex="0">작업 큐<span class="menu-tab-badge" data-menu-badge="queue">확인 중</span></button>
           <button id="menu-tab-input-source" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-input-source" data-menu-key="input-source" tabindex="-1">입력·소스<span class="menu-tab-badge" data-menu-badge="input-source">확인 중</span></button>
           <button id="menu-tab-competitors" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-competitors" data-menu-key="competitors" tabindex="-1">경쟁사<span class="menu-tab-badge" data-menu-badge="competitors">확인 중</span></button>
           <button id="menu-tab-production-acut" class="menu-tab" type="button" role="tab" aria-selected="false" aria-controls="menu-panel-production-acut" data-menu-key="production-acut" tabindex="-1">생산·A컷<span class="menu-tab-badge" data-menu-badge="production-acut">확인 중</span></button>
@@ -4884,7 +4104,7 @@
         </div>
       </details>
 
-      <section id="menu-panel-overview" class="menu-panel" data-menu-panel="overview" role="tabpanel" aria-labelledby="menu-tab-overview">
+      <section id="menu-panel-overview" class="menu-panel" data-menu-panel="overview" role="tabpanel" aria-labelledby="menu-tab-overview" hidden>
 
 
       <section class="section next-action-inbox" id="next-action-inbox" aria-labelledby="next-action-heading">
@@ -4940,7 +4160,7 @@
             <span class="status-mark" aria-hidden="true">BT</span>
             <div>
               <h3 id="status-title">백엔드 응답 대기 중</h3>
-              <p id="status-detail">127.0.0.1:41009에서 준비 상태를 확인하고 있습니다.</p>
+              <p id="status-detail">localhost:41009에서 준비 상태를 확인하고 있습니다.</p>
             </div>
           </div>
           <div class="detail-grid">
@@ -5036,7 +4256,7 @@
 
       </section>
 
-      <section id="menu-panel-queue" class="menu-panel" data-menu-panel="queue" role="tabpanel" aria-labelledby="menu-tab-queue" hidden>
+      <section id="menu-panel-queue" class="menu-panel" data-menu-panel="queue" role="tabpanel" aria-labelledby="menu-tab-queue">
       <section class="section operator-console-shell" id="operator-console-shell" aria-labelledby="operator-console-heading">
         <div class="section-heading operator-console-heading">
           <div>
@@ -5054,6 +4274,7 @@
             <div class="operator-queue-filters" role="group" aria-label="제품 대기열 상태 필터">
               <button class="button-secondary" type="button" data-queue-filter="all" aria-pressed="true">전체</button>
               <button class="button-secondary" type="button" data-queue-filter="selection" aria-pressed="false">선택 대기만</button>
+              <button class="button-secondary" type="button" data-queue-filter="approval" aria-pressed="false">승인 필요</button>
               <button class="button-secondary" type="button" data-queue-filter="blocked" aria-pressed="false">차단만</button>
               <button class="button-secondary" type="button" data-queue-filter="running" aria-pressed="false">진행 중</button>
               <button class="button-secondary" type="button" data-queue-filter="completed" aria-pressed="false">완료</button>
@@ -5149,19 +4370,8 @@
       </section>
 
       <section id="menu-panel-input-source" class="menu-panel" data-menu-panel="input-source" role="tabpanel" aria-labelledby="menu-tab-input-source" hidden>
-      <!-- 대량 제품 투입 폼은 작업 큐 맨 위에 있다. 같은 id 를 두 곳에 둘 수 없으니,
-           여기서는 그 자리로 보내 준다. 안 그러면 예전에 쓰던 사람이 사라졌다고 여긴다. -->
-      <section class="section" aria-labelledby="intake-moved-heading">
-        <div class="section-heading">
-          <div>
-            <p class="section-eyebrow">BATCH INTAKE</p>
-            <h2 id="intake-moved-heading">대량 제품 투입</h2>
-          </div>
-          <button class="board-action" type="button" id="go-batch-intake">작업 큐 목록 보기</button>
-        </div>
-        <p class="section-copy">새 제품 투입은 작업 큐 맨 위로 옮겼습니다. 투입한 뒤 그 아래 표에서 진행 상황을 바로 볼 수 있습니다.</p>
-      </section>
       <section id="bulk-intake" class="section bulk-intake" aria-label="제품 일괄 투입">
+        <button class="board-action" type="button" id="go-batch-intake">작업큐 보기</button>
         <p class="status-message">제품 일괄 투입을 준비하는 중입니다.</p>
       </section>
       <section class="section" aria-labelledby="work-bundle-input-heading">
@@ -5347,7 +4557,7 @@
         factoryBackend: document.getElementById("factory-backend"),
         apiHub: document.getElementById("api-hub")
       };
-      const healthUrl = "http://127.0.0.1:41009/api/health";
+      const healthUrl = "http://localhost:41009/api/health";
       const requestedApiBase = new URLSearchParams(window.location.search).get("apiBase");
       const activeHealthUrl = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(requestedApiBase || "")
         ? `${requestedApiBase}/api/health`
@@ -5399,7 +4609,7 @@
         } catch (error) {
           const message = error instanceof DOMException && error.name === "AbortError"
             ? "health 응답 시간이 초과되었습니다."
-            : "127.0.0.1:41009 백엔드에 연결할 수 없습니다.";
+            : "localhost:41009 백엔드에 연결할 수 없습니다.";
           renderFailure(message);
         } finally {
           window.clearTimeout(timeoutId);
@@ -5409,19 +4619,19 @@
       loadHealth();
     })();
   </script>
-  <script>
+  <script type="module">
+    import { createControlTowerClient } from "./src/control-tower-client.mjs";
     (() => {
       const params = new URLSearchParams(window.location.search);
       const localOrigin = (name, fallback) => {
         const value = params.get(name);
         return /^http:\/\/(?:127\.0\.0\.1|localhost):\d+$/.test(value || "") ? value : fallback;
       };
-      const API_BASE = localOrigin("apiBase", "http://127.0.0.1:41009");
-      const FACTORY_BACKEND = localOrigin("factoryBackend", "http://127.0.0.1:5050");
+      const API_BASE = localOrigin("apiBase", "http://localhost:41009");
+      const FACTORY_BACKEND = localOrigin("factoryBackend", "http://127.0.0.1:43030");
       const API_HUB = localOrigin("apiHub", "http://127.0.0.1:4321");
       // 판단에 쓸 기본 모델. 목록에 있으면 이것을 고른다.
       const PREFERRED_JUDGMENT_MODEL = "gpt-5.6-luna";
-      const session = { id: "", csrf: "" };
       const automation = {
         registry: null,
         batchOverride: {},
@@ -5488,43 +4698,7 @@
           raiseHiddenStatusAlert(element, message, tone);
         }
       };
-      const sendRequest = async (path, options = {}) => {
-        const headers = { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) };
-        if (session.id && options.method && options.method !== "GET") headers["X-Control-Tower-Session"] = session.id;
-        if (session.csrf && options.method && options.method !== "GET") headers["X-Control-Tower-CSRF"] = session.csrf;
-        const response = await fetch(`${API_BASE}${path}`, { ...options, cache: "no-store", headers, credentials: "include" });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          const error = new Error(String(body.error?.code || `HTTP_${response.status}`));
-          error.status = response.status;
-          error.code = String(body.error?.code || "");
-          throw error;
-        }
-        return body;
-      };
-      const apiRequest = async (path, options = {}) => {
-        try {
-          return await sendRequest(path, options);
-        } catch (error) {
-          // 관제탑이 잠깐 꺼져 있는 동안 화면을 열어 두면 session 이 비어 있다. 그 뒤 첫 요청이
-          // csrf_required 로 튕기면서 투입이 통째로 실패한다. 한 번은 세션을 다시 받아 재시도한다.
-          if (error.code !== "csrf_required" && error.code !== "session_required") throw error;
-          await loadSession();
-          if (!session.id || !session.csrf) throw error;
-          return sendRequest(path, options);
-        }
-      };
-      const loadSession = async () => {
-        try {
-          const response = await fetch(`${API_BASE}/api/session`, { credentials: "include" });
-          const body = await response.json();
-          session.id = String(body.sessionId || "");
-          session.csrf = String(body.csrfToken || "");
-          setStatus("intake-status", session.id ? "변경 요청 session 준비됨" : "session을 만들지 못했습니다.", session.id ? "ok" : "error");
-        } catch (error) {
-          setStatus("intake-status", `session 차단: ${String(error.message || error)}`, "error");
-        }
-      };
+      const { apiRequest, loadSession } = createControlTowerClient({ apiBase: API_BASE, setStatus });
       const loadModelStatus = async () => {
         // 목록을 다시 채우면서 사람이 고른 값을 덮으면, 새로고침 한 번에 설정이 조용히 되돌아간다.
         // 그래서 다시 채우기 전에 지금 고른 값을 기억했다가, 그 값이 새 목록에도 있으면 그대로 되돌린다.
@@ -5615,6 +4789,7 @@
         factoryApp: FACTORY_APP,
         apiHub: API_HUB,
       });
+      window.dispatchEvent(new CustomEvent("control-tower:runtime-ready"));
       void loadSession();
       void loadModelStatus();
     })();
@@ -5638,10 +4813,10 @@
       window.dispatchEvent(new CustomEvent("control-tower:tab-resumed", { detail: state }));
     });
   </script>
-  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=30&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1&amp;staleInbox=1"></script>
+  <script type="module" src="./src/production-workbench.mjs?menuReorg=5&amp;workBundleCompleteness=7&amp;factoryQueue=5&amp;operatorConsole=33&amp;workBundleHistory=1&amp;imageLoading=1&amp;historyStageFilter=1&amp;resultWorkbench=4&amp;workfileTabs=5&amp;durableJobProjection=1&amp;revealHiddenPanel=1&amp;inspectorSubject=1&amp;selectionGuard=2&amp;failureCopy=3&amp;jobDeletion=1&amp;operatorCopy=1&amp;syncSummary=1&amp;staleInbox=1&amp;currentProductTruth=4&amp;resumeHistory=2&amp;storedResultCopy=1&amp;queueCountCopy=1"></script>
   <script type="module">
     import { createQueueModel, getQueueScrollTop, renderVirtualQueue } from "./src/virtual-queue.mjs";
-    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=7";
+    import { mountProductIntake } from "./src/product-intake.mjs?productIntake=9";
     mountProductIntake(globalThis.controlTowerRuntime);
     const fixtureParams = new URLSearchParams(window.location.search);
     const fixtureCount = fixtureParams.get("fixtureCount");
@@ -5743,7 +4918,7 @@
       runControlTowerBuildCheck();
     }
   </script>
-  <script type="module" src="./src/production-board.mjs?parallelBoard=79"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=22"></script>
+  <script type="module" src="./src/production-board.mjs?parallelBoard=82"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=28"></script>
 </body>
 </html>

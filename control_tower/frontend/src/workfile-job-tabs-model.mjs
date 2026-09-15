@@ -1,4 +1,4 @@
-import { normalizeFactoryProjection } from './factory-sync-model.mjs?selectedId=4';
+import { normalizeFactoryProjection } from './factory-sync-model.mjs?selectedId=5';
 
 const FACTORY_PROJECTION_SCHEMA = 'factory-control-projection:v1';
 const FACTORY_COMMAND_VERSION = 'factory-control-command:v1';
@@ -266,7 +266,25 @@ export function createWorkfileJobTabRegistry() {
       tabs.set(key, tab);
     }
     if (!activeKey || !tabs.has(activeKey)) {
-      activeKey = durableKeys.has(`job:${liveJobId}`) ? `job:${liveJobId}` : (tabs.keys().next().value || '');
+      const preferredJob = jobs
+        .filter(job => ['running', 'waiting_manual'].includes(text(job.status)))
+        .sort((left, right) => {
+          const leftSavedAt = Math.max(
+            Number(record(left.checkpoint).savedAt) || 0,
+            Number(record(left.progress).trace?.at) || 0,
+          );
+          const rightSavedAt = Math.max(
+            Number(record(right.checkpoint).savedAt) || 0,
+            Number(record(right.progress).trace?.at) || 0,
+          );
+          return rightSavedAt - leftSavedAt;
+        })[0]
+        || jobs.find(job => text(job.status) === 'queued')
+        || jobs[0];
+      const preferredKey = text(preferredJob?.jobId) ? `job:${text(preferredJob.jobId)}` : '';
+      activeKey = durableKeys.has(`job:${liveJobId}`)
+        ? `job:${liveJobId}`
+        : preferredKey;
     }
     return snapshot();
   };

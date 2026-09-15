@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
+const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '../..');
 const GATEWAY = path.join(ROOT, 'src/modules/workspace-persistence.mjs');
@@ -343,4 +344,68 @@ test('Given alpha preference A pauses When beta writes the same global key Then 
     pendingA, error => ['STALE_SCOPE', 'STALE_REPLICA'].includes(error?.code),
   );
   assert.equal(records.get('appSettings:global-pref').marker, 'B');
+});
+
+test('Given an obsolete session-asset save When its scope is fenced off Then it does not warn the current work', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'src/app-core-02.js'), 'utf8');
+  const start = source.indexOf('async function saveSessionAssetsToDbOnce(');
+  const end = source.indexOf('\nfunction scheduleSessionAssetSave(', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const saveOnceSource = source.slice(start, end);
+
+  async function run(error) {
+    const warnings = [];
+    const consoleWarnings = [];
+    const state = {
+      storageWarning: '',
+      currentScope: 'project:current',
+      factory: { inputs: ['C'], queue: Array.from({ length: 13 }, (_, index) => ({ index })) },
+    };
+    const context = {
+      state,
+      console: { warn: (...args) => consoleWarnings.push(args) },
+      saveLastProductImageBackupToDbIfChanged: async () => undefined,
+      currentSessionAssetsPayload: () => ({ savedAt: 1 }),
+      workspaceGetSessionAssets: async () => null,
+      workspaceRevisionApi: () => null,
+      workspaceSnapshotRevision: () => null,
+      workspacePutSessionAssets: async () => { throw error; },
+      reconcileMatchingWorkspaceReplicaRevision: async () => false,
+      setStorageWarningOnce: message => {
+        warnings.push(message);
+        state.storageWarning = message;
+        return true;
+      },
+      render: () => undefined,
+    };
+    vm.runInNewContext(`${saveOnceSource}\nglobalThis.runSave = saveSessionAssetsToDbOnce;`, context);
+    return {
+      result: await context.runSave(), state, warnings, consoleWarnings,
+    };
+  }
+
+  // Baseline characterization: real same-scope persistence failures remain visible and false.
+  for (const error of [
+    Object.assign(new Error('IndexedDB quota exceeded'), { name: 'QuotaExceededError' }),
+    Object.assign(new Error('workspace revision is stale'), { name: 'WorkspaceAuthorityError', code: 'STALE_REVISION' }),
+  ]) {
+    const observed = await run(error);
+    assert.equal(observed.result, false);
+    assert.deepEqual(observed.warnings, ['이미지 저장소 저장에 실패했습니다. 현재 화면은 유지되지만, 새로고침 전에 현재 작업 저장을 한 번 눌러주세요.']);
+    assert.equal(observed.consoleWarnings[0][0], 'Session asset save failed:');
+  }
+
+  // Red before the production fix: the old scope is canceled, not an image-storage failure in current work.
+  const staleScope = Object.assign(new Error('workspace authority scope changed'), {
+    name: 'WorkspaceAuthorityError', code: 'STALE_SCOPE', snapshot: { scopeId: 'project:current' },
+  });
+  const observed = await run(staleScope);
+  assert.equal(observed.result, false);
+  assert.deepEqual(observed.warnings, []);
+  assert.deepEqual(observed.state, {
+    storageWarning: '',
+    currentScope: 'project:current',
+    factory: { inputs: ['C'], queue: Array.from({ length: 13 }, (_, index) => ({ index })) },
+  });
 });

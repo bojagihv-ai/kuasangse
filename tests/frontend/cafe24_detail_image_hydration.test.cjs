@@ -132,15 +132,74 @@ test('Cafe24 상세 이미지 원본 endpoint가 404여도 보관 메타데이�
   ]);
 });
 
+test('업로드 원본 연결은 같은 A컷 ID를 유지하고 다른 작업 보관본은 거절한다', async () => {
+  for (const sameScope of [true, false]) {
+    const selected = { id: 'hero-selected', stageId: 'hero', used: true,
+      image: '/api/local-archive/assets/hero-archive/image', metadata: { localArchiveId: 'hero-archive' } };
+    const factory = { product: {}, archive: {}, assets: [selected],
+      stages: { hero: { selectedAssetIds: [selected.id], status: 'done' } } };
+    const before = JSON.stringify(factory.assets);
+    const load = compileFunction(FACTORY_CORE_SOURCE, 'factoryLoadLocalArchiveAsset', {
+      state: { productName: '파우치' },
+      factoryCurrentProductIdentityMeta: () => ({ productName: '파우치', productIdentityKey: 'pouch' }),
+      factoryNormalizeIdentityText: value => String(value || ''),
+      factoryNormalizeStageScope: value => String(value || ''),
+      workspaceArchiveFetch: async () => ({ ok: true, json: async () => ({
+        record: { archiveId: 'hero-archive', stageId: 'hero', workspaceId: 'qa', productKey: 'pouch',
+          productName: '파우치', currentRunId: 'run', inputImageFingerprint: 'input' },
+        imageDataUrl: 'data:image/png;base64,SELECTED_HERO',
+      }) }),
+      displayableImageSrc: value => value,
+      factoryLocalArchiveMatchesCurrentWork: () => sameScope,
+      factoryLocalArchiveLinkedAssetMatchesCurrentWork: () => false,
+      factorySectionIdFromLocalArchiveStage: () => '',
+      factoryLocalArchiveRecordCompatible: () => true,
+      factoryRegisterAsset: (stageId, image, options) => {
+        const copy = { id: 'new-copy', stageId, image, metadata: options.metadata };
+        factory.assets.push(copy);
+        return copy;
+      },
+    });
+    const result = await load('hero-archive', { factory, hydrateAssetId: selected.id, render: false, silent: true });
+    assert.equal(result, sameScope);
+    assert.deepEqual(factory.assets.map(asset => asset.id), ['hero-selected']);
+    assert.deepEqual(factory.stages.hero.selectedAssetIds, ['hero-selected']);
+    if (sameScope) assert.equal(selected.image, 'data:image/png;base64,SELECTED_HERO');
+    else assert.equal(JSON.stringify(factory.assets), before);
+  }
+});
+
+test('선택 A컷 원본을 못 읽으면 다른 후보를 대신 선택하지 않는다', async () => {
+  const factory = { product: {}, assets: [
+    { id: 'chosen', stageId: 'hero', image: '', metadata: { localArchiveId: 'missing' } },
+    { id: 'other', stageId: 'hero', image: '', metadata: { localArchiveId: 'other-archive' } },
+  ], stages: { hero: { selectedAssetIds: ['chosen'], status: 'done' } } };
+  const hydrate = compileFunction(FACTORY_CORE_SOURCE, 'factoryHydrateCafe24ImagesFromLocalArchive', {
+    factoryCafe24InlineImageFromCandidate: asset => asset?.image ? { base64: asset.image } : null,
+    factoryLoadLocalArchiveAsset: async (id, options) => {
+      if (id === 'missing') return false;
+      options.factory.assets[1].image = 'data:image/png;base64,OTHER';
+      return true;
+    },
+    uniqueApiKeys: values => [...new Set(values)],
+  });
+  const result = await hydrate({ factory, render: false });
+  assert.equal(result.ok, false);
+  assert.deepEqual(factory.stages.hero.selectedAssetIds, ['chosen']);
+  assert.equal(factory.assets[1].image, '');
+});
+
 test('대표이미지 후속 동기화는 응답에 요청 슬롯이 하나라도 없으면 등록 성공으로 끝내지 않는다', async () => {
   const slots = [
     { key: 'detail_image', label: '상세 이미지' },
     { key: 'list_image', label: '목록 이미지' },
   ];
   const factory = { product: { cafe24Candidates: [], candidateAutoApply: false } };
+  let reads = 0;
   const syncImages = compileFunction(SYNC_SOURCE, 'factorySyncCafe24ProductImages', {
     CAFE24_CONTROL_API: { defaultMallId: 'bojagi1928' },
     FACTORY_CAFE24_IMAGE_SLOTS: slots,
+    factoryCafe24ApprovedImageDataUrl: compileFunction(SYNC_SOURCE, 'factoryCafe24ApprovedImageDataUrl'),
     factoryCafe24TargetCandidate: () => null,
     parseCafe24Raw: detail => detail?.product || detail || {},
     factoryCafe24ImagePayload: () => ({
@@ -151,7 +210,7 @@ test('대표이미지 후속 동기화는 응답에 요청 슬롯이 하나라�
     callCafe24Console: async () => ({ mode: 'direct', response: { ok: true } }),
     factoryCafe24ControlPlanFromBody: () => null,
     factoryExecuteCafe24ControlBody: async body => ({ body, job: null }),
-    fetchCafe24ProductFullByNo: async () => ({
+    fetchCafe24ProductFullByNo: async () => (++reads, {
       product: { product_no: '3001', detail_image: 'https://cdn.example/detail.jpg', list_image: '' },
     }),
     factoryMergeCafe24Candidates: (existing, incoming) => [...(existing || []), ...incoming],
@@ -170,6 +229,7 @@ test('대표이미지 후속 동기화는 응답에 요청 슬롯이 하나라�
   const result = await syncImages({ factory, productNo: '3001', skipConfirm: true });
 
   assert.equal(result, false, 'a missing requested image slot must fail the required post-create step');
+  assert.equal(reads, 30, 'failure must come from the missing slot after readback, not an absent test dependency');
 });
 
 test('대표이미지 후속 동기화는 Cafe24 반영 지연 뒤 이미지 경로가 나타나면 성공한다', async () => {
@@ -182,6 +242,7 @@ test('대표이미지 후속 동기화는 Cafe24 반영 지연 뒤 이미지 경
   const syncImages = compileFunction(SYNC_SOURCE, 'factorySyncCafe24ProductImages', {
     CAFE24_CONTROL_API: { defaultMallId: 'bojagi1928' },
     FACTORY_CAFE24_IMAGE_SLOTS: slots,
+    factoryCafe24ApprovedImageDataUrl: compileFunction(SYNC_SOURCE, 'factoryCafe24ApprovedImageDataUrl'),
     factoryCafe24TargetCandidate: () => null,
     parseCafe24Raw: detail => detail?.product || detail || {},
     factoryCafe24ImagePayload: () => ({

@@ -78,7 +78,7 @@ _CAFE24_CONTROL_ROOT = Path(r"C:\Users\kua\Documents\Playground\cafe24-control-t
 _CAFE24_CONTROL_SCRIPT = _CAFE24_CONTROL_ROOT / "launch-cafe24-control-tower.ps1"
 _CAFE24_CONTROL_PORT = 8787
 _CAFE24_CONTROL_START_LOCK = threading.Lock()
-_LOCAL_ACTION_ORIGIN_PORTS = {5000, 5050, 5500, 8080, 8081}
+_LOCAL_ACTION_ORIGIN_PORTS = {5000, 5050, 5500, 8080, 8081, 42011}
 
 
 def _local_action_request_allowed():
@@ -350,13 +350,13 @@ def _parse_cafe24_setup_status(body):
         "tokenMessage": "",
         "problem": "",
     }
-    if not isinstance(body, dict):
+    if not isinstance(body, dict) or body.get("ok") is not True:
         return unknown
     data = body.get("data")
     if not isinstance(data, dict):
         return unknown
     checks = data.get("checks")
-    if not isinstance(checks, list):
+    if not isinstance(checks, list) or not isinstance(data.get("missing_scopes", []), list):
         return unknown
     by_id = {}
     for check in checks:
@@ -399,6 +399,9 @@ def _parse_cafe24_setup_status(body):
             "tokenMessage": token_message,
             "problem": f"Cafe24 권한이 모자랍니다({named}). Control Tower 에서 권한을 다시 승인해주세요.",
         }
+    if (status_of(mall) != "pass" or status_of(scopes) != "pass"
+            or status_of(token) not in {"pass", "warn"}):
+        return unknown
     if status_of(token) == "warn":
         # 곧 만료되지만 지금은 쓸 수 있다. 막지 않고 알리기만 한다.
         return {
@@ -433,7 +436,27 @@ def _cafe24_control_status_payload():
             health_detail = f"HTTP {response.status_code}"
             # 본문을 버리지 않는다. 토큰·연결·권한 검사표가 여기 들어 있다.
             try:
-                verdict = _parse_cafe24_setup_status(response.json())
+                body = response.json()
+                if (response.status_code == 401 and isinstance(body, dict)
+                        and isinstance(body.get("error"), dict)
+                        and body["error"].get("code") == "control_key_invalid"):
+                    health_ok = True
+                    health_detail += " control_key_invalid"
+                    body = None
+                    try:
+                        hub_response = requests.post(
+                            f"{_JEPUM_API_HUB_BASE}/api/invoke/cafe24_control_tower/setup-status",
+                            json={"query": {"include_secrets": 0}}, timeout=2,
+                        )
+                        health_detail += f"; API Hub HTTP {hub_response.status_code}"
+                        hub_payload = hub_response.json()
+                        if (hub_response.ok and isinstance(hub_payload, dict)
+                                and hub_payload.get("ok") is True and hub_payload.get("status") == 200
+                                and isinstance(hub_payload.get("response"), dict)):
+                            body = hub_payload["response"].get("body")
+                    except (requests.RequestException, ValueError) as exc:
+                        health_detail += f"; API Hub {exc.__class__.__name__}"
+                verdict = _parse_cafe24_setup_status(body)
             except Exception:
                 verdict = {"usable": None, "oauthState": "unknown", "missingScopes": [], "tokenMessage": "", "problem": ""}
         except requests.RequestException as exc:
@@ -461,6 +484,8 @@ def _cafe24_control_status_payload():
         "message": (
             "Cafe24 Control Tower가 꺼져 있습니다."
             if not running
+            else "Cafe24 Control Tower는 실행 중이지만 OAuth 상태를 확인하지 못했습니다. API Hub 상태를 확인해주세요."
+            if verdict["usable"] is None
             else verdict["problem"]
             or "Cafe24 Control Tower가 실행 중입니다. API Hub 후보 수집을 계속합니다."
         ),
@@ -796,6 +821,4 @@ def _last_work_score(snapshot):
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
 

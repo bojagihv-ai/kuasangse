@@ -66,6 +66,36 @@ async function main() {
       imgIds: ['image_scoped_v138_' + index],
     }));
     const state = window.__kuasangseState || window.state;
+    const bootstrapTrace = [];
+    const authorityTrace = [];
+    const lock = window.__KUASANGSE_WORKSPACE_LOCK__;
+    const unsubscribeAuthority = lock?.subscribe?.(snapshot => {
+      if (authorityTrace.length >= 96) return;
+      authorityTrace.push({
+        at: Date.now(),
+        mode: String(snapshot?.mode || ''),
+        scopeId: String(snapshot?.scopeId || ''),
+        reasonCode: String(snapshot?.reasonCode || ''),
+        reason: String(snapshot?.reason || '').slice(0, 180),
+        leaseId: String(snapshot?.leaseId || ''),
+        fencingToken: Number(snapshot?.fencingToken || 0),
+      });
+    });
+    const originalBootstrap = window.saveLastWorkBootstrap;
+    const originalWarn = console.warn;
+    window.saveLastWorkBootstrap = options => {
+      const result = originalBootstrap(options);
+      bootstrapTrace.push({ event: 'bootstrap', scopeId: result?.workspaceScope?.id || '', returned: !!result });
+      return result;
+    };
+    console.warn = (...args) => {
+      if (/bootstrap|Workspace recovery write|Session (asset|metadata|persistence)|Server last-work/.test(String(args[0] || ''))) {
+        bootstrapTrace.push({ event: 'warning', message: String(args[0]).slice(0, 180),
+          code: String(args[1]?.code || ''), detail: String(args[1]?.message || '').slice(0, 180),
+          authority: lock?.snapshot?.() || null });
+      }
+      originalWarn.apply(console, args);
+    };
     state.currentProjectId = projectId;
     state.currentProjectName = projectName;
     state.currentProjectCreatedAt = Date.now();
@@ -113,14 +143,20 @@ async function main() {
     }
     window.render();
     await new Promise(resolve => setTimeout(resolve, 300));
-    await window.saveLastWorkNow({ force: true, deep: true });
+    const saveReceipts = await window.saveLastWorkNow({ force: true, deep: true });
     await new Promise(resolve => setTimeout(resolve, 1500));
     const server = await fetch('http://127.0.0.1:5050/api/last-work?workspaceId=' + encodeURIComponent('project:' + projectId), { cache: 'no-store' }).then(response => response.json());
     const storedSession = await window.workspaceGetSessionAssets?.();
     const persistence = window.workspacePersistenceApi();
     const localSession = JSON.parse(persistence.readRecoveryValue('pdp_session') || '{}');
     const bootstrap = JSON.parse(persistence.readRecoveryValue('pdp_last_work_bootstrap_v1') || '{}');
+    window.saveLastWorkBootstrap = originalBootstrap;
+    console.warn = originalWarn;
+    unsubscribeAuthority?.();
     return {
+      bootstrapTrace,
+      authorityTrace,
+      saveReceipts: (saveReceipts || []).map(item => ({ status: item.status, value: typeof item.value === 'boolean' ? item.value : typeof item.value })),
       projectId: state.currentProjectId,
       projectName: state.currentProjectName,
       scope: window.getCurrentLastWorkWorkspaceScope(),
@@ -270,6 +306,8 @@ async function main() {
   assertChecks([
     { ok: /^draft:/.test(saved.scope) && saved.scope === saved.branchScope, message: `현재 탭 브랜치 저장 scope 불일치: ${saved.scope}` },
     { ok: saved.bootstrapScope === saved.branchScope, message: `즉시 복원 포인터 branch 불일치: ${saved.bootstrapScope}` },
+    { ok: saved.bootstrapTrace.every(item => item.event !== 'warning') && !saved.storageWarning,
+      message: `복원 포인터 저장 실패를 무시했습니다: ${JSON.stringify(saved.bootstrapTrace)}` },
     { ok: saved.localScope === saved.branchScope && saved.localProjectId === projectId, message: `로컬 branch/document 식별자 불일치: ${JSON.stringify({ scope: saved.localScope, projectId: saved.localProjectId })}` },
     { ok: saved.storedSessionImages.length === 4 && saved.storedSessionImages.every(image => image.previewLength > 0 || image.base64Length > 0 || image.dataUrlLength > 0), message: `브랜치 옵션 이미지 저장 불일치: ${JSON.stringify(saved.storedSessionImages)}` },
     { ok: !!EXPECTED_BUILD_ID && restored.buildId === EXPECTED_BUILD_ID, message: `최신 빌드가 아닙니다: ${restored.buildId} (예상: ${EXPECTED_BUILD_ID || '빌드 ID 없음'})` },

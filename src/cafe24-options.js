@@ -130,6 +130,131 @@ function factoryCafe24OptionSorterDraft(optionSorter = state.optionSorter || {})
   };
 }
 
+function factoryCafe24SelectedOptionImages(factory, optionSorter = state.optionSorter || {}) {
+  const ids = factory.stages?.options?.selectedAssetIds || [];
+  if (!ids.length) return null;
+  if (ids.length !== 1) throw new Error('옵션 이미지 연결 중단: 옵션 결과를 하나만 선택해주세요.');
+  const assets = (factory.assets || []).filter(asset => asset.id === ids[0] && asset.stageId === 'options' && !asset.rejected);
+  const resultId = assets[0]?.sourceMap?.optionResultId;
+  const results = (optionSorter.optionResults || []).filter(result => result.id === resultId);
+  if (assets.length !== 1 || !resultId || results.length !== 1) throw new Error('옵션 이미지 연결 중단: 선택한 옵션 결과 원본을 확인하지 못했습니다.');
+  const splits = results[0].splitImages || [];
+  const names = splits.map(split => factoryDbNormalizeKey(split.optionName || ''));
+  if (!splits.length || names.some(name => !name) || new Set(names).size !== names.length
+    || splits.some(split => !/^data:image\/[^;,]+;base64,[A-Za-z0-9+/=]+$/i.test(split.image || ''))) {
+    throw new Error('옵션 이미지 연결 중단: 분리 이미지의 이름 또는 원본이 없거나 중복됩니다.');
+  }
+  return { assetId: ids[0], resultId, splits };
+}
+
+function factoryCafe24OptionImageUrl(value, plan) {
+  const text = String(value || '').trim();
+  if (!text || /[\\\s]/.test(text) || /(?:^|\/)\.{1,2}(?:\/|$)|%2e|%2f|%5c/i.test(text)
+    || text.startsWith('//') || (!text.startsWith('/') && !text.startsWith('https://'))) {
+    throw new Error('옵션 이미지 경로가 올바르지 않습니다.');
+  }
+  const url = new URL(text, `https://${plan.mallId}.cafe24.com`);
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash
+    || !url.pathname.startsWith('/web/') || !plan.optionImageOrigins.includes(url.origin)) {
+    throw new Error('옵션 이미지가 확정된 Cafe24 몰의 업로드 경로가 아닙니다.');
+  }
+  return { url: url.href, path: `${url.pathname}${url.search}` };
+}
+
+function factoryCafe24OptionImagePlan(factory, raw, productNo, mallId) {
+  const selected = factoryCafe24SelectedOptionImages(factory);
+  if (!selected) return { optionImages: [], optionImageOrigins: [], optionImageIdentity: '' };
+  const root = factoryCafe24ExistingOptionRoot(raw);
+  const groups = root.options || [];
+  const origins = new Set([`https://${mallId}.cafe24.com`]);
+  const imageUrls = ['detail_image', 'list_image', 'tiny_image', 'small_image'].map(key => raw[key]);
+  for (const group of groups) {
+    for (const value of group.option_value || []) imageUrls.push(value.option_link_image);
+  }
+  for (const html of [raw.description, raw.mobile_description]) {
+    for (const match of String(html || '').matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["']/gi)) imageUrls.push(match[1]);
+  }
+  for (const value of imageUrls) {
+    try {
+      const url = new URL(String(value || ''));
+      if (url.protocol === 'https:' && !url.username && !url.password && url.pathname.startsWith('/web/')) origins.add(url.origin);
+    } catch (_) {}
+  }
+  const identity = JSON.stringify([factory.workspace?.id || '', productNo, mallId, selected.assetId, selected.resultId,
+    selected.splits.map(split => [split.optionName, factoryProjectFileImageFingerprint(split.image)])]);
+  const plan = { mallId, optionImageOrigins: [...origins], optionImageIdentity: identity };
+  const cache = factory.product.cafe24ImageDraft?.optionLinks || {};
+  plan.optionImages = selected.splits.map(split => {
+    const matches = groups.flatMap(group => (group.option_value || []).filter(value =>
+      factoryDbNormalizeKey(factoryCafe24ExistingOptionText(value)) === factoryDbNormalizeKey(split.optionName)
+    ).map(value => ({ group, value })));
+    if (matches.length !== 1) throw new Error(`옵션 이미지 연결 중단: 기존 옵션값 ${split.optionName}을 하나로 확정하지 못했습니다.`);
+    const { group, value } = matches[0];
+    const key = JSON.stringify([identity, group.option_name, value.value_no ?? '', split.optionName]);
+    const uploaded = cache[key]?.url ? factoryCafe24OptionImageUrl(cache[key].url, plan) : null;
+    let matched = false;
+    if (uploaded && value.option_link_image) {
+      try { matched = factoryCafe24OptionImageUrl(value.option_link_image, plan).path === uploaded.path; } catch (_) {}
+    }
+    return { key, groupName: group.option_name, optionText: factoryCafe24ExistingOptionText(value),
+      valueNo: value.value_no, image: split.image, ...uploaded, matched };
+  });
+  return plan;
+}
+
+function factoryCafe24ApplyOptionImageLinks(plan, raw) {
+  const root = factoryCafe24ExistingOptionRoot(raw);
+  const body = plan.optionUpdate.body.option || plan.optionUpdate.body;
+  for (const group of body.options || []) {
+    const original = (root.options || []).find(item => item.option_name === group.option_name);
+    for (const value of group.option_value || []) {
+      const previous = (original?.option_value || []).find(item => factoryCafe24ExistingOptionText(item) === value.option_text);
+      ['option_image_file', 'option_link_image'].forEach(key => {
+        if (previous?.[key] !== undefined) value[key] = key === 'option_link_image' && previous[key]
+          ? factoryCafe24OptionImageUrl(previous[key], plan).path : previous[key];
+      });
+      const image = plan.optionImages.find(item => item.groupName === group.option_name && item.optionText === value.option_text);
+      if (image?.path) value.option_link_image = image.path;
+    }
+  }
+}
+
+function factoryCafe24VerifyOptionImageEcho(plan, detail) {
+  const images = plan.optionImages || [];
+  const raw = parseCafe24Raw(detail);
+  const root = factoryCafe24ExistingOptionRoot(raw);
+  const mismatches = images.filter(image => {
+    const groups = (root.options || []).filter(group => group.option_name === image.groupName);
+    const values = groups.flatMap(group => (group.option_value || []).filter(value =>
+      factoryCafe24ExistingOptionText(value) === image.optionText
+      && (image.valueNo === undefined || String(value.value_no) === String(image.valueNo))));
+    if (values.length !== 1 || !image.path) return true;
+    try { return factoryCafe24OptionImageUrl(values[0].option_link_image, plan).path !== image.path; } catch (_) { return true; }
+  });
+  let preserved = true;
+  if (plan.optionImagesOnly) {
+    const expected = plan.optionUpdate?.body?.option || plan.optionUpdate?.body || {};
+    const shape = group => [group.option_name, group.required_option, group.option_display_type,
+      (group.option_value || []).map(value => [factoryCafe24ExistingOptionText(value), value.value_no])];
+    preserved = JSON.stringify((expected.options || []).map(shape)) === JSON.stringify((root.options || []).map(shape))
+      && JSON.stringify(plan.optionImageVariantCodes) === JSON.stringify((raw.variants || [])
+        .map(row => String(row.variant_code || '')).filter(Boolean).sort());
+    for (const [index, group] of (expected.options || []).entries()) {
+      for (const [valueIndex, value] of (group.option_value || []).entries()) {
+        const actual = root.options?.[index]?.option_value?.[valueIndex] || {};
+        for (const field of ['option_image_file', 'option_link_image']) {
+          if (!value[field] && !actual[field]) continue;
+          try {
+            if (factoryCafe24OptionImageUrl(value[field], plan).path !== factoryCafe24OptionImageUrl(actual[field], plan).path) preserved = false;
+          } catch (_) { preserved = false; }
+        }
+      }
+    }
+  }
+  return { matched: !mismatches.length && preserved, imageChecked: images.length, imageMismatchCount: mismatches.length,
+    message: `옵션 이미지 ${images.length - mismatches.length}/${images.length}개 연결 확인${preserved ? '' : ' · 기존 옵션/이미지/품목 보존 확인 필요'}` };
+}
+
 function factoryCafe24NormalizeVariantOptions(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean);

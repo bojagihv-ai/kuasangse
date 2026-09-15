@@ -114,7 +114,12 @@ export function filenameFor(source, fallback, mimeType) {
   return `${fallback}.${extension}`;
 }
 
+export function isDocumentAsset(source) {
+  return text(source.type).toLowerCase() === 'html' || Boolean(text(source.documentArchiveId));
+}
+
 export function binarySource(source) {
+  if (isDocumentAsset(source)) return '';
   const embeddedImage = binaryText(source.image);
   if (embeddedImage) return embeddedImage;
   for (const key of SOURCE_KEYS) {
@@ -180,10 +185,6 @@ function stableAssetSuffix(canonicalIdentity) {
   return `${tinyHash(`asset-a\u001f${canonicalIdentity}`)}${tinyHash(`asset-b\u001f${canonicalIdentity}`)}`;
 }
 
-function collisionAssetKey(baseAssetKey, suffix) {
-  return `${baseAssetKey.slice(0, 320 - suffix.length - 1)}:${suffix}`;
-}
-
 function assignCollisionKeys(plan, baseAssetKey, group) {
   for (const entry of group) plan.assetKeys.delete(entry.assignedKey);
   const sorted = [...group].sort((left, right) => (
@@ -203,7 +204,7 @@ function assignCollisionKeys(plan, baseAssetKey, group) {
   for (const [suffix, values] of suffixGroups) {
     values.forEach((entry, index) => {
       const uniqueSuffix = values.length === 1 ? suffix : `${suffix}-${index + 1}`;
-      entry.assignedKey = collisionAssetKey(baseAssetKey, uniqueSuffix);
+      entry.assignedKey = `${baseAssetKey.slice(0, 320 - uniqueSuffix.length - 1)}:${uniqueSuffix}`;
       plan.assetKeys.add(entry.assignedKey);
       plan.assets[entry.assetIndex] = Object.freeze({
         ...entry.asset,

@@ -97,3 +97,54 @@ test('사이즈 폴백을 더 열지 않는다 — 남의 제품 값이 새어 �
   const src = sourceSlice(CORE_06, 'function factoryNormalizeSizeSummaryFactValue(', 'function factoryDbSizeParsedCandidate(');
   assert.doesNotMatch(src, /factory\.product|dbCandidates|confirmedDb/, '정규화가 값의 출처를 뒤지면 안 됩니다.');
 });
+
+test('신규 bulk mm는 정확한 cm 프롬프트가 되고 원본 수동 계약은 유지된다', () => {
+  const core03 = fs.readFileSync(path.join(ROOT, 'src/app-core-03.js'), 'utf8');
+  const adapter = sourceSlice(core03, 'function factoryRuntimeControlProvidedFieldEntries(', 'async function factoryRuntimeControlRestoreRequiredValues(');
+  const prompt = sourceSlice(CORE_06, 'function factoryMetricPromptCleanValue(', 'function factoryApplyWizardDbSearchQuery(');
+  const runtime = new Function('factorySetDbFieldManualValue', 'factoryCollectDbSizeFieldModels', `${adapter}\n${prompt}
+    return { apply: factoryRuntimeControlApplyProvidedRequiredFields, rows: factoryCollectSizePromptFactRows,
+      block: factoryDbSizePromptBlock, dimension: factoryPromptDimensionNumber, weight: factoryNormalizeWeightPromptValue };`)(
+    (fieldId, value, { factory }) => { factory.product.dbFieldSettings[fieldId] = { manualValue: value }; },
+    factory => Object.entries(factory.product.dbFieldSettings).map(([fieldId, setting]) => ({ fieldId, value: setting.manualValue })),
+  );
+  for (const [input, expected] of [
+    ['150mm', '15cm'], ['80 mm', '8cm'], ['12.5mm', '1.25cm'], ['8.3mm', '0.83cm'],
+    ['1mm', '0.1cm'], ['150㎜', '15cm'], ['80 MM', '8cm'],
+    ['55', '55cm'], ['150', '150cm'], ['55cm', '55cm'], ['3.5cm', '3.5cm'], ['8㎝', '8cm'],
+  ]) assert.equal(runtime.dimension(input), expected, input);
+  for (const [input, expected] of [['5.3', '5.3g'], ['5.3g', '5.3g'], ['0.2kg', '0.2kg']]) {
+    assert.equal(runtime.weight(input), expected, input);
+  }
+
+  const requiredValues = { widthMm: '150', depthMm: '80', size: '가로15cm*세로8cm' };
+  const originalValues = structuredClone(requiredValues);
+  const factory = { product: { dbFieldSettings: { weight: { manualValue: '5.3g' } } } };
+  runtime.apply(factory, requiredValues);
+  assert.equal(factory.product.dbFieldSettings.width_mm.manualValue, '150mm');
+  assert.equal(factory.product.dbFieldSettings.depth_mm.manualValue, '80mm');
+  assert.equal(factory.product.dbFieldSettings.size.manualValue, requiredValues.size);
+  assert.deepEqual(requiredValues, originalValues);
+  const beforePrompt = structuredClone(factory);
+  assert.deepEqual(runtime.rows(factory), [
+    { label: '사이즈/규격', value: '가로 15cm x 세로 8cm' },
+    { label: '가로', value: '15cm' }, { label: '세로', value: '8cm' },
+    { label: '제품 무게', value: '5.3g' },
+  ]);
+  const block = runtime.block(factory);
+  assert.match(block, /가로: 15cm/);
+  assert.match(block, /세로: 8cm/);
+  assert.match(block, /제품 무게: 5\.3g/);
+  assert.doesNotMatch(block, /150cm|80cm/);
+  assert.deepEqual(factory, beforePrompt);
+
+  const freeform = { product: { dbFieldSettings: {
+    size: { manualValue: '가로3.5cm*세로18cm' }, weight: { manualValue: '0.2kg' },
+  } } };
+  const beforeFreeform = structuredClone(freeform);
+  assert.deepEqual(runtime.rows(freeform), [
+    { label: '사이즈/규격', value: '가로3.5cm*세로18cm' }, { label: '제품 무게', value: '0.2kg' },
+  ]);
+  assert.match(runtime.block(freeform), /가로3\.5cm\*세로18cm/);
+  assert.deepEqual(freeform, beforeFreeform);
+});

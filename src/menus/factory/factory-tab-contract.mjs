@@ -171,7 +171,7 @@ export function createFactoryTabContract(definition, runtimeCapabilities) {
     throw error;
   }
 
-  function invoke(commandName, ...args) {
+  function executeCommand(commandName, args, dispatch) {
     const normalizedName = cleanText(commandName);
     if (!Object.prototype.hasOwnProperty.call(commands, normalizedName)) {
       throw new Error(`undeclared command: ${normalizedName || '<empty>'}`);
@@ -183,7 +183,12 @@ export function createFactoryTabContract(definition, runtimeCapabilities) {
     try {
       if (mutationCommand(normalizedName, command.capability)) runtime.assertMutable(owner);
       token = runtime.getOperationToken();
-      result = command.execute(...args, Object.freeze({ operationToken: token }));
+      const routed = dispatch && runtimeCapabilities.actions.dispatchFactoryCommand?.(Object.freeze({
+        tabId: id, commandName: normalizedName, capability: command.capability, args,
+      }));
+      result = routed?.handled === true ? routed.result
+        : command.execute(...args, Object.freeze({ operationToken: token }));
+      if (routed?.handled !== true) routed?.observeLocalResult?.(result);
       if (!result || typeof result.then !== 'function') {
         const receipt = runtimeCommandReceipt(result);
         if (!runtime.isOperationCurrent(receipt?.operationToken || token)) throw staleOperationError(id);
@@ -226,6 +231,8 @@ export function createFactoryTabContract(definition, runtimeCapabilities) {
     onEnter: requiredFunction(definition, 'onEnter'),
     onLeave: requiredFunction(definition, 'onLeave'),
     persistence: persistenceContract(definition.persistence, owner),
-    invoke,
+    invoke: (commandName, ...args) => executeCommand(commandName, args, true),
+    // Worker entrypoint: bypass only transport dispatch, never the command guards.
+    invokeLocal: (commandName, ...args) => executeCommand(commandName, args, false),
   });
 }

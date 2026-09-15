@@ -28,6 +28,13 @@ function cdpBasePort(env = process.env) {
   return port;
 }
 
+function strictCdpBasePort(env = process.env) {
+  const value = String(env.KUASANGSE_CDP_BASE_PORT_STRICT || '').trim().toLowerCase();
+  if (!value || ['0', 'false', 'no', 'off'].includes(value)) return false;
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true;
+  throw new Error(`invalid KUASANGSE_CDP_BASE_PORT_STRICT: ${env.KUASANGSE_CDP_BASE_PORT_STRICT}`);
+}
+
 function canBindTcpPort(port) {
   return new Promise(resolve => {
     const server = net.createServer();
@@ -38,14 +45,20 @@ function canBindTcpPort(port) {
   });
 }
 
-async function findAvailableCdpBasePort(stepCount, requestedPort = cdpBasePort()) {
+async function findAvailableCdpBasePort(stepCount, requestedPort = cdpBasePort(), strict = strictCdpBasePort()) {
   const browserPortSpan = Math.max(16, Number(stepCount) || 0);
   const offsets = [
     ...Array.from({ length: browserPortSpan }, (_, index) => index),
     ...Array.from({ length: browserPortSpan }, (_, index) => 1000 + index),
     2001,
   ];
-  for (let basePort = requestedPort; basePort + 2001 <= 64000; basePort += browserPortSpan) {
+  const maxOffset = Math.max(...offsets);
+  const maxBasePort = 65535 - maxOffset;
+  if (strict && requestedPort > maxBasePort) {
+    throw new Error(`strict daily CDP port range unavailable at ${requestedPort}`);
+  }
+  const lastBasePort = strict ? requestedPort : Math.min(64000 - 2001, maxBasePort);
+  for (let basePort = requestedPort; basePort <= lastBasePort; basePort += browserPortSpan) {
     let available = true;
     for (const offset of offsets) {
       if (!await canBindTcpPort(basePort + offset)) {
@@ -55,12 +68,13 @@ async function findAvailableCdpBasePort(stepCount, requestedPort = cdpBasePort()
     }
     if (available) return basePort;
   }
+  if (strict) throw new Error(`strict daily CDP port range unavailable at ${requestedPort}`);
   throw new Error(`no free daily CDP port range starting at ${requestedPort}`);
 }
 
 function servicePort(name, fallback) {
   const value = Number.parseInt(process.env[name] || String(fallback), 10);
-  if (!Number.isInteger(value) || value < 1024 || value > 64000) {
+  if (!Number.isInteger(value) || value < 1024 || value > 65535) {
     throw new Error(`invalid ${name}: ${process.env[name]}`);
   }
   return value;
@@ -302,6 +316,10 @@ async function startTaskOwnedStaticServer(runDir, requestedPort = 0, runtimeRoot
 }
 
 async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePort = cdpBasePort()) {
+  const strict = strictCdpBasePort();
+  if (strict && !process.env.KUASANGSE_DAILY_BACKEND_PORT) {
+    throw new Error('strict daily runtime requires KUASANGSE_DAILY_BACKEND_PORT');
+  }
   const backendPort = servicePort('KUASANGSE_DAILY_BACKEND_PORT', selectedCdpBasePort + 2001);
   const apiBase = `http://127.0.0.1:${backendPort}`;
   if (await urlIsReady(`${apiBase}/api/sections`)) {
@@ -317,6 +335,9 @@ async function startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePor
     runtime: { runtimeRoot },
     env: { KUASANGSE_TASK_OWNED_RUNTIME: '1' },
   });
+  if (strict && !process.env.KUASANGSE_DAILY_FRONTEND_PORT) {
+    throw new Error('strict daily runtime requires KUASANGSE_DAILY_FRONTEND_PORT');
+  }
   const requestedFrontendPort = process.env.KUASANGSE_DAILY_FRONTEND_PORT
     ? servicePort('KUASANGSE_DAILY_FRONTEND_PORT', 0)
     : 0;
@@ -658,7 +679,9 @@ async function main() {
     throw new Error(`unknown or unavailable regression ids: ${missing.join(', ')}`);
   }
   const sourceBaseline = captureRuntimeSourceSnapshot(ROOT, RUNTIME_SOURCES);
-  const selectedCdpBasePort = await findAvailableCdpBasePort(steps.length);
+  const requestedCdpBasePort = cdpBasePort();
+  const strictCdpPort = strictCdpBasePort();
+  const selectedCdpBasePort = await findAvailableCdpBasePort(steps.length, requestedCdpBasePort, strictCdpPort);
   const runtime = await startTaskOwnedDailyServices(pythonExe, runDir, selectedCdpBasePort);
   const results = [];
   const detail04Fixture = runtime.detail04Fixture;
@@ -698,6 +721,7 @@ async function main() {
     finishedAt: finishedAt.toISOString(),
     runtimeSourceSnapshot: sourceBaseline,
     runtimeSourceDigest: runtimeSourceDigest(sourceBaseline),
+    cdpPortContract: { requestedCdpBasePort, selectedCdpBasePort, strict: strictCdpPort },
     detail04Fixture,
     summary: {
       total: results.length,
@@ -733,6 +757,7 @@ module.exports = {
   captureRuntimeSourceSnapshot,
   compareRuntimeSourceSnapshots,
   findAvailableCdpBasePort,
+  strictCdpBasePort,
   isBrowserStep,
   isRetryableInfrastructureFailure,
   prepareDetail04Fixture,

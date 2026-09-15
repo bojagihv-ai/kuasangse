@@ -52,6 +52,7 @@ function productImageBackupScopeRuntime(globals = {}) {
   const context = vm.createContext({
     IMAGE_STORED_MARKER: '__stored_in_indexeddb__',
     LAST_PRODUCT_IMAGE_BACKUP_ID: 'lastProductImageBackup',
+    factoryRuntimeReadFactory: () => globals.state?.factory || {},
     WORKSPACE_DB: { appSettings: 'appSettings' },
     workspaceBlankResetInProgress: false,
     workspaceBlankResetToken: 0,
@@ -879,7 +880,7 @@ test('Given a restored tab session When startup hydration reaches the server The
 
 test('Given an active menu render, warning reconciliation happens before visible markup replacement', () => {
   const calls = [];
-  const root = {};
+  const root = { querySelector: () => null };
   const menu = {
     ownedSlices: ['manual-ui'],
     refresh: refreshedRoot => calls.push(refreshedRoot === root ? 'refresh' : 'refresh:unexpected'),
@@ -889,7 +890,9 @@ test('Given an active menu render, warning reconciliation happens before visible
     document: {
       getElementById: () => root,
       documentElement: { dataset: {} },
+      body: { querySelectorAll: () => [] },
     },
+    requestAnimationFrame: callback => callback(),
     runtimeMenuModules: new Map(),
     ensureWorkfileActionDelegation: () => calls.push('delegation'),
     showImageRestoreWarningIfNeeded: () => calls.push('warning-reconciled'),
@@ -1010,6 +1013,36 @@ globalThis.applyBackup = applyProductImageBackupPayload;`, context);
   assert.equal(state.analysisImages.length, 1);
   assert.equal(state.analysisImages[0].base64, 'CURRENT_IMAGE');
   assert.equal(state.analysisImages[0].restoredFrom, 'lastProductImageBackup');
+});
+
+test('same fingerprint inline backup preserves input IDs and additional photos across repeated reloads', () => {
+  for (const fingerprint of ['same-photo', 'other-photo']) {
+    const input = { id: 'kept-input', name: 'image.jpg', inputImageFingerprint: fingerprint, lockedInput: true };
+    const extra = { id: 'extra-input', name: 'extra.jpg', base64: 'EXTRA' };
+    const factory = { product: { productName: '지갑', lockedInputImageFingerprint: 'same-photo',
+      inputImages: [input, extra] }, assets: [{ id: 'generated-keep' }] };
+    const runtime = productImageBackupScopeRuntime({
+      state: { productName: '지갑', analysisImages: [] },
+      factoryRuntimeReadFactory: () => factory,
+      lastWorkIdentityKeysCompatible: (a, b) => a === b,
+      displayableImageSrc: value => String(value || '').startsWith('data:image/'),
+      restoreCutsSourceFromCurrentProductImage: () => false,
+      factoryImagePayloadFingerprint: () => 'same-photo',
+      uid: () => 'new-input',
+    });
+    const payload = { productName: '지갑', primary: { source: 'app', base64: 'CURRENT_IMAGE', mime: 'image/jpeg', name: 'image.jpg' } };
+    for (let reload = 0; reload < 2; reload += 1) {
+      runtime.applyProductImageBackupPayload(payload, { factory, restoreInline: true, force: true, syncMarket: false });
+      assert.equal(factory.product.inputImages[0].id, fingerprint === 'same-photo' ? 'kept-input' : 'new-input');
+      assert.equal(factory.product.inputImages[0].base64, 'CURRENT_IMAGE');
+      assert.deepEqual(factory.assets, [{ id: 'generated-keep' }]);
+      if (fingerprint === 'same-photo') {
+        assert.equal(factory.product.inputImages.length, 2);
+        assert.equal(factory.product.inputImages[1], extra);
+        assert.equal(factory.product.inputImages[0].lockedInput, true);
+      }
+    }
+  }
 });
 
 test('Given a competitor-only image persistence notice, unrelated menus do not show a global warning', () => {

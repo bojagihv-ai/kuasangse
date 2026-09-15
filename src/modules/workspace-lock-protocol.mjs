@@ -22,7 +22,7 @@ export function frozenSnapshot(value = {}) {
 
 export function bases(root) {
   const origin = text(root.location?.origin).replace(/\/$/, '');
-  return [...new Set([origin, 'http://127.0.0.1:5050', 'http://localhost:5050'].filter(Boolean))];
+  return [...new Set([origin, 'http://127.0.0.1:43030'].filter(Boolean))];
 }
 
 export function isDraft(scopeId) {

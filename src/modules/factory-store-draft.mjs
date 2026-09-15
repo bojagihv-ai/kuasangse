@@ -12,7 +12,7 @@ import {
 
 const MISSING_DRAFT_FIELD = Symbol('missing-draft-field');
 
-function mergeConcurrentDraftField(base, draft, current, hasBase, hasDraft, hasCurrent) {
+function mergeConcurrentDraftField(base, draft, current, hasBase, hasDraft, hasCurrent, path) {
   if (!hasDraft) {
     if (!hasBase) return hasCurrent ? clonePlainData(current) : MISSING_DRAFT_FIELD;
     if (!hasCurrent) return plainDataEqual(draft, base) ? MISSING_DRAFT_FIELD : MISSING_DRAFT_FIELD;
@@ -25,6 +25,18 @@ function mergeConcurrentDraftField(base, draft, current, hasBase, hasDraft, hasC
   if (hasBase && plainDataEqual(draft, base)) return clonePlainData(current);
   if (hasBase && plainDataEqual(current, base)) return clonePlainData(draft);
   if (!hasBase && plainDataEqual(draft, current)) return clonePlainData(draft);
+  if (path === 'factory.assets' && [base, draft, current].every(rows =>
+    Array.isArray(rows) && rows.every(row => isPlainRecord(row) && typeof row.id === 'string' && row.id.trim())
+      && new Set(rows.map(row => row.id)).size === rows.length)) {
+    const [before, generated, latest] = [base, draft, current].map(rows => new Map(rows.map(row => [row.id, row])));
+    const merged = [];
+    for (const id of new Set([...latest.keys(), ...generated.keys()])) {
+      const value = mergeConcurrentDraftField(before.get(id), generated.get(id), latest.get(id),
+        before.has(id), generated.has(id), latest.has(id), `${path}.${id}`);
+      if (value !== MISSING_DRAFT_FIELD) merged.push(value);
+    }
+    return merged;
+  }
   if (isPlainRecord(base) && isPlainRecord(draft) && isPlainRecord(current)) {
     const merged = {};
     const keys = new Set([...Object.keys(base), ...Object.keys(draft), ...Object.keys(current)]);
@@ -36,6 +48,7 @@ function mergeConcurrentDraftField(base, draft, current, hasBase, hasDraft, hasC
         Object.prototype.hasOwnProperty.call(base, key),
         Object.prototype.hasOwnProperty.call(draft, key),
         Object.prototype.hasOwnProperty.call(current, key),
+        `${path}.${key}`,
       );
       if (value !== MISSING_DRAFT_FIELD) merged[key] = value;
     }
@@ -45,8 +58,8 @@ function mergeConcurrentDraftField(base, draft, current, hasBase, hasDraft, hasC
   return clonePlainData(current);
 }
 
-function mergeConcurrentDraftSlice(base, draft, current) {
-  const value = mergeConcurrentDraftField(base, draft, current, true, true, true);
+function mergeConcurrentDraftSlice(base, draft, current, path) {
+  const value = mergeConcurrentDraftField(base, draft, current, true, true, true, path);
   return value === MISSING_DRAFT_FIELD ? {} : value;
 }
 
@@ -151,7 +164,7 @@ export function createFactoryDraftUpdater({
         const latestSnapshot = shouldRebase ? getSnapshot() : null;
         const latestSlice = shouldRebase ? readPath(latestSnapshot, draftPath) : null;
         const committedSlice = shouldRebase
-          ? mergeConcurrentDraftSlice(currentSlice, mutableSlice, latestSlice)
+          ? mergeConcurrentDraftSlice(currentSlice, mutableSlice, latestSlice, draftPath)
           : mutableSlice;
         const assignments = policy ? validateCommandDiff(policy, shouldRebase ? latestSlice : currentSlice, committedSlice) : Object.freeze([]);
         const detachedResult = immutableCopy(result);

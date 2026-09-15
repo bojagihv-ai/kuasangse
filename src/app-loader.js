@@ -122,11 +122,11 @@
   function workspaceAuthorityServerBases() {
     let configured = '';
     try { configured = String(localStorage.getItem('gemini_backend_url') || '').trim(); } catch (_) {}
+    if (/^http:\/\/(?:127\.0\.0\.1|localhost):(?:5050|41026)\/?$/i.test(configured)) configured = 'http://127.0.0.1:43030';
     return [...new Set([
       configured.replace(/\/+$/, ''),
       String(location.origin || '').replace(/\/+$/, ''),
-      'http://127.0.0.1:5050',
-      'http://localhost:5050',
+      'http://127.0.0.1:43030',
     ].filter(Boolean))];
   }
 
@@ -364,6 +364,9 @@
         throw new Error('createBootstrapCoordinator export가 없습니다.');
       }
       const isBatchWorker = new URL(location.href).searchParams.get('batchWorker') === '1';
+      const searchParams = new URL(location.href).searchParams;
+      const isBatchConsole = isBatchWorker && searchParams.get('batchConsole') === '1';
+      const allowBatchTakeover = isBatchConsole && searchParams.get('batchTakeover') === '1';
       let loadedModules = null;
       const hydrationEnvelope = Object.freeze({
         schema: 'kuasangse.app-state',
@@ -390,6 +393,11 @@
               : await import(resourceUrl(file, buildId)),
           ])));
           loadedModules = Object.freeze(Object.fromEntries(entries));
+          if (isBatchConsole) {
+            loadedModules['src/modules/native-batch-console.mjs'].configureNativeFactoryRuntime({
+              location: Object.freeze({ href: location.href }),
+            });
+          }
         },
         bundleCompat: async () => {
           await loadExternalScript(manifest.bundle, buildId);
@@ -400,7 +408,7 @@
         },
         installMenuModules: () => requestClassicRuntime('menu-install', loadedModules),
         hydrate: envelope => requestClassicRuntime('hydrate', envelope),
-        render: () => requestClassicRuntime('render', isBatchWorker ? { mode: 'batch-worker' } : null),
+        render: () => requestClassicRuntime('render', isBatchWorker ? { mode: 'batch-worker', display: isBatchConsole } : null),
         hydrationEnvelope,
       });
       const bootStatus = await coordinator.boot();
@@ -417,9 +425,11 @@
         void runtimeBuildGuard.checkNow();
       }
 
-      if (isBatchWorker) {
+      let workerReceipt = null;
+      function installRuntimeWorker({ replaceExistingSession = false } = {}) {
+        if (workerReceipt) return workerReceipt;
         const workerRoot = document.getElementById('app');
-        if (workerRoot) {
+        if (workerRoot && !isBatchConsole) {
           workerRoot.innerHTML = `
             <main class="batch-worker-shell" aria-live="polite" style="box-sizing:border-box;padding-inline-start:var(--space-2, 8px);padding-inline-end:var(--space-2, 8px);">
               <strong>생산관제 워커 실행 중</strong>
@@ -460,6 +470,7 @@
         const cafe24CommandBridge = window.__KUASANGSE_BATCH_CONTROL_COMMAND_BRIDGE__;
         const factoryControlCommandBridge = window.__KUASANGSE_FACTORY_CONTROL_COMMAND_BRIDGE__;
         const commandBridge = Object.freeze({
+          ...(isBatchConsole ? { waitForAdmission: order => loadedModules['src/modules/native-batch-console.mjs'].waitForNativeFactoryWorkerAdmission(order) } : {}),
           inspect: (...args) => cafe24CommandBridge.inspect(...args),
           verify: (...args) => cafe24CommandBridge.verify(...args),
           run: (kind, ...args) => (
@@ -474,10 +485,11 @@
             setIntervalImpl: window.setInterval.bind(window),
             clearIntervalImpl: window.clearInterval.bind(window),
           };
-        const workerReceipt = workerNamespace.installBatchControlWorker(window, {
+        workerReceipt = workerNamespace.installBatchControlWorker(window, {
           apiBase: workerApiUrl.origin,
           workerId: `factory-worker-${buildId}-${RUNTIME_BOOT_CACHE_TOKEN}`,
           runtimeBuildId: buildId,
+          replaceExistingSession: !isBatchConsole || replaceExistingSession === true,
           commandBridge,
           projectionBridge: factoryControlCommandBridge,
           authorityHeartbeat: () => window.__KUASANGSE_WORKSPACE_LOCK__?.heartbeat?.(),
@@ -486,10 +498,70 @@
           setIntervalImpl: workerTimers.setIntervalImpl,
           clearIntervalImpl: workerTimers.clearIntervalImpl,
         });
+        return workerReceipt;
+      }
+
+      if (isBatchWorker && !isBatchConsole) {
+        const workerReceipt = installRuntimeWorker();
         workerReceipt.worker.startHeartbeat();
         workerReceipt.worker.startSessionHeartbeat();
         workerReceipt.worker.startPolling();
         workerReceipt.worker.startProjectionPolling();
+      }
+      if (isBatchConsole) {
+        const consoleNamespace = loadedModules?.['src/modules/native-batch-console.mjs'];
+        if (typeof consoleNamespace?.mountNativeBatchConsole !== 'function') {
+          throw new Error('생산관제 시작 화면을 불러오지 못했습니다.');
+        }
+        const apiBase = new URL(new URL(location.href).searchParams.get('controlTowerBase') || 'http://127.0.0.1:41009', location.origin).origin;
+        const journalKey = `native-factory-command:v1:${apiBase}`;
+        const journal = loadedModules['src/modules/native-command-journal.mjs'].createNativeCommandJournal({
+          read: () => window.sessionStorage.getItem(journalKey),
+          write: text => window.sessionStorage.setItem(journalKey, text),
+        });
+        await consoleNamespace.mountNativeBatchConsole(document, {
+          journal,
+          randomUUID: () => window.crypto.randomUUID(),
+          digest: bytes => window.crypto.subtle.digest('SHA-256', bytes),
+          wait: ms => new Promise(resolve => window.setTimeout(resolve, ms)),
+          openEventSource: url => new window.EventSource(url, { withCredentials: true }),
+          confirm: message => window.confirm(message),
+          onBeforeUnload: handler => window.addEventListener('beforeunload', handler),
+          onJobCreated: handler => window.addEventListener('control-tower:job-created', handler),
+          publishMenu: menu => { window.controlTowerMenu = Object.freeze(menu); },
+          installWorker: ({ replaceExistingSession = false } = {}) => installRuntimeWorker({ replaceExistingSession }),
+          allowExistingSession: allowBatchTakeover,
+          syncProjection: () => {
+            if (!workerReceipt) throw new Error('native_command_worker_not_connected');
+            return workerReceipt.worker.syncProjection();
+          },
+          apiBase,
+          readSettings: () => requestClassicRuntime('native-batch-settings'),
+          readStartupIdentity: async () => {
+            const bridge = loadedModules['src/modules/factory-control-command-bridge.mjs'].createFactoryControlCommandBridge({
+              requestClassicRuntime: payload => requestClassicRuntime('factory-control-command', payload),
+            });
+            const projection = await bridge.getProjection();
+            const text = value => typeof value === 'string' ? value : '';
+            const product = (Array.isArray(projection.inputs) ? projection.inputs : [])
+              .find(group => group.key === 'product')?.items?.[0];
+            return Object.freeze({
+              productName: text(product?.productName),
+              registration: Object.freeze({ jobId: text(projection.registration?.jobId) }),
+              session: Object.freeze({ runId: text(projection.session?.runId) }),
+              capturedAt: text(projection.capturedAt),
+            });
+          },
+          readState: async () => {
+            const apiUrl = new URL(new URL(location.href).searchParams.get('controlTowerBase') || 'http://127.0.0.1:41009', location.origin);
+            if (apiUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(apiUrl.hostname)) {
+              throw new Error('factory_state_invalid');
+            }
+            const response = await window.fetch(`${apiUrl.origin}/api/factory/state`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error('factory_state_invalid');
+            return response.json();
+          },
+        });
       }
 
       const loadedAt = new Date().toISOString();
@@ -505,6 +577,7 @@
         loadMode: 'coordinated-manifest-bundle-no-eval',
         phase: bootStatus.phase,
         ready: bootStatus.ready,
+        batchConsole: isBatchConsole,
       });
       document.documentElement.dataset.kuasangseBuildId = buildId;
       document.documentElement.dataset.kuasangseLoadedAt = loadedAt;
@@ -512,7 +585,7 @@
 
       setTimeout(() => {
         const root = document.getElementById('app');
-        const expectedRootSelector = isBatchWorker ? '.batch-worker-shell' : '.app';
+        const expectedRootSelector = isBatchWorker && !isBatchConsole ? '.batch-worker-shell' : '.app';
         if (!root?.querySelector(expectedRootSelector)) {
           showLoadError(new Error('스크립트는 로드됐지만 화면 렌더가 완료되지 않았습니다.'));
         }

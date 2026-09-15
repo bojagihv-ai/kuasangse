@@ -1,6 +1,6 @@
 {
   "schema": "kuasangse.runtime.v1",
-  "buildId": "20260811-webmcp-hydration-bridge-v1439",
+  "buildId": "20260811-webmcp-hydration-bridge-v1522",
   "entry": "app.html",
   "loader": "src/app-loader.js",
   "bundle": "dist/app-runtime.bundle.js",
@@ -56,6 +56,11 @@
     "src/modules/unthrottled-interval.mjs",
     "src/modules/batch-control-order-intake.mjs",
     "src/modules/batch-control-worker.mjs",
+    "src/modules/native-batch-console.mjs",
+    "src/modules/native-batch-console-view.mjs",
+    "src/modules/native-factory-command-routing.mjs",
+    "src/modules/native-factory-resume.mjs",
+    "src/modules/native-command-journal.mjs",
     "src/modules/factory-cafe24-command-bridge.mjs",
     "src/modules/factory-control-payloads.mjs",
     "src/modules/factory-control-command-bridge.mjs",
@@ -167,5 +172,5 @@
     "src/cafe24-sync.js",
     "src/app-core-06.js"
   ],
-  "sourceDigest": "ef34a63e0b8ce1cc92dbc2e9b0a1a8ce76e55a9a5344e64d84ac752b151f2a0c"
+  "sourceDigest": "11bb1733db2d2a16ed5a0e631222fd27ef95ba2c7142785171746d025bb994f9"
 }

@@ -309,6 +309,32 @@ def test_factory_history_route_canonicalizes_work_bundle_key_while_preserving_ra
     assert response_json["history"]["workspaceId"] == "batch:job-1"
 
 
+def test_factory_history_route_rejects_running_job_without_checkpoint(tmp_path: Path) -> None:
+    class RunningFactory:
+        def product_job_context(self, job_id: str) -> JsonObject:
+            assert job_id == "job-running"
+            return {
+                "job": {"status": "running"},
+                "payload": {"productName": "실행 중 상품", "inputImages": []},
+                "checkpoint": None,
+            }
+
+    client = create_app(
+        ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)}),
+        pdp_api=FakePdpApi(),
+        cafe24_bridge=FakeCafe24Bridge(),
+        factory_sync_bridge=RunningFactory(),
+    ).test_client()
+
+    response = client.get("/api/factory/jobs/job-running/history")
+
+    assert response.status_code == 409
+    error = response.get_json()["error"]
+    assert error["code"] == "factory_history_checkpoint_missing"
+    assert error["retryable"] is False
+    assert error["correlationId"]
+
+
 def test_factory_history_marks_source_cut_when_final_archive_contains_same_file_or_hash() -> None:
     assert _history_selection_state(
         "09_OUTPUT_대표이미지",
@@ -923,6 +949,59 @@ def test_deleting_a_job_over_http_actually_removes_it_from_the_saved_file(tmp_pa
     again = client.delete(f"/api/factory/jobs/{job_id}", headers=headers)
     assert again.status_code == 404
     assert again.get_json()["error"]["code"] == "factory_product_job_not_found"
+
+
+def test_pause_after_current_route_persists_only_valid_explicit_state(tmp_path: Path) -> None:
+    bridge = FactorySyncBridge(state_path=tmp_path / "factory-product-jobs.json")
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=FakePdpApi(), factory_sync_bridge=bridge).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {
+        "X-Control-Tower-CSRF": session["csrfToken"],
+        "X-Control-Tower-Session": session["sessionId"],
+    }
+
+    invalid = client.post(
+        "/api/factory/jobs/pause-after-current",
+        json={"enabled": "true"},
+        headers=headers,
+    )
+    armed = client.post(
+        "/api/factory/jobs/pause-after-current",
+        json={"enabled": True},
+        headers=headers,
+    )
+
+    assert invalid.status_code == 422
+    assert invalid.get_json()["error"]["code"] == "request_invalid"
+    assert armed.status_code == 202
+    assert armed.get_json()["pauseAfterCurrent"] is True
+    assert client.get("/api/factory/jobs").get_json()["pauseAfterCurrent"] is True
+    saved = json.loads((tmp_path / "factory-product-jobs.json").read_text(encoding="utf-8"))
+    assert saved["pauseAfterCurrent"] is True
+
+
+def test_pause_after_current_route_never_reports_success_when_persistence_fails(tmp_path: Path) -> None:
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("fixture", encoding="utf-8")
+    bridge = FactorySyncBridge(state_path=blocked_parent / "factory-product-jobs.json")
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=FakePdpApi(), factory_sync_bridge=bridge).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {
+        "X-Control-Tower-CSRF": session["csrfToken"],
+        "X-Control-Tower-Session": session["sessionId"],
+    }
+
+    response = client.post(
+        "/api/factory/jobs/pause-after-current",
+        json={"enabled": True},
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert response.get_json()["error"]["code"] == "factory_product_state_write_failed"
+    assert bridge.product_queue_state()["pauseAfterCurrent"] is False
 
 
 def test_deleting_a_job_without_csrf_headers_is_refused(tmp_path: Path) -> None:

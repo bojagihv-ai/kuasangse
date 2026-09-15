@@ -31,12 +31,29 @@ const {
   cdpUrlForAttempt,
   ensureAppServer,
 } = require('./browser_contract_harness.cjs');
+const {
+  archiveFixturePort,
+  startArchiveFixtureServer,
+} = require('../../tools/verify_option_sorter_result_archive_reload_v461.cjs');
 
 const browserStep = {
   args: ['tools/verify_factory_sample_cdp_v1.cjs'],
 };
 
-async function reserveLocalPort() {
+function fixturePort(name) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return 0;
+  if (!/^\d+$/.test(value)) throw new Error(`invalid ${name}: ${value}`);
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+  return port;
+}
+
+async function reserveLocalPort(name = '') {
+  const injectedPort = name ? fixturePort(name) : 0;
+  if (injectedPort) return injectedPort;
   const server = net.createServer();
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -48,17 +65,52 @@ async function reserveLocalPort() {
 }
 
 test('daily runner skips an occupied CDP port range before starting its isolated browser', async t => {
-  const occupiedPort = await findAvailableCdpBasePort(2, 12000);
+  const requestedPort = fixturePort('KUASANGSE_TEST_DAILY_CDP_BASE_PORT') || 12000;
+  const occupiedPort = fixturePort('KUASANGSE_TEST_DAILY_CDP_BASE_PORT')
+    ? requestedPort
+    : await findAvailableCdpBasePort(2, requestedPort);
   const blocker = net.createServer();
   await new Promise((resolve, reject) => {
     blocker.once('error', reject);
     blocker.listen(occupiedPort, '127.0.0.1', resolve);
   });
   t.after(() => new Promise(resolve => blocker.close(resolve)));
-  const selectedPort = await findAvailableCdpBasePort(2, occupiedPort);
+  const selectedPort = await findAvailableCdpBasePort(2, occupiedPort, false);
 
   assert.notEqual(selectedPort, occupiedPort);
   assert.ok(selectedPort > occupiedPort);
+});
+
+test('strict daily CDP base keeps a free official base and fails closed when it is occupied', async t => {
+  const requestedPort = fixturePort('KUASANGSE_TEST_DAILY_CDP_BASE_PORT')
+    || await findAvailableCdpBasePort(1, 12000, false);
+  assert.equal(await findAvailableCdpBasePort(1, requestedPort, true), requestedPort);
+
+  const blocker = net.createServer();
+  await new Promise((resolve, reject) => {
+    blocker.once('error', reject);
+    blocker.listen(requestedPort, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => blocker.close(resolve)));
+
+  await assert.rejects(
+    findAvailableCdpBasePort(1, requestedPort, true),
+    /strict daily CDP port range unavailable/,
+  );
+});
+
+test('archive fixture uses the explicit official port and rejects invalid injection', async t => {
+  const archivePort = fixturePort('KUASANGSE_TEST_ARCHIVE_FIXTURE_PORT');
+  assert.throws(
+    () => archiveFixturePort({ KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT: 'invalid' }),
+    /invalid KUASANGSE_OPTION_SORTER_ARCHIVE_FIXTURE_PORT/,
+  );
+  const server = await startArchiveFixtureServer(archivePort || 0);
+  t.after(() => server.close());
+  if (archivePort) assert.equal(server.baseUrl, `http://127.0.0.1:${archivePort}`);
+  const response = await fetch(`${server.baseUrl}/api/local-archive/assets/ac41ff6b9bf5fdbd/image`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
 });
 
 test('Windows 소유 프로세스 정리는 자식 트리 전체를 종료한다', () => {
@@ -81,7 +133,7 @@ test('Windows 소유 프로세스 정리는 자식 트리 전체를 종료한다
 });
 
 test('브라우저 계약 하네스는 8081이 없으면 소유한 임시 앱 서버로 회귀를 계속한다', async t => {
-  const port = await reserveLocalPort();
+  const port = await reserveLocalPort('KUASANGSE_TEST_APP_FIXTURE_PORT');
   const appUrl = `http://127.0.0.1:${port}/app.html`;
   const service = await ensureAppServer(appUrl);
   t.after(() => service.cleanup());
@@ -99,7 +151,7 @@ test('브라우저 계약 하네스는 기존 앱 서버를 빌리지 않고 종
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
+    server.listen(fixturePort('KUASANGSE_TEST_EXISTING_APP_FIXTURE_PORT'), '127.0.0.1', resolve);
   });
   t.after(() => new Promise(resolve => server.close(resolve)));
   const port = server.address().port;
@@ -116,7 +168,7 @@ test('브라우저 계약 하네스는 기존 앱 서버를 빌리지 않고 종
 
 test('daily 프런트엔드는 OS 할당 exclusive 포트를 실행 종료까지 직접 소유한다', async t => {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kuasangse-daily-static-'));
-  const service = await startTaskOwnedStaticServer(runDir);
+  const service = await startTaskOwnedStaticServer(runDir, fixturePort('KUASANGSE_TEST_STATIC_FIXTURE_PORT'));
   t.after(async () => {
     await new Promise(resolve => service.server.close(resolve));
     service.stdout.end();
@@ -167,7 +219,7 @@ test('회귀 브라우저는 이미 실행 중인 사용자 CDP에 자동 연결
   });
   await new Promise((resolve, reject) => {
     foreignCdp.once('error', reject);
-    foreignCdp.listen(0, '127.0.0.1', resolve);
+    foreignCdp.listen(fixturePort('KUASANGSE_TEST_FOREIGN_CDP_PORT'), '127.0.0.1', resolve);
   });
   t.after(() => new Promise(resolve => foreignCdp.close(resolve)));
   const cdpUrl = `http://127.0.0.1:${foreignCdp.address().port}`;
@@ -545,9 +597,14 @@ test('DETAIL-04 task runtime은 상세 검증 시작 전에 pinned fixture 하�
   const pythonExe = fs.existsSync(path.resolve(__dirname, '../../backend/venv311/Scripts/python.exe'))
     ? path.resolve(__dirname, '../../backend/venv311/Scripts/python.exe')
     : 'python';
+  const savedPorts = Object.fromEntries(
+    ['KUASANGSE_DAILY_BACKEND_PORT', 'KUASANGSE_DAILY_FRONTEND_PORT'].map(key => [key, process.env[key]]),
+  );
   let runtime;
   let caught;
   try {
+    process.env.KUASANGSE_DAILY_BACKEND_PORT = String(await reserveLocalPort('KUASANGSE_TEST_DAILY_BACKEND_PORT'));
+    process.env.KUASANGSE_DAILY_FRONTEND_PORT = String(await reserveLocalPort('KUASANGSE_TEST_NESTED_DAILY_FRONTEND_PORT'));
     runtime = await startTaskOwnedDailyServices(
       pythonExe,
       runDir,
@@ -584,6 +641,10 @@ test('DETAIL-04 task runtime은 상세 검증 시작 전에 pinned fixture 하�
   } catch (error) {
     caught = error;
   } finally {
+    for (const [key, value] of Object.entries(savedPorts)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     if (runtime) await stopServices(runtime.services);
     fs.rmSync(runDir, { recursive: true, force: true });
   }

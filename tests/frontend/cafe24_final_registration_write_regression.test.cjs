@@ -65,6 +65,115 @@ function compile(source, name, globals) {
   return context.target;
 }
 
+test('상세 HTML 보관본은 이미지 주소로 변환하지 않고 실제 이미지 후보만 반환한다', () => {
+  const display = compile(CORE_BATCH, 'factoryAssetDisplayImage', {
+    factoryCachedAssetDisplayImage: () => null,
+    factoryAssetDisplayImageCacheMatches: () => false,
+    factoryNormalizeAssetImageReference: () => {},
+    factoryRuntimeArchiveImageUrl: asset => `https://archive/${asset.archiveId}/image`,
+    factoryCoerceImageSrc: value => typeof value === 'string' ? value : '',
+    factoryAssetImageLoadFailedForSrc: () => false,
+    factoryRememberAssetDisplayImage: () => {},
+  });
+  assert.equal(display({ type: 'image', archiveId: 'hero' }), 'https://archive/hero/image');
+  assert.equal(display({ type: 'html', archiveId: 'document' }), '');
+});
+
+test('현재 섹션이 잘못 덮였어도 선택 후보의 보관 원본으로 복구한다', () => {
+  const variant = { id: 'header-a', imageRef: 'current-section-image', imageUrl: 'https://archive/header/image' };
+  const state = { currentSectionVariantIds: { header: variant.id }, sectionImages: { header: 'wrong-document/image' }, sectionVariants: { header: [variant] } };
+  const context = vm.createContext({ state, SECTION_VARIANT_CURRENT_IMAGE_REF: 'current-section-image', factoryRuntimeArchiveImageUrl: item => item.imageUrl || '' });
+  vm.runInContext(sourceFunction(CORE_BATCH, 'sectionVariantImageForDisplay') + sourceFunction(CORE_BATCH, 'materializeCurrentSectionVariantImage'), context);
+  const preserved = context.materializeCurrentSectionVariantImage('header', state.sectionVariants.header);
+  assert.equal(context.sectionVariantImageForDisplay('header', preserved[0]), variant.imageUrl);
+  assert.equal(variant.image, undefined);
+  assert.equal(context.sectionVariantImageForDisplay('header', { ...variant, image: 'explicit-image' }), 'explicit-image');
+});
+
+test('전송 이미지 목록은 활성 섹션만 포함하고 숨긴 섹션 원본은 그대로 보존한다', () => {
+  const state = { sectionImages: { header: 'header.jpg', certifications: 'hidden.jpg' }, sectionVariants: {}, sectionContents: {} };
+  const refs = compile(CORE, 'factoryRegistrationDetailImageRefs', {
+    state,
+    orderedSections: (options = {}) => [{ id: 'header' }, ...(options.includeHidden ? [{ id: 'certifications' }] : [])],
+    factoryRegistrationImageRef: (src, label, source) => src ? { src, label, source } : null,
+    factoryRegistrationCollectImageRefsFromValue: () => [],
+  })({});
+  assert.deepEqual(Array.from(refs, ref => ref.src), ['header.jpg']);
+  assert.equal(state.sectionImages.certifications, 'hidden.jpg');
+});
+
+test('automation.optionMode none인 신규 Cafe24 payload는 옵션 필드를 전부 제거한다', () => {
+  const attach = compile(SYNC, 'factoryAttachCafe24OptionsToProductPayload', {
+    factoryCafe24OptionSettingsFinalDb: () => {
+      throw new Error('option helpers must not run for optionMode none');
+    },
+  });
+  const product = {
+    has_option: 'T',
+    options: [{ name: '색상', values: ['빨강', '파랑'] }],
+    option_type: 'T',
+    option_list_type: 'C',
+    select_one_by_option: 'F',
+    use_additional_option: 'T',
+    additional_options: [{ name: '각인' }],
+    use_attached_file_option: 'T',
+    attached_file_option: [{ name: '파일' }],
+  };
+
+  const result = attach(
+    product,
+    { automation: { optionMode: 'none' }, product: { finalDb: { options: [{ name: '색상' }] } } },
+    { options: [{ name: '색상', values: ['빨강'] }] },
+  );
+
+  assert.equal(result, product);
+  assert.equal(product.has_option, 'F');
+  for (const key of [
+    'options',
+    'option_type',
+    'option_list_type',
+    'select_one_by_option',
+    'use_additional_option',
+    'additional_options',
+    'use_attached_file_option',
+    'attached_file_option',
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(product, key), false, `${key} must be absent`);
+  }
+});
+
+test('신규 Cafe24 create 후속 동기화는 category를 필수 키로 요구한다', () => {
+  const createRegistration = sourceFunction(SYNC, 'factoryCreateCafe24ProductFromFinalDb');
+  assert.match(
+    createRegistration,
+    /requiredKeys:\s*\[\s*'images',\s*'additionalImages',\s*'category',\s*'options'\s*\]/,
+  );
+});
+
+test('신규 Cafe24 후속 동기화는 required category runner의 false/throw를 실제 실패로 전파한다', async () => {
+  for (const fixture of [
+    { name: 'false', run: () => false },
+    { name: 'throw', run: () => { throw new Error('category fixture failure'); } },
+  ]) {
+    const factory = { product: {} };
+    let syncReceipt;
+    const run = compile(SYNC, 'factoryRunCafe24PostCreateSync', {
+      factoryCafe24TargetInfo: () => ({ productNo: '3003', mallId: 'mall' }),
+      factorySyncCafe24CategoryLink: fixture.run,
+      factoryRememberCafe24SyncResult: (_factory, _stage, receipt) => { syncReceipt = receipt; },
+      factoryLog: () => {},
+    });
+
+    const result = await run(
+      [{ key: 'category', label: '카테고리 연결', ready: true }],
+      { productNo: '3003', requiredKeys: ['category'], factory },
+    );
+
+    assert.equal(result, false, `${fixture.name} category failure must fail post-create sync`);
+    assert.equal(syncReceipt.ok, false, `${fixture.name} category failure must be recorded as failed`);
+  }
+});
+
 test('생산관제 Cafe24 등록은 기존 상품의 모든 옵션 재고를 99로 강제 검증한다', () => {
   const batchRegistration = sourceFunction(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration');
   const finalRegistration = sourceFunction(CORE, 'factoryRunFinalRegistration');
@@ -151,6 +260,8 @@ test('생산관제는 본체 생성 후 실패한 신규 상품을 찾아 새 �
     categoryId: '107',
     htmlDigest: 'sha:full-detail',
     imageDigests: ['sha:hero'],
+    approvalGrantDigest: 'sha:approval-grant',
+    payloadDigest: 'sha:payload',
     expectedWorkfileRevision: 19,
     expectedRunId: 'run-1',
     expectedInputFingerprint: 'fingerprint-1',
@@ -223,6 +334,34 @@ test('생산관제는 본체 생성 후 실패한 신규 상품을 찾아 새 �
   assert.equal(result.externalProductNo, '3011');
 });
 
+test('생산관제 배치 등록은 approval grant digest가 없으면 writer를 실행하지 않는다', async () => {
+  let writes = 0;
+  const run = compile(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration', {
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    factoryRunFinalRegistration: async () => { writes += 1; return true; },
+  });
+
+  await assert.rejects(
+    run({ batchControl: { payloadDigest: 'sha:payload' } }),
+    error => error.code === 'approval_grant_digest_missing',
+  );
+  assert.equal(writes, 0);
+});
+
+test('생산관제 배치 등록은 payload digest가 없으면 writer를 실행하지 않는다', async () => {
+  let writes = 0;
+  const run = compile(CORE_BATCH, 'factoryRuntimeRunBatchCafe24Registration', {
+    factoryRuntimeBatchCommandError: code => Object.assign(new Error(code), { code }),
+    factoryRunFinalRegistration: async () => { writes += 1; return true; },
+  });
+
+  await assert.rejects(
+    run({ batchControl: { approvalGrantDigest: 'sha:approval-grant' } }),
+    error => error.code === 'payload_digest_missing',
+  );
+  assert.equal(writes, 0);
+});
+
 test('생산관제 체크포인트 복원 뒤 mismatch 영수증의 #3011은 신규 생성하지 않고 update로 이어간다', async () => {
   const batch = {
     productId: 'cafe24:3011',
@@ -230,6 +369,8 @@ test('생산관제 체크포인트 복원 뒤 mismatch 영수증의 #3011은 신
     categoryId: '107',
     htmlDigest: 'sha:full-detail',
     imageDigests: ['sha:hero'],
+    approvalGrantDigest: 'sha:approval-grant',
+    payloadDigest: 'sha:payload',
     expectedWorkfileRevision: 1,
     expectedRunId: 'run-1',
     expectedInputFingerprint: 'fingerprint-1',
@@ -289,6 +430,8 @@ test('생산관제 최종 read-back은 update 영수증에 한해 승인 대상�
     categoryId: '107',
     htmlDigest: 'sha:detail',
     imageDigests: ['sha:hero'],
+    approvalGrantDigest: 'sha:approval-grant',
+    payloadDigest: 'sha:payload',
     expectedWorkfileRevision: 1,
     expectedRunId: 'run-1',
     expectedInputFingerprint: 'fingerprint-1',
@@ -346,6 +489,19 @@ test('생산관제 Cafe24 카테고리는 부분 생성 복구 뒤 finalDb categ
 
   assert.equal(result.categoryId, '107');
   assert.equal(result.categoryLabel, '수저집');
+});
+
+test('생산관제 Cafe24 카테고리는 저장된 관제탑 필수값을 finalDb가 비어도 복구한다', () => {
+  const selection = compile(CORE_BATCH, 'factoryRuntimeCafe24CategorySelection', {});
+
+  const result = selection({
+    product: {
+      finalDb: { category: '수저집' },
+      requirementsSnapshot: { cafe24CategoryId: '84' },
+    },
+  });
+
+  assert.equal(result.categoryId, '84');
 });
 
 test('생산관제 체크포인트는 같은 작업의 참고 #2994에서 update 대상 #3011로 전환된 복원을 허용한다', () => {
@@ -489,6 +645,8 @@ test('생산관제 신규 등록은 참고 상품번호와 다른 Cafe24 생성 
     categoryId: '107',
     htmlDigest: 'html-digest',
     imageDigests: ['image-digest'],
+    approvalGrantDigest: 'sha:approval-grant',
+    payloadDigest: 'sha:payload',
     expectedWorkfileRevision: 19,
     expectedRunId: 'run-1',
     expectedInputFingerprint: 'fingerprint-1',
@@ -701,8 +859,9 @@ test('현재 미리보기가 14장이면 선택 A컷을 같은 섹션 이미지�
     { length: 13 },
     (_, index) => `<img src="https://cdn.example/detail-${index + 1}.jpg" alt="섹션 ${index + 1}">`,
   ).join('')}</main>`;
+  const appState = { productName: '방울수저집', analysis: {}, sectionContents: {}, sectionImages: {} };
   const scopedDetail = compile(PAYLOADS, 'factoryCafe24CurrentScopedDetailHtml', {
-    state: { productName: '방울수저집', analysis: {}, sectionContents: {}, sectionImages: {} },
+    state: appState,
     factoryCurrentPreviewSectionStatus: () => ({
       requiredSections: Array.from({ length: 14 }, (_, index) => ({ id: `section-${index + 1}` })),
       requiredIds: Array.from({ length: 14 }, (_, index) => `section-${index + 1}`),
@@ -741,6 +900,10 @@ test('현재 미리보기가 14장이면 선택 A컷을 같은 섹션 이미지�
   assert.equal(result.source, 'current-section-export');
   assert.match(result.html, /local-archive\/assets\/selected-material\/image/);
   assert.doesNotMatch(result.html, /OLD_MATERIAL/);
+
+  appState.cuts = { placement: { material_tech: 'factory:stale-material' } };
+  const stalePlacementResult = scopedDetail(factory);
+  assert.match(stalePlacementResult.html, /local-archive\/assets\/selected-material\/image/, '현재 선택 컷과 일치하지 않는 stale placement는 legacy A컷 우선 규칙을 막으면 안 된다');
 });
 
 test('큰 로컬 상세 이미지는 등록용 경량 키로 보존해 전송 직전에 원본으로 확장한다', () => {
@@ -820,6 +983,30 @@ test('최종 등록 준비는 marker로 남은 상세 섹션 이미지를 같은
   assert.equal(recoverCalls.length, 1);
   assert.equal(recoverCalls[0].render, false);
   assert.equal(recoverCalls[0].persist, false);
+});
+
+test('등록 준비는 선택한 최종본을 유지하고 이전 보관 문서를 추가 선택하지 않는다', async () => {
+  const factory = {
+    assets: [{ id: 'final-14', stageId: 'detail', html: '<main>selected</main>', used: true }],
+    stages: { detail: { selectedAssetIds: ['final-14'], status: 'done' } },
+  };
+  const before = JSON.stringify(factory);
+  const prepare = compile(CORE, 'factoryPrepareFinalRegistrationLocalAssets', {
+    state: {},
+    factoryUpdateFinalRegistrationStatus() {},
+    factoryRefreshLocalArchiveAssets: async () => ({ ok: true }),
+    factoryCurrentPreviewSectionStatus: () => ({ generated: 14, total: 14 }),
+    factoryRegistrationDetailImageRefs: () => Array.from({ length: 14 }, (_, id) => ({ src: `section-${id}` })),
+    factoryLocalArchiveRestoreTargets: () => [{ archiveId: 'old-partial' }],
+    factoryRestoreLocalArchiveToCurrentWork: async () => {
+      factory.assets.push({ id: 'old-partial-copy', stageId: 'detail', used: true });
+      factory.stages.detail.selectedAssetIds.push('old-partial-copy');
+      return { ok: true, restored: 1 };
+    },
+    factoryHydrateCafe24ImagesFromLocalArchive: async () => ({ ok: true, alreadyReady: true }),
+  });
+  await prepare({ factory, restoreCurrentWork: true, render: false });
+  assert.equal(JSON.stringify(factory), before);
 });
 
 
@@ -1282,4 +1469,5 @@ test('직접 Cafe24 새 상품 등록도 로컬 대표이미지를 복원하고 
   assert.equal(planInputs.every(input => input.forceInventoryQuantity === ''), true, 'direct-create plans must keep saved per-row inventory');
   assert.equal(postInputs.length, 1);
   assert.equal(postInputs[0].forceInventoryQuantity, '');
+  assert.deepEqual(Array.from(postInputs[0].requiredKeys), ['images', 'additionalImages', 'category', 'options']);
 });

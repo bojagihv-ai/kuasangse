@@ -1133,6 +1133,67 @@ def test_factory_product_queue_waits_for_manual_selection_then_resumes_sequentia
     assert [job["status"] for job in bridge.product_jobs()] == ["running", "completed"]
 
 
+def test_pause_after_current_survives_restarts_and_releases_one_unchanged_job(tmp_path: Path) -> None:
+    state_path = tmp_path / "factory-product-jobs.json"
+    bridge = FactorySyncBridge(state_path=state_path)
+    bridge.hello(_hello())
+    first = bridge.queue_product(_manual_product_job_payload(suffix="pause-a"))
+    second = bridge.queue_product(_manual_product_job_payload(suffix="pause-b"))
+    second_payload = deepcopy(bridge.product_job_context(second["jobId"])["payload"])
+    worker = {**_worker(), "workerId": "factory-worker-live", "sessionId": "factory-session-live"}
+    order = bridge.claim(worker)["order"]
+    bridge.lifecycle(
+        order["orderId"],
+        "ack",
+        {**order, "workerId": worker["workerId"], "accepted": True, "eventSequence": 1},
+    )
+
+    armed = bridge.set_pause_after_current(True)
+    projection = _product_projection(first["jobId"], sequence=8, revision=10)
+    receipt = {
+        "schema": "factory-product-run-receipt:v1",
+        "jobId": first["jobId"],
+        "status": "completed",
+        "stageKey": "",
+        "message": "Cafe24 사전점검 준비 완료",
+        "projection": projection,
+        "checkpoint": _product_checkpoint(first["jobId"], projection, status="completed", stage_key=""),
+    }
+    completed = {**order, "workerId": worker["workerId"], "eventSequence": 2, "result": receipt}
+    bridge.lifecycle(order["orderId"], "events", completed)
+    bridge.lifecycle(order["orderId"], "complete", completed)
+
+    assert armed["pauseAfterCurrent"] is True
+    assert bridge.product_queue_state()["pauseAfterCurrent"] is True
+    assert [job["status"] for job in bridge.product_jobs()] == ["completed", "queued"]
+    assert bridge.product_jobs()[1]["dispatched"] is False
+
+    restored = FactorySyncBridge(state_path=state_path)
+    restored_again = FactorySyncBridge(state_path=state_path)
+    assert restored.product_queue_state()["pauseAfterCurrent"] is True
+    assert restored_again.product_queue_state()["pauseAfterCurrent"] is True
+    assert restored.product_job_context(second["jobId"])["payload"] == second_payload
+    replacement = _hello(session_id="factory-session-after-pause")
+    restored.hello(replacement)
+    replacement_worker = {
+        **_worker(),
+        "workerId": "factory-worker-live",
+        "sessionId": "factory-session-after-pause",
+    }
+    assert restored.claim(replacement_worker)["claimed"] is False
+
+    restarted = restored.set_pause_after_current(False)
+    released = restored.claim(replacement_worker)["order"]
+    assert restarted["pauseAfterCurrent"] is False
+    assert released["command"]["payload"]["jobId"] == second["jobId"]
+    assert released["command"]["payload"]["inputImages"] == second_payload["inputImages"]
+    assert restored.product_job_context(first["jobId"])["job"]["status"] == "completed"
+
+    current_attempts = restored.product_job_context(second["jobId"])["job"]["attempts"]
+    restored.set_pause_after_current(False)
+    assert restored.product_job_context(second["jobId"])["job"]["attempts"] == current_attempts
+
+
 def test_factory_product_claim_publishes_running_job_to_sse() -> None:
     bridge = FactorySyncBridge()
     bridge.hello(_hello())
@@ -1173,6 +1234,35 @@ def test_blocked_product_without_checkpoint_retries_from_fresh_payload() -> None
     assert retry_order["command"]["payload"]["expectedStageKey"] == ""
     assert retry_order["command"]["payload"]["imageModel"] == "api-hub-openai-image"
     assert len(retry_order["command"]["payload"]["inputImages"]) == 1
+    attempts = bridge.product_job_context(queued["jobId"])["job"]["attempts"]
+    try:
+        bridge.resume_product(queued["jobId"])
+    except FactorySyncError as error:
+        assert error.code == "factory_product_job_not_resumable"
+    else:
+        raise AssertionError("a running retry must not create a duplicate order")
+    assert bridge.product_job_context(queued["jobId"])["job"]["attempts"] == attempts
+
+
+def test_pause_after_current_rejects_stale_non_boolean_durable_state(tmp_path: Path) -> None:
+    state_path = tmp_path / "factory-product-jobs.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema": "factory-product-job-state:v1",
+                "pauseAfterCurrent": "true",
+                "jobs": [],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        FactorySyncBridge(state_path=state_path)
+    except FactorySyncError as error:
+        assert error.code == "factory_product_state_invalid"
+    else:
+        raise AssertionError("stale non-boolean pause state must not be accepted")
 
 
 def test_blocked_product_with_checkpoint_restores_even_when_projection_has_same_job() -> None:

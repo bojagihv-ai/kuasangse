@@ -1,4 +1,6 @@
 import {
+  appendBulkProductRows,
+  fillBulkProductRequiredValues,
   BLOCKING_ISSUES,
   buildBulkPlan,
   buildProductPayload,
@@ -9,9 +11,14 @@ import {
   isSupportedImage,
   parseIntakeCsv,
   readImageName,
+  readBulkQueueReceipt,
   serializeWorkingState,
   summarizeBulkIntake,
-} from './bulk-intake-model.mjs?bulkIntake=11';
+} from './bulk-intake-model.mjs?bulkIntake=14';
+import { loadCafe24Categories } from './intake-categories.mjs?intakeCategories=1';
+import { assertInputPolicySnapshot, inputPolicySummary, renderInputPolicyGrid, resolveInputPolicy, setInputDecision } from './automation-policy-model.mjs?automationPolicy=5';
+import { beginProductSourceRequest, beginProductSourceSelection, buildProductFieldSummary, cancelProductSourceRequests, commitProductField,
+  finishProductSourceRequest, finishProductSourceSelection, setProductFieldDraft } from './bulk-intake-source.mjs?bulkIntakeSource=1';
 
 /**
  * '전체 자동' 이 실제로 무엇을 대신 정하는지 사람 말로. 값만 보여 주면 그 값이 뭘
@@ -23,7 +30,7 @@ const AUTOMATION_PRESET_COPY = Object.freeze({
   representative_manual: '대표 이미지만 사람이 고릅니다. 나머지는 AI가 고릅니다.',
   representative_and_size_manual: '대표·사이즈 이미지를 사람이 고릅니다. 나머지는 AI가 고릅니다.',
   all_images_manual: '이미지컷까지 모든 생성 이미지를 사람이 고릅니다. 섹션·최종은 AI가 고릅니다.',
-  custom: '자동판단 화면에서 단계별로 정한 값을 그대로 씁니다.',
+  custom: '아래 공정별 설정과 각 제품의 개별 설정을 적용합니다.',
 });
 
 // 회색 글씨는 보기일 뿐 값이 아니다. '주방' 처럼만 적어 두면 이미 채워진 것처럼 읽혀서,
@@ -32,7 +39,7 @@ const AUTOMATION_PRESET_COPY = Object.freeze({
 // 필드 기준은 조립공장의 직접 입력 폼(intake-form 의 required-*)이다 — 사람이 넣어야만 하는
 // 값이 곧 이 폼의 전부다. 조립공장이 스스로 만드는 값은 여기 두지 않는다.
 const DEFAULT_FIELDS = Object.freeze([
-  { key: 'category', label: '분류', placeholder: '예: 주방', group: 'product' },
+  { key: 'category', label: '상품 종류', placeholder: '예: 지갑, 수저집, 보자기', group: 'product' },
   { key: 'material', label: '소재', placeholder: '예: 면 100%', group: 'product' },
   { key: 'originCountry', label: '원산지', placeholder: '예: 대한민국', group: 'product' },
   { key: 'size', label: '크기', placeholder: '예: 20x15cm', group: 'product' },
@@ -51,6 +58,13 @@ const DEFAULT_FIELDS = Object.freeze([
   { key: 'sellingStatus', label: '판매', placeholder: '예: 판매안함', group: 'cafe24' },
 ]);
 
+const NATIVE_EXTRA_FIELDS = Object.freeze([
+  { key: 'category', label: '상품 종류', placeholder: '예: 보자기' },
+  { key: 'originCountry', label: '원산지', placeholder: '예: 대한민국' },
+  { key: 'displayStatus', label: '진열', select: true },
+  { key: 'sellingStatus', label: '판매', select: true },
+]);
+
 const ISSUE_LABELS = Object.freeze({
   image_missing: '이미지 없음',
   product_name_missing: '제품명 비어 있음',
@@ -59,7 +73,8 @@ const ISSUE_LABELS = Object.freeze({
   color_name_missing: '옵션 사진에 색상명 없음',
   category_missing: '분류 비어 있음',
   sale_price_missing: '판매가 비어 있음',
-  sale_price_invalid: '판매가 자릿수 초과 (12자리까지)',
+  sale_price_invalid: '판매가는 원화 정수 12자리까지',
+  supply_price_invalid: '공급가는 원화 정수만 입력',
   stock_invalid: '재고 자릿수 초과 (9자리까지)',
   size_mm_missing: '가로·세로 비어 있음',
   size_mm_invalid: '가로·세로가 2000mm 초과',
@@ -197,7 +212,7 @@ async function digestOf(file) {
   }
 }
 
-export function mountBulkIntake(runtime, { root = document.getElementById('bulk-intake') } = {}) {
+export function mountBulkIntake(runtime, { root = document.getElementById('bulk-intake'), imageModels, presetOptions, getJudgmentSettings, intake = null } = {}) {
   if (!root || !runtime) return () => {};
   const { apiRequest } = runtime;
   const automation = runtime.automation || {};
@@ -257,23 +272,25 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
    * 칸을 그대로 쓰면 대량 투입이 만드는 묶음 이름과 어긋나 한 건도 들어가지 못한다 —
    * 실측 2026-08-28, 실제 투입에서 전건 거절.
    */
-  async function lockPolicy(productId, batchId) {
-    const base = automation.snapshotRequest?.(String(productId)) || {
-      productId: String(productId),
+  function policyRequestFor(entry, batchId = '') {
+    return {
+      batchId: String(batchId),
+      productId: String(entry.productName),
       preset: String(policySelect.value || '').trim() || 'full_auto',
-      batchOverride: { ...(automation.batchOverride || {}) },
-      productOverride: { ...(automation.productOverride || {}) },
-      stageOverride: { ...(automation.stageOverride || {}) },
+      batchOverride: { ...decisionOverrides },
+      productOverride: { ...(entry.decisionOverrides || {}) },
+      stageOverride: {},
     };
-    const policyRequest = { ...base, batchId: String(batchId || ''), productId: String(productId) };
+  }
+
+  async function lockPolicy(entry, batchId) {
+    const policyRequest = policyRequestFor(entry, batchId);
+    const expected = resolveInputPolicy(policyRegistry, policyRequest);
     const policySnapshot = await requestWithDeadline('/api/automation/policy/snapshot', {
       method: 'POST',
       body: JSON.stringify(policyRequest),
     });
-    automation.snapshot = policySnapshot;
-    window.dispatchEvent(new CustomEvent('control-tower:policy-locked', {
-      detail: { snapshotId: policySnapshot.snapshotId },
-    }));
+    assertInputPolicySnapshot(policySnapshot, policyRequest, expected);
     return policySnapshot;
   }
 
@@ -287,8 +304,9 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
    */
   async function requestAiColorNames(targets) {
     if (!apiHub) throw new Error('API Hub 주소를 알 수 없습니다.');
-    const model = String(document.getElementById('model-select')?.value || '').trim();
-    const reasoningEffort = String(document.getElementById('reasoning-select')?.value || '').trim();
+    const judgment = await getJudgmentSettings?.();
+    const model = String(judgment?.model || document.getElementById('model-select')?.value || '').trim();
+    const reasoningEffort = String(judgment?.reasoningEffort || document.getElementById('reasoning-select')?.value || '').trim();
     if (!model || !reasoningEffort) throw new Error('자동판단 화면에서 판단 모델과 추론 깊이를 먼저 고르세요.');
     const shots = [];
     for (const target of targets) {
@@ -311,7 +329,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
         prompt,
         model,
         reasoningEffort,
-        serviceTier: String(document.getElementById('tier-select')?.value || 'standard'),
+        serviceTier: String(judgment?.serviceTier || document.getElementById('tier-select')?.value || 'standard'),
         timeoutMs: 180000,
         jsonOnly: true,
         images: shots,
@@ -365,16 +383,78 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   let csvErrors = [];
   let defaults = {};
   let busy = false;
-  let status = { copy: '이미지 파일을 여러 개 고르면 제품별로 묶어 한 번에 투입합니다.', tone: '' };
+  let inputVersion = 0;
+  let inputReads = 0;
+  let status = { copy: '제품명을 적고 사진을 추가하세요. 준비한 제품은 작업큐에 추가할 수 있습니다.', tone: '' };
   let progress = null;
+  let categoryItems = [];
+  let categoryStatus = 'Cafe24 분류를 불러오는 중…';
+  let categoryLoading = false;
+  let selectedProductIndex = 0;
+  const selectedForCommon = new Set();
+  let commonValues = {};
+  let decisionOverrides = { ...(automation.batchOverride || {}), ...(automation.productOverride || {}), ...(automation.stageOverride || {}) };
+  let policyRegistry = null;
+  let policyError = '공정 설정 불러오는 중';
 
   const heading = element('div', 'section-heading');
   const headingCopy = element('div');
-  headingCopy.append(element('p', 'eyebrow', 'BULK INTAKE'), element('h2', '', '제품 일괄 투입'));
-  heading.append(
-    headingCopy,
-    element('p', 'section-copy', '이미지를 좌라락 고르면 파일 이름으로 제품을 묶습니다. 제품별 값은 CSV 로 붙이거나 아래 기본값으로 채웁니다.'),
-  );
+  headingCopy.append(element('h2', '', '대량 제품 입력'), element('p', 'status-message', '여러 제품 준비 → 선택 제품 편집 → 작업큐에 추가'));
+  heading.append(headingCopy);
+  const queueButton = document.getElementById('go-batch-intake');
+  const creator = element('div', 'bulk-product-creator');
+  const newNameLabel = element('label', 'bulk-name-field');
+  const newName = document.createElement('input');
+  newName.id = 'bulk-new-product-name';
+  newName.placeholder = '제품명부터 입력하세요 · 예: 색동동전지갑';
+  newNameLabel.append(element('span', '', '새 제품명'), newName);
+  const addProduct = element('button', 'board-action', '＋ 제품 추가');
+  addProduct.id = 'bulk-add-product';
+  addProduct.type = 'button';
+  creator.append(newNameLabel, addProduct);
+  function createNamedProduct() {
+    const productName = newName.value.trim();
+    if (!productName) { newName.focus(); setStatus('먼저 새 제품명을 입력해 주세요.', 'warn'); return; }
+    restoreCancelled = true;
+    const existing = grouped.products.findIndex(item => !item.queued && item.productName === productName);
+    if (existing < 0) grouped.products.push({ productName, images: [], inheritDefaults: false });
+    newName.value = '';
+    selectedProductIndex = existing < 0 ? grouped.products.length - 1 : existing;
+    rebuild();
+    const index = existing < 0 ? grouped.products.length - 1 : existing;
+    root.querySelector(`[data-focus-key="product-name:${index}"]`)?.focus();
+    setStatus(`${productName} · 선택 제품 편집에서 기본 사진과 상품정보를 채워 주세요.`);
+  }
+  addProduct.addEventListener('click', createNamedProduct);
+  newName.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); createNamedProduct(); }
+  });
+
+  const multiRow = element('div', 'bulk-multi-row');
+  const pasteLabel = element('label', 'bulk-paste-field');
+  const pasteInput = document.createElement('textarea');
+  pasteInput.id = 'bulk-product-rows';
+  pasteInput.rows = 3;
+  pasteInput.placeholder = '카드지갑\n색동동전지갑\n모시보자기';
+  pasteLabel.append(element('span', '', '여러 제품명 · 한 줄에 하나씩 입력'), pasteInput);
+  const pasteActions = element('div', 'bulk-paste-actions');
+  const pasteAdd = element('button', 'board-action', '여러 제품을 목록에 추가');
+  pasteAdd.id = 'bulk-add-rows';
+  pasteAdd.type = 'button';
+  pasteActions.append(pasteAdd, element('p', 'status-message', '표도 붙여넣을 수 있습니다. 첫 줄에 제품명·소재·크기·판매가 등 열 제목을 포함하세요. 기존 제품은 덮어쓰지 않습니다.'));
+  multiRow.append(pasteLabel, pasteActions);
+  pasteAdd.addEventListener('click', () => {
+    if (busy || restorePending) return;
+    const firstNew = grouped.products.length;
+    const result = appendBulkProductRows(grouped.products, pasteInput.value);
+    if (result.added) {
+      restoreCancelled = true;
+      selectedProductIndex = firstNew;
+      pasteInput.value = '';
+      rebuild();
+    }
+    setStatus(`${result.added}개 제품을 추가했습니다${result.duplicates ? ` · 중복 ${result.duplicates}개는 기존 입력 보존` : ''}${result.errors.length ? ' · 표의 제품명 열과 빈 이름을 확인하세요' : ''}.`, result.errors.length || !result.added ? 'warn' : 'ok');
+  });
 
   const pickers = element('div', 'bulk-pickers');
   const imageLabel = element('label', 'bulk-picker');
@@ -383,21 +463,21 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   imageInput.multiple = true;
   imageInput.accept = 'image/*';
   imageInput.id = 'bulk-image-input';
-  imageLabel.append(element('span', '', '① 제품 사진 고르기 — 기본 이미지로 들어갑니다'), imageInput);
+  imageLabel.append(element('span', '', '파일명으로 여러 제품 한번에 묶기'), imageInput);
 
   const csvLabel = element('label', 'bulk-picker');
   const csvInput = document.createElement('input');
   csvInput.type = 'file';
   csvInput.accept = '.csv,.tsv,.txt';
   csvInput.id = 'bulk-csv-input';
-  csvLabel.append(element('span', '', '② 제품 정보 CSV (선택)'), csvInput);
+  csvLabel.append(element('span', '', '제품 정보 CSV (선택)'), csvInput);
   pickers.append(imageLabel, csvLabel);
 
   // 사람이 넣어야만 하는 조립공장 필수값은 항상 보이고, Cafe24 등록값(선택)은 접어 둔다.
   // 열한 칸이 한 줄에 쏟아지면 무엇이 필수인지 읽히지 않는다.
   const defaultsBox = element('div', 'bulk-defaults');
   const factoryRow = element('div', 'bulk-defaults-row');
-  factoryRow.append(element('span', 'bulk-defaults-label', '필수값 (전 제품 공통)'));
+  factoryRow.append(element('span', 'bulk-defaults-label', '기존 저장 제품의 공통값'));
   const cafe24Details = document.createElement('details');
   cafe24Details.className = 'bulk-defaults-extra';
   const cafe24Summary = document.createElement('summary');
@@ -437,49 +517,187 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   const automationHead = element('div', 'bulk-automation-head');
   automationHead.append(
     element('strong', '', '자동화 설정'),
-    element('span', 'status-message', '이 설정으로 투입 전 확인 화면에서 다시 보여 줍니다.'),
+    element('span', 'status-message', '큐에 추가하기 전에 모델과 컷 선택 방식을 확인하세요.'),
   );
   const automationRow = element('div', 'bulk-automation-row');
   const imageModelField = element('label', 'field-stack');
   const imageModelSelect = document.createElement('select');
   imageModelSelect.id = 'bulk-image-model-select';
   imageModelSelect.innerHTML = legacyImageModelSelect ? legacyImageModelSelect.innerHTML : '';
+  if (imageModels) imageModelSelect.replaceChildren(...imageModels.map(item => new Option(item.label, item.id)));
   if (legacyImageModelSelect) imageModelSelect.value = legacyImageModelSelect.value;
   imageModelField.append(element('span', '', '이미지 생성 모델'), imageModelSelect);
   const policyField = element('label', 'field-stack');
   const policySelect = document.createElement('select');
   policySelect.id = 'bulk-automation-preset-select';
   policySelect.innerHTML = legacyPolicySelect ? legacyPolicySelect.innerHTML : '';
+  if (presetOptions) policySelect.replaceChildren(...presetOptions.map(item => new Option(item.label, item.id)));
   if (legacyPolicySelect) policySelect.value = legacyPolicySelect.value;
   policyField.append(element('span', '', '자동화 방식'), policySelect);
   automationRow.append(imageModelField, policyField);
   const automationCopy = element('p', 'status-message bulk-automation-copy');
   automationBox.append(automationHead, automationRow, automationCopy);
-  function renderAutomationCopy() {
-    automationCopy.textContent = AUTOMATION_PRESET_COPY[policySelect.value] || '';
+  const policyDetails = document.createElement('details');
+  policyDetails.className = 'bulk-policy-details';
+  policyDetails.open = true;
+  policyDetails.append(element('summary', '', '공통 공정 설정 · 제품별로 바꿀 수 있습니다'));
+  const policyGrid = element('div');
+  const policyReload = element('button', 'bulk-mini-action', '설정 다시 읽기');
+  policyReload.type = 'button';
+  policyReload.addEventListener('click', () => { void loadInputPolicy(); });
+  policyDetails.append(element('p', 'status-message', '직접 선택도 후보 이미지는 생성합니다. 생성 후 사람이 컷을 고릅니다. 이미 큐에 추가한 제품의 설정은 바뀌지 않습니다.'), policyGrid, policyReload);
+  automationBox.append(policyDetails);
+  async function loadInputPolicy() {
+    try {
+      policyRegistry = await requestWithDeadline('/api/automation/policy', {});
+      resolveInputPolicy(policyRegistry, policyRequestFor({ productName: '' }));
+      policyError = '';
+    } catch (error) {
+      policyError = String(error.message || error);
+    }
+    render();
   }
-  imageModelSelect.addEventListener('change', () => { confirmState = null; render(); });
-  policySelect.addEventListener('change', () => { renderAutomationCopy(); confirmState = null; render(); });
+  function renderPolicyControls() {
+    policyReload.disabled = busy || restorePending;
+    try {
+      const resolved = resolveInputPolicy(policyRegistry, policyRequestFor({ productName: '' }));
+      policyGrid.replaceChildren(renderInputPolicyGrid({ registry: policyRegistry, overrides: decisionOverrides, resolved, disabled: busy || restorePending, onChange(id, mode) {
+        decisionOverrides = setInputDecision(decisionOverrides, id, mode, policyRegistry.decisionPointIds);
+        invalidateConfirmation();
+        render();
+        queueWorkingSave();
+      } }));
+      policyError = '';
+    } catch (error) {
+      policyError = String(error.message || error);
+      policyGrid.replaceChildren(element('p', 'status-message', policyError));
+    }
+  }
+  function renderAutomationCopy() {
+    automationCopy.textContent = `기본 방식: ${AUTOMATION_PRESET_COPY[policySelect.value] || ''} 아래 공통 공정 설정과 제품별 설정이 우선합니다.`;
+  }
+  imageModelSelect.addEventListener('change', () => { invalidateConfirmation(); render(); queueWorkingSave(); });
+  policySelect.addEventListener('change', () => { renderAutomationCopy(); invalidateConfirmation(); render(); queueWorkingSave(); });
   renderAutomationCopy();
 
-  const actions = element('div', 'bulk-actions');
-  const submit = element('button', 'board-action primary', '작업 큐에 투입');
+  const actions = element('div', 'bulk-actions bulk-queue-actions');
+  const submit = element('button', 'board-action primary', '입력 완료 제품 모두 추가');
+  submit.id = 'bulk-queue-submit';
   submit.type = 'button';
   submit.dataset.action = 'submit';
+  submit.dataset.queueScope = 'all';
+  const submitSelected = element('button', 'board-action primary', '선택한 제품 추가');
+  submitSelected.id = 'bulk-queue-submit-selected';
+  submitSelected.type = 'button';
+  submitSelected.dataset.action = 'submit';
+  submitSelected.dataset.queueScope = 'selected';
   const reset = element('button', 'board-action ghost', '고른 파일 비우기');
   reset.type = 'button';
   reset.dataset.action = 'reset';
   const hint = element('span', 'board-toolbar-hint');
-  actions.append(submit, reset, hint);
+  hint.style.wordBreak = 'keep-all';
+  actions.append(submitSelected, submit);
+  if (queueButton) actions.append(queueButton);
+  heading.append(actions);
 
   const statusNode = element('p', 'status-message');
+  statusNode.id = 'bulk-intake-status';
+  statusNode.setAttribute('role', 'status');
+  statusNode.setAttribute('aria-live', 'polite');
   const table = element('div', 'bulk-plan');
 
+  const commonBox = element('details', 'bulk-common-fields');
+  const commonSummary = element('summary');
+  const commonActions = element('div', 'bulk-common-actions');
+  const commonAll = element('button', 'bulk-mini-action', '입력 제품 전체 선택');
+  commonAll.type = 'button';
+  commonAll.id = 'bulk-common-select-all';
+  const commonApply = element('button', 'board-action', '선택 제품 빈칸 채우기');
+  commonApply.type = 'button';
+  commonApply.id = 'bulk-common-apply';
+  commonActions.append(commonAll, commonApply);
+  const commonFields = element('div', 'bulk-product-fields');
+  const commonCategoryLabel = element('label', 'bulk-default-field');
+  const commonCategory = document.createElement('select');
+  commonCategory.id = 'bulk-common-category';
+  commonCategory.dataset.commonKey = 'cafe24CategoryId';
+  commonCategoryLabel.append(element('span', '', 'Cafe24 상품분류'), commonCategory);
+  commonFields.append(commonCategoryLabel);
+  for (const field of DEFAULT_FIELDS.filter(item => item.group === 'product' && !['widthMm', 'depthMm'].includes(item.key))) {
+    const label = element('label', 'bulk-default-field');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.dataset.commonKey = field.key;
+    input.placeholder = field.placeholder;
+    input.setAttribute('aria-label', `공통 ${field.label}`);
+    label.append(element('span', '', field.label), input);
+    commonFields.append(label);
+  }
+  commonBox.append(commonSummary, element('p', 'status-message', '체크는 제품만 선택합니다. 공통값 적용과 큐 추가는 각각의 버튼에서 실행합니다. 공통값은 기존 입력을 유지하고 빈칸만 채웁니다.'), commonFields, commonActions);
+  function renderCommonControls() {
+    const targets = grouped.products.filter(group => !group.queued && selectedForCommon.has(group));
+    commonSummary.textContent = `공통 필수값 · 선택 ${targets.length}개 제품에 적용`;
+    commonApply.disabled = busy || restorePending || !targets.length;
+    commonAll.disabled = busy || restorePending || !grouped.products.some(group => !group.queued);
+    commonCategory.replaceChildren(element('option', '', '분류 선택 · 적용할 때만 빈칸 채움'));
+    commonCategory.firstElementChild.value = '';
+    for (const item of categoryItems) {
+      const option = element('option', '', `${item.label} · #${item.id}`);
+      option.value = item.id;
+      commonCategory.append(option);
+    }
+    commonCategory.value = commonValues.cafe24CategoryId || '';
+    for (const input of commonBox.querySelectorAll('[data-common-key]')) input.disabled = busy || restorePending;
+  }
+  commonBox.addEventListener('input', event => {
+    const key = event.target?.dataset?.commonKey;
+    if (!key) return;
+    commonValues[key] = event.target.value;
+    if (key === 'cafe24CategoryId') {
+      const selected = categoryItems.find(item => item.id === event.target.value);
+      if (selected) {
+        commonValues.category = selected.name;
+        commonBox.querySelector('[data-common-key="category"]').value = selected.name;
+      }
+    }
+    queueWorkingSave();
+  });
+  commonAll.addEventListener('click', () => {
+    const targets = grouped.products.filter(group => !group.queued);
+    const clear = targets.every(group => selectedForCommon.has(group));
+    for (const group of targets) clear ? selectedForCommon.delete(group) : selectedForCommon.add(group);
+    invalidateConfirmation();
+    render();
+    queueWorkingSave();
+  });
+  commonApply.addEventListener('click', () => {
+    if (busy || restorePending) return;
+    let changed = 0;
+    for (const [index, group] of grouped.products.entries()) {
+      if (selectedForCommon.has(group)) changed += fillBulkProductRequiredValues(group, plan.entries[index].requiredValues, commonValues);
+    }
+    rebuild();
+    setStatus(changed ? `선택 제품의 빈칸 ${changed}개를 채웠습니다. 기존 값과 다른 제품은 보존했습니다.` : '채울 빈칸이 없습니다. 기존 값은 유지했습니다.', changed ? 'ok' : 'warn');
+  });
+
   const confirmBox = element('div', 'bulk-confirm-box');
+  confirmBox.id = 'bulk-queue-confirm';
   confirmBox.hidden = true;
   let confirmState = null;
+  let confirming = false;
+  function invalidateConfirmation() { inputVersion += 1; confirmState = null; }
+  function queueRows(scope) {
+    return plan.entries.map((entry, index) => ({ entry, group: grouped.products[index] }))
+      .filter(({ entry, group }) => (scope !== 'selected' || selectedForCommon.has(group))
+        && !entry.queued && !entry.issues.some(issue => BLOCKING_ISSUES.has(issue)));
+  }
 
-  root.replaceChildren(heading, pickers, defaultsBox, automationBox, colorRuleDetails, bulkBar, confirmBox, actions, statusNode, table);
+  const batchTools = element('details', 'bulk-batch-tools');
+  batchTools.append(element('summary', '', '여러 제품 한번에 입력 · 파일명 묶기 / CSV / 공통값'));
+  batchTools.append(element('p', 'status-message', '새 제품의 필수값은 위 공통 필수값에서 선택 적용하세요. 아래 공통값은 이전에 저장된 제품의 값 보존용이며, 새 제품에는 자동으로 넣지 않습니다.'), pickers, defaultsBox, bulkBar, colorRuleDetails, reset);
+  const entryTools = element('div', 'bulk-entry-tools');
+  entryTools.append(multiRow, creator);
+  root.replaceChildren(heading, hint, confirmBox, statusNode, entryTools, commonBox, table, automationBox, batchTools);
 
   function setStatus(copy, tone = '') {
     status = { copy, tone };
@@ -498,6 +716,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   // 한글 조합 중인지. 조합 중에 다시 그리면 입력칸이 갈아 끼워져 글자가 깨진다.
   let composing = false;
   function schedulePlan() {
+    invalidateConfirmation();
     if (planTimer) clearTimeout(planTimer);
     planTimer = setTimeout(() => {
       planTimer = null;
@@ -535,6 +754,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   }
 
   function rebuild() {
+    invalidateConfirmation();
     defaults = Object.fromEntries(
       [...defaultsBox.querySelectorAll('[data-default-key]')].map(input => [input.dataset.defaultKey, input.value]),
     );
@@ -599,15 +819,15 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     });
   }
 
-  async function saveWorkingState() {
-    if (persistDisabled || busy) return;
-    if (saveBusy) { saveAgain = true; return; }
+  async function saveWorkingState({ submission = false } = {}) {
+    if (persistDisabled || restorePending || (busy && !submission)) return false;
+    if (saveBusy) { saveAgain = true; return false; }
     saveBusy = true;
     try {
       const db = await openWorkingDb();
-      if (!db) return;
+      if (!db) return false;
       // 사진 본문은 처음 볼 때 한 번만 넣는다. 같은 트랜잭션 안에서 안 쓰는 본문을 지워
-      // 저장소가 비대해지지 않게 한다(비우기·투입 뒤에는 여기서 전부 지워진다).
+      // 저장소가 비대해지지 않게 한다. 큐에 추가된 제품의 사진도 계속 보존한다.
       const referenced = new Set();
       const fresh = [];
       for (const product of grouped.products) {
@@ -617,7 +837,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
           referenced.add(image.blobId);
         }
       }
-      const stateRecord = serializeWorkingState({ grouped, csvRows, csvErrors, defaults });
+      const stateRecord = serializeWorkingState({ grouped, csvRows, csvErrors, defaults, settings: { imageModel: imageModelSelect.value, policy: policySelect.value, decisionOverrides, commonValues, commonTargets: grouped.products.flatMap((group, index) => selectedForCommon.has(group) ? [index] : []), selectedProductIndex } });
       const tx = db.transaction(['state', 'blobs'], 'readwrite');
       const blobStore = tx.objectStore('blobs');
       for (const image of fresh) blobStore.put(image.file, image.blobId);
@@ -630,9 +850,11 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
         }
       };
       await idbDone(tx);
+      return true;
     } catch {
       // 용량 초과 등. 이후로는 메모리 전용으로만 돈다 — 화면 동작은 그대로여야 한다.
       persistDisabled = true;
+      return false;
     } finally {
       saveBusy = false;
       if (saveAgain) {
@@ -682,23 +904,32 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       if (restoreCancelled || grouped.products.length || csvRows.length) return;
       const blobs = new Map(keys.map((key, index) => [key, values[index]]));
       const revived = hydrateWorkingState(stored, blobs);
-      if (!revived || (!revived.grouped.products.length && !revived.csvRows.length)) return;
+      if (!revived) return;
       grouped = revived.grouped;
       csvRows = revived.csvRows;
       csvErrors = revived.csvErrors;
+      commonValues = revived.settings.commonValues && typeof revived.settings.commonValues === 'object' && !Array.isArray(revived.settings.commonValues) ? revived.settings.commonValues : {};
+      for (const input of commonBox.querySelectorAll('[data-common-key]')) input.value = commonValues[input.dataset.commonKey] || '';
+      for (const index of Array.isArray(revived.settings.commonTargets) ? revived.settings.commonTargets : []) if (grouped.products[index]) selectedForCommon.add(grouped.products[index]);
+      if (Number.isInteger(revived.settings.selectedProductIndex)) selectedProductIndex = Math.max(0, Math.min(revived.settings.selectedProductIndex, grouped.products.length - 1));
+      if (revived.settings.imageModel) imageModelSelect.value = revived.settings.imageModel;
+      if (revived.settings.policy) policySelect.value = revived.settings.policy;
+      if (revived.settings.decisionOverrides) decisionOverrides = revived.settings.decisionOverrides;
+      renderAutomationCopy();
       for (const input of defaultsBox.querySelectorAll('[data-default-key]')) {
         const value = revived.defaults[input.dataset.defaultKey];
         if (typeof value === 'string') input.value = value;
       }
-      const parts = [`이전에 작업하던 제품 ${revived.grouped.products.length}건을 복원했습니다`];
+      const parts = [`저장된 제품 ${revived.grouped.products.length}개를 복원했습니다`];
       if (revived.csvRows.length) parts.push(`CSV ${revived.csvRows.length}건 포함`);
       if (revived.dropped.length) parts.push(`사진 ${revived.dropped.length}장은 본문이 없어 빠졌습니다`);
-      setStatus(`${parts.join(' · ')}. 이어서 하시거나 「고른 파일 비우기」로 지울 수 있습니다.`, 'ok');
+      setStatus(`${parts.join(' · ')}. 이어서 입력하세요.`, 'ok');
       rebuild();
     } catch {
       // 깨진 기록이면 빈 화면으로 시작한다. 다음 저장이 새 기록으로 덮어쓴다.
     } finally {
       restorePending = false;
+      render();
       // 복원 중에 눌린 저장(고르기·기본값 입력)이 있었으면 이제 반영한다.
       queueWorkingSave();
     }
@@ -711,6 +942,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   function colorTargets(products) {
     const targets = [];
     for (const product of products) {
+      if (product.queued || product.queueRequest) continue;
       let ordinal = 0;
       for (const image of (Array.isArray(product?.images) ? product.images : [])) {
         if (!COLOR_ROLES.has(image.role || 'base')) continue;
@@ -861,6 +1093,8 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       const thumb = document.createElement('img');
       thumb.src = url;
       thumb.alt = image.fileName;
+      thumb.loading = 'lazy';
+      thumb.decoding = 'async';
       thumbButton.append(thumb);
       thumbButton.addEventListener('click', () => openLightbox(url, image.fileName));
     } else {
@@ -903,6 +1137,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
 
   /** 고른 파일들을 이 제품의 사진으로 붙인다. 구역이 정한 역할을 그대로 받는다. */
   function addImagesToGroup(group, fileList, role) {
+    if (group.queued || group.queueRequest || busy || restorePending) return;
     const files = [...(fileList || [])].filter(file => isSupportedImage(file.name));
     if (!files.length) return;
     const start = group.images.length;
@@ -929,7 +1164,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     input.type = 'file';
     input.multiple = true;
     input.accept = 'image/*';
-    input.hidden = true;
+    input.setAttribute('aria-label', `${group.productName || '새 제품'} ${label}`);
     input.addEventListener('change', () => {
       addImagesToGroup(group, input.files, role);
       input.value = '';
@@ -1034,6 +1269,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
    */
   function applyRolePattern(products, pattern) {
     for (const product of products) {
+      if (product.queued || product.queueRequest) continue;
       const images = Array.isArray(product?.images) ? product.images : [];
       images.forEach((image, index) => {
         if (pattern === 'all-base') {
@@ -1163,18 +1399,262 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     const sourceLabel = COLOR_NAME_SOURCES.find(item => item.key === colorRule.source)?.label || colorRule.source;
     add(`색상명 채우기 · ${sourceLabel}`, () => void fillColorNames(grouped.products));
     bulkBar.append(element('span', 'bulk-card-spacer'));
-    // 파일 없이 시작하는 길. 이름을 치고 구역별 '사진 추가' 로 채우면 큐의 직접 입력과 같다.
-    const blank = element('button', 'bulk-mini-action', '＋ 빈 제품 추가');
-    blank.type = 'button';
-    blank.addEventListener('click', () => {
-      grouped.products.push({ productName: '', images: [] });
+  }
+
+  async function refreshCategories() {
+    if (categoryLoading) return;
+    categoryLoading = true;
+    categoryStatus = 'Cafe24 분류를 불러오는 중…';
+    schedulePlan();
+    try {
+      categoryItems = await loadCafe24Categories(apiHub);
+      categoryStatus = categoryItems.length ? `Cafe24 분류 ${categoryItems.length}개 · 이름으로 검색해 선택하세요.` : 'Cafe24에 등록된 분류가 없습니다.';
+    } catch (error) {
+      categoryStatus = `분류를 불러오지 못했습니다. ${error?.name === 'TimeoutError' ? '연결 응답 시간 초과' : String(error?.message || '')} · 다시 불러오기를 눌러 주세요.`;
+    } finally {
+      categoryLoading = false;
       schedulePlan();
+    }
+  }
+
+  function productValue(group, key, value) {
+    if (group.queued || group.queueRequest || busy || restorePending) return;
+    group.requiredValues = { ...(group.requiredValues || {}), [key]: value };
+  }
+
+  const sourceCandidateId = (source, candidate) => String(source === 'sinhwa'
+    ? candidate?.jcode || candidate?.id || ''
+    : candidate?.product_no || candidate?.raw?.product_no || '');
+
+  async function searchProductSource(group, source) {
+    if (busy || restorePending) return;
+    const query = String(group.productName || '').trim();
+    if (!query) { setStatus('제품명을 먼저 입력하세요.', 'warn'); return; }
+    const request = beginProductSourceRequest(group, source, query);
+    if (!request) return;
+    rebuild();
+    try {
+      const candidates = await intake.searchCandidates({ source, query, productName: query });
+      if (busy || restorePending || !grouped.products.includes(group) || !finishProductSourceRequest(group, request, candidates, '', grouped.products[selectedProductIndex])) return;
+      setStatus(`${query} · ${source === 'sinhwa' ? '신화사DB' : 'Cafe24'} 후보 ${candidates.length}건을 찾았습니다. 상품을 직접 선택하세요.`, candidates.length ? 'ok' : 'warn');
+    } catch (error) {
+      if (busy || restorePending || !grouped.products.includes(group) || !finishProductSourceRequest(group, request, [], String(error?.message || error), grouped.products[selectedProductIndex])) return;
+      setStatus(`${query} 조회 실패 · ${String(error?.message || error)}`, 'error');
+    }
+    rebuild();
+  }
+
+  async function selectProductSource(group, source, candidate) {
+    if (busy || restorePending) return;
+    const selectionId = sourceCandidateId(source, candidate);
+    const request = beginProductSourceSelection(group, source, selectionId);
+    if (!request) return;
+    const lookup = group.sourceLookup?.[source];
+    if (lookup) lookup.status = 'selecting';
+    rebuild();
+    try {
+      const result = await intake.selectCandidate({ source, candidate, productName: group.productName });
+      if (busy || restorePending || !grouped.products.includes(group) || !finishProductSourceSelection(group, request, result, Date.now(), grouped.products[selectedProductIndex])) return;
+      setStatus(`${result.label} 선택 · 원본 필수값의 빈칸만 채웠습니다. 값을 확인하고 수정하세요.`, 'ok');
+    } catch (error) {
+      if (group.queued || group.queueRequest || busy || restorePending || !grouped.products.includes(group) || grouped.products[selectedProductIndex] !== group
+        || group.sourceSelectionRequest !== request || group.productName !== request.productName) return;
+      delete group.sourceSelectionRequest;
+      if (lookup) { lookup.status = 'error'; lookup.error = String(error?.message || error); }
+      setStatus(`선택 상품 상세 확인 실패 · ${String(error?.message || error)}`, 'error');
+    }
+    rebuild();
+  }
+
+  function renderProductSourceLookup(group) {
+    const section = element('section', 'bulk-source-lookup');
+    section.append(element('strong', '', '제품 원본 찾기'));
+    section.append(element('p', 'status-message', '제품명으로 기존 신화사DB와 Cafe24를 조회합니다. 조회만으로 현재 조립 작업이나 기존 Cafe24 상품은 바뀌지 않습니다.'));
+    if (group.sourceSelection?.selectionId) {
+      const selected = element('div', 'bulk-source-selected');
+      if (group.sourceSelection.thumbnail) {
+        const image = document.createElement('img');
+        image.src = group.sourceSelection.thumbnail; image.alt = ''; image.width = 56; image.height = 56; image.loading = 'lazy';
+        selected.append(image);
+      }
+      selected.append(element('span', '', `선택됨 · ${group.sourceSelection.label || group.sourceSelection.selectionId}`));
+      section.append(selected);
+    }
+    for (const source of ['sinhwa', 'cafe24']) {
+      const box = element('div', 'bulk-source-group');
+      const label = source === 'sinhwa' ? '신화사DB' : 'Cafe24';
+      const action = element('button', 'bulk-mini-action', `${label} 조회`);
+      action.type = 'button'; action.dataset.sourceSearch = source;
+      action.disabled = group.sourceLookup?.[source]?.status === 'loading' || group.sourceLookup?.[source]?.status === 'selecting';
+      action.addEventListener('click', () => void searchProductSource(group, source));
+      const lookup = group.sourceLookup?.[source];
+      box.append(action, element('span', 'status-message', lookup?.status === 'loading' ? '조회 중…'
+        : lookup?.status === 'selecting' ? '선택 상품 상세 확인 중…'
+          : lookup?.error ? `확인 필요 · ${lookup.error}`
+            : lookup?.status === 'done' ? `후보 ${lookup.candidates.length}건` : '제품명을 입력한 뒤 조회하세요.'));
+      const candidates = element('div', 'bulk-source-candidates');
+      for (const candidate of lookup?.candidates || []) {
+        const card = element('button', 'bulk-source-candidate');
+        card.type = 'button';
+        card.dataset.sourceCandidate = `${source}:${sourceCandidateId(source, candidate)}`;
+        const imageUrl = candidate.image || candidate.thumbnail || candidate.thumb_url || '';
+        if (imageUrl) {
+          const image = document.createElement('img'); image.src = imageUrl; image.alt = ''; image.width = 56; image.height = 56; image.loading = 'lazy'; card.append(image);
+        }
+        const name = candidate.product_name || candidate.jname || candidate.name || '이름 확인 필요';
+        card.append(element('span', '', `${name} · #${sourceCandidateId(source, candidate) || '번호 없음'}`));
+        card.addEventListener('click', () => void selectProductSource(group, source, candidate));
+        candidates.append(card);
+      }
+      box.append(candidates); section.append(box);
+    }
+    return section;
+  }
+
+  function renderNativeRequiredFields(group, index) {
+    const panel = element('div', 'bulk-native-required-fields');
+    panel.innerHTML = intake.renderRequiredFields(buildProductFieldSummary(intake.definitions, group), {
+      panelId: `bulk-required-fields-${index}`, showSourceLink: false,
     });
-    bulkBar.append(blank);
+    if (group.queued || group.queueRequest || busy || restorePending) {
+      for (const control of panel.querySelectorAll('input, button')) control.disabled = true;
+      return panel;
+    }
+    const aliases = { product_name: 'productName', sale_price: 'salePrice', purchase_price: 'supplyPrice', stock: 'stock',
+      size: 'size', width_mm: 'widthMm', depth_mm: 'depthMm', weight: 'weight', material: 'material', usage: 'usage' };
+    for (const input of panel.querySelectorAll('[data-factory-wizard-field]')) {
+      const fieldId = input.dataset.factoryWizardField;
+      input.dataset.productField = aliases[fieldId] || fieldId;
+      input.dataset.focusKey = `product-field:${index}:${input.dataset.productField}`;
+      input.addEventListener('input', () => { setProductFieldDraft(group, fieldId, input.value); queueWorkingSave(); });
+    }
+    for (const button of panel.querySelectorAll('[data-factory-wizard-edit]')) button.addEventListener('click', () => {
+      const fieldId = button.dataset.factoryWizardEdit;
+      const current = panel.querySelector(`[data-factory-wizard-field="${fieldId}"]`);
+      setProductFieldDraft(group, fieldId, current?.value || '');
+      rebuild();
+    });
+    for (const button of panel.querySelectorAll('[data-factory-wizard-commit]:not([data-factory-wizard-edit])')) button.addEventListener('click', () => {
+      const fieldId = button.dataset.factoryWizardCommit;
+      const input = panel.querySelector(`[data-factory-wizard-field="${fieldId}"]`);
+      commitProductField(group, fieldId, input?.value || '');
+      rebuild();
+    });
+    panel.querySelector('[data-factory-wizard-commit-all]')?.addEventListener('click', () => {
+      for (const input of panel.querySelectorAll('[data-factory-wizard-field]')) commitProductField(group, input.dataset.factoryWizardField, input.value);
+      rebuild();
+    });
+    return panel;
+  }
+
+  function renderCategoryField(entry, group, index) {
+    const box = element('div', 'intake-category-picker');
+    const label = element('label', 'bulk-default-field');
+    const select = document.createElement('select');
+    select.id = `bulk-category-${index}`;
+    select.dataset.focusKey = `category:${index}`;
+    select.setAttribute('aria-label', `${entry.productName || '새 제품'} Cafe24 상품분류`);
+    label.append(element('span', '', 'Cafe24 상품분류'), select);
+    const searchRow = element('div', 'bulk-category-search');
+    const search = document.createElement('input');
+    search.type = 'search';
+    search.placeholder = '분류 검색 · 예: 지갑';
+    search.setAttribute('aria-label', `${entry.productName || '새 제품'} 분류 검색`);
+    search.dataset.focusKey = `category-search:${index}`;
+    const refresh = element('button', 'bulk-mini-action', '다시 불러오기');
+    refresh.type = 'button';
+    refresh.disabled = categoryLoading;
+    refresh.addEventListener('click', () => void refreshCategories());
+    searchRow.append(search, refresh);
+    const selectedId = entry.requiredValues.cafe24CategoryId || '';
+    const updateOptions = () => {
+      const term = search.value.trim().toLocaleLowerCase();
+      const items = categoryItems.filter(item => !term || `${item.label} ${item.id}`.toLocaleLowerCase().includes(term) || item.id === selectedId);
+      select.replaceChildren();
+      const blank = element('option', '', selectedId ? '분류 선택 해제' : `분류를 선택하세요${entry.requiredValues.category ? ` · 현재 상품 종류: ${entry.requiredValues.category}` : ''}`);
+      blank.value = '';
+      select.append(blank);
+      if (selectedId && !items.some(item => item.id === selectedId)) {
+        const current = element('option', '', `기존 분류 #${selectedId} · 목록 확인 필요`);
+        current.value = selectedId;
+        select.append(current);
+      }
+      for (const item of items) {
+        const option = element('option', '', `${item.label} · #${item.id}`);
+        option.value = item.id;
+        select.append(option);
+      }
+      select.value = selectedId;
+      select.disabled = !items.length && !selectedId;
+      feedback.textContent = term && !items.length ? '검색 결과가 없습니다. 다른 분류명을 입력하세요.' : categoryStatus;
+    };
+    const feedback = element('p', 'status-message');
+    feedback.setAttribute('role', 'status');
+    search.addEventListener('input', updateOptions);
+    select.addEventListener('change', () => {
+      productValue(group, 'cafe24CategoryId', select.value);
+      const selected = categoryItems.find(item => item.id === select.value);
+      if (selected) productValue(group, 'category', selected.name);
+      rebuild();
+    });
+    updateOptions();
+    box.append(label, searchRow, feedback);
+    return box;
+  }
+
+  function renderProductFields(entry, group, index) {
+    const panel = element('div', 'bulk-product-info');
+    if (intake) panel.append(renderProductSourceLookup(group), renderNativeRequiredFields(group, index), renderCategoryField(entry, group, index));
+    else panel.append(renderCategoryField(entry, group, index));
+    const fields = element('div', 'bulk-product-fields');
+    const extra = element('details', 'bulk-product-extra');
+    extra.append(element('summary', '', '추가 상품정보 · 상품 종류 / 공급가 / 진열·판매'));
+    const extraFields = element('div', 'bulk-product-fields');
+    extra.append(extraFields);
+    const fieldsToRender = intake ? NATIVE_EXTRA_FIELDS : DEFAULT_FIELDS.filter(item => item.key !== 'cafe24CategoryId');
+    for (const field of fieldsToRender) {
+      const label = element('label', 'bulk-default-field');
+      const input = document.createElement(field.select || ['displayStatus', 'sellingStatus'].includes(field.key) ? 'select' : 'input');
+      if (input.tagName === 'SELECT') {
+        for (const [value, copy] of [['', '등록 기본값 유지'], ['F', '안 함'], ['T', '함']]) {
+          const option = element('option', '', copy); option.value = value; input.append(option);
+        }
+      } else {
+        input.type = 'text';
+        input.placeholder = field.placeholder;
+        if (['widthMm', 'depthMm', 'salePrice', 'stock', 'supplyPrice'].includes(field.key)) input.inputMode = 'decimal';
+      }
+      input.dataset.productField = field.key;
+      input.dataset.focusKey = `product-field:${index}:${field.key}`;
+      input.value = entry.requiredValues[field.key] || '';
+      input.setAttribute('aria-label', `${entry.productName || '새 제품'} ${field.label}`);
+      input.addEventListener('compositionstart', () => { composing = true; });
+      input.addEventListener('compositionend', () => { composing = false; schedulePlan(); });
+      const update = () => {
+        productValue(group, field.key, input.value);
+        if (field.key === 'size') {
+          const pair = readSizePair(input.value);
+          for (const key of ['widthMm', 'depthMm']) if (!Object.hasOwn(group.requiredValues, key)) {
+            const dimension = panel.querySelector(`[data-product-field="${key}"]`);
+            if (dimension) dimension.value = pair[key];
+          }
+        }
+        if (!composing) schedulePlan();
+      };
+      input.addEventListener(input.tagName === 'SELECT' ? 'change' : 'input', update);
+      label.append(element('span', '', field.label), input);
+      (intake || field.group === 'cafe24' || field.key === 'category' ? extraFields : fields).append(label);
+    }
+    extra.addEventListener('toggle', () => { group.fieldsOpen = extra.open; });
+    extra.open = group.fieldsOpen === true;
+    panel.append(fields, extra);
+    return panel;
   }
 
   function renderPlan() {
+    const policyWasOpen = table.querySelector('.bulk-product-policy')?.open === true;
     const nodes = [];
+    let selectedEditor = null;
     if (grouped.skipped.length) {
       nodes.push(element(
         'p',
@@ -1192,7 +1672,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       nodes.push(element('p', 'bulk-note', `이미지를 찾지 못한 CSV 제품 ${plan.unmatchedCsv.length}건 · ${plan.unmatchedCsv.slice(0, 4).join(', ')}`));
     }
     if (!plan.entries.length) {
-      nodes.push(element('p', 'factory-empty-state', '아직 고른 이미지가 없습니다.'));
+      nodes.push(element('p', 'factory-empty-state', '위에 제품명을 여러 줄로 넣어 목록을 만드세요. 목록에서 제품을 골라 사진과 필수값을 편집합니다.'));
       table.replaceChildren(...nodes);
       return;
     }
@@ -1200,8 +1680,23 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       const group = grouped.products[index];
       const card = element('div', 'bulk-product-card');
       card.dataset.state = entry.issues.length ? 'warn' : 'ready';
+      card.dataset.productIndex = String(index);
+      card.dataset.selected = String(index === selectedProductIndex);
 
       const head = element('div', 'bulk-card-head');
+      const commonTarget = document.createElement('input');
+      commonTarget.type = 'checkbox';
+      commonTarget.checked = selectedForCommon.has(group);
+      commonTarget.dataset.commonTarget = String(index);
+      commonTarget.setAttribute('aria-label', `${entry.productName || '이름 없는 제품'} 제품 선택`);
+      commonTarget.addEventListener('change', () => {
+        commonTarget.checked ? selectedForCommon.add(group) : selectedForCommon.delete(group);
+        invalidateConfirmation();
+        render();
+        queueWorkingSave();
+      });
+      head.append(commonTarget);
+      if (group.queueRequest) head.append(element('span', 'status-message', '추가 결과 확인 필요 · 같은 요청으로 다시 확인'));
       // 흠은 왼쪽 세로줄로만 알린다. 카드 전체를 물들이면 무엇이 문제인지가 아니라
       // 카드가 통째로 노래져서, 정작 어느 칸이 비었는지는 여전히 안 보인다.
       head.append(element('span', 'bulk-card-rail'));
@@ -1210,6 +1705,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       const nameInput = document.createElement('input');
       nameInput.type = 'text';
       nameInput.value = entry.productName;
+      nameInput.setAttribute('aria-label', `${index + 1}행 제품명`);
       nameInput.placeholder = '예: 슬라브 겹보 55x55cm';
       // 다시 그릴 때 이 칸을 찾아 초점을 되살리기 위한 표식.
       nameInput.dataset.focusKey = `product-name:${index}`;
@@ -1218,11 +1714,11 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       nameInput.addEventListener('compositionstart', () => { composing = true; });
       nameInput.addEventListener('compositionend', () => {
         composing = false;
-        if (group) group.productName = nameInput.value.trim();
+        if (group && !group.queued && !group.queueRequest && !busy && !restorePending) group.productName = nameInput.value.trim();
         schedulePlan();
       });
       nameInput.addEventListener('input', () => {
-        if (group) group.productName = nameInput.value.trim();
+        if (group && !group.queued && !group.queueRequest && !busy && !restorePending) group.productName = nameInput.value.trim();
         // 글자를 칠 때마다 다시 그리면 초점이 매번 나간다. 조합 중에는 세지 않는다.
         if (composing) return;
         schedulePlan();
@@ -1230,6 +1726,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       nameLabel.append(nameInput);
       head.append(nameLabel);
       head.append(element('span', 'bulk-card-summary', `사진 ${entry.images.length}장`));
+      if (policyRegistry && !policyError) head.append(element('span', 'bulk-policy-row-summary', inputPolicySummary(entry.queuedPolicySnapshot?.resolved || resolveInputPolicy(policyRegistry, policyRequestFor(entry)), 'row')));
       if (entry.matchedCsv) head.append(element('span', 'bulk-card-badge', 'CSV 값 적용'));
       // 모자란 값은 머리글에서 바로 읽힌다. 카드 맨 아래에 두면 스크롤해야 보인다.
       head.append(element('span', 'bulk-card-spacer'));
@@ -1238,17 +1735,95 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       const verdict = element(
         'span',
         'bulk-card-verdict',
-        entry.issues.length ? entry.issues.map(issue => ISSUE_LABELS[issue] || issue).join(' · ') : '준비됨',
+        entry.queued ? '작업큐에 추가됨' : entry.issues.length ? entry.issues.map(issue => ISSUE_LABELS[issue] || issue).join(' · ') : '큐 추가 준비됨',
       );
       verdict.dataset.tone = entry.issues.some(issue => BLOCKING_ISSUES.has(issue))
         ? 'blocked'
         : entry.issues.length ? 'warn' : 'ok';
       head.append(verdict);
+      const rowActions = element('div', 'bulk-row-actions');
+      const open = element('button', 'bulk-mini-action bulk-row-open', entry.queued ? '입력 내용 보기' : index === selectedProductIndex ? '편집 중' : '사진·필수값 편집');
+      open.type = 'button';
+      open.disabled = busy || restorePending;
+      open.setAttribute('aria-expanded', String(index === selectedProductIndex));
+      open.dataset.editProduct = String(index);
+      open.addEventListener('click', () => {
+        if (busy || restorePending) return;
+        const previous = grouped.products[selectedProductIndex];
+        if (previous && previous !== group) cancelProductSourceRequests(previous);
+        selectedProductIndex = index; renderPlan(); queueWorkingSave();
+      });
+      rowActions.append(open);
+      if (!entry.queued) {
+        const remove = element('button', 'bulk-mini-action', '입력 취소');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', `${entry.productName || '이름 없는 제품'} 입력 취소`);
+        let removeArmed = false;
+        const keep = element('button', 'bulk-mini-action', '유지');
+        keep.type = 'button';
+        keep.hidden = true;
+        keep.setAttribute('aria-label', `${entry.productName || '이름 없는 제품'} 입력 유지`);
+        keep.addEventListener('click', () => {
+          renderPlan();
+          setStatus(`${entry.productName || '이름 없는 제품'} 입력을 유지했습니다.`);
+        });
+        remove.addEventListener('click', () => {
+          if (!removeArmed) {
+            removeArmed = true;
+            keep.hidden = false;
+            remove.textContent = '확인 · 입력 취소';
+            remove.setAttribute('aria-label', `${entry.productName || '이름 없는 제품'} 입력 취소 확인`);
+            setStatus(`${entry.productName || '이름 없는 제품'}의 입력과 사진 ${entry.images.length}장만 지웁니다. 「확인 · 입력 취소」 또는 「유지」를 선택하세요.`, 'warn');
+            return;
+          }
+          selectedForCommon.delete(group);
+          grouped.products.splice(index, 1);
+          selectedProductIndex = Math.max(0, Math.min(selectedProductIndex, grouped.products.length - 1));
+          rebuild();
+          setStatus(`${entry.productName || '이름 없는 제품'} 입력만 취소했습니다. 다른 제품은 보존했습니다.`, 'ok');
+        });
+        rowActions.append(remove, keep);
+      }
+      head.append(rowActions);
       card.append(head);
 
-      card.append(renderImageZones(group));
+      if (index === selectedProductIndex) {
+        selectedEditor = element('section', 'bulk-selected-editor');
+        selectedEditor.id = 'bulk-selected-editor';
+        selectedEditor.dataset.state = entry.queued ? 'queued' : 'editing';
+        selectedEditor.append(element('h3', '', `${entry.queued ? '입력 내용 보기' : '선택 제품 편집'} · ${entry.productName || '제품명을 입력하세요'}`));
+        const editor = element('div', 'bulk-product-editor');
+        editor.append(renderProductFields(entry, group, index), renderImageZones(group));
+        selectedEditor.append(editor);
+        if (policyRegistry && !policyError) {
+          const decisions = document.createElement('details');
+          decisions.className = 'bulk-product-policy';
+          decisions.open = policyWasOpen;
+          decisions.append(element('summary', '', entry.queued ? '이 제품의 확정 공정 설정' : '이 제품만 공정 설정 변경'));
+          decisions.append(renderInputPolicyGrid({ registry: policyRegistry, overrides: group.decisionOverrides || {}, resolved: entry.queuedPolicySnapshot?.resolved || resolveInputPolicy(policyRegistry, policyRequestFor(entry)), product: true, disabled: entry.queued || Boolean(group.queueRequest) || busy || restorePending, onChange(id, mode) {
+            if (group.queued || group.queueRequest || busy || restorePending) return;
+            group.decisionOverrides = setInputDecision(group.decisionOverrides || {}, id, mode, policyRegistry.decisionPointIds);
+            rebuild();
+          } }));
+          selectedEditor.append(decisions);
+        }
+        if (entry.queued) selectedEditor.append(element('p', 'status-message', '입력 원본을 보관 중입니다. 이후 편집은 작업큐에서 확인하세요.'));
+        if (entry.queued || group.queueRequest || busy || restorePending) {
+          for (const control of selectedEditor.querySelectorAll('input, select, textarea, button:not(.bulk-thumb)')) control.disabled = true;
+        }
+      }
+      if (entry.queued) {
+        card.dataset.state = 'queued';
+      }
+      if (entry.queued || busy || restorePending) {
+        for (const control of card.querySelectorAll('input, select, .bulk-move-action, .bulk-mini-action:not(.bulk-row-open)')) control.disabled = true;
+      }
+      if (group.queueRequest) {
+        for (const control of card.querySelectorAll('input:not([data-common-target]), select, .bulk-move-action, .bulk-mini-action:not(.bulk-row-open)')) control.disabled = true;
+      }
       nodes.push(card);
     }
+    if (selectedEditor) nodes.push(selectedEditor);
     table.replaceChildren(...nodes);
   }
 
@@ -1269,16 +1844,18 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     confirmBox.replaceChildren();
     if (!confirmState) return;
     const { entries } = confirmState;
-    confirmBox.append(element('strong', '', `${entries.length}건을 아래 설정으로 투입합니다`));
+    confirmBox.append(element('strong', '', `작업큐에 추가할 제품 ${entries.length}개 · 마지막 확인`));
+    confirmBox.append(element('p', 'status-message', `${confirmState.scope === 'selected' ? '선택 제품' : '준비된 전체'} · ${entries.length}개 추가 / 미준비·기투입 ${confirmState.excluded}개 제외`));
 
     const settings = document.createElement('dl');
     settings.className = 'bulk-confirm-settings';
     const modelLabel = imageModelSelect.selectedOptions[0]?.textContent.trim() || imageModelSelect.value || '지정 안 됨';
     settings.append(...labelledConfirmRow('이미지 생성 모델', modelLabel));
     const presetLabel = policySelect.selectedOptions[0]?.textContent.trim() || policySelect.value;
-    settings.append(...labelledConfirmRow('자동화 방식', presetLabel));
-    const decisionModel = String(document.getElementById('model-select')?.value || '').trim();
-    const decisionEffort = String(document.getElementById('reasoning-select')?.value || '').trim();
+    settings.append(...labelledConfirmRow('공통 기본 자동화 방식', presetLabel));
+    const judgment = confirmState.judgment;
+    const decisionModel = String(judgment?.model || document.getElementById('model-select')?.value || '').trim();
+    const decisionEffort = String(judgment?.reasoningEffort || document.getElementById('reasoning-select')?.value || '').trim();
     settings.append(...labelledConfirmRow(
       '판단 모델 (경쟁사·색상 등 AI 판단)',
       decisionModel && decisionEffort
@@ -1286,7 +1863,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
         : '자동판단 화면에서 설정되지 않음 — 자동 판단이 필요한 항목에서 막힐 수 있습니다',
     ));
     confirmBox.append(settings);
-    confirmBox.append(element('p', 'bulk-automation-copy', AUTOMATION_PRESET_COPY[policySelect.value] || ''));
+    confirmBox.append(element('p', 'bulk-automation-copy', '제품별 설정이 공통 기본보다 우선합니다. 공통·제품별 공정 설정을 반영한 실제 적용 방식은 아래 제품별 요약을 확인하세요.'));
 
     const flagged = entries.filter(entry => looksLikeCameraFileName(entry.productName));
     if (flagged.length) {
@@ -1304,57 +1881,74 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     for (const entry of entries) {
       const li = document.createElement('li');
       li.append(element('span', '', entry.productName));
+      li.append(element('small', 'bulk-policy-confirm-summary', inputPolicySummary(resolveInputPolicy(policyRegistry, policyRequestFor(entry)))));
+      const request = confirmState.groups[entries.indexOf(entry)].queueRequest;
+      if (request) li.append(element('small', 'status-message', `기존 요청 확인 · 이미지 모델 ${request.payload.imageModel || '지정 안 됨'} · 판단 ${request.judgment?.model || '지정 안 됨'} · 새 작업을 만들지 않습니다.`));
       if (looksLikeCameraFileName(entry.productName)) li.append(element('span', 'bulk-confirm-flag', '파일명 그대로'));
       list.append(li);
     }
     confirmBox.append(list);
 
     const row = element('div', 'bulk-confirm-actions');
+    const confirm = element('button', 'board-action primary', `확인 · 작업큐에 ${entries.length}개 추가`);
+    confirm.type = 'button';
+    confirm.dataset.action = 'submit';
+    confirm.dataset.queueScope = confirmState.scope;
+    confirm.id = 'bulk-queue-confirm-submit';
     const cancel = element('button', 'board-action ghost', '다시 확인');
     cancel.type = 'button';
     cancel.addEventListener('click', () => { confirmState = null; render(); });
-    row.append(cancel);
+    row.append(confirm, cancel);
     confirmBox.append(row);
   }
 
   function render() {
+    renderPolicyControls();
     if (!plan.ready) confirmState = null;
-    submit.textContent = confirmState
-      ? '이 설정으로 투입'
-      : plan.ready ? `확인하고 ${plan.ready}건 투입` : '작업 큐에 투입';
-    submit.disabled = busy || plan.ready === 0;
+    const selectedCount = grouped.products.filter(group => selectedForCommon.has(group)).length;
+    const selectedReadyCount = queueRows('selected').length;
+    submit.textContent = '입력 완료 제품 모두 추가';
+    submitSelected.textContent = '선택한 제품 추가';
+    submit.disabled = busy || restorePending || inputReads > 0 || plan.ready === 0 || Boolean(policyError);
+    submitSelected.disabled = busy || restorePending || inputReads > 0 || selectedReadyCount === 0 || Boolean(policyError);
+    for (const control of [newName, addProduct, pasteInput, pasteAdd, imageInput, csvInput, imageModelSelect, policySelect, ...defaultsBox.querySelectorAll('input')]) {
+      control.disabled = busy || restorePending;
+    }
     reset.disabled = busy || (!grouped.products.length && !csvRows.length);
     renderConfirmBox();
     // 막힌 건이 있으면 그것부터 말한다. 무엇을 채워야 버튼이 열리는지 모르면
     // 사람은 회색 버튼만 보고 고장으로 읽는다.
-    hint.textContent = plan.blocked
-      ? `${plan.blocked}건은 지금 상태로 투입할 수 없습니다. 카드 오른쪽에 적힌 항목을 채우거나 고쳐 주세요.`
+    hint.textContent = `선택한 ${selectedCount}개 중 ${selectedReadyCount}개 추가 가능 · 전체 ${plan.ready}개 추가 가능. `
+      + (plan.blocked
+      ? `${plan.blocked}개는 필수 정보가 빠져 제외됩니다. 제품 옆 안내를 확인해주세요.`
       : plan.warned
-        ? `${plan.warned}건은 값이 비어 있어도 투입은 됩니다. 조립공장에서 채우게 됩니다.`
+        ? '추가 정보는 조립공장에서 입력할 수 있습니다.'
         : plan.ready
-          ? '파일 이름이 제품명이 됩니다. 같은 이름_숫자 는 한 제품의 여러 장으로 묶입니다.'
-          : '';
+          ? ''
+          : '');
     renderStatus();
+    renderCommonControls();
     renderColorRule();
     renderBatchBar();
     renderPlan();
   }
 
-  async function submitPlan() {
+  async function submitPlan(confirmed) {
     // 차단 흠이 있는 건은 보내지 않는다. image_missing 만 거르면 색상명 없는 옵션 사진이
     // 조용히 기본 사진으로 강등된 채 수락되고, 기본 사진 없는 건은 서버 422 로 튕긴다 —
     // 버튼의 'N건 투입' 과 실제 전송 건수도 어긋난다.
-    const entries = plan.entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue)));
-    if (!entries.length) return;
+    const { entries, groups } = confirmed;
+    if (!entries.length || confirmed.version !== inputVersion || groups.some(group => !grouped.products.includes(group) || group.queued)) return;
     confirmState = null;
     busy = true;
     const batchId = `batch-bulk-${entries.length}-${entries[0].productName}`.slice(0, 60);
-    const imageModel = imageModelSelect.value || '';
+    const imageModel = confirmed.imageModel;
     const results = [];
     progress = { done: 0, total: entries.length, current: entries[0].productName };
     render();
     try {
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
+      const group = groups[index];
       progress = { done: results.length, total: entries.length, current: entry.productName };
       renderStatus();
       try {
@@ -1365,21 +1959,35 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
           sha256s.push(await digestOf(image.file));
         }
         // 큐의 직접 입력 폼과 같은 규칙: 제품마다 정책을 잠그고, 잠금 여부가 auto/manual 을 정한다.
-        const policySnapshot = await lockPolicy(entry.productName, batchId);
+        const request = group.queueRequest;
+        const requestBatchId = request?.payload.batchId || batchId;
+        const policySnapshot = request?.payload.policySnapshot || await lockPolicy(entry, requestBatchId);
+        const policyRequest = policyRequestFor(entry, requestBatchId);
+        assertInputPolicySnapshot(policySnapshot, policyRequest, resolveInputPolicy(policyRegistry, policyRequest));
         const payload = buildProductPayload(entry, {
-          batchId, imageModel, dataUrls, sha256s,
+          batchId: requestBatchId, imageModel, dataUrls, sha256s,
           mode: policySnapshot?.locked === true ? 'auto' : 'manual',
           policySnapshot,
         });
+        const savedPayload = { ...payload, inputImages: payload.inputImages.map(({ dataUrl, ...image }) => image) };
+        if (request && (JSON.stringify(request.payload) !== JSON.stringify(savedPayload)
+          || JSON.stringify(request.judgment) !== JSON.stringify(confirmed.judgment))) {
+          throw new Error('미해결 요청의 설정과 다릅니다. 기존 모델·입력 설정으로 되돌린 뒤 같은 요청을 확인하세요.');
+        }
+        group.queueRequest ||= { payload: savedPayload, judgment: confirmed.judgment };
+        if (!(await saveWorkingState({ submission: true }))) throw new Error('전송 전 입력 보존을 확인하지 못했습니다. 저장 상태를 확인한 뒤 같은 요청을 다시 확인하세요.');
+        if (confirmed.version !== inputVersion) throw new Error('입력이 바뀌었습니다. 전송 대상을 다시 확인하세요.');
         const queued = await requestWithDeadline('/api/factory/jobs', { method: 'POST', body: JSON.stringify(payload) });
-        const queuedJob = queued?.job && typeof queued.job === 'object' && !Array.isArray(queued.job)
-          ? queued.job
-          : {};
-        results.push({
-          productName: entry.productName,
-          jobId: String(queuedJob.jobId || ''),
-          status: 'queued',
-        });
+        const queuedJob = readBulkQueueReceipt(queued, payload);
+        if (group) {
+          group.queued = true;
+          group.queuedJobId = String(queuedJob.jobId || '');
+          group.requiredValues = { ...entry.requiredValues };
+          group.queuedPolicySnapshot = policySnapshot;
+          delete group.queueRequest;
+        }
+        if (!(await saveWorkingState({ submission: true }))) throw new Error('작업큐 수락은 확인했지만 저장을 확인하지 못했습니다. 새로 추가하지 말고 기존 작업큐를 확인하세요.');
+        results.push({ productName: entry.productName, jobId: String(queuedJob.jobId || ''), status: 'queued' });
       } catch (error) {
         results.push({
           productName: entry.productName,
@@ -1402,7 +2010,6 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       summary.tone,
     );
     if (summary.queued) {
-      grouped = { products: [], skipped: [] };
       imageInput.value = '';
       const jobIds = results
         .filter(item => item.status === 'queued')
@@ -1417,6 +2024,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       }));
     }
     rebuild();
+    if (summary.queued && !failed.length) window.controlTowerMenu?.activate('queue');
   }
 
   async function onImagePick() {
@@ -1428,10 +2036,12 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     // 그리고 통째로 갈아끼우지 않고 합친다 — 카드에서 색상 사진을 붙이고 이름을 다듬은
     // 뒤에 ① 로 사진을 더 고르면, 그 손질이 전부 날아가면 안 된다.
     const incoming = groupImageFiles([...(imageInput.files || [])]);
+    restoreCancelled = true;
     for (const product of incoming.products) {
-      const existing = grouped.products.find(item => item.productName === product.productName);
+      const existing = grouped.products.find(item => !item.queued && item.productName === product.productName);
+      if (existing?.queueRequest) { setStatus('미해결 제품의 사진은 같은 요청 확인 후 바꿀 수 있습니다.', 'warn'); continue; }
       if (!existing) {
-        grouped.products.push(product);
+        grouped.products.push({ ...product, inheritDefaults: false });
         continue;
       }
       for (const image of product.images) {
@@ -1457,6 +2067,9 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       rebuild();
       return;
     }
+    inputReads += 1;
+    invalidateConfirmation();
+    render();
     try {
       const parsed = parseIntakeCsv(await file.text());
       csvRows = parsed.rows;
@@ -1466,24 +2079,47 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
       csvRows = [];
       csvErrors = [];
       setStatus(`CSV 를 읽지 못했습니다 · ${String(error?.message || error)}`, 'error');
+    } finally {
+      inputReads -= 1;
     }
     rebuild();
   }
 
-  function onClick(event) {
+  async function onClick(event) {
     const target = event.target instanceof Element ? event.target.closest('[data-action]') : null;
-    if (!target || busy) return;
+    if (!target || busy || restorePending || inputReads || composing) return;
     if (target.dataset.action === 'submit') {
-      if (!confirmState) {
-        const entries = plan.entries.filter(entry => !entry.issues.some(issue => BLOCKING_ISSUES.has(issue)));
-        if (!entries.length) return;
-        confirmState = { entries };
+      if (confirming) return;
+      if (planTimer) { clearTimeout(planTimer); planTimer = null; rebuild(); }
+      const version = inputVersion;
+      const scope = target.dataset.queueScope === 'selected' ? 'selected' : 'all';
+      confirming = true;
+      let judgment;
+      try { judgment = await getJudgmentSettings?.(); }
+      catch (error) { setStatus(`판단 설정 확인 실패 · ${error.message}`, 'error'); return; }
+      finally { confirming = false; }
+      if (planTimer) { clearTimeout(planTimer); planTimer = null; rebuild(); }
+      if (!confirmState || confirmState.scope !== scope || version !== inputVersion) {
+        const rows = queueRows(scope);
+        if (!rows.length) return;
+        const entries = rows.map(({ entry }) => ({ ...entry, requiredValues: { ...entry.requiredValues },
+          decisionOverrides: { ...entry.decisionOverrides }, images: entry.images.map(image => ({ ...image })) }));
+        const imageModel = imageModelSelect.value || '';
+        confirmState = { entries, groups: rows.map(row => row.group), scope, version: inputVersion, judgment, imageModel,
+          excluded: (scope === 'selected' ? grouped.products.filter(group => selectedForCommon.has(group)).length : plan.entries.length) - entries.length };
         render();
         return;
       }
-      void submitPlan();
+      if (JSON.stringify(confirmState.judgment) !== JSON.stringify(judgment)) {
+        confirmState.judgment = judgment;
+        setStatus('원본 판단 모델 설정이 바뀌었습니다. 변경된 설정을 확인하고 다시 추가하세요.', 'warning');
+        render();
+        return;
+      }
+      void submitPlan(confirmState);
     }
     if (target.dataset.action === 'reset') {
+      selectedForCommon.clear();
       grouped = { products: [], skipped: [] };
       csvRows = [];
       csvErrors = [];
@@ -1529,6 +2165,8 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   root.addEventListener('click', onClick);
   rebuild();
   void restoreWorkingState();
+  void refreshCategories();
+  void loadInputPolicy();
 
   return () => {
     imageInput.removeEventListener('change', onImagePick);

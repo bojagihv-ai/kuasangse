@@ -2,8 +2,9 @@
 # Save as UTF-8 with BOM for Windows PowerShell 5.1
 param(
   [switch]$WorkerOnly,
+  [switch]$BackendOnly,
   [ValidateRange(1, 65535)]
-  [int]$BackendPort = 5050,
+  [int]$BackendPort = 43030,
   [ValidateRange(1, 65535)]
   [int]$ControlTowerPort = 41009,
   [string]$ExpectedWorkerBuildId = ''
@@ -12,6 +13,15 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 try { $Host.UI.RawUI.WindowTitle = 'Detail Page AI - starting' } catch {}
 
+$launcherCreated = $false
+$launcherMutex = New-Object Threading.Mutex($false, ('Local\KuaDetailLauncher-' + $BackendPort + '-' + $ControlTowerPort), [ref]$launcherCreated)
+if (-not $launcherCreated) {
+  $launcherMutex.Dispose()
+  Write-Host '  조립공장 실행이 이미 진행 중입니다. 기존 실행을 기다립니다.'
+  exit 0
+}
+try {
+
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Root) { $Root = $PSScriptRoot }
 if (-not $Root) { $Root = (Get-Location).Path }
@@ -19,7 +29,7 @@ $Backend = Join-Path $Root 'backend'
 $ControlTowerBase = 'http://127.0.0.1:' + $ControlTowerPort
 $EncodedControlTowerBase = [uri]::EscapeDataString($ControlTowerBase)
 $NormalAppUrl = 'http://127.0.0.1:8081/app.html'
-$WorkerAppUrl = 'http://127.0.0.1:8081/app.html?batchWorker=1&controlTowerBase=' + $EncodedControlTowerBase
+$WorkerAppUrl = 'http://127.0.0.1:8081/app.html?batchWorker=1&controlTowerBase=' + $EncodedControlTowerBase + '&launch=' + [Guid]::NewGuid().ToString('N')
 $BackendBaseUrl = 'http://127.0.0.1:' + $BackendPort
 $SinhwaHubRoot = if ($env:SINHWA_HUB_ROOT) {
   $env:SINHWA_HUB_ROOT
@@ -36,6 +46,7 @@ if ($ExpectedWorkerBuildId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
   Write-Host '  ERROR: runtime manifest build ID is invalid.'
   exit 1
 }
+$WorkerShellUrl = 'http://127.0.0.1:8081/src/menus/factory/factory-menu-shell.mjs?v=' + [uri]::EscapeDataString($ExpectedWorkerBuildId)
 
 $SachyApi = $env:SACHYOSANGSE_API_DIR
 if (-not $SachyApi) {
@@ -96,6 +107,18 @@ function Test-HttpReady {
     $r = Invoke-WebRequest -Uri $Url -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
     return $r.StatusCode -lt 500
   } catch {}
+  return $false
+}
+
+function Wait-HttpSuccess {
+  param([string]$Url, [int]$MaxTries = 20, [int]$DelaySec = 1)
+  for ($i = 1; $i -le $MaxTries; $i++) {
+    try {
+      $r = Invoke-WebRequest -Uri $Url -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+      if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 300) { return $true }
+    } catch {}
+    Start-Sleep -Seconds $DelaySec
+  }
   return $false
 }
 
@@ -219,6 +242,25 @@ if ($backendOk -and -not (Test-SinhwaBridgeConfigured)) {
   Write-Host '  It was left running. Stop only the known owning process, then run this launcher again.'
   exit 1
 }
+if ($BackendOnly) {
+  if (-not $backendOk) {
+    $backendCmd = 'title 조립공장 백엔드 ' + $BackendPort + ' - kuasangse && cd /d "' + $Backend + '" && set SSL_CERT_FILE=' + $CertFile + ' && "' + $Waitress + '" --call --listen=127.0.0.1:' + $BackendPort + ' --threads=16 app:create_app'
+    $serviceKey = Get-PdpControlServiceKey
+    $serviceKeyWasPresent = Test-Path -LiteralPath 'Env:SINHWA_PDP_SERVICE_KEY'
+    $originalServiceKey = [Environment]::GetEnvironmentVariable('SINHWA_PDP_SERVICE_KEY', [EnvironmentVariableTarget]::Process)
+    try {
+      if ($serviceKey) { $env:SINHWA_PDP_SERVICE_KEY = $serviceKey }
+      Start-Process -FilePath 'cmd.exe' -ArgumentList ('/k ' + $backendCmd) -WindowStyle Hidden
+    } finally {
+      Restore-EnvironmentVariable -Name 'SINHWA_PDP_SERVICE_KEY' -WasPresent $serviceKeyWasPresent -Value $originalServiceKey
+      $serviceKey = $null
+    }
+    $backendOk = Wait-HttpReady -Url ($BackendBaseUrl + '/api/sections') -MaxTries 45 -DelaySec 1
+  }
+  if (-not $backendOk) { exit 1 }
+  Write-Host ('  Backend ready on ' + $BackendPort + '. No worker, frontend, or dependency launcher was started.')
+  exit 0
+}
 $sinhwaHubOk = Ensure-SinhwaHubReady
 
 # [0] API Hub (4321) - required for GPT OAuth / Cafe24 Control / connectors
@@ -248,7 +290,7 @@ if ($sachyApiOk) {
   Write-Host '  [1/4] sachyosangse API (4000) already running'
 } elseif ($SachyApi -and (Test-Path $SachyApi)) {
   Write-Host '  [1/4] sachyosangse API (4000)...'
-  $apiArgs = '/k cd /d "' + $SachyApi + '" && pnpm dev'
+  $apiArgs = '/k title 사쵸상세 API 4000 - sachyosangse && cd /d "' + $SachyApi + '" && pnpm dev'
   Start-Process -FilePath 'cmd.exe' -ArgumentList $apiArgs -WindowStyle Minimized
 } else {
   Write-Host '  [1/4] sachyosangse API path missing - skip'
@@ -258,7 +300,7 @@ if ($backendOk) {
   Write-Host ('  [2/4] Backend (' + $BackendPort + ') already running')
 } else {
   Write-Host ('  [2/4] Backend (' + $BackendPort + ', threads=16) starting...')
-  $backendCmd = 'cd /d "' + $Backend + '" && set SSL_CERT_FILE=' + $CertFile + ' && "' + $Waitress + '" --call --listen=127.0.0.1:' + $BackendPort + ' --threads=16 app:create_app'
+  $backendCmd = 'title 조립공장 백엔드 ' + $BackendPort + ' - kuasangse && cd /d "' + $Backend + '" && set SSL_CERT_FILE=' + $CertFile + ' && "' + $Waitress + '" --call --listen=127.0.0.1:' + $BackendPort + ' --threads=16 app:create_app'
   $serviceKey = Get-PdpControlServiceKey
   $serviceKeyWasPresent = Test-Path -LiteralPath 'Env:SINHWA_PDP_SERVICE_KEY'
   $originalServiceKey = [Environment]::GetEnvironmentVariable(
@@ -269,7 +311,7 @@ if ($backendOk) {
     if ($serviceKey) {
       $env:SINHWA_PDP_SERVICE_KEY = $serviceKey
     }
-    Start-Process -FilePath 'cmd.exe' -ArgumentList ('/k ' + $backendCmd) -WindowStyle Minimized
+    Start-Process -FilePath 'cmd.exe' -ArgumentList ('/k ' + $backendCmd) -WindowStyle Hidden
   } finally {
     Restore-EnvironmentVariable -Name 'SINHWA_PDP_SERVICE_KEY' -WasPresent $serviceKeyWasPresent -Value $originalServiceKey
     $serviceKey = $null
@@ -316,6 +358,17 @@ Write-Host $(if ($WorkerOnly) { '  Opening background worker...' } else { '  Ope
 # and add 127.0.0.1. Turning Memory Saver off entirely is not required.
 Write-Host '  NOTE: add 127.0.0.1 to Chrome Settings > Performance > always-active sites,'
 Write-Host '        otherwise Chrome may suspend the minimized worker window mid-run.'
+$previousWorkerSessionId = ''
+if ($WorkerOnly) {
+  try {
+    $previousFactoryState = Invoke-RestMethod -Uri ($ControlTowerBase + '/api/factory/state') -TimeoutSec 2 -ErrorAction Stop
+    $previousWorkerSessionId = [string]$previousFactoryState.workerSession.sessionId
+  } catch {}
+  if (-not (Wait-HttpSuccess -Url $WorkerShellUrl -MaxTries 20 -DelaySec 1)) {
+    Write-Host ('  ERROR: factory worker module is not ready: ' + $WorkerShellUrl)
+    exit 1
+  }
+}
 if ($Chrome) {
   Start-Process -FilePath $Chrome -ArgumentList @('--new-window', '--start-minimized', $WorkerAppUrl)
   if (-not $WorkerOnly) {
@@ -334,10 +387,13 @@ if ($WorkerOnly) {
   for ($attempt = 0; $attempt -lt 40; $attempt++) {
     try {
       $factoryState = Invoke-RestMethod -Uri ($ControlTowerBase + '/api/factory/state') -TimeoutSec 2 -ErrorAction Stop
+      $currentWorkerSessionId = [string]$factoryState.workerSession.sessionId
       if (
         $factoryState.connected -eq $true -and
         $factoryState.expectedWorkerBuildId -eq $ExpectedWorkerBuildId -and
-        $factoryState.workerSession.buildId -eq $ExpectedWorkerBuildId
+        $factoryState.workerSession.buildId -eq $ExpectedWorkerBuildId -and
+        $currentWorkerSessionId -and
+        $currentWorkerSessionId -ne $previousWorkerSessionId
       ) {
         $workerReady = $true
         break
@@ -355,3 +411,6 @@ Write-Host ''
 Write-Host '  Done. Servers keep running in background.'
 Write-Host ''
 Start-Sleep -Seconds 2
+} finally {
+  $launcherMutex.Dispose()
+}

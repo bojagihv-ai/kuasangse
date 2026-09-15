@@ -63,6 +63,10 @@ function normalizeCandidate(value) {
   return {
     id,
     assetId: text(source.assetId || id),
+    kind: text(source.kind),
+    label: text(source.label || source.title),
+    summary: text(source.summary),
+    documentArchiveId: text(source.documentArchiveId),
     thumbnailUrl: text(source.thumbnailUrl || source.thumbnailRef),
     digest: text(source.digest),
     source: text(source.source),
@@ -86,6 +90,8 @@ function normalizeStage(value) {
     key,
     status: text(source.status || (candidates.length ? 'waiting_manual' : 'empty')),
     selectedId,
+    selectedIds: [...new Set((Array.isArray(source.selectedIds) ? source.selectedIds : [selectedId]).map(text).filter(Boolean))]
+      .filter(id => candidates.some(candidate => candidate.id === id)),
     updatedAt: text(source.updatedAt),
     candidates,
   };
@@ -100,6 +106,7 @@ function normalizeSession(value) {
     runId: text(source.runId || source.currentRunId),
     inputFingerprint: text(source.inputFingerprint || source.expectedInputFingerprint),
     revision: integer(source.revision ?? source.workfileRevision),
+    storeRevision: Number.isInteger(source.storeRevision) && source.storeRevision >= 0 ? source.storeRevision : null,
     workfileName: text(source.workfileName),
     workfileSource: text(source.workfileSource),
     workfileSha256: text(source.workfileSha256),

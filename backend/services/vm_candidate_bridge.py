@@ -269,6 +269,9 @@ def start_vm() -> dict:
     if executable is None:
         return {"ok": False, "started": False, "vmPowerState": state,
                 "message": "VirtualBox(VBoxManage)를 찾지 못해 VM 을 켤 수 없습니다."}
+    if state != "poweroff":
+        return {"ok": False, "started": False, "vmPowerState": state,
+                "message": "VM 전원이 꺼진 상태인지 확인하지 못해 시작을 중단했습니다. VM 상태를 다시 확인해 주세요."}
     vm_name = str(os.getenv("KUASANGSE_VM_NAME", _DEFAULT_VM_NAME)).strip() or _DEFAULT_VM_NAME
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:

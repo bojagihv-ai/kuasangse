@@ -8,7 +8,7 @@ const css = fs.readFileSync(APP_HTML, 'utf8');
 
 function rule(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return css.match(new RegExp(`${escaped}\\{[^}]*\\}`))?.[0] || '';
+  return css.match(new RegExp(`(?:^|[{}\\n])\\s*(${escaped}\\{[^}]*\\})`))?.[1] || '';
 }
 
 test('TASK8-RESPONSIVE-CJK: 전역 안내·제목·분석 카드가 한글 음절을 임의로 쪼개지 않는다', () => {
@@ -95,6 +95,25 @@ test('TASK8-RESPONSIVE-ARCHIVE: 로컬 보관함은 긴 경로가 있어도 본�
   assert.match(panelRule, /grid-template-columns:minmax\(0,1fr\)/);
   assert.match(panelRule, /min-width:0/);
   assert.match(childRule, /min-width:0/);
+});
+
+test('TASK8-RESPONSIVE-ARCHIVE: gallery grid track이 그룹의 intrinsic minimum으로 넘치지 않는다', () => {
+  const galleryRule = rule('.factory-local-archive-gallery');
+  assert.notEqual(galleryRule, '', 'local archive gallery CSS rule is missing');
+  assert.match(
+    galleryRule,
+    /grid-template-columns:minmax\(0,1fr\)/,
+    'the implicit auto track expands to the 1218px group min-content width at a 720px gallery; bound its minimum to zero',
+  );
+});
+
+test('TASK8-RESPONSIVE-ARCHIVE: 카드 본문이 줄어들어 동작 버튼을 카드 안에서 줄바꿈한다', () => {
+  assert.match(
+    rule('.factory-local-archive-body'),
+    /grid-template-columns:minmax\(0,1fr\)/,
+    'archive body needs a zero-minimum track so folder actions can wrap within its card column',
+  );
+  assert.match(rule('.factory-local-archive-actions'), /flex-wrap:wrap/);
 });
 
 test('TASK8-RESPONSIVE-CJK: 모바일 현재 화면 배너와 모델 크기 문구는 어절을 보존한다', () => {

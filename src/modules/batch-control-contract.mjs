@@ -1,3 +1,4 @@
+import { FactoryControlCommandError, hydrationPayload, tabCommandPayload } from './factory-control-payloads.mjs';
 import {
   BatchWorkerContractError,
   hasSensitiveProductField,
@@ -138,6 +139,7 @@ export function validateOrder(order) {
         'composeFactoryCut',
         // 막힌 작업을 화면에서 되살리는 길. 잘못 붙은 Cafe24 대상을 떼거나 섹션을 다시 만든다.
         'recoverFactoryProduct',
+        'invokeFactoryTabCommand',
       ].includes(order.command.name)
     ) {
       throw new BatchWorkerContractError('factory_control_command_version_unsupported');
@@ -152,6 +154,17 @@ export function validateOrder(order) {
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
     const payload = order.command.payload;
+    if (order.command.name === 'invokeFactoryTabCommand') {
+      let validated;
+      try { validated = tabCommandPayload(payload); }
+      catch (error) { throw new BatchWorkerContractError(error.code || 'factory_tab_command_payload_invalid'); }
+      if (payload.productId !== order.productId || payload.productKey !== order.productKey
+        || payload.expectedRunId !== order.currentRunId || payload.expectedRevision !== order.expectedWorkfileRevision
+        || payload.idempotencyKey !== order.idempotencyKey) {
+        throw new BatchWorkerContractError('factory_control_identity_mismatch');
+      }
+      return Object.freeze({ ...order, command: Object.freeze({ ...order.command, payload: validated }) });
+    }
     if (order.command.name === 'composeFactoryCut') {
       if (!text(payload.jobId)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
       if (!text(payload.stageKey)) throw new BatchWorkerContractError('factory_control_command_payload_invalid');
@@ -166,13 +179,7 @@ export function validateOrder(order) {
       return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
     }
     if (order.command.name === 'registerFactoryCafe24') {
-      if (!text(payload.jobId)) {
-        throw new BatchWorkerContractError('factory_control_field_missing:jobId');
-      }
-      if (payload.cafe24 !== undefined && !record(payload.cafe24)) {
-        throw new BatchWorkerContractError('factory_control_command_payload_invalid');
-      }
-      return Object.freeze({ ...order, command: Object.freeze({ ...order.command }) });
+      throw new BatchWorkerContractError('factory_cafe24_approval_required');
     }
     if (isProductRun) {
       validateProductRunPayload(payload);
@@ -212,33 +219,13 @@ export function validateOrder(order) {
     ) {
       throw new BatchWorkerContractError('factory_workfile_command_version_unsupported');
     }
-    const payload = order.command.payload;
-    if (
-      payload.contractVersion !== BATCH_CONTROL_WORKFILE_COMMAND_VERSION
-      || payload.capabilityVersion !== BATCH_CONTROL_WORKFILE_COMMAND_VERSION
-    ) {
-      throw new BatchWorkerContractError('factory_workfile_command_version_unsupported');
+    try {
+      hydrationPayload(order.command.payload, order);
+    } catch (error) {
+      if (error instanceof FactoryControlCommandError) throw new BatchWorkerContractError(error.code);
+      throw error;
     }
-    requireFields(payload, ['fileName', 'workfileText', 'expectedSha256', 'expectedWorkspaceId',
-      'expectedProductId', 'expectedProductKey', 'expectedRunId', 'idempotencyKey'],
-    'factory_workfile_field_missing');
-    if (
-      (payload.expectedInputFingerprint !== undefined && !text(payload.expectedInputFingerprint))
-      ||
-      !/^[a-f0-9]{64}$/u.test(text(payload.expectedSha256).toLocaleLowerCase('en-US'))
-      || !Number.isInteger(payload.expectedWorkfileRevision)
-      || payload.expectedWorkfileRevision < 0
-    ) {
-      throw new BatchWorkerContractError('factory_workfile_identity_invalid');
-    }
-    if (
-      payload.expectedProductId !== order.productId
-      || payload.expectedProductKey !== order.productKey
-      || payload.expectedRunId !== order.currentRunId
-      || payload.expectedWorkfileRevision !== order.expectedWorkfileRevision
-      || payload.idempotencyKey !== order.idempotencyKey
-      || order.stageId !== 'workfile-hydration'
-    ) {
+    if (order.stageId !== 'workfile-hydration') {
       throw new BatchWorkerContractError('factory_workfile_identity_mismatch');
     }
   }

@@ -1,8 +1,11 @@
+import { deriveAssemblyWorkbench } from './production-workbench-model.mjs?currentProductTruth=5';
 const text = value => String(value ?? '').trim();
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
 const STAGES = Object.freeze([
-  ['db', '제품·입력', ''],
+  ['db', 'DB 확정', 'sinhwa_db_product'],
+  ['required_fields', '필수값', 'required_field_candidate'],
+  ['competitors', '경쟁사', 'competitor_product'],
   ['representative', '대표 이미지', 'representative_image'],
   ['size', '사이즈', 'size_image'],
   ['option_color', '옵션·색상', 'option_image'],
@@ -12,8 +15,12 @@ const STAGES = Object.freeze([
   ['cafe24', 'Cafe24', ''],
 ]);
 
-function stageFor(job) {
-  const stageKey = text(job.stageKey);
+function stageFor(job, current = {}) {
+  const progress = record(record(current).progress || current);
+  const rawStageKey = text(job.stageKey || progress.stageKey);
+  const stageKey = rawStageKey === 'export' || rawStageKey === 'cafe24_preflight' || rawStageKey === 'registration'
+    ? 'cafe24'
+    : rawStageKey;
   if (text(job.status) === 'completed') return STAGES.at(-1);
   return STAGES.find(([key]) => key === stageKey) || STAGES[0];
 }
@@ -24,14 +31,20 @@ function stageMode(job, decisionId) {
   return mode === 'manual' ? 'manual' : 'auto';
 }
 
-export function buildOperatorQueueRow(jobValue, index = 0) {
+export function buildOperatorQueueRow(jobValue, index = 0, current = {}) {
   const job = record(jobValue);
-  const [stageKey, stageLabel, decisionId] = stageFor(job);
+  const [stageKey, stageLabel, decisionId] = stageFor(job, current);
   const mode = stageMode(job, decisionId);
   const status = text(job.status);
   const waitingForSelection = status === 'waiting_manual';
+  const approvalRequired = waitingForSelection && stageKey === 'cafe24';
   const labels = waitingForSelection
-    ? { stateLabel: '내 선택 대기', actionLabel: '컷 고르기' }
+    ? { stateLabel: stageKey === 'cafe24' ? '승인 대상 확인' : '내 선택 대기', actionLabel: {
+      db: 'DB 확정하기',
+      required_fields: '필수값 확인',
+      competitors: '경쟁사 선택',
+      cafe24: '사전점검 열기',
+    }[stageKey] || '컷 고르기' }
     : status === 'running'
       ? { stateLabel: mode === 'auto' ? '자동 생성 중' : '수동 처리 중', actionLabel: '진행 관찰' }
       : status === 'queued'
@@ -41,17 +54,21 @@ export function buildOperatorQueueRow(jobValue, index = 0) {
           : status === 'completed'
             ? { stateLabel: 'Cafe24 확인 대기', actionLabel: 'Cafe24 확인' }
             : { stateLabel: '상태 확인 중', actionLabel: '상태 확인' };
-  const stageIndex = STAGES.findIndex(([key]) => key === stageKey) + 1;
+  const assembly = deriveAssemblyWorkbench(
+    Object.hasOwn(current, 'progress') ? current : { progress: current },
+    job,
+  );
+  const stageIndex = assembly.steps.findIndex(step => step.key === assembly.currentStep.key) + 1;
 
   return Object.freeze({
     orderLabel: String(index + 1).padStart(2, '0'),
-    stepLabel: `${stageIndex} / ${STAGES.length}단계`,
+    stepLabel: `${stageIndex} / ${assembly.steps.length}단계`,
     stageLabel,
     modeLabel: waitingForSelection
-      ? mode === 'auto' ? '자동 진행 후 수동 선택' : '수동 선택'
+      ? approvalRequired ? '승인 대기' : mode === 'auto' ? '자동 진행 후 수동 선택' : '수동 선택'
       : mode === 'auto' ? '자동 진행' : '수동 진행',
     stateLabel: labels.stateLabel,
     actionLabel: labels.actionLabel,
-    needsSelection: waitingForSelection,
+    needsSelection: waitingForSelection && !approvalRequired,
   });
 }

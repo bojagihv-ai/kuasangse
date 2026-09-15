@@ -50,8 +50,9 @@ function createRuntime(currentFactory, initialState = {}, expectedFence = null) 
     lastWorkPayloadProductName: () => '',
     sanitizeLastWorkPayloadProductScope: value => value,
     workspaceValidatedImageStatePayload: () => ({ payload: null, images: [], blocked: false }),
+    workspaceImagePayloadFingerprint: value => String(value.base64 || ''),
     factoryIdentityKey: factory => String(factory?.product?.productKey || ''),
-    factoryProductHasImage: () => false,
+    factoryProductHasImage: product => Boolean(product?.hasImage || product?.imageBase64),
     restoreSectionContentsFromStoredVariants: () => false,
     mergeRuntimeSectionImages: (currentImages, incomingImages) => {
       const result = clone(incomingImages || {});
@@ -67,6 +68,8 @@ function createRuntime(currentFactory, initialState = {}, expectedFence = null) 
     resolveRestoredCandidateReviewWorkspaceId: value => value,
     factoryRecoverRestoredReviewCandidateWorkspaceScope: () => 0,
     restoreOptionSorterLabelsFromFactory: optionSorter => optionSorter,
+    normalizeOptionSorterState: clone,
+    mergeOptionSorterStoredImages: (current, incoming) => ({ ...clone(current), ...clone(incoming) }),
     repairRestoredDraftFactoryAssetWorkspaceScope: () => false,
     restoreSpecificationSizeImageFromFactory: () => false,
     repairRestoredSessionIdentityDrift: () => false,
@@ -123,6 +126,34 @@ test('forced same-work asset hydrate cannot lower existing factory progress', ()
   assert.deepEqual(runtime.readReplaced().assets, [{ id: 'color-group-shot' }]);
   assert.deepEqual(runtime.readReplaced().product.dbCandidates, [{ jcode: 'DB-1' }]);
   assert.equal(runtime.readReplaced().goalRun.progress, 100);
+});
+
+test('새로고침에서 같은 원본 사진만 먼저 복원돼도 해당 작업의 입력과 선택을 이어받는다', () => {
+  const incoming = {
+    workspaceScope: { id: 'draft:tab-a' },
+    inputImageFingerprint: 'original-image',
+    productName: '파우치',
+    factory: { workspace: { id: 'pouch-a' }, product: { productName: '파우치', productKey: 'pouch-a', hasImage: true } },
+    sectionContents: { header: { headline: '선택한 훅' } },
+    currentSectionVariantIds: { header: 'chosen-hook' },
+    optionSorter: { images: [{ id: 'red' }, { id: 'purple' }] },
+  };
+  const scope = { workspaceId: 'draft:tab-a', inputImageFingerprint: 'original-image' };
+  for (const [productKey, image, accepted] of [
+    ['', '', true],
+    ['', '__stored_in_indexeddb__', true],
+    ['', 'original-image', true],
+    ['', 'another-image', false],
+    ['other-product', 'original-image', false],
+  ]) {
+    const runtime = createRuntime({ product: { productKey }, assets: [] }, { imageBase64: image }, scope);
+    const restored = runtime.apply(incoming, { preserveInlineImages: true, allowScopedInlineImages: true });
+    assert.equal(restored, accepted, `${productKey || 'image-only'} / ${image}`);
+    if (!accepted) { assert.equal(runtime.readReplaced(), null); continue; }
+    assert.equal(runtime.readReplaced().product.productKey, 'pouch-a');
+    assert.deepEqual(runtime.readState().currentSectionVariantIds, { header: 'chosen-hook' });
+    assert.equal(runtime.readState().optionSorter.images.length, 2);
+  }
 });
 
 test('same-work session assets add missing durable section objects without reducing current A state', () => {

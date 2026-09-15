@@ -8,9 +8,9 @@ function source(...parts) {
 }
 
 test('완료된 작업에는 Cafe24 등록 버튼이 뜬다', () => {
-  // 조립공장에는 등록 화면이 없다. 이 버튼이 없으면 사람이 등록을 시작할 방법 자체가 없다.
+  // 보드의 시작 버튼은 승인 단계로 안내해야 하며 즉시 외부 등록을 해서는 안 된다.
   const board = source('production-board.mjs');
-  assert.ok(board.includes("'Cafe24 등록', {"), 'Cafe24 등록 버튼이 없습니다');
+  assert.ok(board.includes("'Cafe24 승인·등록 열기', {"), 'Cafe24 승인 단계 버튼이 없습니다');
   assert.ok(board.includes("(row.status === 'completed' || row.cafe24Declined) && !row.cafe24Registered"));
 });
 
@@ -38,9 +38,9 @@ test('분류번호를 등록 전제조건으로 삼지 않는다', () => {
   assert.ok(!model.includes('cafe24ValuesReady'), '분류 유무로 등록을 가릅니다');
 });
 
-test('받은 값은 등록 지시에 실어 보낸다', () => {
+test('받은 값은 승인 전 pending 상태로 저장한다', () => {
   const board = source('production-board.mjs');
-  assert.ok(board.includes('registerCafe24(jobId, values = {})'), '값을 받을 자리가 없습니다');
+  assert.ok(board.includes('saveCafe24Values(jobId, values = {})'), '값을 저장할 자리가 없습니다');
   assert.ok(board.includes('JSON.stringify(values)'), '받은 값을 보내지 않습니다');
 });
 
@@ -50,9 +50,10 @@ test('투입값이 있는지 모델이 알려준다', () => {
   assert.ok(model.includes('      cafe24Values,'), '기존 값을 행에 전달하지 않습니다');
 });
 
-test('등록 버튼은 관제탑 등록 지시 엔드포인트를 부른다', () => {
+test('값 저장은 관제탑 pending endpoint만 부른다', () => {
   const board = source('production-board.mjs');
-  assert.ok(board.includes('/cafe24/register'), '등록 엔드포인트를 부르지 않습니다');
+  assert.ok(board.includes('/cafe24/values'), '값 저장 endpoint를 부르지 않습니다');
+  assert.ok(!board.includes('/cafe24/register'), '보드가 승인 없는 등록 endpoint를 부릅니다');
 });
 
 test('이미 등록된 작업에는 버튼을 다시 내지 않는다', () => {
@@ -61,10 +62,10 @@ test('이미 등록된 작업에는 버튼을 다시 내지 않는다', () => {
   assert.ok(model.includes("text(job.stageKey) === 'cafe24'"));
 });
 
-test('등록 지시 실패는 조용히 넘어가지 않는다', () => {
+test('값 저장 실패는 조용히 넘어가지 않는다', () => {
   const board = source('production-board.mjs');
-  const at = board.indexOf('async function registerCafe24(');
-  assert.notEqual(at, -1, 'registerCafe24 가 없습니다');
+  const at = board.indexOf('async function saveCafe24Values(');
+  assert.notEqual(at, -1, 'saveCafe24Values 가 없습니다');
   const region = board.slice(at, at + 900);
   assert.ok(region.includes("'error'"), '실패를 사람에게 알리지 않습니다');
 });

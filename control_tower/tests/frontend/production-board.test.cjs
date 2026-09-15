@@ -35,17 +35,22 @@ class FakeElement {
   querySelectorAll() { return []; }
   closest(selector) { return selector === '[data-action]' && this.dataset.action ? this : null; }
   remove() {}
+  before() {}
   focus() {}
 }
 
 function installBoardDocument(t) {
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('board_test_network_disabled'); });
   const previous = { document: globalThis.document, window: globalThis.window, Element: globalThis.Element };
   const windowListeners = new Map();
+  const documentListeners = new Map();
   globalThis.Element = FakeElement;
   globalThis.document = {
     createElement: tagName => new FakeElement(tagName),
     createTextNode: value => ({ textContent: String(value) }),
-    addEventListener() {}, removeEventListener() {}, getElementById: () => null,
+    createComment: () => new FakeElement('comment'),
+    addEventListener: (type, listener) => documentListeners.set(type, listener),
+    removeEventListener: type => documentListeners.delete(type), getElementById: () => null,
     querySelector: () => null, querySelectorAll: () => [], activeElement: null,
     body: new FakeElement('body'),
   };
@@ -55,7 +60,7 @@ function installBoardDocument(t) {
     removeEventListener: type => windowListeners.delete(type),
   };
   t.after(() => Object.assign(globalThis, previous));
-  return { root: new FakeElement('div'), windowListeners };
+  return { root: new FakeElement('div'), windowListeners, documentListeners };
 }
 
 function dispatchBoardClick(root, dataset) {
@@ -86,7 +91,63 @@ function nodesByClass(root, className) {
   return matches;
 }
 
+function treeText(node) {
+  return [
+    String(node?.textContent || ''),
+    ...(node?.children || []).map(child => treeText(child)),
+  ].join(' ');
+}
+
 const jobRows = root => nodesByClass(root, 'board-row').filter(node => node.dataset.jobId);
+
+test('후보 크게 보기는 키보드 버튼으로 열리고 선택 요청을 보내지 않는다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root } = installBoardDocument(t);
+  const writes = [];
+  const stop = mountProductionBoard({
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async (url, options = {}) => { if (options.method === 'POST') writes.push(url); return {}; },
+  }, { root, EventSourceImpl: null, fetchJobs: async () => ({ jobs: [job()] }) });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    dispatchBoardClick(root, { action: 'open', jobId: 'factory-job-a', stageKey: 'representative' });
+    const zoomButtons = nodesByClass(root, 'board-candidate-zoom');
+    assert.equal(zoomButtons.length, 2);
+    assert.equal(zoomButtons[1].tagName, 'BUTTON');
+    dispatchBoardClick(root, zoomButtons[1].dataset);
+    const image = nodesByClass(document.body, 'board-zoom-image')[0];
+    assert.equal(image.src, 'http://127.0.0.1:5062/thumb/rep-b');
+    assert.equal(writes.length, 0);
+  } finally {
+    stop();
+  }
+});
+
+test('작업판은 요청한 컷 공정만 보여주고 그룹 전환은 저장하지 않는다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root, documentListeners } = installBoardDocument(t);
+  const writes = [];
+  const product = job({ progress: { ...job().progress, stages: [
+    stage('representative', { candidates: ['rep-a', 'rep-b'] }),
+    stage('size', { candidates: ['size-a'] }),
+  ] } });
+  const stop = mountProductionBoard({
+    assetUrl: value => value, setStatus() {},
+    apiRequest: async (url, options = {}) => { if (options.method === 'POST') writes.push(url); return {}; },
+  }, { root, EventSourceImpl: null, fetchJobs: async () => ({ jobs: [product] }) });
+  try {
+    await new Promise(setImmediate);
+    const target = new FakeElement('section');
+    documentListeners.get('control-tower:production-board-focus')({ detail: {
+      target, jobId: product.jobId, surface: 'cuts', stageKey: 'size',
+    } });
+    assert.deepEqual(nodesByClass(target, 'board-candidate-strip').map(node => node.dataset.stageKey), ['size']);
+    documentListeners.get('control-tower:production-board-focus-stage')({ detail: { stageKey: 'representative' } });
+    assert.deepEqual(nodesByClass(target, 'board-candidate-strip').map(node => node.dataset.stageKey), ['representative']);
+    assert.equal(writes.length, 0);
+  } finally { stop(); }
+});
 
 function stage(key, { selectedId = '', candidates = [] } = {}) {
   return {
@@ -124,6 +185,376 @@ function job(overrides = {}) {
     ...overrides,
   };
 }
+
+const QA_FINAL_IDS = {
+  old: 'factory_detail_mtnx5s8p_ika5d9',
+  full: 'factory_detail_mto0ggbz_mim66q',
+  archive: 'be1bc585c9299c19',
+};
+const QA_SECTION_IDS = [
+  'header', 'hook', 'key_features', 'specifications', 'use_scenarios', 'competitive_edge',
+  'material_tech', 'certifications', 'reviews', 'promotion', 'shipping', 'faq', 'brand_story', 'cta_footer',
+];
+const settleBoard = () => new Promise(setImmediate);
+const selectedCards = root => nodesByClass(root, 'board-candidate')
+  .filter(node => node.dataset.picked === 'true').map(node => node.dataset.candidateId);
+const documentCandidate = (id, archiveId = '') => ({
+  id, kind: 'html', documentArchiveId: archiveId, summary: '섹션 14개',
+});
+const boardJob = (jobId, stages, overrides = {}) => job({
+  jobId, stageKey: stages.at(-1).key, status: 'completed', message: '',
+  progress: { ...job().progress, stages, awaitingStageKeys: [], selectedStageCount: 1 },
+  ...overrides,
+});
+
+async function mountBoardCase(t, getJobs, { history = {}, documents = id => ({ html: `<p>${id}</p>` }) } = {}) {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  let stop = () => {};
+  t.after(() => stop());
+  const dom = installBoardDocument(t);
+  const requests = [];
+  stop = mountProductionBoard({
+    assetUrl: value => value, setStatus() {},
+    apiRequest: async (url, options = {}) => {
+      requests.push({ url, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null });
+      if (url === '/api/factory/state') return { connected: true, session: {} };
+      if (url.startsWith('/api/factory/archive-document/')) return documents(decodeURIComponent(url.split('/').at(-1)));
+      const jobId = /^\/api\/factory\/jobs\/([^/]+)\/history$/.exec(url)?.[1];
+      if (jobId) return { workBundle: { assets: history[decodeURIComponent(jobId)] || [] } };
+      return {};
+    },
+  }, { root: dom.root, EventSourceImpl: null, fetchJobs: async () => ({ jobs: getJobs() }) });
+  await settleBoard();
+  return {
+    ...dom, requests,
+    open: (jobId, stageKey) => dispatchBoardClick(dom.root, { action: 'open', jobId, stageKey }),
+    refresh: async () => { await dom.windowListeners.get('control-tower:job-created')(); await settleBoard(); },
+  };
+}
+
+test('작업면을 닫은 뒤에도 차단·완료 이력은 기본으로 접고 현재 작업만 보여준다', async t => {
+  const products = [
+    boardJob('old-blocked', [{ key: 'sections', candidates: [] }], { status: 'blocked' }),
+    boardJob('old-completed', [{ key: 'sections', candidates: [] }], { status: 'completed' }),
+    boardJob('active-work', [{ key: 'sections', candidates: ['section-a'] }], {
+      status: 'waiting_manual', stageKey: 'sections',
+    }),
+  ];
+  const board = await mountBoardCase(t, () => products);
+  assert.deepEqual(jobRows(board.root).map(node => node.dataset.jobId), ['active-work']);
+});
+
+test('running/no-checkpoint 작업은 history를 조회하지 않고 checkpoint 작업은 계속 조회한다', async t => {
+  const products = [
+    boardJob('running-no-checkpoint', [{ key: 'sections', candidates: [] }], {
+      status: 'running', checkpointAvailable: false,
+    }),
+    boardJob('completed-with-checkpoint', [{ key: 'sections', candidates: [] }], {
+      status: 'completed', checkpointAvailable: true,
+    }),
+    boardJob('blocked-with-checkpoint', [{ key: 'sections', candidates: [] }], {
+      status: 'blocked', checkpointAvailable: true,
+    }),
+  ];
+  const board = await mountBoardCase(t, () => products);
+  board.open('running-no-checkpoint', 'sections');
+  await settleBoard();
+  const historyRequests = board.requests.filter(request => request.url.endsWith('/history'));
+  assert.deepEqual(historyRequests.map(request => request.url), [
+    '/api/factory/jobs/completed-with-checkpoint/history',
+    '/api/factory/jobs/blocked-with-checkpoint/history',
+  ]);
+});
+
+test('PIN: full14 문서와 이전 부분 문서, 명시한 14개 섹션 선택을 그대로 보존한다', async t => {
+  const ids = QA_SECTION_IDS.map(id => `${id}:chosen`);
+  const sections = { key: 'sections', selectedId: ids[0], selectedIds: ids, candidates: ids.map(id => ({ id })) };
+  const final = { key: 'final_detail', selectedId: QA_FINAL_IDS.old, candidates: [
+    { ...documentCandidate(QA_FINAL_IDS.old, '3a488823841a77f2'), summary: '섹션 1개' },
+    documentCandidate(QA_FINAL_IDS.full, QA_FINAL_IDS.archive),
+  ] };
+  const product = boardJob('factory-job-be6f0ea339d847bfb0c0467241158b05', [sections, final]);
+  const before = structuredClone(product);
+  const board = await mountBoardCase(t, () => [product]);
+  board.open(product.jobId, 'sections');
+  assert.deepEqual(selectedCards(board.root), ids);
+  board.open(product.jobId, 'final_detail');
+  await settleBoard();
+  const frames = nodesByClass(board.root, 'board-candidate-doc-view');
+  assert.equal(frames.length, 2);
+  assert.ok(frames[1].srcdoc.includes(QA_FINAL_IDS.archive));
+  assert.equal(frames[1].getAttribute('sandbox'), '');
+  assert.deepEqual(selectedCards(board.root), [QA_FINAL_IDS.old], '큰 문서를 자동 선택하면 안 됩니다');
+  board.open(product.jobId, 'final_detail');
+  board.open(product.jobId, 'final_detail');
+  assert.equal(board.requests.filter(request => request.url.startsWith('/api/factory/archive-document/')).length, 2);
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+  assert.deepEqual(product, before, '보기 전후 원래 후보/선택/문서 metadata를 보존해야 합니다');
+});
+
+test('PIN: 다른 작업의 정확한 자산과 읽기 전용 보관 그림은 내 문서 후보 선택 근거가 아니다', async t => {
+  const candidate = documentCandidate('legacy-final');
+  const products = ['mine', 'foreign'].map(id => boardJob(id, [{ key: 'final_detail', candidates: [candidate] }], {
+    checkpointAvailable: true,
+  }));
+  const asset = (id, assetKey) => ({ id, assetKey, phase: 'output', factoryStageKey: 'final_detail',
+    selectionState: 'candidate', thumbnailReference: `/thumb/${id}`, contentReference: `/image/${id}` });
+  const board = await mountBoardCase(t, () => products, { history: {
+    mine: [asset('reference-only', 'output:reference-only')],
+    foreign: [asset('legacy-final', 'output:legacy-final')],
+  } });
+  board.open('mine', 'final_detail');
+  const [card] = nodesByClass(board.root, 'board-candidate').filter(node => node.dataset.candidateId);
+  assert.equal(card.disabled, true);
+  assert.equal(card.getAttribute('aria-pressed'), 'false');
+  assert.equal(nodesByClass(board.root, 'board-final-detail-storyboard').length, 1);
+  dispatchBoardClick(board.root, { action: 'pick', jobId: 'mine', stageKey: 'final_detail', candidateId: candidate.id });
+  await settleBoard();
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('동일 ID 문서에 보관 metadata가 늦게 생기면 열린 미리보기가 갱신된다', async t => {
+  const candidate = documentCandidate(QA_FINAL_IDS.full);
+  const product = boardJob('late-doc', [{ key: 'final_detail', selectedId: candidate.id, candidates: [candidate] }]);
+  const board = await mountBoardCase(t, () => [product]);
+  board.open(product.jobId, 'final_detail');
+  assert.equal(nodesByClass(board.root, 'board-candidate-doc-view').length, 0);
+  candidate.documentArchiveId = QA_FINAL_IDS.archive;
+  await board.refresh();
+  assert.equal(nodesByClass(board.root, 'board-candidate-doc-view').length, 1, '같은 후보 ID의 새 본문이 화면에 도착해야 합니다');
+  assert.ok(nodesByClass(board.root, 'board-candidate-doc-view')[0].srcdoc.includes(QA_FINAL_IDS.archive));
+  candidate.documentArchiveId = 'replacement-document';
+  await board.refresh();
+  assert.ok(nodesByClass(board.root, 'board-candidate-doc-view')[0].srcdoc.includes('replacement-document'));
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('같은 작업판을 다시 표시해도 로딩 중인 상세 문서 프레임을 교체하지 않는다', async t => {
+  const candidate = documentCandidate(QA_FINAL_IDS.full, QA_FINAL_IDS.archive);
+  const product = boardJob('stable-preview', [{ key: 'final_detail', candidates: [candidate] }]);
+  const board = await mountBoardCase(t, () => [product]);
+  const target = new FakeElement('section');
+  const focus = () => board.documentListeners.get('control-tower:production-board-focus')({
+    detail: { target, jobId: product.jobId, surface: 'sections' },
+  });
+  focus();
+  await settleBoard();
+  const frame = nodesByClass(target, 'board-candidate-doc-view')[0];
+  assert.ok(frame);
+  focus();
+  assert.equal(nodesByClass(target, 'board-candidate-doc-view')[0], frame,
+    '변경 없는 작업판 알림이 iframe의 이미지와 글꼴 로드를 다시 시작하면 안 됩니다');
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('상태 갱신 중에도 입력 중인 Cafe24 등록값을 같은 제품에 보존한다', async t => {
+  const product = boardJob('registration-draft', [{ key: 'final_detail', candidates: [] }]);
+  const board = await mountBoardCase(t, () => [product]);
+  const target = new FakeElement('section');
+  board.documentListeners.get('control-tower:production-board-focus')({
+    detail: { target, jobId: product.jobId, surface: 'cafe24' },
+  });
+  const form = nodesByClass(target, 'board-cafe24-values')[0];
+  form.listeners.get('change')?.({ target: { name: 'registrationMode', value: 'create' } });
+  form.listeners.get('input')?.({ target: { name: 'categoryId', value: '82' } });
+  product.message = '상태 갱신';
+  await board.refresh();
+  const labels = nodesByClass(target, 'board-cafe24-field');
+  const controls = labels.flatMap(label => label.children).filter(node => node.name);
+  assert.equal(controls.find(node => node.name === 'registrationMode').value, 'create');
+  assert.equal(controls.find(node => node.name === 'categoryId').value, '82');
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('완료품 필수값은 기존 제품명과 공급가를 표시하고 직접 저장한 값을 우선한다', async t => {
+  const products = [
+    boardJob('stored-values', [{ key: 'final_detail', candidates: [] }], {
+      productName: '전통 파우치', requiredValues: { salePrice: '4000' },
+      cafe24Values: { supplyPrice: '1000', categoryId: '82' },
+    }),
+    boardJob('explicit-values', [{ key: 'final_detail', candidates: [] }], {
+      productName: '이전 이름', requiredValues: { productName: '확정 이름', supplyPrice: '1500' },
+      cafe24Values: { supplyPrice: '1000' },
+    }),
+  ];
+  const original = structuredClone(products);
+  const board = await mountBoardCase(t, () => products);
+  const target = new FakeElement('section');
+  for (const [index, productName, supplyPrice] of [[0, '전통 파우치', '1000'], [1, '확정 이름', '1500']]) {
+    board.documentListeners.get('control-tower:production-board-focus')({
+      detail: { target, jobId: products[index].jobId, surface: 'values' },
+    });
+    const controls = nodesByClass(target, 'board-cafe24-field')
+      .flatMap(label => label.children).filter(node => node.name);
+    assert.equal(controls.find(node => node.name === 'productName').value, productName);
+    assert.equal(controls.find(node => node.name === 'supplyPrice').value, supplyPrice);
+  }
+  board.documentListeners.get('control-tower:production-board-focus')({
+    detail: { target, jobId: products[0].jobId, surface: 'cafe24' },
+  });
+  assert.ok(nodesByClass(target, 'factory-pill').some(node => node.textContent === '저장된 등록값'));
+  assert.deepEqual(products, original);
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('본문 없음 캐시는 같은 후보를 다시 열 때 새 documentArchiveId를 가로막지 않는다', async t => {
+  const candidate = documentCandidate(QA_FINAL_IDS.full);
+  const product = boardJob('reopen-doc', [{ key: 'final_detail', candidates: [candidate] }]);
+  const board = await mountBoardCase(t, () => [product]);
+  board.open(product.jobId, 'final_detail');
+  board.open(product.jobId, 'final_detail');
+  candidate.documentArchiveId = QA_FINAL_IDS.archive;
+  await board.refresh();
+  board.open(product.jobId, 'final_detail');
+  await settleBoard();
+  assert.equal(nodesByClass(board.root, 'board-candidate-doc-view').length, 1, '본문 없음이 영구 캐시되면 안 됩니다');
+  assert.ok(board.requests.some(request => request.url.endsWith(`/${QA_FINAL_IDS.archive}`)));
+});
+
+test('다른 작업의 같은 후보 ID와 늦은 응답이 현재 작업 문서 캐시를 오염시키지 않는다', async t => {
+  const pending = Promise.withResolvers();
+  const products = ['a', 'b'].map(id => boardJob(id, [{ key: 'final_detail', candidates: [documentCandidate('same-id', `doc-${id}`)] }]));
+  const board = await mountBoardCase(t, () => products, { documents: id => id === 'doc-a' ? pending.promise : { html: '<p>doc-b</p>' } });
+  try {
+    board.open('a', 'final_detail');
+    board.open('b', 'final_detail');
+    await settleBoard();
+    assert.equal(nodesByClass(board.root, 'board-candidate-doc-view').length, 1, '다른 작업의 loading 캐시를 재사용하면 안 됩니다');
+    assert.ok(nodesByClass(board.root, 'board-candidate-doc-view')[0].srcdoc.includes('doc-b'));
+    pending.resolve({ html: '<p>doc-a</p>' });
+    await settleBoard();
+    assert.ok(nodesByClass(board.root, 'board-candidate-doc-view')[0].srcdoc.includes('doc-b'));
+    board.open('a', 'final_detail');
+    assert.ok(nodesByClass(board.root, 'board-candidate-doc-view')[0].srcdoc.includes('doc-a'));
+    assert.equal(board.requests.filter(request => request.url.startsWith('/api/factory/archive-document/')).length, 2);
+    assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+  } finally { pending.resolve({ html: '<p>doc-a</p>' }); await settleBoard(); }
+});
+
+test('보관 ID가 명시된 full14 HTML은 이미지 자산 없이도 명시한 후보만 선택 요청한다', async t => {
+  const candidates = [documentCandidate(QA_FINAL_IDS.old, '3a488823841a77f2'), documentCandidate(QA_FINAL_IDS.full, QA_FINAL_IDS.archive)];
+  const product = boardJob('pick-document', [{ key: 'final_detail', selectedId: candidates[0].id, candidates }]);
+  const board = await mountBoardCase(t, () => [product]);
+  board.open(product.jobId, 'final_detail');
+  await settleBoard();
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+  dispatchBoardClick(board.root, { action: 'pick', jobId: product.jobId, stageKey: 'final_detail', candidateId: candidates[1].id });
+  await settleBoard();
+  const writes = board.requests.filter(request => request.method !== 'GET');
+  assert.equal(writes.length, 1, '문서 보관 ID를 이미지 자산 누락으로 거절하면 안 됩니다');
+  assert.deepEqual(writes[0].body.selections, [{ jobId: product.jobId, stageKey: 'final_detail', candidateId: QA_FINAL_IDS.full }]);
+  const full = nodesByClass(board.root, 'board-candidate').find(node => node.dataset.candidateId === QA_FINAL_IDS.full);
+  assert.equal(full.disabled, false);
+  assert.equal(full.getAttribute('aria-pressed'), 'false', '저장 영수증/projection 전에는 선택을 낙관 반영하지 않습니다');
+});
+
+for (const status of ['completed', 'waiting_manual', 'blocked']) {
+test(`${status} 현재 제품의 명시 선택은 기존 상태별 명령 계약을 지키고 영수증 전에는 표시를 바꾸지 않는다`, async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  let stop = () => {};
+  t.after(() => stop());
+  const { root, windowListeners } = installBoardDocument(t);
+  const product = boardJob('completed-choice', [{ key: 'final_detail', selectedId: 'old',
+    candidates: [documentCandidate('old', 'doc-old'), documentCandidate('new', 'doc-new')] }], { status });
+  const live = { schema: 'factory-control-projection:v1', connected: true,
+    registration: { jobId: product.jobId }, session: { productId: 'product-a', productKey: 'key-a',
+      runId: 'run-a', inputFingerprint: 'image-a', revision: 10 }, stages: product.progress.stages };
+  let pending = null;
+  stop = mountProductionBoard({ assetUrl: value => value, setStatus() {},
+    apiRequest: async (url, options = {}) => {
+      if (url === '/api/factory/state') return structuredClone(live);
+      if (url.startsWith('/api/factory/archive-document/')) return { html: '<p>preview</p>' };
+      if (options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        if (status !== 'completed') {
+          assert.equal(url, '/api/factory/jobs/selections');
+          assert.equal(body.mode, 'manual');
+          assert.equal(body.selections[0].jobId, product.jobId);
+          assert.equal(body.selections[0].stageKey, 'final_detail');
+          pending = body.selections[0].candidateId;
+          return { results: [{ ...body.selections[0], status: 'applied' }] };
+        }
+        assert.equal(url, `/api/factory/jobs/${product.jobId}/select`);
+        assert.equal(body.expectedRevision, 10);
+        assert.equal(body.expectedRunId, 'run-a');
+        assert.equal(body.expectedInputFingerprint, 'image-a');
+        assert.equal(body.decisionMode, 'manual');
+        pending = body.candidateId;
+        return { accepted: true, selectionStatus: 'saving' };
+      }
+      return {};
+    },
+  }, { root, EventSourceImpl: null, fetchJobs: async () => ({ jobs: [structuredClone(product)] }) });
+  await settleBoard();
+  dispatchBoardClick(root, { action: 'open', jobId: product.jobId, stageKey: 'final_detail' });
+  await settleBoard();
+  dispatchBoardClick(root, { action: 'pick', jobId: product.jobId, stageKey: 'final_detail', candidateId: 'new' });
+  await settleBoard();
+  assert.equal(pending, 'new');
+  assert.deepEqual(selectedCards(root), ['old']);
+  product.progress.stages[0].selectedId = pending;
+  live.session.revision = 11;
+  await windowListeners.get('control-tower:job-created')();
+  assert.deepEqual(selectedCards(root), ['new']);
+  assert.equal(product.status, status);
+});
+}
+
+test('명시 선택 없는 단일 섹션 후보는 완료·진행 중·대기 상태에서도 자동 선택하지 않는다', async t => {
+  const products = ['completed', 'running', 'queued'].map(status => boardJob(status, [{
+    key: 'sections', selectedId: '', selectedIds: [], candidates: [{ id: 'header:only', sectionId: 'header' }],
+  }], { status }));
+  const board = await mountBoardCase(t, () => products);
+  for (const product of products) {
+    board.open(product.jobId, 'sections');
+    const [card] = nodesByClass(board.root, 'board-candidate').filter(node => node.dataset.candidateId);
+    assert.equal(card.getAttribute('aria-pressed'), 'false', `${product.status}: 단일 후보는 명시 선택이 아닙니다`);
+    assert.deepEqual(selectedCards(board.root), []);
+  }
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('selectedIds만 있는 14개 명시 선택도 보드 칸을 선택 완료로 투영한다', async () => {
+  const { projectProductionBoard } = await import(MODEL_URL);
+  const ids = QA_SECTION_IDS.map(id => `${id}:chosen`);
+  const product = boardJob('array-selection', [{ key: 'sections', selectedIds: ids, candidates: ids.map(id => ({ id })) }]);
+  const [row] = projectProductionBoard([product]).rows;
+  const cell = row.cells.find(item => item.stageKey === 'sections');
+  assert.deepEqual(cell.selectedIds, ids);
+  assert.equal(cell.state, 'selected', '명시 selectedIds가 있는데 선택 대기로 되돌리면 안 됩니다');
+  assert.equal(cell.selectedId, ids[0]);
+  assert.equal(cell.changeable, true);
+});
+
+test('selectedId와 후보 수가 같아도 selectedIds가 바뀌면 열린 섹션 선택 표시가 갱신된다', async t => {
+  const sections = { key: 'sections', selectedId: 'header:a', selectedIds: ['header:a', 'hook:a'],
+    candidates: ['header:a', 'hook:a', 'hook:b'].map(id => ({ id })) };
+  const product = boardJob('selection-refresh', [sections]);
+  const board = await mountBoardCase(t, () => [product]);
+  board.open(product.jobId, 'sections');
+  assert.deepEqual(selectedCards(board.root), ['header:a', 'hook:a']);
+  sections.selectedIds = ['header:a', 'hook:b'];
+  await board.refresh();
+  assert.deepEqual(selectedCards(board.root), ['header:a', 'hook:b'], '두 번째 섹션의 명시 선택도 새로 그려야 합니다');
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
+
+test('보드 표의 섹션 선택 수는 첫 후보 순번이 아니라 명시 선택 전체를 센다', async t => {
+  const ids = QA_SECTION_IDS.map(id => `${id}:chosen`);
+  const sections = { key: 'sections', selectedId: ids[0], selectedIds: [ids[0]], candidates: ids.map(id => ({ id })) };
+  const product = boardJob('selection-count', [sections]);
+  const board = await mountBoardCase(t, () => [product]);
+  const choice = () => {
+    const cell = nodesByClass(board.root, 'board-cell-stage').find(node => node.dataset.stageLabel === '섹션');
+    return nodesByClass(cell, 'board-cell-choice')[0]?.textContent;
+  };
+  const before = choice();
+  sections.selectedIds = [...ids, ids[0]];
+  await board.refresh();
+  assert.equal(choice(), '14/14 선택', '명시된 14개 선택을 첫 후보 순번 1/14로 축소하면 안 됩니다');
+  assert.equal(before, '1/14 선택');
+  assert.equal(board.requests.filter(request => request.method !== 'GET').length, 0);
+});
 
 test('여러 작업을 행으로, 여섯 공정을 열로 펼친다', async () => {
   const { projectProductionBoard, BOARD_STAGES } = await import(MODEL_URL);
@@ -210,6 +641,7 @@ test('보드 요약은 상태별 작업 수와 남은 선택 칸을 센다', asy
     queued: 1,
     running: 1,
     waiting: 3,
+    approval: 0,
     blocked: 0,
     completed: 1,
     reserved: 1,
@@ -219,6 +651,19 @@ test('보드 요약은 상태별 작업 수와 남은 선택 칸을 센다', asy
     totalWaitMs: 0,
     pickableCells: 2,
   });
+});
+
+test('Cafe24 승인 대기는 컷 선택 대기와 별도 상태로 투영한다', async () => {
+  const { projectProductionBoard } = await import(MODEL_URL);
+  const [row] = projectProductionBoard([job({
+    jobId: 'approval-job',
+    status: 'waiting_manual',
+    stageKey: '',
+    progress: { ...job().progress, stageKey: 'export', registration: { status: 'approval_required' } },
+  })]).rows;
+  assert.equal(row.statusLabel, '승인 필요');
+  assert.equal(row.approvalRequired, true);
+  assert.deepEqual(row.nextAction, { kind: 'approval', copy: '다음: Cafe24 사전점검', tone: 'attention' });
 });
 
 test('명시한 후보의 수동 일괄 선택 요청은 예약되지 않은 대기 칸만 담는다', async () => {
@@ -470,6 +915,72 @@ test('이미 읽은 작업 큐는 다음 200 응답이 비어도 유지하고 �
   assert.match(status.textContent, /마지막 작업 큐 2건 유지/u);
   assert.match(status.textContent, /상태 갱신 지연/u);
   assert.equal(status.dataset.tone, 'warning');
+  stop();
+});
+
+test('사람 세션 presence 카드와 요약은 폴링으로 갱신되고 같은 작업 행은 보존한다', async t => {
+  const { mountProductionBoard } = await import(BOARD_URL);
+  const { root, windowListeners } = installBoardDocument(t);
+  const presence = overrides => ({
+    presenceId: 'human:tab-1',
+    role: 'human',
+    productName: '팔각자개상자',
+    workspaceId: 'draft:lastwork_001',
+    stageKey: 'detail',
+    stageLabel: '상세페이지',
+    message: '사이즈컷 3장 생성 중',
+    buildId: 'build-human-presence-test',
+    sentAt: 1788742321223,
+    ...overrides,
+  });
+  const responses = [
+    {
+      jobs: [job({ jobId: 'stable-job' })],
+      humanPresences: [presence({})],
+    },
+    {
+      jobs: [job({ jobId: 'stable-job' })],
+      humanPresences: [presence({ message: '상세페이지 문구 확인 중', sentAt: 1788742321224 })],
+    },
+    {
+      jobs: [job({ jobId: 'stable-job' })],
+      humanPresences: [],
+    },
+  ];
+  const runtime = {
+    assetUrl: value => value,
+    setStatus() {},
+    apiRequest: async requestPath => requestPath === '/api/factory/state'
+      ? { connected: true, session: {} }
+      : {},
+  };
+  const stop = mountProductionBoard(runtime, {
+    root,
+    EventSourceImpl: null,
+    fetchJobs: async () => responses.shift() || responses.at(-1),
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const panel = nodesByClass(root, 'board-human-presences')[0];
+  const rowBefore = jobRows(root)[0];
+  assert.equal(panel.dataset.humanPresenceCount, '1');
+  assert.match(treeText(panel), /사람이 쥔 작업 1/u);
+  assert.match(treeText(panel), /팔각자개상자/u);
+  assert.match(treeText(panel), /상세페이지/u);
+  assert.match(treeText(panel), /사이즈컷 3장 생성 중/u);
+  assert.match(treeText(panel), /draft:lastwork_001/u);
+
+  await windowListeners.get('control-tower:job-created')();
+  const rowAfterUpdate = jobRows(root)[0];
+  assert.strictEqual(rowAfterUpdate, rowBefore, 'presence 갱신 때문에 작업 행을 갈아 끼웠습니다');
+  assert.equal(panel.dataset.humanPresenceCount, '1');
+  assert.match(treeText(panel), /상세페이지 문구 확인 중/u);
+
+  await windowListeners.get('control-tower:job-created')();
+  assert.strictEqual(jobRows(root)[0], rowBefore, 'presence 만료 때문에 작업 행을 갈아 끼웠습니다');
+  assert.equal(panel.dataset.humanPresenceCount, '0');
+  assert.match(treeText(panel), /사람이 쥔 작업 0/u);
+  assert.match(treeText(panel), /현재 사람이 쥔 작업이 없습니다/u);
   stop();
 });
 
@@ -792,6 +1303,13 @@ test('모듈 import 에 버전을 붙여 낡은 캐시가 남지 않게 한다',
       `${name} 스크립트 태그에 버전 쿼리가 없습니다`,
     );
   }
+});
+
+test('여러 관제탑 탭은 이벤트 스트림 하나만 열고 나머지는 폴링한다', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'production-board.mjs'), 'utf8');
+  assert.match(source, /EVENT_STREAM_LEASE_KEY/);
+  assert.match(source, /acquireEventStreamLease\(\)/);
+  assert.match(source, /startBoardPolling\(\)/);
 });
 
 test('읽기 전용 Cafe24 값 화면은 동작하지 않는 승인 버튼 라벨을 만들지 않는다', () => {

@@ -9,6 +9,26 @@ from control_tower.backend.app import create_app
 from control_tower.backend.config import DEFAULT_BACKEND_PORT, ConfigurationError, ControlTowerConfig
 
 
+def _read_live_control_tower_sources() -> tuple[str, str, str, str]:
+    tower_root = Path(__file__).parents[2]
+    repository_root = tower_root.parent
+    frontend_root = tower_root / "frontend"
+    frontend_source = (frontend_root / "control-tower.html").read_text(encoding="utf-8")
+    stylesheet_hrefs = set(re.findall(r'<link\b[^>]*\bhref=["\']([^"\']+)["\']', frontend_source))
+    base_theme = repository_root / "src" / "factory-theme.css"
+    bulk_intake = frontend_root / "src" / "bulk-intake.css"
+    assert "/factory-native/src/factory-theme.css" in stylesheet_hrefs
+    assert "./src/bulk-intake.css" in stylesheet_hrefs
+    assert base_theme.is_file()
+    assert bulk_intake.is_file()
+    return (
+        frontend_source,
+        (frontend_root / "src" / "control-tower-client.mjs").read_text(encoding="utf-8"),
+        base_theme.read_text(encoding="utf-8"),
+        bulk_intake.read_text(encoding="utf-8"),
+    )
+
+
 def test_default_config_uses_isolated_local_runtime_defaults() -> None:
     # Given: 환경변수가 없는 새 생산관제 런타임 설정을 준비한다.
     # When: 경계 설정 파서를 호출한다.
@@ -35,7 +55,7 @@ def test_health_is_deterministic_and_exposes_runtime_topology() -> None:
         "displayName": "생산관제",
         "links": {
             "apiHub": "http://127.0.0.1:4321",
-            "factoryBackend": "http://127.0.0.1:5050",
+            "factoryBackend": "http://127.0.0.1:43030",
             "factoryFrontend": "http://127.0.0.1:8081",
         },
         "listen": {"host": "127.0.0.1", "port": 41009},
@@ -56,26 +76,30 @@ def test_default_backend_port_is_browser_safe_without_chrome_bypass() -> None:
     assert DEFAULT_BACKEND_PORT == 41009
     assert config.backend_port == 41009
     assert config.backend_port not in restricted_ports
-    assert "http://127.0.0.1:41009/api/health" in frontend_source
+    assert "http://localhost:41009/api/health" in frontend_source
     assert "http://127.0.0.1:5060/api/health" not in frontend_source
     assert "explicitly-allowed-ports" not in frontend_source
 
 
 def test_frontend_dynamic_api_requests_never_reuse_stale_browser_cache() -> None:
-    # Given: 운영 화면의 공통 API 요청 경계를 준비한다.
-    frontend_source = (Path(__file__).parents[2] / "frontend" / "control-tower.html").read_text(encoding="utf-8")
-    # When/Then: 재시작 전 factory 상태가 다시 그려지지 않도록 모든 동적 요청은 browser cache를 우회해야 한다.
-    assert 'fetch(`${API_BASE}${path}`, { ...options, cache: "no-store", headers, credentials: "include" })' in frontend_source
+    # Given: 운영 화면과 실제 공통 API client 경계를 준비한다.
+    frontend_source, client_source, _, _ = _read_live_control_tower_sources()
+    # When: 화면이 공통 client의 apiRequest를 통해 동적 요청을 보낸다.
+    # Then: caller의 cache: force-cache 요청도 공통 경계에서 no-store로 강제되어야 한다.
+    assert 'import { createControlTowerClient } from "./src/control-tower-client.mjs";' in frontend_source
+    assert "const { apiRequest, loadSession } = createControlTowerClient({ apiBase: API_BASE, setStatus });" in frontend_source
+    assert "await apiRequest(path);" in frontend_source
+    assert 'fetchImpl(`${API_BASE}${path}`, { ...options, cache: "no-store", headers, credentials: "include" })' in client_source
 
 
 def test_frontend_live_css_rejects_raw_values_outside_semantic_token_root() -> None:
-    # Given: production control 화면의 전체 CSS와 token root를 준비한다.
-    frontend_source = (Path(__file__).parents[2] / "frontend" / "control-tower.html").read_text(encoding="utf-8")
+    # Given: 실제 연결 stylesheet와 production control consumer CSS를 준비한다.
+    frontend_source, _, base_theme_css, bulk_intake_css = _read_live_control_tower_sources()
     style = re.search(r"<style>(?P<css>.*?)</style>", frontend_source, flags=re.DOTALL)
     assert style is not None
-    root = re.search(r":root\s*\{(?P<body>.*?)\}", style.group("css"), flags=re.DOTALL)
+    root = re.search(r":root\s*\{(?P<body>.*?)\}", bulk_intake_css, flags=re.DOTALL)
     assert root is not None
-    consumer_css = style.group("css")[: root.start()] + style.group("css")[root.end() :]
+    consumer_css = style.group("css") + bulk_intake_css[: root.start()] + bulk_intake_css[root.end() :]
     media_conditions = re.findall(r"@media\s*([^\{]+)\{", consumer_css)
     media_thresholds = {
         threshold
@@ -98,21 +122,26 @@ def test_frontend_live_css_rejects_raw_values_outside_semantic_token_root() -> N
         for name, value in re.findall(r"(?m)^\s*([\w-]+)\s*:\s*([^;]+);", consumer_css)
         if name in token_only_properties and not value.strip().startswith("var(")
     ]
-    token_names = set(re.findall(r"--([\w-]+)\s*:", root.group("body")))
+    token_names = set(re.findall(r"--([\w-]+)\s*:", base_theme_css + bulk_intake_css))
+    used_token_names = set(re.findall(r"var\(--([\w-]+)", consumer_css + bulk_intake_css))
     required_token_names = set(
         (
             "border-width-default card-min-block-size color-accent-wash color-error-border color-ok-border "
-            "color-primary-glow color-surface-sheen content-max-width font-size-page-title font-size-panel-copy "
+            "color-menu-tab-background color-primary-glow color-surface-sheen content-max-width font-size-page-title font-size-panel-copy "
             "font-size-section-title font-weight-strong grid-min-card grid-min-detail line-height-body page-gutter "
-            "radius-card radius-circle radius-pill space-page-bottom status-dot-size status-mark-size tracking-kicker"
+            "radius-card radius-circle radius-pill shadow-menu-tab-selected-inset space-page-bottom status-dot-size status-mark-size tracking-kicker"
         ).split()
     )
     # Then: raw px는 주석으로 설명된 반응형 threshold뿐이고 나머지는 모두 의미 token을 사용해야 한다.
     assert raw_visual_values == [], f"raw visual consumer declarations: {raw_visual_values}"
     assert non_tokenized_properties == [], f"non-tokenized visual properties: {non_tokenized_properties}"
-    assert media_thresholds == {"720px", "721px", "960px", "1100px"}
+    assert media_thresholds == {"720px", "721px", "900px", "960px", "1100px"}
     assert "CSS custom properties are not supported in media conditions; use only documented 720px, 721px, 960px, and 1100px responsive thresholds." in consumer_css
     assert required_token_names <= token_names
+    assert used_token_names <= token_names
+    assert "font-size: var(--font-size-panel-copy);" in consumer_css
+    assert "background: var(--color-menu-tab-background);" in consumer_css
+    assert "box-shadow: var(--shadow-menu-tab-selected-inset);" in consumer_css
 
 
 @pytest.mark.parametrize(

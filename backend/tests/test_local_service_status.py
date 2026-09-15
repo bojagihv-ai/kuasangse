@@ -61,3 +61,25 @@ def test_cafe24_start_returns_immediately_when_another_service_owns_the_port(mon
     assert status_code == 409
     assert response.get_json()['portConflict'] is True
 
+
+def test_cafe24_start_passes_heap_headroom_to_the_control_tower(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(api_core, '_local_action_request_allowed', lambda: True)
+    script = tmp_path / 'launch-cafe24-control-tower.ps1'
+    script.write_text('', encoding='utf-8')
+    monkeypatch.setattr(api_core, '_CAFE24_CONTROL_SCRIPT', script)
+    monkeypatch.setattr(api_core, '_CAFE24_CONTROL_ROOT', tmp_path)
+    statuses = iter((
+        {'running': False, 'portConflict': False, 'port': 8787},
+        {'running': True, 'portConflict': False, 'port': 8787},
+    ))
+    monkeypatch.setattr(api_core, '_cafe24_control_status_payload', lambda: next(statuses))
+    monkeypatch.setattr(api_core.time, 'sleep', lambda _seconds: None)
+    captured = {}
+    monkeypatch.setattr(api_core.subprocess, 'Popen', lambda *args, **kwargs: captured.update(kwargs))
+    app = Flask(__name__)
+
+    with app.test_request_context('/api/cafe24-control/start', method='POST'):
+        response = api_core.cafe24_control_start()
+
+    assert response.get_json()['running'] is True
+    assert captured['env']['NODE_OPTIONS'] == '--max-old-space-size=4096'

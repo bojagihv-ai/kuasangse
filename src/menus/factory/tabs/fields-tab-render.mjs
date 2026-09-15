@@ -102,7 +102,7 @@ function sizeNotice(factory, helpers) {
   </div>`;
 }
 
-function missingPanel(summary, helpers) {
+function missingPanel(summary, helpers, options = {}) {
   const missing = [...(summary.missingRegister || []), ...(summary.missingGenerate || [])];
   const autoDone = Array.isArray(summary.autoDone) ? summary.autoDone : [];
   const autoDoneText = autoDone.length ? `자동/선택 상품 기준으로 통과한 필수값 ${autoDone.length}개: ${autoDone.slice(0, 6).map(item => item.label).join(', ')}${autoDone.length > 6 ? ' 외' : ''}` : '';
@@ -110,8 +110,10 @@ function missingPanel(summary, helpers) {
   const ready = missing.length === 0;
   const escapeHtml = helpers.escapeHtml;
   const escAttr = helpers.escAttr;
+  const panelId = options.panelId == null ? 'factoryWizardMissingFieldsPanel' : String(options.panelId);
+  const showSourceLink = options.showSourceLink !== false;
   const groups = ['상품등록 필수', '생성 필수'];
-  return `<div class="factory-card" id="factoryWizardMissingFieldsPanel" style="border-color:${ready ? 'rgba(34,197,94,.34)' : 'rgba(239,68,68,.46)'};background:${ready ? 'rgba(34,197,94,.07)' : 'rgba(127,29,29,.12)'};margin-bottom:14px">
+  return `<div class="factory-card" id="${escAttr(panelId)}" style="border-color:${ready ? 'rgba(34,197,94,.34)' : 'rgba(239,68,68,.46)'};background:${ready ? 'rgba(34,197,94,.07)' : 'rgba(127,29,29,.12)'};margin-bottom:14px">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap"><div>
       <div style="font-size:13px;font-weight:950;color:${ready ? 'var(--ok)' : 'var(--danger)'}">필수값 확인판 · ${ready ? '준비 완료' : `직접 확인할 필수값 ${missing.length}개`}</div>
       <div class="factory-small" style="margin-top:4px">초록색은 현재 확정된 값입니다. 바꾸려면 <b>값 수정</b>을 누른 뒤 <b>수정 적용</b>을 눌러야 합니다.</div>
@@ -119,10 +121,30 @@ function missingPanel(summary, helpers) {
       ${notice ? `<div data-factory-field-commit-notice class="factory-small" style="margin-top:7px;padding:7px 9px;border-radius:7px;border:1px solid rgba(34,197,94,.45);background:rgba(34,197,94,.10);color:var(--ok);font-weight:900">✓ ${escapeHtml(notice)}</div>` : ''}
     </div><div class="factory-automation-actions" style="justify-content:flex-end">
       ${missing.length ? '<button class="btn-sm primary" type="button" data-factory-wizard-commit-all>입력값 확인 적용</button>' : ''}
-      <button class="btn-sm" data-factory-guide-action="focus-missing-field-source"><span class="material-icons-outlined" style="font-size:14px">vertical_align_bottom</span>직접기입하러가기</button>
+      ${showSourceLink ? '<button class="btn-sm" data-factory-guide-action="focus-missing-field-source"><span class="material-icons-outlined" style="font-size:14px">vertical_align_bottom</span>직접기입하러가기</button>' : ''}
     </div></div>
     ${groups.map(group => `<div style="margin-top:12px"><div style="font-size:12px;font-weight:950;color:var(--text);margin-bottom:8px">${escapeHtml(group)}</div><div class="factory-automation-status-grid">${(summary.fields || []).filter(item => item.group === group).map(item => fieldCard(item, helpers)).join('')}</div></div>`).join('')}
   </div>`;
+}
+
+function renderFieldsHelpers(injectedHelpers = {}) {
+  return {
+    escapeHtml: helper(injectedHelpers, 'escapeHtml', escapeHtmlFallback),
+    escAttr: helper(injectedHelpers, 'escAttr', escapeAttrFallback),
+    disabledAttr: helper(injectedHelpers, 'disabledAttr', disabledAttrFallback),
+    factoryAutomationStatusTone: helper(injectedHelpers, 'factoryAutomationStatusTone', statusToneFallback),
+    factoryAutomationCounts: helper(injectedHelpers, 'factoryAutomationCounts', () => ({})),
+    factoryAutomationReviewSummary: helper(injectedHelpers, 'factoryAutomationReviewSummary', () => ({ fields: [], missingRegister: [], missingGenerate: [], autoDone: [] })),
+    factoryBojagiSquareSizeOptionSuggestion: helper(injectedHelpers, 'factoryBojagiSquareSizeOptionSuggestion', () => null),
+    factoryFieldTransferRows: helper(injectedHelpers, 'factoryFieldTransferRows', () => []),
+    factoryFieldTransferState: helper(injectedHelpers, 'factoryFieldTransferState', () => ({})),
+    factorySinhwaSelectedTransferTarget: helper(injectedHelpers, 'factorySinhwaSelectedTransferTarget', () => null),
+    factoryCafe24SelectedTransferTarget: helper(injectedHelpers, 'factoryCafe24SelectedTransferTarget', () => null),
+  };
+}
+
+export function renderFactoryRequiredFieldsPanel(summary, injectedHelpers = {}, options = {}) {
+  return missingPanel(record(summary), renderFieldsHelpers(injectedHelpers), options);
 }
 
 function transferPanel(factory, summary, helpers) {
@@ -155,19 +177,7 @@ function transferPanel(factory, summary, helpers) {
 }
 
 export function renderFieldsFactoryTab(view, injectedHelpers = {}) {
-  const helpers = {
-    escapeHtml: helper(injectedHelpers, 'escapeHtml', escapeHtmlFallback),
-    escAttr: helper(injectedHelpers, 'escAttr', escapeAttrFallback),
-    disabledAttr: helper(injectedHelpers, 'disabledAttr', disabledAttrFallback),
-    factoryAutomationStatusTone: helper(injectedHelpers, 'factoryAutomationStatusTone', statusToneFallback),
-    factoryAutomationCounts: helper(injectedHelpers, 'factoryAutomationCounts', () => ({})),
-    factoryAutomationReviewSummary: helper(injectedHelpers, 'factoryAutomationReviewSummary', () => ({ fields: [], missingRegister: [], missingGenerate: [], autoDone: [] })),
-    factoryBojagiSquareSizeOptionSuggestion: helper(injectedHelpers, 'factoryBojagiSquareSizeOptionSuggestion', () => null),
-    factoryFieldTransferRows: helper(injectedHelpers, 'factoryFieldTransferRows', () => []),
-    factoryFieldTransferState: helper(injectedHelpers, 'factoryFieldTransferState', () => ({})),
-    factorySinhwaSelectedTransferTarget: helper(injectedHelpers, 'factorySinhwaSelectedTransferTarget', () => null),
-    factoryCafe24SelectedTransferTarget: helper(injectedHelpers, 'factoryCafe24SelectedTransferTarget', () => null),
-  };
+  const helpers = renderFieldsHelpers(injectedHelpers);
   const source = record(view);
   const factory = record(source.factory || source);
   const counts = record(source.counts || helpers.factoryAutomationCounts(factory));
@@ -181,7 +191,7 @@ export function renderFieldsFactoryTab(view, injectedHelpers = {}) {
   const renderStatusCard = helper(injectedHelpers, 'renderFactoryAutomationStatusCard', (label, value, detail, done) => statusCardFallback(label, value, detail, done, helpers.escapeHtml));
   return `<div>
     <div class="factory-automation-grid"><div class="factory-automation-panel"><h4>3. 필수값</h4><p>빨간 칸은 지금 채워야 하는 값입니다. 사이즈값이 채워지면 사이즈이미지 생성 버튼이 바로 활성화됩니다.</p>
-      ${sizeNotice(factory, helpers)}${missingPanel(summary, helpers)}
+      ${sizeNotice(factory, helpers)}${renderFactoryRequiredFieldsPanel(summary, helpers)}
       <div class="factory-automation-actions">${hasSizeImageCandidate ? `<button class="btn-primary" data-factory-guide-action="go-tab:assets">생성컷 선택으로 이동</button><button class="btn-sm" data-factory-guide-action="run-size-now" ${helpers.disabledAttr(!summary.sizeReady, '가로/세로 값을 먼저 채워주세요.')}>사이즈이미지 다시 생성</button>` : `<button class="btn-primary" data-factory-guide-action="run-size-now" ${helpers.disabledAttr(!summary.sizeReady, '가로/세로 값을 먼저 채워주세요.')}>사이즈이미지 생성</button><button class="btn-sm" data-factory-guide-action="go-tab:assets">생성컷 선택으로 이동</button>`}</div>
     </div><div class="factory-automation-panel"><h4>옵션 여부</h4><p>옵션표와 색상 판단은 기존 옵션분류기 흐름을 사용합니다. 여기서는 어떤 경로로 갈지만 확정합니다.</p><div class="factory-automation-status-grid">${renderStatusCard('현재 선택', auto.optionMode === 'none' ? '옵션 없음' : auto.optionMode === 'provided' ? '옵션 있음' : '미결정', '색상옵션 섹션과 옵션표 생성 기준으로 사용됩니다.', auto.optionMode !== 'pending')}${renderStatusCard('옵션 결과', `${Number(counts.optionAssets || 0)}개`, '옵션분류기 최종 결과가 있으면 색상옵션 섹션 기본 이미지로 사용합니다.', Number(counts.optionAssets || 0) > 0)}</div><div class="factory-automation-actions"><button class="btn-sm" data-factory-guide-action="mark-no-options">옵션 없음</button><button class="btn-sm primary" type="button" data-factory-option-color-upload>옵션 있음 - 색상이미지 직접넣기</button><button class="btn-sm" data-factory-guide-action="mark-options-match">옵션 있음 - 옵션분류기에서 매칭</button><input type="file" data-factory-option-color-file accept="image/*" multiple style="display:none"></div>${checklist}</div></div>
     ${transferPanel(factory, summary, { ...helpers, factoryFieldTransferRows: helper(injectedHelpers, 'factoryFieldTransferRows', () => []), factoryFieldTransferState: helper(injectedHelpers, 'factoryFieldTransferState', () => ({})), factorySinhwaSelectedTransferTarget: helper(injectedHelpers, 'factorySinhwaSelectedTransferTarget', () => null), factoryCafe24SelectedTransferTarget: helper(injectedHelpers, 'factoryCafe24SelectedTransferTarget', () => null) })}

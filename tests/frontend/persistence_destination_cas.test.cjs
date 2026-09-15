@@ -188,6 +188,7 @@ test('Given import session replica When published Then session and bootstrap sha
     currentProjectId: 'alpha',
     currentProjectName: '수저집',
     currentProjectCreatedAt: 1710000000000,
+    workspaceKind: 'project',
     step: 'factory',
   };
 
@@ -212,6 +213,34 @@ test('Given import session replica When published Then session and bootstrap sha
   assert.equal(bootstrap.workspaceRevision.counter, 41);
   assert.equal(bootstrap.currentProjectId, 'alpha');
   assert.equal(bootstrap.currentProjectName, '수저집');
+  assert.equal(bootstrap.workspaceKind, 'project');
+});
+
+test('새 작업 bootstrap은 초안 ID를 저장된 문서 ID로 승격하지 않는다', async () => {
+  const { createSessionStorageAdapter } = await load('session-storage-adapter.mjs');
+  for (const [scopeId, currentProjectId, expectedProjectId] of [
+    ['draft:new-work', '', ''],
+    ['draft:saved-document-tab', 'saved-document', 'saved-document'],
+    ['project:legacy-document', undefined, 'legacy-document'],
+  ]) {
+    const values = new Map();
+    const adapter = createSessionStorageAdapter({ storage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: key => values.delete(key),
+    } });
+    const accepted = envelope('BOOTSTRAP', 0, 1);
+    accepted.scopeId = scopeId;
+    accepted.metadata.revision.scopeId = scopeId;
+    accepted.snapshot = { currentProjectId, currentProjectName: '', productName: '', step: 'factory' };
+    await adapter.write(accepted, { writeBootstrap: true });
+    const bootstrap = JSON.parse(adapter.getItem('pdp_last_work_bootstrap_v1'));
+    const session = await adapter.read(scopeId);
+    assert.equal(bootstrap.workspaceScope.id, scopeId);
+    assert.equal(bootstrap.currentProjectId, expectedProjectId);
+    assert.equal(session.snapshot.currentProjectId, currentProjectId);
+    assert.equal(session.snapshot.productName, '');
+  }
 });
 
 test('Given an F5 starts with draft authority When this tab has a project bootstrap Then the project identity is still readable', async () => {
@@ -530,6 +559,8 @@ test('Given two tabs open the same saved document When each tab autosaves Then F
   assert.equal((await adapterB.read('draft:tab-b'))?.snapshot?.productName, '같은문서-B편집');
   assert.equal(JSON.parse(adapterA.getItem('pdp_last_work_bootstrap_v1')).workspaceScope.id, 'draft:tab-a');
   assert.equal(JSON.parse(adapterB.getItem('pdp_last_work_bootstrap_v1')).workspaceScope.id, 'draft:tab-b');
+  assert.equal(JSON.parse(adapterA.getItem('pdp_last_work_bootstrap_v1')).workspaceBranch.branchId, 'tab-a');
+  assert.equal(JSON.parse(adapterB.getItem('pdp_last_work_bootstrap_v1')).workspaceBranch.branchId, 'tab-b');
   assert.equal(sharedValues.size, 0);
 });
 

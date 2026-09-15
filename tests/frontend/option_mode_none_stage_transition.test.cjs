@@ -67,6 +67,7 @@ function loadRestoreCheckpoint(projection, factory) {
     factoryRuntimeControlProjection: async () => (typeof projection === 'function' ? projection() : projection),
     factoryRuntimeControlProjectionMatchesCheckpoint: () => true,
     getCurrentDocumentWorkspaceScope: projectId => `project:${projectId}`,
+    getCurrentLastWorkWorkspaceScope: () => 'draft:optionless-test',
     ensureWorkspaceEditAuthority: async scopeId => ({ mode: 'editing', scopeId }),
     factoryRuntimeUpdateOwnedFactory: async (_operation, _scope, mutate) => mutate(factory),
     factoryApplySelectedAssetsToSections: () => true,
@@ -94,6 +95,7 @@ function sourceSlice(source, startMarker, endMarker) {
 function loadRealRestoreCheckpoint(factory, options = {}) {
   const source = fs.readFileSync(path.join(ROOT, 'src', 'app-core-03.js'), 'utf8');
   const hydrateSource = fs.readFileSync(path.join(ROOT, 'src', 'app-core-02.js'), 'utf8');
+  const definitionSource = fs.readFileSync(path.join(ROOT, 'src', 'app-core-01.js'), 'utf8');
   const jobId = options.jobId || 'job-optionless-real-projection';
   const projectId = `batch:${jobId}`;
   const error = '색상옵션 값을 찾지 못했습니다.';
@@ -130,6 +132,7 @@ function loadRealRestoreCheckpoint(factory, options = {}) {
       return options.missingLocalProject === true ? null : true;
     },
     getCurrentDocumentWorkspaceScope: value => `project:${value}`,
+    getCurrentLastWorkWorkspaceScope: () => 'draft:optionless-test',
     ensureWorkspaceEditAuthority: async scopeId => ({ mode: 'editing', scopeId }),
     factoryRuntimeUpdateOwnedFactory: async (_operation, _scope, mutate) => mutate(factory),
     factoryApplySelectedAssetsToSections: () => true,
@@ -200,6 +203,11 @@ function loadRealRestoreCheckpoint(factory, options = {}) {
     } : {}),
   });
   const slices = [
+    sourceSlice(definitionSource, 'const SECTIONS = [', '\nconst LLM_PROVIDERS ='),
+    sourceSlice(hydrateSource, 'const SECTION_GENERATION_MODES = [', '\nfunction sectionAssemblySelectedSourceIds('),
+    sourceSlice(hydrateSource, 'function normalizeCustomSections(', '\nfunction getSectionDefinition('),
+    sourceSlice(source, 'function sectionAssemblyGeneralCutChoices(', '\nfunction renderSectionAssemblySummaryPanel('),
+    sourceSlice(source, 'function factoryRuntimeControlTabScope(', '\nfunction factoryRuntimeControlCandidateRequest('),
     ...(options.durableRestore ? [
       sourceSlice(hydrateSource, 'function workspaceSnapshotRevision(', '\nfunction currentWorkspaceRevision('),
       sourceSlice(hydrateSource, 'async function hydrateServerLastWorkSnapshot(', '\nasync function refreshCompetitorAnalysisFromServer('),

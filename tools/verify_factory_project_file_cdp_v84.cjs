@@ -302,8 +302,24 @@ async function main() {
     }
     const originalRefreshWorkspaceLists = window.refreshWorkspaceLists;
     window.refreshWorkspaceLists = async () => { throw new Error('post-commit-refresh-failure-v84'); };
-    const imported = await window.importFactoryProjectFileBundle(bundle, { fileName: '작업파일검증상품.kuasangse', skipLeaveConfirm: true });
+    const originalEnsureAuthority = window.ensureWorkspaceEditAuthority;
+    const importAuthorityTrace = [];
+    window.ensureWorkspaceEditAuthority = async (...args) => {
+      const caller = String(new Error().stack).split('\\n').slice(1, 5).join('\\n');
+      const result = await originalEnsureAuthority(...args);
+      importAuthorityTrace.push({ requested: args[0] || '', scope: result?.scopeId, mode: result?.mode, caller });
+      return result;
+    };
+    let imported;
+    try {
+      imported = await window.importFactoryProjectFileBundle(bundle, { fileName: '작업파일검증상품.kuasangse', skipLeaveConfirm: true });
+    } finally {
+      window.ensureWorkspaceEditAuthority = originalEnsureAuthority;
+    }
     const authorityAfterImport = window.__KUASANGSE_WORKSPACE_LOCK__?.snapshot?.() || null;
+    if (!String(authorityAfterImport?.scopeId || '').startsWith('draft:')) {
+      throw new Error('IMPORT_AUTHORITY_NOT_DRAFT: ' + JSON.stringify(importAuthorityTrace.slice(-8)));
+    }
     const workspaceBranchAfterImport = window.currentWorkspaceBranch(
       authorityAfterImport?.scopeId || '',
       window.state.currentProjectId,

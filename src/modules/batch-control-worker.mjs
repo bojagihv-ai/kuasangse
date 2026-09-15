@@ -25,6 +25,7 @@ export function createBatchControlWorker({
   workerId,
   runtimeBuildId = 'runtime-build-unknown',
   workerSessionId = '',
+  replaceExistingSession = true,
   commandBridge,
   projectionBridge = null,
   authorityHeartbeat = null,
@@ -121,6 +122,7 @@ export function createBatchControlWorker({
     const result = await post(WORKER_ENDPOINTS.factoryHello, {
       ...sessionEnvelope(projection),
       projection,
+      ...(replaceExistingSession === false ? { replaceExistingSession: false } : {}),
     });
     liveSessionReady = true;
     return result;
@@ -173,6 +175,7 @@ export function createBatchControlWorker({
     activeOrder = await acceptWorkOrder({ order: claimed.order, workerId, post, endpoints: WORKER_ENDPOINTS, onError: onIntakeError });
     eventSequence = 1;
     try {
+      if (typeof commandBridge.waitForAdmission === 'function') await commandBridge.waitForAdmission(activeOrder);
       if (
         activeOrder.command.kind === 'factory-workfile'
         && (!record(projectionBridge) || typeof projectionBridge.run !== 'function')
@@ -199,7 +202,8 @@ export function createBatchControlWorker({
       return Object.freeze({ status: 'completed', orderId: activeOrder.orderId });
     } catch (error) {
       console.error('Batch worker command failed', error);
-      await post(WORKER_ENDPOINTS.fail(activeOrder.orderId), { ...activeOrder, workerId, eventSequence: ++eventSequence, error: String(error?.code || error?.message || error) });
+      const terminalProjection = await Promise.resolve().then(() => record(projectionBridge) && typeof projectionBridge.getProjection === 'function' ? projectionBridge.getProjection() : null).then(projection => record(projection) && projection.schema === 'factory-control-projection:v1' ? projection : null).catch(() => null);
+      await post(WORKER_ENDPOINTS.fail(activeOrder.orderId), { ...activeOrder, workerId, eventSequence: ++eventSequence, error: String(error?.code || error?.message || error), ...(terminalProjection ? { terminalProjection } : {}) });
       workfileHydration.reject(activeOrder.orderId, error);
       throw error;
     } finally {
@@ -240,13 +244,6 @@ export function createBatchControlWorker({
 
   function startPolling(intervalMs = 1000) { return pollingTask.start(intervalMs); }
 
-  function startProjectionPolling(intervalMs = 1000) {
-    if (!record(projectionBridge) || typeof projectionBridge.getProjection !== 'function') {
-      throw new BatchWorkerContractError('projection_bridge_missing');
-    }
-    return projectionPollingTask.start(intervalMs);
-  }
-
   return Object.freeze({
     capabilityVersion: BATCH_CONTROL_WORKER_CAPABILITY_VERSION,
     sessionId: liveSessionId,
@@ -260,7 +257,12 @@ export function createBatchControlWorker({
     startPolling,
     hydrateFactoryWorkfile: workfileHydration.submit,
     syncProjection,
-    startProjectionPolling,
+    startProjectionPolling(intervalMs = 1000) {
+      if (!record(projectionBridge) || typeof projectionBridge.getProjection !== 'function') {
+        throw new BatchWorkerContractError('projection_bridge_missing');
+      }
+      return projectionPollingTask.start(intervalMs);
+    },
     endpoints: WORKER_ENDPOINTS,
   });
 }

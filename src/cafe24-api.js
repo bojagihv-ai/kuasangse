@@ -1404,12 +1404,10 @@ async function approveCafe24ControlPlan(plan = {}, options = {}) {
       throw new Error(`Cafe24 변경안 승인 중단: 확인문구 "${phrase}"가 필요합니다.`);
     }
   }
-  const base = String(CAFE24_CONTROL_API.controlBase || '').replace(/\/+$/, '');
   const approvalTimeoutMs = Math.max(30000, Number(options.approvalTimeoutMs || 180000));
-  const data = await fetchJsonWithTimeout(`${base}/api/change-plans/${encodeURIComponent(planId)}/approve`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-    body: JSON.stringify({ confirmation }),
+  const data = await invokeApiHubConnector(CAFE24_CONTROL_API.connectorId, 'change-plan-approve', {
+    pathParams: { planId },
+    body: { confirmation },
   }, approvalTimeoutMs);
   if (data?.ok === false) {
     throw new Error(formatApiErrorMessage(data, 'Cafe24 변경안 승인 실패'));
@@ -1418,11 +1416,9 @@ async function approveCafe24ControlPlan(plan = {}, options = {}) {
 }
 
 async function fetchCafe24ControlJobs(options = {}) {
-  const base = String(CAFE24_CONTROL_API.controlBase || '').replace(/\/+$/, '');
   const limit = Math.max(1, Math.min(50, Number(options.limit || 20) || 20));
-  const data = await fetchJsonWithTimeout(`${base}/api/jobs?limit=${encodeURIComponent(limit)}`, {
-    method: 'GET',
-    headers: { 'Accept': 'application/json' },
+  const data = await invokeApiHubConnector(CAFE24_CONTROL_API.connectorId, 'jobs', {
+    query: { limit },
   }, 10000);
   const body = data?.data ?? data;
   return Array.isArray(body) ? body : [];

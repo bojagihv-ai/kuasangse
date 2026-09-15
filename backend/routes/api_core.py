@@ -1,5 +1,6 @@
 """API domain routes: core. Auto-split from api.py — behavior unchanged."""
 import ipaddress
+import os
 import socket
 import ssl
 import tempfile
@@ -735,6 +736,8 @@ def cafe24_control_start():
             }), 404
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
+            child_env = os.environ.copy()
+            child_env["NODE_OPTIONS"] = "--max-old-space-size=4096"
             subprocess.Popen(
                 [
                     "powershell.exe",
@@ -748,6 +751,7 @@ def cafe24_control_start():
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
+                env=child_env,
             )
         except OSError as exc:
             return jsonify({

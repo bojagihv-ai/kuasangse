@@ -6,41 +6,45 @@ import {
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
   reconcileFactoryProjectionForSameWork,
-} from './factory-sync-model.mjs?selectedId=4';
+} from './factory-sync-model.mjs?selectedId=5';
 import { bindMenuShell, projectMenuBadges } from './menu-shell.mjs?menuReorg=3';
-import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=2';
+import { buildOperatorQueueRow } from './operator-queue-model.mjs?batchList=4';
+import { createFactoryOperatorControls, readFactoryOperatorControls, factoryWorkfileExportBlocker } from './factory-operator-controls.mjs?operator=3';
+import { renderFactoryDbControls, renderFactoryCompetitorControls, renderFactoryFieldControls } from './factory-operator-source-panels.mjs?operator=4';
+import { renderFactorySectionControls } from './factory-operator-section-panel.mjs?operator=3';
 // 사람 말로 옮긴 사유 표는 보드 모델이 들고 있다. 화면마다 따로 두면 한쪽만 번역되어
 // 같은 코드가 어떤 화면에서는 한국어로, 어떤 화면에서는 원시 코드로 뜬다.
-import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=44';
+import { OPERATOR_MESSAGES, projectProductionBoard } from './production-board-model.mjs?parallelBoard=45';
 // 개요 첫 화면은 새 사실을 만들지 않는다. 보드가 이미 만든 파생을 사람이 할 일 순서로만 다시 세운다.
 import { buildNextActionInbox, inboxHeadline } from './next-action-model.mjs?nextAction=3';
-import { deriveAssemblyWorkbench, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=2';
+import { deriveAssemblyWorkbench, followAssemblyWorkbenchStep, resolveCandidateAsset } from './production-workbench-model.mjs?currentProductTruth=5';
 import { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
 import {
   createWorkfileJobTabRegistry,
   workfileIdentityMatches,
   workfileTargetIdentityMatches,
   workfileTabIdentity,
-} from './workfile-job-tabs-model.mjs?workfileTabs=5';
+} from './workfile-job-tabs-model.mjs?workfileTabs=6';
 
 export {
   buildCandidateReviewActions,
   buildIoConveyorProjection,
+  followAssemblyWorkbenchStep,
   mergeCommandResult,
   normalizeJob,
   normalizeJobs,
   reviewPayloadSignature,
   resolveCandidateAsset,
-} from './production-workbench-model.mjs?currentProductTruth=2';
+} from './production-workbench-model.mjs?currentProductTruth=5';
 export {
   applyFactoryDelta,
   buildACutSelectionCommand,
   disconnectedFactoryProjection,
   normalizeFactoryProjection,
   reconcileFactoryProjectionForSameWork,
-} from './factory-sync-model.mjs?selectedId=4';
+} from './factory-sync-model.mjs?selectedId=5';
 export { groupWorkBundleSectionAssets } from './production-result-groups.mjs?detailSections=1';
-export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=5';
+export { createWorkfileJobTabRegistry } from './workfile-job-tabs-model.mjs?workfileTabs=6';
 
 const STAGE_LABELS = Object.freeze({
   representative: '대표이미지',
@@ -97,6 +101,7 @@ const STATUS_LABELS = Object.freeze({
   staged_pending_readback: '원격 재확인 대기',
   executing: '등록 실행 중',
   staged_verified: '등록 검증 완료',
+  registered_history: '등록 이력 확인됨',
   disconnected: '조립공장 연결 끊김',
   unlinked: '연결 안 됨',
   ambiguous: '연결 확인 필요',
@@ -294,23 +299,30 @@ export function buildWorkfileForkPayload({ projection: projectionValue, workfile
   });
 }
 
-export function buildFactoryResumePayload({ job: jobValue, projection: projectionValue, imageModel = '' }) {
+export function buildFactoryResumePayload({ job: jobValue, projection: projectionValue, imageModel = '', history: historyValue }) {
   const job = record(jobValue);
-  const projection = normalizeFactoryProjection(projectionValue);
-  if (!text(job.jobId) || text(projection.registration.jobId) !== text(job.jobId)) {
+  const projection = projectionValue ? normalizeFactoryProjection(projectionValue) : null;
+  const history = record(record(historyValue).history);
+  const savedCheckpoint = job.checkpointAvailable
+    && record(record(historyValue).workBundle).id === `history:${job.jobId}`
+    && history.workspaceId === `batch:${job.jobId}`
+    && Number.isInteger(history.revision) && history.revision >= 0
+    ? history : {};
+  if (!text(job.jobId) || !projection && !savedCheckpoint || projection && text(projection.registration.jobId) !== text(job.jobId)) {
     const error = new Error('factory_job_view_not_current');
     error.code = 'factory_job_view_not_current';
     throw error;
   }
-  if (!projection.session.runId || projection.session.revision < 0) {
+  const checkpoint = savedCheckpoint.runId ? savedCheckpoint : projection?.session || {};
+  if (!text(checkpoint.runId) || !Number.isInteger(checkpoint.revision) || checkpoint.revision < 0) {
     const error = new Error('factory_product_checkpoint_invalid');
     error.code = 'factory_product_checkpoint_invalid';
     throw error;
   }
   return Object.freeze({
-    imageModel: text(imageModel),
-    expectedCheckpointRevision: projection.session.revision,
-    expectedCheckpointRunId: projection.session.runId,
+    ...(text(imageModel) ? { imageModel: text(imageModel) } : {}),
+    expectedCheckpointRevision: checkpoint.revision,
+    expectedCheckpointRunId: checkpoint.runId,
   });
 }
 
@@ -322,17 +334,24 @@ function httpUrl(value) {
 export function cafe24RegistrationSummary(registrationValue, sessionValue = {}, receiptValue = null) {
   const registration = record(registrationValue);
   const session = record(sessionValue);
-  const receipt = record(receiptValue || registration.publicationReceipt);
+  const receipt = [record(receiptValue), record(registration.publicationReceipt)].find(candidate => {
+    const remote = record(candidate.remoteReadback);
+    const associated = Boolean(text(candidate.receiptId) && text(remote.productNo) && text(candidate.jobId) && text(candidate.productId))
+      && text(candidate.jobId) === text(registration.jobId)
+      && text(candidate.productId) === text(registration.productId || session.productId);
+    if (!associated) return false;
+    if (candidate.schema === 'factory-cafe24-terminal-publication-receipt:v1') {
+      return candidate.status === 'staged_verified' && Boolean(text(candidate.remoteReadbackDigest));
+    }
+    return candidate.schema === 'factory-cafe24-native-registration-history:v1' && candidate.status === 'verified'
+      && Boolean(text(candidate.workspaceId) && text(candidate.productKey) && text(candidate.runId) && text(candidate.inputFingerprint))
+      && text(candidate.workspaceId) === text(session.workspaceId)
+      && text(candidate.productKey) === text(session.productKey)
+      && text(candidate.productId) === `cafe24:${text(remote.productNo)}`;
+  }) || {};
   const remote = record(receipt.remoteReadback);
-  const verified = text(receipt.schema) === 'factory-cafe24-terminal-publication-receipt:v1'
-    && Boolean(text(receipt.receiptId))
-    && text(receipt.status) === 'staged_verified'
-    && Boolean(text(receipt.remoteReadbackDigest))
-    && Boolean(text(remote.productNo))
-    && Boolean(text(receipt.jobId))
-    && text(receipt.jobId) === text(registration.jobId)
-    && Boolean(text(receipt.productId))
-    && text(receipt.productId) === text(registration.productId || session.productId);
+  const verified = Boolean(receipt.receiptId);
+  const historical = verified && receipt.schema === 'factory-cafe24-native-registration-history:v1';
   const productNo = verified ? text(remote.productNo) : '';
   const mallId = verified ? firstText(remote.mallId, receipt.mallId, CAFE24_DEFAULT_MALL_ID) : '';
   const storefrontUrl = httpUrl(
@@ -343,11 +362,15 @@ export function cafe24RegistrationSummary(registrationValue, sessionValue = {}, 
   const adminUrl = httpUrl(verified ? firstText(remote.adminUrl, receipt.adminUrl) : '') || (productNo
     ? `https://${mallId}.cafe24.com/disp/admin/shop1/product/ProductRegister?product_no=${encodeURIComponent(productNo)}`
     : '');
-  const status = verified ? 'staged_verified' : firstText(receipt.status, registration.status);
+  const status = historical ? 'registered_history' : verified ? 'staged_verified' : text(registration.status);
   return Object.freeze({
     status,
     registered: verified,
+    historical,
+    currentVerified: verified && !historical,
     jobId: verified ? firstText(receipt.jobId, registration.jobId) : '',
+    workspaceId: verified ? text(receipt.workspaceId) : '',
+    runId: verified ? text(receipt.runId) : '',
     productName: verified ? firstText(remote.productName, receipt.productName) : '',
     productNo,
     productCode: verified ? firstText(remote.productCode, receipt.productCode) : '',
@@ -358,6 +381,9 @@ export function cafe24RegistrationSummary(registrationValue, sessionValue = {}, 
     representativeImageCount: verified ? Number(remote.representativeImageCount || receipt.representativeImageCount || 0) : 0,
     detailImageCount: verified ? Number(remote.detailImageCount || receipt.detailImageCount || 0) : 0,
     variantCount: verified ? Number(remote.variantCount || receipt.variantCount || 0) : 0,
+    optionName: verified ? text(remote.optionName) : '',
+    optionValues: Object.freeze(verified ? list(remote.optionValues).map(text) : []),
+    inventoryByOption: verified ? record(remote.inventoryByOption) : {},
     storefrontUrl,
     adminUrl,
     receiptId: verified ? firstText(receipt.receiptId) : '',
@@ -375,6 +401,7 @@ function projectionRecordKey(value) {
   return firstText(
     source.key,
     source.id,
+    source.schema === 'factory-operator-controls:v1' ? source.schema : '',
     source.assetId,
     source.candidateId,
     source.receiptId,
@@ -464,11 +491,14 @@ export function preserveCurrentProductProjection(currentValue, incomingValue) {
     registration: {
       ...(incomingIsStale ? reconciled.registration : current.registration),
       ...(incomingIsStale ? current.registration : reconciled.registration),
-      publicationReceipt: Object.keys(record(current.registration.publicationReceipt)).length
-        ? current.registration.publicationReceipt
-        : reconciled.registration.publicationReceipt,
+      publicationReceipt: !incomingIsStale && Object.keys(record(reconciled.registration.publicationReceipt)).length
+        ? reconciled.registration.publicationReceipt
+        : current.registration.publicationReceipt || reconciled.registration.publicationReceipt,
     },
-    receipts: mergeProjectionRecords(current.receipts, reconciled.receipts, incomingIsStale),
+    receipts: mergeProjectionRecords([
+      ...current.receipts,
+      ...(current.registration.publicationReceipt ? [current.registration.publicationReceipt] : []),
+    ], reconciled.receipts, incomingIsStale),
     products: mergeProjectionRecords(current.products, reconciled.products, incomingIsStale),
     session: {
       ...reconciled.session,
@@ -494,7 +524,7 @@ export function buildWorkfilePublicationLedger(projectionValue, receiptValue = n
   ];
   const seen = new Set();
   const publications = receiptCandidates.flatMap(candidate => {
-    const summary = cafe24RegistrationSummary(candidate, session, candidate);
+    const summary = cafe24RegistrationSummary(registration, session, candidate);
     if (!summary.registered || !summary.productNo) return [];
     const key = summary.receiptId || `${summary.jobId}|${summary.productNo}|${summary.productName}`;
     if (seen.has(key)) return [];
@@ -526,9 +556,13 @@ export function buildWorkfilePublicationLedger(projectionValue, receiptValue = n
     workfileSource,
     workfileExact,
     workfileConnected: Boolean(workfileName),
-    creationMode: workfileExact
+    creationMode: session.workfileSource === 'authoritative-store'
+      ? '권위 저장소 저장 · 실제 .kuasangse 파일 생성 없음'
+      : ['browser-download', 'browser-download-requested'].includes(session.workfileSource)
+        ? '다운로드 요청 기록 · 디스크 저장 미확인'
+      : workfileExact
       ? session.workfileSource
-        ? '상세페이지 프로그램 기존 저장 로직으로 제품명 .kuasangse 자동 생성'
+        ? '상세페이지 프로그램 저장 영수증 · 실제 파일은 별도 확인'
         : '기존 .kuasangse 연결 · 생산관제 자동 새 작업 생성 기록 없음'
       : workfileName
         ? '완료 이력 폴더만 확인 · 실제 .kuasangse 파일명·경로 미기록'
@@ -831,8 +865,16 @@ export function resolveCandidateThumbnail(candidate = {}, assetUrl = value => va
 }
 
 export function operatorQueueState(jobValue) {
-  const status = text(record(jobValue).status);
-  if (status === 'waiting_manual') return Object.freeze({ key: 'selection', label: '선택 필요' });
+  const job = record(jobValue);
+  const status = text(job.status);
+  if (status === 'waiting_manual') {
+    const progress = record(job.progress);
+    const stageKey = text(job.stageKey || progress.stageKey);
+    if (['export', 'cafe24_preflight', 'registration'].includes(stageKey)) {
+      return Object.freeze({ key: 'approval', label: '승인 필요' });
+    }
+    return Object.freeze({ key: 'selection', label: '선택 필요' });
+  }
   if (status === 'blocked') return Object.freeze({ key: 'blocked', label: '차단' });
   if (status === 'completed') return Object.freeze({ key: 'completed', label: '완료' });
   return Object.freeze({ key: 'running', label: '진행 중' });
@@ -973,6 +1015,8 @@ export function describeSyncSummary({
   percent = 0,
   queuedCount = 0,
   registrationVerified = false,
+  registrationHistorical = false,
+  waitingLabel = '',
 } = {}) {
   const connectivity = record(connectivityValue);
   const state = text(connectivity.state);
@@ -991,11 +1035,12 @@ export function describeSyncSummary({
   if (!hasProduct) return { text: `조립공장 연결됨 · 진행 중인 제품 없음${waiting}`, tone: 'ok' };
   const product = text(productLabel) || '현재 제품';
   const status = text(jobStatus).toLowerCase();
-  if (status === 'waiting_manual') return { text: `${product} · A컷 선택을 기다립니다${waiting}`, tone: 'warn' };
+  if (status === 'waiting_manual') return { text: `${product} · ${text(waitingLabel) || 'A컷 선택을 기다립니다'}${waiting}`, tone: 'warn' };
   if (status === 'blocked') return { text: `${product} · 막힘 · 되살리기 필요${waiting}`, tone: 'error' };
   if (status === 'running') return { text: `${product} · ${text(stageLabel) || '진행 중'} ${Math.max(0, Number(percent) || 0)}%${waiting}`, tone: 'ok' };
   if (status === 'queued') return { text: `${product} · 생산 순서 대기${waiting}`, tone: 'ok' };
   if (status === 'completed') {
+    if (registrationHistorical) return { text: `${product} · Cafe24 등록 이력 확인 · 현재 변경 별도 승인${waiting}`, tone: 'ok' };
     return registrationVerified
       ? { text: `${product} · Cafe24 등록 검증 완료${waiting}`, tone: 'ok' }
       : { text: `${product} · 생산 완료 · Cafe24 승인 필요${waiting}`, tone: 'warn' };
@@ -1039,7 +1084,7 @@ export function currentFactoryProductLabel(stateValue, activeJobValue) {
   const session = record(state.session || state);
   const registration = record(state.registration);
   const activeJob = record(activeJobValue);
-  return firstText(state.productKey, session.productKey, registration.productKey, activeJob.productKey, activeJob.productName);
+  return firstText(activeJob.productName, activeJob.productKey, state.productKey, session.productKey, registration.productKey);
 }
 
 export function applyFactorySseMessage(currentValue, factoryEventCursor, event) {
@@ -1271,6 +1316,7 @@ export function createWorkBundleAssetCard(asset, assetUrl = value => value, disp
         : []),
     ];
     image.addEventListener('error', () => {
+      if (!card.isConnected || image.parentNode !== frame) return;
       const next = fallbacks.shift();
       if (next) {
         image.src = next;
@@ -1529,8 +1575,10 @@ export function mountProductionWorkbench({
   if (typeof baseApiRequest !== 'function' || requiredRoots.some(key => !roots[key])) return () => {};
   const apiRequest = createCsrfRetryingApiRequest({ apiRequest: baseApiRequest, assetUrl });
   const surfaceHomes = new Map();
+  let overviewRenderKey = '';
 
   function restoreWorkbenchSurfaces() {
+    overviewRenderKey = '';
     document.dispatchEvent(new CustomEvent('control-tower:production-board-restore'));
     for (const [surface, marker] of surfaceHomes) {
       if (marker.isConnected && surface.parentNode !== marker.parentNode) marker.replaceWith(surface);
@@ -1549,7 +1597,7 @@ export function mountProductionWorkbench({
   }
 
   const activeMenuObserver = new MutationObserver(() => {
-    if (document.getElementById('app')?.dataset.activeMenu !== 'overview') restoreWorkbenchSurfaces();
+    if (document.getElementById('app')?.dataset.activeMenu !== 'queue') restoreWorkbenchSurfaces();
   });
   activeMenuObserver.observe(document.getElementById('app'), { attributes: true, attributeFilter: ['data-active-menu'] });
   roots.imageDialog?.addEventListener('click', event => {
@@ -1571,6 +1619,7 @@ export function mountProductionWorkbench({
   let stopped = false;
   let registrationMessage = '';
   let registrationRenderKey = '';
+  let queueSelectionRenderKey = '';
   let lastAutomationReceipt = null;
   let workBundle = normalizeWorkBundle({});
   let workBundleStatus = 'loading';
@@ -1582,17 +1631,19 @@ export function mountProductionWorkbench({
   let workBundleOutputPage = 0;
   let workBundleOutputStageKey = '';
   let workBundleGeneration = 0;
+  const workBundleRenders = new WeakMap();
   let productJobs = [];
   let recentlyCreatedJobIds = new Set();
   let queueFilter = 'all';
-  let operatorStepKey = '';
-  let operatorStepJobId = '';
+  let operatorStep = { jobId: '', key: '', manual: false };
+  let operatorCutStep = { jobId: '', key: '', manual: false };
   const workfileTabs = createWorkfileJobTabRegistry();
   const workfileInput = document.getElementById('workfile-input');
   let pendingWorkfileTargetJobId = '';
   let queueApiError = '';
   const pendingResumeByStage = new Map();
   const resumeInFlight = new Set();
+  const resumeFeedback = new Map();
   const deleteInFlight = new Set();
   const workfileForkInFlight = new Set();
   const heldDecisions = new Set();
@@ -1605,6 +1656,14 @@ export function mountProductionWorkbench({
   let registrationTargetConfirmed = false;
   const fixtureCount = Math.max(0, Number.parseInt(new URLSearchParams(window.location.search).get('fixtureCount') || '0', 10) || 0);
   const fixtureMode = fixtureCount > 0;
+  const operatorControls = createFactoryOperatorControls({
+    getContext: () => ({ job: activeProductJob(), projection }),
+    apiRequest,
+    onChange: () => { renderOverviewSummary(); renderWorkfileReportLedger(); },
+    onApplied: () => Promise.allSettled([refreshState(), refreshQueue()]),
+  });
+  const refreshAfterOperatorEdit = () => queueMicrotask(() => { if (!stopped) renderOverviewSummary(); });
+  roots.overview?.addEventListener('focusout', refreshAfterOperatorEdit);
   const requestedWorkBundleId = text(new URLSearchParams(window.location.search).get('bundleId'));
 
   function rememberActiveTabView() {
@@ -2109,39 +2168,51 @@ export function mountProductionWorkbench({
   function renderSyncBar() {
     const root = roots.sync;
     const state = connectivity();
-    const progress = record(projection.progress);
+    const current = viewedProjection();
+    const progress = record(current.progress);
     const activeJob = activeProductJob();
-    const productLabel = currentFactoryProductLabel(projection, activeJob) || '현재 제품 없음';
-    const stageLabel = progress.stageLabel || progress.stageKey || '공정 대기';
-    const jobStatus = text(activeJob?.status || progress.status || projection.status);
+    const productLabel = currentFactoryProductLabel(current, activeJob) || '현재 제품 없음';
+    const jobStatus = text(activeJob?.status || progress.status || current.status);
+    const currentReceipt = viewMatchesLiveProjection() ? approval.receipt : null;
+    const currentRegistration = cafe24RegistrationSummary(current.registration, current.session, currentReceipt);
     const assembly = deriveAssemblyWorkbench(
-      projection,
+      current,
       activeJob,
-      cafe24RegistrationSummary(projection.registration, projection.session, approval.receipt).registered,
+      currentRegistration.registered,
     );
-    const selectionCounts = projection.stages.reduce((total, stage) => ({
+    const stageLabel = assembly.currentStep?.label || progress.stageLabel || progress.stageKey || '공정 대기';
+    const productStateLabel = jobStatus === 'waiting_manual' && assembly.currentStep.key === 'send'
+      ? 'Cafe24 사전점검 필요'
+      : statusLabel(jobStatus);
+    const selectionCounts = current.stages.reduce((total, stage) => ({
       candidates: total.candidates + stage.candidates.length,
-      selected: total.selected + (stage.selectedId ? 1 : 0),
+      selected: total.selected + stage.selectedIds.length,
     }), { candidates: 0, selected: 0 });
     const backendTruth = factoryApiError ? `상태 조회 실패 · ${factoryApiError}` : '상태 응답 정상';
-    const factoryTruth = projection.connected
-      ? `연결됨 · ${projection.capabilityVersion || 'capability 미기록'}`
+    const factoryTruth = current.connected
+      ? `연결됨 · ${current.capabilityVersion || 'capability 미기록'}`
       : `연결 끊김 · ${state.detail}`;
-    const productTruth = projection.session.productKey
-      ? `${productLabel} · ${statusLabel(jobStatus)}`
+    const productTruth = current.session.productKey
+      ? `${productLabel} · ${productStateLabel}`
       : '선택된 제품 없음';
     const queuedCount = productJobs.filter(job => text(job.status) === 'queued').length;
     if (roots.syncSummary) {
       const summary = describeSyncSummary({
         connectivity: state,
         backendError: factoryApiError,
-        hasProduct: Boolean(projection.session.productKey),
+        hasProduct: Boolean(current.session.productKey),
         productLabel,
         jobStatus,
         stageLabel,
         percent: progress.percent,
         queuedCount,
-        registrationVerified: registrationStatus() === 'staged_verified',
+        registrationVerified: currentRegistration.status === 'staged_verified',
+        registrationHistorical: currentRegistration.status === 'registered_history',
+        waitingLabel: assembly.currentStep.key === 'send'
+          ? 'Cafe24 사전점검을 기다립니다'
+          : assembly.currentStep.key === 'cuts' || assembly.currentStep.key === 'sections'
+            ? 'A컷 선택을 기다립니다'
+            : `${assembly.currentStep.label} 확인을 기다립니다`,
       });
       roots.syncSummary.textContent = summary.text;
       const disclosure = roots.syncSummary.closest('summary');
@@ -2156,9 +2227,9 @@ export function mountProductionWorkbench({
       labelledValue('생산관제 backend', backendTruth, 'backend-truth'),
       labelledValue('조립공장 session/capability', factoryTruth, 'factory-truth'),
       labelledValue('현재 제품', productTruth, 'product-truth'),
-      labelledValue('.kuasangse 작업파일', projection.session.workfileName || '작업파일 미기록', 'workfile-name'),
-      labelledValue('작업파일 revision', projection.session.revision, 'revision'),
-      labelledValue('마지막 저장', firstText(progress.savedAt, projection.registration.workfileSavedAt) || '저장 시각 미기록', 'last-save'),
+      labelledValue('.kuasangse 작업파일', current.session.workfileName || '작업파일 미기록', 'workfile-name'),
+      labelledValue('작업파일 revision', current.session.revision, 'revision'),
+      labelledValue('마지막 저장', firstText(progress.savedAt, current.registration.workfileSavedAt) || '저장 시각 미기록', 'last-save'),
       labelledValue('현재 조립 단계', assembly.currentStep.label, 'current-step'),
       labelledValue('선택/후보', `${selectionCounts.selected}/${selectionCounts.candidates}`, 'selection-counts'),
     );
@@ -2273,6 +2344,7 @@ export function mountProductionWorkbench({
 
   function assemblyStateLabel(step) {
     if (step.state === 'done') return '완료';
+    if (step.key === 'send' && ['manual', 'blocked'].includes(step.state)) return '승인 필요';
     if (step.state === 'manual') return `선택 필요${step.candidateCount ? ` · ${step.candidateCount}` : ''}`;
     if (step.state === 'blocked') return '차단';
     if (step.state === 'active') return '진행 중';
@@ -2287,8 +2359,38 @@ export function mountProductionWorkbench({
       element('p', 'eyebrow', `${step.label} 작업면`),
       element('h3', '', `${step.label} · ${assemblyStateLabel(step)}`),
     );
-    heading.append(copy, element('span', 'factory-pill', `${step.selectedCount}/${step.candidateCount || step.selectedCount || 0} 선택`));
+    heading.append(copy);
+    if (step.candidateCount) heading.append(element('span', 'factory-pill', `${step.selectedCount}/${step.candidateCount} 선택`));
     root.append(heading, element('p', 'status-message', step.blocker || step.nextAction));
+
+    if (job?.checkpointAvailable && (text(projection.registration.jobId) !== text(job.jobId)
+      || !text(projection.session.runId)
+      || (text(job.checkpointRunId) && text(job.checkpointRunId) !== text(projection.session.runId))
+      || projection.storage.ok === false)
+      && ['waiting_manual', 'blocked', 'completed'].includes(job.status)) {
+      const open = element('button', 'button-primary', '이 제품 작업 이어 열기');
+      open.type = 'button';
+      open.dataset.action = 'restore-viewed-job';
+      open.disabled = resumeInFlight.has(job.jobId) || !projection.connected;
+      open.addEventListener('click', () => void resumeFactoryJob(job.jobId));
+      root.append(element('p', 'status-message', '저장된 결과를 보고 있습니다. 입력·선택을 변경하려면 이 제품을 조립공장에 이어 여세요.'), open);
+    }
+
+    const controls = readFactoryOperatorControls(current);
+    const controlContext = {
+      job: record(job), projection: current, controller: operatorControls, assetUrl,
+      disabled: operatorControls.busy || !current.connected || !viewMatchesLiveProjection()
+        || !['waiting_manual', 'blocked', 'completed'].includes(job?.status),
+    };
+    if (controls) {
+      const feedback = operatorControls.status(job?.jobId);
+      const message = element('p', 'status-message', feedback.message
+        || (controlContext.disabled ? '현재 실행 중인 공정이 끝나면 이 제품의 입력·선택을 변경할 수 있습니다.' : '변경은 조립공장에 저장한 뒤 반영됩니다.'));
+      message.id = 'operator-command-status';
+      message.dataset.tone = feedback.tone;
+      message.setAttribute('role', feedback.tone === 'error' ? 'alert' : 'status');
+      root.append(message);
+    }
 
     const boardTarget = element('div', 'operator-live-surface');
     boardTarget.dataset.productionBoardFocus = 'true';
@@ -2299,7 +2401,12 @@ export function mountProductionWorkbench({
     } else if (step.key === 'required') {
       boardTarget.dataset.surface = 'values';
       root.append(boardTarget);
+      if (controls) renderFactoryFieldControls(root, controlContext, controls.fields || []);
     } else if (step.key === 'db') {
+      if (controls) {
+        renderFactoryDbControls(root, controlContext, controls.db || {});
+        return;
+      }
       const facts = element('div', 'menu-summary-grid');
       for (const input of current.inputs.filter(item => ['product', 'requirements', 'db', 'cafe24'].some(key => text(item.key).includes(key)))) {
         const card = element('article', 'menu-summary-card');
@@ -2315,6 +2422,10 @@ export function mountProductionWorkbench({
       action.addEventListener('click', () => openFactoryStage('db'));
       root.append(action);
     } else if (step.key === 'competitors') {
+      if (controls) {
+        renderFactoryCompetitorControls(root, controlContext, controls.competitor || {});
+        return;
+      }
       const target = element('div', 'operator-live-surface');
       root.append(target);
       dockWorkbenchSurface(roots.competitors, target);
@@ -2324,18 +2435,26 @@ export function mountProductionWorkbench({
       root.append(action);
     } else if (step.key === 'cuts') {
       const groups = element('div', 'operator-cut-groups');
+      const cutStageKey = step.groups.some(group => group.key === job?.stageKey)
+        ? job.stageKey : 'representative';
+      const cutScope = `${text(job?.jobId)}:${text(job?.stageKey)}`;
+      operatorCutStep = followAssemblyWorkbenchStep(operatorCutStep, cutScope, cutStageKey);
+      boardTarget.dataset.stageKey = operatorCutStep.key;
       for (const group of step.groups) {
         const button = element('button', 'button-secondary', `${STAGE_LABELS[group.key]} · ${group.selectedCount}/${group.candidateCount}`);
         button.type = 'button';
         button.dataset.cutStage = group.key;
+        button.setAttribute('aria-pressed', String(group.key === operatorCutStep.key));
         button.addEventListener('click', () => {
-          document.dispatchEvent(new CustomEvent('control-tower:production-board-focus-stage', { detail: { stageKey: group.key } }));
+          operatorCutStep = followAssemblyWorkbenchStep(operatorCutStep, cutScope, cutStageKey, group.key);
+          renderOverviewSummary();
         });
         groups.append(button);
       }
       boardTarget.dataset.surface = 'cuts';
       root.append(groups, boardTarget);
     } else if (step.key === 'sections') {
+      if (controls) renderFactorySectionControls(root, controlContext, controls);
       boardTarget.dataset.surface = 'sections';
       root.append(boardTarget);
     } else if (step.key === 'send') {
@@ -2376,6 +2495,7 @@ export function mountProductionWorkbench({
           target: boardTarget,
           jobId: text(job?.jobId),
           surface: boardTarget.dataset.surface,
+          stageKey: boardTarget.dataset.stageKey || '',
           readOnly: boardTarget.dataset.surface === 'cafe24'
             && text(current.registration.jobId) !== text(job?.jobId),
         },
@@ -2387,7 +2507,10 @@ export function mountProductionWorkbench({
     const panel = element('section', 'operator-stage-panel operator-assembly-workbench');
     const stageHeading = element('div', 'operator-panel-heading');
     const headingCopy = element('div');
-    headingCopy.append(element('p', 'eyebrow', '조립공장 작업판'), element('h3', '', '1 시작부터 7 전송까지'));
+    headingCopy.append(
+      element('p', 'eyebrow', '조립공장 작업판 · 1 시작부터 7 전송까지'),
+      element('h3', '', text(job?.productName || current.session.productKey) || '제품을 선택하세요'),
+    );
     stageHeading.append(headingCopy, element('span', 'factory-pill', `현재 ${assembly.currentStep.label}`));
     const stageList = element('ol', 'operator-stage-list');
     stageList.id = 'operator-assembly-steps';
@@ -2396,8 +2519,8 @@ export function mountProductionWorkbench({
       const button = element('button', 'operator-stage-step');
       button.type = 'button';
       button.dataset.assemblyStep = step.key;
-      button.dataset.state = step.key === operatorStepKey ? 'active' : step.state;
-      button.setAttribute('aria-pressed', String(step.key === operatorStepKey));
+      button.dataset.state = step.key === operatorStep.key ? 'active' : step.state;
+      button.setAttribute('aria-pressed', String(step.key === operatorStep.key));
       button.setAttribute('aria-label', `${index + 1}단계 ${step.label} · ${assemblyStateLabel(step)}`);
       button.append(
         element('span', 'operator-stage-number', String(index + 1).padStart(2, '0')),
@@ -2405,7 +2528,7 @@ export function mountProductionWorkbench({
         element('span', 'operator-stage-state', assemblyStateLabel(step)),
       );
       button.addEventListener('click', () => {
-        operatorStepKey = step.key;
+        operatorStep = followAssemblyWorkbenchStep(operatorStep, operatorStep.jobId, assembly.currentStep.key, step.key);
         renderOverviewSummary();
       });
       item.append(button);
@@ -2414,15 +2537,15 @@ export function mountProductionWorkbench({
     const body = element('section', 'operator-assembly-body');
     body.id = 'operator-assembly-body';
     body.setAttribute('aria-live', 'polite');
-    renderAssemblyWorkbenchBody(body, assembly.steps.find(step => step.key === operatorStepKey) || assembly.currentStep, current, job);
+    renderAssemblyWorkbenchBody(body, assembly.steps.find(step => step.key === operatorStep.key) || assembly.currentStep, current, job);
     panel.append(stageHeading, stageList, body);
     return panel;
   }
 
   function renderOverviewSummary() {
     if (!roots.overview) return;
-    restoreWorkbenchSurfaces();
-    roots.overview.replaceChildren();
+    if (roots.overview.contains(document.activeElement)
+      && document.activeElement?.matches?.('[data-operator-field]')) return;
     const current = viewedProjection();
     const progress = record(current.progress);
     const activeJob = activeProductJob();
@@ -2433,24 +2556,38 @@ export function mountProductionWorkbench({
       cafe24RegistrationSummary(current.registration, current.session, liveReceipt).registered,
     );
     const assemblyJobId = text(activeJob?.jobId || current.registration.jobId || current.session.productId);
-    if (operatorStepJobId !== assemblyJobId) {
-      operatorStepJobId = assemblyJobId;
-      operatorStepKey = assembly.currentStep.key;
-    }
+    operatorStep = followAssemblyWorkbenchStep(operatorStep, assemblyJobId, assembly.currentStep.key);
     const projectionJobId = text(current.registration.jobId);
     const sameJob = Boolean(activeJob && text(activeJob.jobId) === projectionJobId);
     const inputMissing = current.inputs.reduce((total, input) => total + input.missing.length, 0);
     const counts = {
       queued: productJobs.filter(job => text(job.status) === 'queued').length,
       running: productJobs.filter(job => text(job.status) === 'running').length,
-      waiting: productJobs.filter(job => text(job.status) === 'waiting_manual').length,
+      waiting: productJobs.filter(job => text(job.status) === 'waiting_manual' && operatorQueueState(job).key === 'selection').length,
+      approval: productJobs.filter(job => text(job.status) === 'waiting_manual' && operatorQueueState(job).key === 'approval').length,
       completed: productJobs.filter(job => text(job.status) === 'completed').length,
     };
+    const renderKey = () => JSON.stringify([
+      current, activeJob, operatorStep, operatorCutStep, counts, workfileTabs.active()?.key,
+      viewMatchesLiveProjection(), projection.connected, projection.registration.jobId,
+      approval, operatorControls.busy, operatorControls.status(activeJob?.jobId),
+      [...resumeInFlight], [...resumeFeedback], [...heldDecisions],
+    ], (key, value) => {
+      if (['cursor', 'sequence', 'eventSequence', 'eventCursor', 'capturedAt', 'updatedAt', 'elapsedMs'].includes(key)) return undefined;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return Object.fromEntries(Object.keys(value).sort().map(childKey => [childKey, value[childKey]]));
+      }
+      return value;
+    });
+    if (overviewRenderKey === renderKey()) return;
+    restoreWorkbenchSurfaces();
+    roots.overview.replaceChildren();
     const summary = element('section', 'operator-summary-strip');
     for (const [label, value, tone] of [
       ['대기', counts.queued, ''],
       ['진행 중', counts.running, 'active'],
       ['선택 필요', counts.waiting, 'warn'],
+      ['승인 필요', counts.approval, 'warn'],
       ['완료', counts.completed, 'ok'],
     ]) {
       const metric = element('article', 'operator-metric');
@@ -2473,10 +2610,14 @@ export function mountProductionWorkbench({
       action.addEventListener('click', () => openFactoryStage('db'));
       empty.append(action);
       roots.overview.append(empty, createAssemblyWorkbench(assembly, current, activeJob));
+      overviewRenderKey = renderKey();
       return;
     }
 
     const jobStatus = text(activeJob?.status || progress.status || current.status || 'queued');
+    const focusStateLabel = jobStatus === 'waiting_manual' && assembly.currentStep.key === 'send'
+      ? 'Cafe24 사전점검 필요'
+      : statusLabel(jobStatus);
     const productName = text(activeJob?.productName || current.session.productKey || activeJob?.jobId);
     const sourceLabel = activeJob?.sourceKind === 'sinhwa-db'
       ? `신화사 DB · 품번 ${text(activeJob.jcode) || '없음'}`
@@ -2488,14 +2629,15 @@ export function mountProductionWorkbench({
     const modeLabel = manualStages.length
       ? `후보 생성 자동 · A컷 직접 선택 ${manualStages.length}공정`
       : activeJob?.mode === 'auto' ? 'GPT 자동판단' : '단계별 수동';
-    const stageLabel = text(activeJob?.stageLabel || STAGE_LABELS[activeJob?.stageKey] || progress.stageLabel || STAGE_LABELS[progress.stageKey] || progress.stageKey || '투입 대기');
+    const stageLabel = assembly.currentStep?.label
+      || text(activeJob?.stageLabel || STAGE_LABELS[activeJob?.stageKey] || progress.stageLabel || STAGE_LABELS[progress.stageKey] || progress.stageKey || '투입 대기');
     const percent = sameJob ? Math.max(0, Math.min(100, Number(progress.percent || 0))) : 0;
     const focus = element('article', 'operator-focus-card');
     focus.dataset.status = jobStatus;
     const focusHeading = element('div', 'operator-focus-heading');
     const identity = element('div');
     identity.append(element('p', 'eyebrow', '현재 제품'), element('h3', '', productName || '제품 식별자 없음'));
-    focusHeading.append(identity, element('span', 'factory-pill', statusLabel(jobStatus)));
+    focusHeading.append(identity, element('span', 'factory-pill', focusStateLabel));
     const meta = element('div', 'operator-focus-meta');
     meta.append(
       element('span', 'factory-pill', sourceLabel),
@@ -2503,7 +2645,7 @@ export function mountProductionWorkbench({
       element('span', 'factory-pill', stageLabel),
     );
     const progressText = sameJob
-      ? `${stageLabel} · ${percent}% · ${visibleFactoryMessage(progress.message || activeJob?.message, activeJob?.stageKey || progress.stageKey) || statusLabel(jobStatus)}`
+      ? `${stageLabel} · ${percent}% · ${visibleFactoryMessage(progress.message || activeJob?.message, activeJob?.stageKey || progress.stageKey) || focusStateLabel}`
       : `${stageLabel} · ${visibleFactoryMessage(activeJob?.message, activeJob?.stageKey) || '작업 순서를 기다리는 중'}`;
     const progressCopy = element('p', 'status-message', progressText);
     const track = element('div', 'progress-track');
@@ -2516,7 +2658,7 @@ export function mountProductionWorkbench({
     track.append(bar);
     focus.append(focusHeading, meta, progressCopy, track);
 
-    const registrationState = registrationStatus();
+    const registrationState = registrationStatus(current, liveReceipt);
     const stagePanel = createAssemblyWorkbench(assembly, current, activeJob);
     roots.overview.append(stagePanel, focus);
 
@@ -2529,7 +2671,22 @@ export function mountProductionWorkbench({
     if (jobStatus === 'waiting_manual') {
       const waitingStage = current.stages.find(stage => stage.key === nextStage);
       const automaticHeld = automaticDecisionHeld(activeJob, nextStage);
-      if (automaticHeld) {
+      if (assembly.currentStep.key === 'send') {
+        const registrationBlockers = list(current.registration.blockers)
+          .map(registrationBlockerLabel)
+          .filter(Boolean);
+        nextTitle = 'Cafe24 사전점검이 필요합니다';
+        nextDetail = registrationBlockers.join(' · ') || 'Cafe24 등록 전 사전점검을 실행하세요.';
+        nextLabel = 'Cafe24 사전점검 열기';
+        nextTone = 'warn';
+        nextStage = 'cafe24';
+      } else if (waitingStage && waitingStage.candidates.length === 0) {
+        nextTitle = `${STAGE_LABELS[nextStage] || stageLabel} 후보를 생성해야 합니다`;
+        nextDetail = '현재 공정의 후보가 없습니다. 저장된 입력과 이전 선택을 유지해 생성을 다시 실행합니다.';
+        nextLabel = '현재 공정 다시 실행';
+        nextTone = 'warn';
+        directAction = () => void resumeFactoryJob(activeJob.jobId);
+      } else if (automaticHeld) {
         nextTitle = 'GPT가 수동 확인으로 넘겼습니다';
         nextDetail = '판단 근거가 충분하지 않아 자동 선택하지 않았습니다. 후보와 근거를 보고 A컷을 직접 확정하세요.';
         nextLabel = '후보를 직접 선택';
@@ -2565,8 +2722,11 @@ export function mountProductionWorkbench({
       nextLabel = '입력 자료 확인';
       nextStage = 'db';
     } else if (jobStatus === 'completed') {
-      nextTitle = registrationState === 'staged_verified' ? 'Cafe24 등록 검증이 끝났습니다' : 'Cafe24 사전점검과 승인을 확인하세요';
-      nextDetail = registrationState === 'staged_verified'
+      nextTitle = registrationState === 'registered_history' ? 'Cafe24 등록 이력이 확인됐습니다'
+        : registrationState === 'staged_verified' ? 'Cafe24 등록 검증이 끝났습니다' : 'Cafe24 사전점검과 승인을 확인하세요';
+      nextDetail = registrationState === 'registered_history'
+        ? '등록 당시 결과입니다. 현재 편집 내용의 반영은 별도 승인과 검증이 필요합니다.'
+        : registrationState === 'staged_verified'
         ? '등록 결과 재확인 영수증까지 확인된 상태입니다.'
         : '외부 등록은 자동 실행하지 않으며 고정 대상과 일회 승인을 거쳐야 합니다.';
       nextLabel = 'Cafe24 게이트 열기';
@@ -2578,11 +2738,12 @@ export function mountProductionWorkbench({
     const nowHeading = element('div', 'operator-now-heading');
     const nowIdentity = element('div');
     nowIdentity.append(element('p', 'eyebrow', '현재 상태와 다음 작업'), element('h3', '', nextTitle));
-    nowHeading.append(nowIdentity, element('span', 'factory-pill', statusLabel(jobStatus)));
+    nowHeading.append(nowIdentity, element('span', 'factory-pill', focusStateLabel));
     const nowActions = element('div', 'operator-now-actions');
     const primary = element('button', '', nextLabel);
     primary.type = 'button';
     primary.dataset.action = directAction ? 'retry-factory-job' : `open-${nextStage}`;
+    primary.disabled = resumeInFlight.has(text(activeJob?.jobId));
     primary.addEventListener('click', directAction || (() => openFactoryStage(nextStage)));
     const intake = element('button', 'button-secondary', '제품 추가 투입');
     intake.type = 'button';
@@ -2590,7 +2751,16 @@ export function mountProductionWorkbench({
     intake.addEventListener('click', () => openFactoryStage('db'));
     nowActions.append(primary, intake);
     now.append(nowHeading, element('p', 'status-message', nextDetail), nowActions);
+    const feedback = resumeFeedback.get(text(activeJob?.jobId));
+    if (feedback) {
+      const message = element('p', 'status-message', feedback.message);
+      message.id = 'operator-resume-status';
+      message.dataset.state = feedback.tone;
+      message.setAttribute('role', feedback.tone === 'error' ? 'alert' : 'status');
+      now.append(message);
+    }
     roots.overview.insertBefore(now, focus);
+    overviewRenderKey = renderKey();
   }
 
   function renderCompetitors() {
@@ -3020,6 +3190,36 @@ export function mountProductionWorkbench({
       lastEventAt,
       apiError: queueApiError || factoryApiError,
     });
+    const active = viewMatchesLiveProjection();
+    const stageKey = selectedStageKey || text(job?.stageKey);
+    const row = job ? buildOperatorQueueRow(job, Math.max(0, productJobs.findIndex(item => text(item.jobId) === text(job.jobId)))) : null;
+    const stageMode = job ? resolveLocalFactoryStageMode(current, productJobs, stageKey) : '';
+    const automaticHeld = job ? automaticDecisionHeld(job, stageKey) : false;
+    const selectionEnabled = Boolean(job && active
+      && text(job.status) === 'waiting_manual'
+      && (stageMode === 'manual' || automaticHeld));
+    const blockedDetail = job && text(job.status) === 'blocked'
+      ? `작업 차단 · ${visibleFactoryMessage(job.message, job.stageKey) || '후보가 아직 없어 선택할 수 없습니다.'}`
+      : '';
+    const nextRenderKey = JSON.stringify([
+      archivedJobId,
+      current.connected,
+      current.reason,
+      current.storage,
+      current.registration.jobId,
+      current.session.productId,
+      current.session.productKey,
+      job,
+      row,
+      stageKey,
+      selectedStage(current, stageKey),
+      selectionEnabled,
+      blockedDetail,
+      connection.connectivity.state,
+      connection.detail?.copy,
+    ], (key, value) => ['cursor', 'sequence', 'eventSequence', 'capturedAt', 'updatedAt', 'elapsedMs'].includes(key) ? undefined : value);
+    if (root.childElementCount && queueSelectionRenderKey === nextRenderKey) return;
+    queueSelectionRenderKey = nextRenderKey;
     if (!job) {
       root.hidden = false;
       root.replaceChildren(
@@ -3029,17 +3229,6 @@ export function mountProductionWorkbench({
       );
       return;
     }
-    const active = viewMatchesLiveProjection();
-    const stageKey = selectedStageKey || text(job.stageKey);
-    const row = buildOperatorQueueRow(job, Math.max(0, productJobs.findIndex(item => text(item.jobId) === text(job.jobId))));
-    const stageMode = resolveLocalFactoryStageMode(current, productJobs, stageKey);
-    const automaticHeld = automaticDecisionHeld(job, stageKey);
-    const selectionEnabled = active
-      && text(job.status) === 'waiting_manual'
-      && (stageMode === 'manual' || automaticHeld);
-    const blockedDetail = text(job.status) === 'blocked'
-      ? `작업 차단 · ${visibleFactoryMessage(job.message, job.stageKey) || '후보가 아직 없어 선택할 수 없습니다.'}`
-      : '';
     const summary = [connection.detail?.copy, !active
       ? `${row.stepLabel} · ${row.stateLabel} · 보기 전용입니다. 명시적으로 작업 재개한 뒤에만 선택을 저장할 수 있습니다.`
       : selectionEnabled
@@ -3143,6 +3332,10 @@ export function mountProductionWorkbench({
   }
 
   function renderWorkBundleAssets(root, phase, pageValue, stageFilterOverride = '') {
+    const view = [workBundle, workBundleHistory, workBundleStatus, workBundleError,
+      archivedJobId, workBundleOutputStageKey, phase, pageValue, stageFilterOverride];
+    if (root.childElementCount && workBundleRenders.get(root)?.every((value, index) => value === view[index])) return;
+    workBundleRenders.delete(root);
     root.replaceChildren();
     bindWorkBundleImagePreview(root);
     const history = record(workBundleHistory);
@@ -3156,11 +3349,14 @@ export function mountProductionWorkbench({
       )).length
       : 0;
     const heading = element('div', 'section-heading compact-heading');
+    const storedResultLabel = phase === 'output' && !historyActive
+      ? `저장 결과 ${totalForHeading}개`
+      : `${totalForHeading}개 ${historyActive ? '자료' : '자산'}`;
     heading.append(element('div'), element(
       'span',
       'factory-pill',
       workBundleStatus === 'ready'
-        ? `${totalForHeading}개 ${historyActive ? '자료' : '자산'}`
+        ? storedResultLabel
         : statusLabel(workBundleStatus),
     ));
     heading.firstElementChild.append(
@@ -3173,7 +3369,7 @@ export function mountProductionWorkbench({
             : stageFilter === 'final_detail'
               ? '최종 상세페이지 선택 결과'
               : `${STAGE_LABELS[stageFilter] || '생산'} 결과`)
-        : (phase === 'input' ? '실제 입력 자료' : '실제 생성 결과')),
+        : (phase === 'input' ? '실제 입력 자료' : '저장된 생성 결과')),
     );
     if (historyActive && root === roots.bundleOutputs) {
       const close = element('button', 'button-secondary', '현재 작업자료로 돌아가기');
@@ -3191,6 +3387,7 @@ export function mountProductionWorkbench({
           ? '신화사 작업 자료를 불러오는 중입니다.'
           : `작업 자료를 불러오지 못했습니다 · ${workBundleError || '연결 상태를 확인해 주세요.'}`,
       ));
+      workBundleRenders.set(root, view);
       return;
     }
     const page = workBundleAssetPage(workBundle, phase, pageValue, stageFilter);
@@ -3227,7 +3424,14 @@ export function mountProductionWorkbench({
       root.append(summary);
     }
     if (!page.total) {
-      root.append(element('p', 'factory-empty-state', `${phase === 'input' ? '입력' : '생성 결과'} 자료가 없습니다.`));
+      root.append(element(
+        'p',
+        'factory-empty-state',
+        phase === 'output'
+          ? '저장된 결과 자산이 없습니다. 아래 A컷 후보에서 단계별 선택 상태를 확인하세요.'
+          : '입력 자료가 없습니다.',
+      ));
+      workBundleRenders.set(root, view);
       return;
     }
     root.dataset.presentation = 'grid';
@@ -3274,6 +3478,7 @@ export function mountProductionWorkbench({
       pagination.append(previous, current, next);
       root.append(pagination);
     }
+    workBundleRenders.set(root, view);
   }
 
   function closeHistoricalWorkBundle() {
@@ -3299,6 +3504,16 @@ export function mountProductionWorkbench({
     workBundle = normalizeWorkBundle({});
     renderWorkBundleAssets(roots.bundleInputs, 'input', workBundleInputPage);
     renderWorkBundleAssets(roots.bundleOutputs, 'output', workBundleOutputPage);
+    if (!productJobs.length) return;
+    const queuedJob = productJobs.find(item => text(item.jobId) === archivedJobId);
+    const projectedJob = record(projection.currentJob);
+    const knownJob = queuedJob || (text(projectedJob.jobId) === archivedJobId ? projectedJob : null);
+    if (knownJob && (text(knownJob.status) === 'running' || knownJob.checkpointAvailable !== true)) {
+      workBundleStatus = 'blocked';
+      workBundleError = 'factory_history_checkpoint_missing';
+      render();
+      return;
+    }
     try {
       const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(archivedJobId)}/history`);
       if (generation !== workBundleGeneration || archivedJobId !== text(jobId)) return;
@@ -3672,12 +3887,15 @@ export function mountProductionWorkbench({
     root.append(actions, result);
   }
 
-  function registrationStatus() {
-    if (cafe24RegistrationSummary(projection.registration, projection.session, approval.receipt).registered) return 'staged_verified';
-    if (text(projection.registration.status) === 'staged_verified') return 'staged_pending_readback';
-    if (approval.status === 'executing') return 'executing';
-    if (approval.token) return 'approval_required';
-    return text(projection.registration.status || 'blocked');
+  function registrationStatus(projectionValue = projection, approvalValue = approval) {
+    const currentApproval = record(approvalValue);
+    if (currentApproval.status === 'executing') return 'executing';
+    const current = normalizeFactoryProjection(projectionValue);
+    const publication = cafe24RegistrationSummary(current.registration, current.session, currentApproval.receipt);
+    if (publication.registered) return publication.status;
+    if (text(current.registration.status) === 'staged_verified') return 'staged_pending_readback';
+    if (currentApproval.token) return 'approval_required';
+    return text(current.registration.status || 'blocked');
   }
 
   async function runPreflight() {
@@ -3812,8 +4030,11 @@ export function mountProductionWorkbench({
 
   function renderWorkfileReportLedger() {
     const root = roots.ledger;
-    const registration = record(projection.registration);
-    const ledger = buildWorkfilePublicationLedger(projection, approval.receipt, workBundleHistory);
+    const current = viewedProjection();
+    const liveView = !workfileTabs.active()?.jobId || viewMatchesLiveProjection();
+    const currentReceipt = liveView ? approval.receipt : null;
+    const registration = record(current.registration);
+    const ledger = buildWorkfilePublicationLedger(current, currentReceipt, workBundleHistory);
     const publication = ledger.publication;
     root.replaceChildren();
     root.dataset.workfileState = ledger.workfileConnected ? 'connected' : 'missing';
@@ -3854,6 +4075,25 @@ export function mountProductionWorkbench({
     root.append(message);
 
     const actions = element('div', 'button-row handoff-ledger-actions');
+    const exportJob = activeProductJob();
+    const exportBlocker = !viewMatchesLiveProjection()
+      ? '현재 보고 있는 제품과 조립공장의 작업이 다릅니다. 같은 작업을 확인하세요.'
+      : factoryWorkfileExportBlocker({ job: exportJob, projection: current }, operatorControls.busy);
+    const download = element('button', 'button-secondary', '현재 제품 .kuasangse 다운로드');
+    download.type = 'button';
+    download.dataset.operatorAction = 'workfile:export-current';
+    download.disabled = Boolean(exportBlocker);
+    download.addEventListener('click', () => {
+      if (!download.disabled && viewMatchesLiveProjection()) {
+        void operatorControls.submit('workfile', 'export-current', {}, '작업파일 다운로드', exportJob.jobId);
+      }
+    });
+    actions.append(download);
+    const exportStatus = operatorControls.status(exportJob?.jobId);
+    const exportFeedback = element('p', 'status-message', exportStatus.message || exportBlocker || '명시적으로 누르면 현재 이미지·선택값을 다운로드합니다. 디스크 저장 완료는 별도 확인이 필요합니다.');
+    exportFeedback.setAttribute('role', 'status');
+    exportFeedback.dataset.tone = exportStatus.tone || (exportBlocker ? 'warning' : '');
+    root.append(exportFeedback);
     const chooseWorkfile = element('button', 'button-secondary', '작업파일 선택 창 열기');
     chooseWorkfile.type = 'button';
     chooseWorkfile.addEventListener('click', () => document.getElementById('workfile-input')?.click());
@@ -3929,10 +4169,10 @@ export function mountProductionWorkbench({
     const unknown = readOnly ? '미확인' : '';
     const blockers = list(registration.blockers).map(registrationBlockerLabel).filter(Boolean);
     root.replaceChildren();
-    const status = publication.registered
-      ? 'staged_verified'
-      : approval.status === 'executing'
-        ? 'executing'
+    const status = approval.status === 'executing'
+      ? 'executing'
+      : publication.registered
+        ? publication.status
         : approval.token
           ? 'approval_required'
           : text(registration.status) === 'staged_verified'
@@ -3943,6 +4183,14 @@ export function mountProductionWorkbench({
     heading.append(element('h3', '', 'Cafe24 등록'), element('span', 'factory-pill', statusLabel(status)));
     const fields = element('dl', 'factory-sync-fields registration-fields');
     const cafe24RegistrationLabel = cafe24RegistrationTargetLabel(registration, session) || unknown;
+    const optionValues = publication.optionValues;
+    const inventory = Object.entries(publication.inventoryByOption);
+    const quantities = [...new Set(inventory.map(([, value]) => text(record(value).quantity)))];
+    const inventoryText = inventory.length
+      ? quantities.length === 1 && quantities[0]
+        ? `각 ${quantities[0]}`
+        : inventory.map(([key, value]) => `${key} ${text(record(value).quantity) || '미확인'}`).join(', ')
+      : '재고 미확인';
     fields.append(
       labelledValue('Cafe24 등록 방식', publication.registrationMode || (publication.registered ? cafe24RegistrationLabel : '원격 영수증 확인 전'), 'product-id'),
       labelledValue('제품명', registration.productKey || session.productKey || unknown, 'product-key'),
@@ -3953,16 +4201,14 @@ export function mountProductionWorkbench({
       labelledValue('등록 이미지', publication.registered ? `${publication.representativeImageCount}장 원격 확인` : '원격 영수증 확인 전', 'image-digests'),
       labelledValue(
         '옵션 구성',
-        publication.registered && list(registration.optionValues).length
-          ? `${text(registration.optionName) || '색상'} · ${list(registration.optionValues).length}개 · ${list(registration.optionValues).map(text).join(', ')}`
-          : Array.isArray(registration.optionValues) ? '옵션 없음' : unknown,
+        publication.registered
+          ? optionValues.length ? `${publication.optionName || '색상'} · ${optionValues.length}개 · ${optionValues.join(', ')}` : '옵션값 미기록'
+          : '원격 영수증 확인 전',
         'option-values',
       ),
       labelledValue(
         '품목별 재고',
-        publication.registered && list(registration.optionValues).length
-          ? `${Number(registration.variantCount || 0)}개 품목 · 각 ${text(registration.inventoryQuantity) || '99'}`
-          : Array.isArray(registration.optionValues) ? '해당 없음' : unknown,
+        publication.registered ? `${publication.variantCount}개 품목 · ${inventoryText}` : '원격 영수증 확인 전',
         'variant-inventory',
       ),
       labelledValue('등록 직후 상태', publication.registered ? '원격 영수증 확인됨' : '원격 영수증 확인 전', 'safe-defaults'),
@@ -3970,6 +4216,8 @@ export function mountProductionWorkbench({
       labelledValue('Cafe24 재확인', publication.registered ? '등록 결과 재확인 완료' : '원격 read-back 대기', 'readback'),
     );
     root.append(heading, fields);
+    if (publication.historical) root.append(element('p', 'status-message',
+      '등록 당시 read-back 이력입니다. 현재 편집 내용의 반영은 별도 승인과 검증이 필요합니다.'));
     const blockerList = element('ul', 'registration-blockers');
     blockerList.dataset.blockerCount = String(blockers.length);
     if (blockers.length) {
@@ -4035,7 +4283,9 @@ export function mountProductionWorkbench({
     }
     root.append(actions);
     const statusMessage = element('p', 'status-message', message || (
-      blockers.length ? `차단 사유 ${blockers.length}개` : '사전점검 준비 완료 · 등록에는 일회 승인이 필요합니다.'
+      readOnly
+        ? '현재 등록 대상이 아니어서 읽기 전용입니다. 작업 큐에서 이 제품을 이어 열어 현재 등록 대상으로 만든 뒤 사전점검을 실행하세요.'
+        : blockers.length ? `차단 사유 ${blockers.length}개` : '사전점검 준비 완료 · 등록에는 일회 승인이 필요합니다.'
     ));
     statusMessage.setAttribute('role', 'status');
     root.append(statusMessage);
@@ -4043,10 +4293,16 @@ export function mountProductionWorkbench({
 
   function renderRegistration() {
     const root = roots.registration;
-    const registration = record(projection.registration);
+    const current = viewedProjection();
+    const active = workfileTabs.active();
+    const liveView = !active?.jobId || viewMatchesLiveProjection();
+    const currentReceipt = liveView ? approval.receipt : null;
+    const registration = record(current.registration);
     const nextRenderKey = JSON.stringify([
-      projection.connected,
+      current.connected,
       registration,
+      active?.jobId || '',
+      liveView,
       approval.status,
       text(approval.preview?.approvalRequestId),
       Boolean(approval.token),
@@ -4057,9 +4313,10 @@ export function mountProductionWorkbench({
     registrationRenderKey = nextRenderKey;
     renderCanonicalCafe24Registration(root, {
       registration,
-      session: projection.session,
-      approvalState: approval,
-      connected: projection.connected,
+      session: current.session,
+      approvalState: { ...approval, receipt: currentReceipt },
+      connected: current.connected,
+      readOnly: !liveView,
       handlers: {
         runPreflight,
         requestApproval,
@@ -4076,19 +4333,23 @@ export function mountProductionWorkbench({
   function renderQueue() {
     if (fixtureMode) return;
     const root = roots.queue;
-    if (root.contains(document.activeElement)) return;
+    const focusedElement = document.activeElement;
+    const focusedTag = text(focusedElement?.tagName).toLowerCase();
+    const preservesEditorFocus = root.contains(focusedElement)
+      && ['input', 'textarea', 'select'].includes(focusedTag);
+    if (preservesEditorFocus) return;
     root.replaceChildren();
+    root.dataset.queueViewFilter = queueFilter;
     const filteredJobs = productJobs.filter(job => queueFilterMatches(job, queueFilter));
-    const focusJobId = text(workfileTabs.active()?.jobId || activeProductJob()?.jobId);
     const projectionJobId = text(projection.registration.jobId);
-    if (roots.queueTotal) roots.queueTotal.replaceChildren(document.createTextNode(
-      queueFilter === 'all' ? `${productJobs.length || projection.products.length}건` : `${filteredJobs.length}/${productJobs.length}건`,
-    ));
+    const focusJobId = text(workfileTabs.active()?.jobId || projectionJobId);
+    let historicalBlockedCount = 0;
+    let historicalCompletedCount = 0;
     if (productJobs.length) {
       for (const job of filteredJobs) {
         const index = productJobs.indexOf(job);
         const jobId = text(job.jobId);
-        const queueRow = buildOperatorQueueRow(job, index);
+        const queueRow = buildOperatorQueueRow(job, index, jobId === projectionJobId ? projection : job.progress);
         const queueState = operatorQueueState(job);
         const linkedTab = workfileTabs.snapshot().tabs.find(tab => tab.jobId === jobId && tab.linkState === 'linked');
         const jobMessage = linkedTab && job.status === 'blocked'
@@ -4100,6 +4361,10 @@ export function mountProductionWorkbench({
         row.dataset.current = String(jobId === focusJobId);
         row.dataset.needsSelection = String(queueRow.needsSelection);
         row.dataset.justCreated = String(recentlyCreatedJobIds.has(jobId));
+        const historical = jobId !== focusJobId && ['blocked', 'completed'].includes(text(job.status));
+        row.dataset.historical = String(historical);
+        if (historical && job.status === 'blocked') historicalBlockedCount += 1;
+        if (historical && job.status === 'completed') historicalCompletedCount += 1;
         row.tabIndex = 0;
         row.setAttribute('role', 'button');
         row.setAttribute('aria-label', `${text(job.productName || job.jobId)} 작업 보기 · ${queueRow.stageLabel} · ${queueState.label}`);
@@ -4109,6 +4374,7 @@ export function mountProductionWorkbench({
           activateRow();
         });
         row.addEventListener('keydown', event => {
+          if (event.target !== row) return;
           if (!['Enter', ' '].includes(event.key)) return;
           event.preventDefault();
           activateRow();
@@ -4126,24 +4392,34 @@ export function mountProductionWorkbench({
           ? workBundle.assets.find(asset => asset.phase === 'input')?.thumbnailReference
           : '';
         const thumbnail = resolveCandidateThumbnail({
-          thumbnailUrl: firstText(projectedSourceImage, bundleSourceImage),
+          thumbnailUrl: firstText(projectedSourceImage, bundleSourceImage,
+            Number(job.imageCount || 0) > 0 ? `/api/factory/jobs/${encodeURIComponent(jobId)}/history/assets/input-0/thumbnail` : ''),
         }, assetUrl);
         const thumb = element('span', 'operator-job-thumb');
         thumb.setAttribute('role', 'img');
+        const imageLabel = `${text(job.productName || job.jobId)} 제품 이미지`;
+        const missingImageLabel = `${text(job.productName || job.jobId)} 제품 이미지 없음`;
+        const initials = text(job.productName || job.workfileName || job.jobId).replace(/\s+/gu, '').slice(0, 2) || '제품';
         if (thumbnail.kind === 'image') {
-          thumb.setAttribute('aria-label', `${text(job.productName || job.jobId)} 제품 이미지`);
+          thumb.setAttribute('aria-label', imageLabel);
           const image = element('img');
           image.src = thumbnail.url;
           image.alt = '';
+          image.loading = 'lazy';
+          image.decoding = 'async';
+          image.addEventListener('error', () => {
+            if (image.parentNode !== thumb) return;
+            thumb.setAttribute('aria-label', missingImageLabel);
+            image.replaceWith(document.createTextNode(initials));
+          });
           thumb.append(image);
         } else {
-          const initials = text(job.productName || job.workfileName || job.jobId).replace(/\s+/gu, '').slice(0, 2) || '제품';
-          thumb.setAttribute('aria-label', `${text(job.productName || job.jobId)} 제품 이미지 없음`);
+          thumb.setAttribute('aria-label', missingImageLabel);
           thumb.append(document.createTextNode(initials));
         }
         const progress = jobId === projectionJobId
           ? Number(projection.progress.percent || 0)
-          : Math.round((Number.parseInt(queueRow.stepLabel, 10) / 8) * 100);
+          : Number(job.progress?.percent ?? 0);
         const source = job.sourceKind === 'sinhwa-db'
           ? `신화사 DB · 품번 ${text(job.jcode) || '없음'}`
           : `직접 입력 · 이미지 ${Number(job.imageCount || 0)}장`;
@@ -4162,22 +4438,53 @@ export function mountProductionWorkbench({
             const actionKind = waitingManualJobAction(job, stage);
             const automaticHeld = automaticDecisionHeld(job, job.stageKey);
             const stageMode = resolveLocalFactoryStageMode(projection, productJobs, job.stageKey);
+            const currentStep = deriveAssemblyWorkbench(projection, job).currentStep;
+            const opensCafe24 = currentStep.key === 'send';
             const action = element(
               'button',
               'button-secondary',
-              automaticHeld
+              opensCafe24
+                ? 'Cafe24 사전점검 열기'
+                : automaticHeld
                 ? 'GPT 보류 · 수동 선택'
                 : stageMode === 'auto'
                   ? '자동 판단 상태 열기'
                   : (selected ? '다음 단계 실행' : queueRow.actionLabel),
             );
             action.type = 'button';
-            action.addEventListener('click', () => (actionKind === 'resume'
+            action.addEventListener('click', () => (opensCafe24
+              ? openFactoryStage('cafe24')
+              : actionKind === 'resume'
               ? void resumeFactoryJob(job.jobId)
               : openFactoryStage(job.stageKey || projection.progress.stageKey)));
             actions.append(action);
+          } else {
+            const durableProjection = workfileTabs.projectionFor(`job:${jobId}`);
+            const action = element(
+              'button',
+              'button-secondary',
+              durableProjection
+                ? '작업 재개'
+                : job.checkpointAvailable
+                  ? '입력·출력·선택 보기'
+                  : '작업 보기',
+            );
+            action.type = 'button';
+            action.dataset.action = durableProjection
+              ? 'resume-queue-job'
+              : job.checkpointAvailable
+                ? 'open-queue-history'
+                : 'view-queue-job';
+            action.addEventListener('click', () => (
+              durableProjection
+                ? void resumeFactoryJob(job.jobId)
+                : job.checkpointAvailable
+                  ? void loadHistoricalWorkBundle(job.jobId)
+                  : activateRow()
+            ));
+            actions.append(action);
           }
-        } else if (job.status === 'blocked' && (jobId === projectionJobId || job.checkpointAvailable)) {
+        } else if (job.status === 'blocked') {
           if (job.checkpointAvailable) {
             const historyAction = element('button', 'button-secondary', '입력·출력·선택 보기');
             historyAction.type = 'button';
@@ -4185,10 +4492,16 @@ export function mountProductionWorkbench({
             historyAction.addEventListener('click', () => void loadHistoricalWorkBundle(job.jobId));
             actions.append(historyAction);
           }
-          if (jobId === projectionJobId) {
+          if (job.checkpointAvailable) {
             const action = element('button', 'button-secondary', '같은 상태로 다시 실행');
             action.type = 'button';
             action.addEventListener('click', () => void resumeFactoryJob(job.jobId));
+            actions.append(action);
+          } else if (jobId !== projectionJobId) {
+            const action = element('button', 'button-secondary', '차단 사유 보기');
+            action.type = 'button';
+            action.dataset.action = 'view-blocked-job';
+            action.addEventListener('click', activateRow);
             actions.append(action);
           }
         } else if (job.status === 'running' && jobId === projectionJobId) {
@@ -4234,6 +4547,28 @@ export function mountProductionWorkbench({
         }
         if (actions.childElementCount) row.append(actions);
         root.append(row);
+      }
+      const hiddenHistoryCount = historicalBlockedCount + historicalCompletedCount;
+      const visibleJobCount = Math.max(0, filteredJobs.length - hiddenHistoryCount);
+      if (roots.queueTotal) roots.queueTotal.replaceChildren(document.createTextNode(
+        queueFilter === 'all'
+          ? hiddenHistoryCount ? `실행 대상 ${visibleJobCount}건` : `${filteredJobs.length}건`
+          : `${filteredJobs.length}/${productJobs.length}건`,
+      ));
+      root.dataset.historicalBlockedCount = String(historicalBlockedCount);
+      root.dataset.historicalCompletedCount = String(historicalCompletedCount);
+      if (queueFilter === 'all' && hiddenHistoryCount) {
+        const historyLabels = [
+          historicalBlockedCount ? `이전 차단 기록 ${historicalBlockedCount}건은 ‘차단만’` : '',
+          historicalCompletedCount ? `완료 기록 ${historicalCompletedCount}건은 ‘완료’` : '',
+        ].filter(Boolean).join(' · ');
+        const hint = element(
+          'p',
+          'operator-queue-history-hint',
+          `${historyLabels}에서 확인할 수 있습니다 · 실행 대상 ${visibleJobCount}건만 표시 중입니다.`,
+        );
+        hint.setAttribute('role', 'status');
+        root.append(hint);
       }
       if (!filteredJobs.length) {
         const empty = element('article', 'operator-empty-state');
@@ -4312,6 +4647,10 @@ export function mountProductionWorkbench({
     try {
       const next = await apiRequest(`/api/factory/state${fixtureCount ? `?fixtureCount=${fixtureCount}` : ''}`);
       factoryApiError = '';
+      if (next?.connected === true || next?.workerSession?.connected === true) {
+        setStatus('status-title', '조립공장 연결됨', 'ok');
+        setStatus('status-detail', `생산관제 백엔드 · 작업자 ${text(next.workerSession?.buildId || '연결됨')}`, 'ok');
+      }
       const snapshotCursor = text(next.eventCursor);
       if (snapshotCursor && (!factoryEventCursor || Number(snapshotCursor) >= Number(factoryEventCursor))) {
         factoryEventCursor = snapshotCursor;
@@ -4407,16 +4746,21 @@ export function mountProductionWorkbench({
     const checkpointProjection = text(projection.registration.jobId) === key
       ? projection
       : workfileTabs.projectionFor(`job:${key}`);
-    if (!job || !checkpointProjection) {
-      setStatus('live-status', '저장된 checkpoint 신원을 확인할 수 없습니다. 작업파일을 다시 선택해 주세요.', 'error');
+    if (!job) {
+      setStatus('live-status', '재개할 작업을 찾지 못했습니다. 작업 큐를 새로고침해 주세요.', 'error');
       return;
     }
     resumeInFlight.add(key);
+    resumeFeedback.set(key, { message: '저장된 작업 상태를 확인하고 재개합니다.', tone: 'warning' });
     try {
+      renderOverviewSummary();
+      const history = job.checkpointAvailable
+        ? await apiRequest(`/api/factory/jobs/${encodeURIComponent(key)}/history`)
+        : null;
       const payload = buildFactoryResumePayload({
         job,
         projection: checkpointProjection,
-        imageModel: text(document.getElementById('image-model-select')?.value),
+        history,
       });
       const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(key)}/resume`, {
         method: 'POST',
@@ -4424,8 +4768,10 @@ export function mountProductionWorkbench({
       });
       const next = result.job;
       if (next) productJobs = productJobs.map(job => job.jobId === next.jobId ? next : job);
+      resumeFeedback.set(key, { message: '재개 요청을 접수했습니다. 기존 입력·선택을 유지해 이어갑니다.', tone: 'ok' });
       setStatus('live-status', `${text(next?.productName || key)} · 재개 요청 접수 · 저장된 작업 상태 확인 중`, 'warning');
     } catch (error) {
+      resumeFeedback.set(key, { message: `다음 단계 실행 실패 · ${aCutSaveFailureCopy(error)}`, tone: 'error' });
       setStatus('live-status', `다음 단계 실행 실패 · ${aCutSaveFailureCopy(error)}`, 'error');
     } finally {
       resumeInFlight.delete(key);
@@ -4585,6 +4931,8 @@ export function mountProductionWorkbench({
   });
   return () => {
     stopped = true;
+    operatorControls.stop();
+    roots.overview?.removeEventListener('focusout', refreshAfterOperatorEdit);
     activeMenuObserver.disconnect();
     restoreWorkbenchSurfaces();
     eventSource?.close?.();
@@ -4598,6 +4946,13 @@ export function mountProductionWorkbench({
   };
 }
 
-if (globalThis.controlTowerRuntime) {
+let productionWorkbenchMounted = false;
+const mountWhenRuntimeReady = () => {
+  if (productionWorkbenchMounted || !globalThis.controlTowerRuntime) return;
+  productionWorkbenchMounted = true;
   mountProductionWorkbench(globalThis.controlTowerRuntime);
-}
+};
+const productionWorkbenchWindow = typeof window === 'undefined' ? null : window;
+productionWorkbenchWindow?.addEventListener('control-tower:runtime-ready', mountWhenRuntimeReady, { once: true });
+productionWorkbenchWindow?.setTimeout?.(mountWhenRuntimeReady, 0);
+mountWhenRuntimeReady();

@@ -14,7 +14,8 @@ param(
     [string]$FrontendRootOverride = "",
     [string]$CacheRootOverride = "",
     [string]$PdpControlBaseUrl = "",
-    [string]$PdpAssetsBaseUrl = ""
+    [string]$PdpAssetsBaseUrl = "",
+    [string]$SinhwaSqlContainerName = "sqlserver-dev"
 )
 
 Set-StrictMode -Version Latest
@@ -41,7 +42,7 @@ $BackendFactoryStateUrl = "http://127.0.0.1:$BackendPort/api/factory/state"
 # localhost 로 열면 준비 확인부터 실패한다. 주소는 127.0.0.1 로 둔다.
 $FrontendUrl = "http://127.0.0.1:$FrontendPort/control-tower.html"
 $FrontendReadyMarker = if ($BackendPort -eq 41009) {
-    'const healthUrl = "http://127.0.0.1:41009/api/health";'
+    'const healthUrl = "http://localhost:41009/api/health";'
 }
 else {
     "const healthUrl = `"http://127.0.0.1:$BackendPort/api/health`";"
@@ -203,7 +204,7 @@ function Test-SinhwaHubPdpAuthReady {
     try {
         $statusText = & powershell.exe -NoProfile -ExecutionPolicy Bypass `
             -File $SinhwaHubManagerPath -Action Status -BackendPort 8200 -FrontendPort 5173 `
-            -SqlContainerName disabled 2>&1 | Out-String
+            -SqlContainerName $SinhwaSqlContainerName 2>&1 | Out-String
     }
     catch {
         return $true
@@ -247,17 +248,15 @@ function Ensure-SinhwaHubReady {
     # 들고 다시 올라온다. 실측 2026-08-25: 내리지 않고 올리면 그대로 401 이 이어졌다.
     $managerStopArguments = (
         "-NoProfile -ExecutionPolicy Bypass -File `"$SinhwaHubManagerPath`" " +
-        "-Action Stop -Force -BackendPort 8200 -FrontendPort 5173 -SqlContainerName disabled"
+        "-Action Stop -Force -BackendPort 8200 -FrontendPort 5173 -SqlContainerName `"$SinhwaSqlContainerName`""
     )
     $managerStopProcess = Start-Process -FilePath "powershell.exe" `
         -ArgumentList $managerStopArguments `
         -WindowStyle Hidden `
         -PassThru
     $managerStopProcess.WaitForExit()
-    $managerArguments = (
-        "-NoProfile -ExecutionPolicy Bypass -File `"$SinhwaHubManagerPath`" " +
-        "-Action Start -BackendPort 8200 -FrontendPort 5173 -SqlContainerName disabled"
-    )
+    $managerCommand = "& '$($SinhwaHubManagerPath.Replace("'", "''"))' -Action Start -BackendPort 8200 -FrontendPort 5173 -SqlContainerName '$($SinhwaSqlContainerName.Replace("'", "''"))'"
+    $managerArguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$managerCommand`""
     $managerProcess = Start-Process -FilePath "powershell.exe" `
         -ArgumentList $managerArguments `
         -WindowStyle Hidden `
@@ -544,6 +543,11 @@ function Start-ControlTowerBrowser {
 }
 
 function Start-FactoryWorkerBrowser {
+    param(
+        [ValidateRange(1, 600)]
+        [int]$TimeoutSeconds = 120
+    )
+
     if ($NoBrowser -or $BackendPort -ne 41009 -or $FrontendPort -ne 42011) {
         return
     }
@@ -559,8 +563,11 @@ function Start-FactoryWorkerBrowser {
         ) `
         -WorkingDirectory $RepositoryRoot `
         -WindowStyle Hidden `
-        -Wait `
         -PassThru
+    # Start-Process -Wait는 상시 실행 서비스 자식까지 기다리므로 런처 하나만 기다린다.
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        throw "조립공장 작업자 런처가 ${TimeoutSeconds}초 안에 종료되지 않았습니다. PID=$($process.Id)"
+    }
     if ($process.ExitCode -ne 0) {
         throw "현재 runtime build의 조립공장 작업자를 확인하지 못했습니다."
     }

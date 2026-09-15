@@ -5,11 +5,11 @@ const test = require('node:test');
 
 const launcher = fs.readFileSync(path.resolve(__dirname, '../../launcher.ps1'), 'utf8');
 
-test('launcher keeps healthy 8081 and 5050 services running', () => {
+test('launcher keeps healthy 8081 and 43030 services running', () => {
   // Given: a launcher that may be invoked while the user is actively editing a local draft.
   // When: the launcher prepares its frontend and backend services.
   // Then: healthy listeners are reused instead of being globally force-killed.
-  assert.doesNotMatch(launcher, /Stop-PortListeners\s+-Ports\s+@\(8081, 5050\)/);
+  assert.doesNotMatch(launcher, /Stop-PortListeners\s+-Ports\s+@\(8081, 43030\)/);
   assert.match(launcher, /if \(-not \$backendOk\) \{/);
   assert.match(launcher, /if \(-not \$frontOk\) \{/);
 });

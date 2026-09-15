@@ -103,6 +103,7 @@ export function createDbFactoryTab(capabilities = {}) {
   const commands = Object.create(null);
   for (const action of GUIDE_ACTIONS) commands[action] = commandFor(assertMutable, actions, action);
   for (const [name, action] of Object.entries({
+    search: 'search',
     'set-db-search-query': 'setDbSearchQuery', 'commit-db-search-query': 'commitDbSearchQuery',
     'apply-db-candidate': 'applyDbCandidate', 'apply-cafe24-candidate': 'applyCafe24Candidate',
     'confirm-no-db-candidate': 'confirmNoDbCandidate', 'confirm-no-cafe24-candidate': 'confirmNoCafe24Candidate',

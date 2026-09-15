@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -302,6 +303,58 @@ def test_richer_competitor_snapshot_keep_is_exact_protected_noop(authority_clien
     assert kept.get_json()["scopeId"] == "project:alpha"
     assert kept.get_json()["revision"] == 1
     assert status.get_json()["revision"] == 1
+
+
+@pytest.mark.parametrize("duplicate_paths", ["sections", "criteria", "both"])
+def test_last_work_post_stores_exact_competitor_section_duplicate_cleanup(authority_client, duplicate_paths: str) -> None:
+    client, _ = authority_client
+    lease = _acquire(client, "project:alpha")
+    rows = [
+        {"title": "첫째", "value": True},
+        {"title": "첫째", "value": 1},
+        *[{"title": f"섹션 {index}", "value": index} for index in range(2, 16)],
+    ]
+    criteria = [{"name": f"기준 {index}", "value": index, "evidence": [1, 2]} for index in range(10)]
+    original = {"analyzedAt": 100, "analyzeModel": "same-model", "sections_found": rows, "page_score": {"total": 74, "criteria": criteria}}
+    duplicated = {
+        **original,
+        "sections_found": rows * (2 if duplicate_paths in ("sections", "both") else 1),
+        "page_score": {"total": 74, "criteria": criteria * (2 if duplicate_paths in ("criteria", "both") else 1)},
+    }
+    first = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "assets": {"compPage": {"analysisResult": duplicated}},
+                "lightweight": {"compPage": {"analysisResult": duplicated}},
+            },
+            "expectedRevision": 0,
+            "revision": 1,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    cleanup = client.post(
+        "/api/last-work?workspaceId=project:alpha",
+        json={
+            "snapshot": {
+                "assets": {"compPage": {"analysisResult": original}},
+                "lightweight": {"compPage": {"analysisResult": original}},
+            },
+            "expectedRevision": 1,
+            "revision": 2,
+            "leaseId": lease["leaseId"],
+            "fencingToken": lease["fencingToken"],
+        },
+    )
+    readback = client.get("/api/last-work?workspaceId=project:alpha").get_json()["snapshot"]
+
+    assert first.get_json()["accepted"] is True
+    assert cleanup.get_json()["accepted"] is True
+    for partition in ("assets", "lightweight"):
+        restored = readback[partition]["compPage"]["analysisResult"]
+        assert [len(restored["sections_found"]), len(restored["page_score"]["criteria"])] == [16, 10]
+        assert json.dumps(restored, sort_keys=True) == json.dumps(original, sort_keys=True)
 
 
 def test_richer_factory_snapshot_keep_is_exact_protected_noop(authority_client) -> None:

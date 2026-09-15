@@ -18,6 +18,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = BACKEND_ROOT.parent
 DEFAULT_DATA_ROOT = BACKEND_ROOT / ".local" / "public-api"
 DEFAULT_CONTROL_TOWER_URL = "http://127.0.0.1:8787"
+DEFAULT_BACKEND_ORIGIN = "http://127.0.0.1:43030"
 
 
 def _now() -> str:
@@ -70,10 +71,10 @@ class PublicAutomationService:
             "api_launcher": str(REPOSITORY_ROOT / "tools" / "launch_public_api.ps1"),
             "docs_launcher": str(REPOSITORY_ROOT / "tools" / "launch_public_api_docs.vbs"),
             "working_directory": str(REPOSITORY_ROOT),
-            "server_url": "http://127.0.0.1:5050",
-            "health_url": "http://127.0.0.1:5050/api/v1/health",
-            "openapi_url": "http://127.0.0.1:5050/api/v1/openapi.json",
-            "docs_url": "http://127.0.0.1:5050/api/v1/docs",
+            "server_url": DEFAULT_BACKEND_ORIGIN,
+            "health_url": f"{DEFAULT_BACKEND_ORIGIN}/api/v1/health",
+            "openapi_url": f"{DEFAULT_BACKEND_ORIGIN}/api/v1/openapi.json",
+            "docs_url": f"{DEFAULT_BACKEND_ORIGIN}/api/v1/docs",
             "api_hub_connector_id": "kuasangse_python_5050",
             "shortcut_path": str(Path.home() / "Desktop" / "상세페이지 AI 자동화 API.lnk"),
         }
