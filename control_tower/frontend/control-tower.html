@@ -1615,7 +1615,18 @@
       align-items: center;
     }
 
-    .board-action {
+    /* 손으로 누르는 자리는 44px 아래로 내려가지 않는다(DESIGN.md 8항의 44px 행동 영역).
+       실측 2026-09-16: 필수값 붙여넣기 패널의 「닫기」 가 1280·768·375px 모두에서 30px 였고
+       workfile-tabs 검사의 buttonHeights >= 44 단정이 거기서 걸렸다.
+       범인은 이 파일이 아니라 함께 불러오는 조립공장 공용 테마였다 —
+       src/factory-theme.css 의 `.btn-sm,.production-control .board-action { min-height:30px }`
+       가 더 구체적이라 이긴다. 조립공장 쪽 파일은 건드리지 않고 여기서 같은 구체도로 되돌린다. */
+    .board-action,
+    .production-control .board-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-block-size: var(--control-min-block-size);
       padding: var(--space-1) var(--space-2);
       border: var(--border-width-default) solid var(--color-border-default);
       border-radius: var(--radius-sm);
@@ -4924,6 +4935,6 @@
     }
   </script>
   <script type="module" src="./src/production-board.mjs?parallelBoard=82"></script>
-  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=28"></script>
+  <script type="module" src="./src/bulk-intake.mjs?bulkIntake=29"></script>
 </body>
 </html>

@@ -841,13 +841,20 @@ test('격리 브라우저에서 다중 작업 탭·보기 전환·A컷 다음 �
   });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=browser`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  // 작업파일 탭 띠는 개요 패널 안에 있다. 실측 2026-09-16: 기본 착지 탭이 개요→작업 큐 로
+  // 바뀌면서 탭은 DOM 에 있어도 숨은 패널 안이라 visible 이 되지 않았다(waitForSelector 기본값).
+  await openOverviewPanel(page);
   await page.waitForSelector('#workfile-job-tabs .workfile-job-tab:nth-child(3)');
   mutationRequests.length = 0;
 
   const tabs = page.locator('#workfile-job-tabs .workfile-job-tab');
   assert.equal(await tabs.count(), 3);
-  assert.equal(await page.locator('#operator-queue-total').innerText(), '3건');
   await openQueuePanel(page);
+  // 기본 필터 '실행 대상' 은 막힌·완료 기록을 접는다. 이 검사는 작업 셋을 모두 다루므로
+  // '전체' 에서 센다 — 실측 2026-09-16, 접힌 채로는 '실행 대상 1건' 이 보인다.
+  await page.locator('[data-queue-filter="all"]').click();
+  await page.waitForFunction(() => document.querySelector('#operator-queue-total')?.textContent?.includes('전부'));
+  assert.equal(await page.locator('#operator-queue-total').innerText(), '3건 전부');
   await page.waitForSelector('#product-list .operator-job-row:nth-child(3)', { state: 'attached' });
   assert.equal(await page.locator('#product-list .operator-job-row').count(), 3);
   const workbenchSteps = page.locator('#operator-assembly-steps [data-assembly-step]');
@@ -1295,6 +1302,9 @@ test('격리 B 작업파일은 명시적 rebind read-back 뒤 새 checkpoint로�
   });
   const url = `http://127.0.0.1:${frontendPort}/control-tower.html?apiBase=http://127.0.0.1:${apiPort}&apiHub=http://127.0.0.1:${apiPort}&workfileTabsQa=b-rebind`;
   await page.goto(url, { waitUntil: 'networkidle' });
+  // 작업파일 탭 띠는 개요 패널 안에 있다. 실측 2026-09-16: 기본 착지 탭이 개요→작업 큐 로
+  // 바뀌면서 탭은 DOM 에 있어도 숨은 패널 안이라 visible 이 되지 않았다(waitForSelector 기본값).
+  await openOverviewPanel(page);
   await page.waitForSelector('#workfile-job-tabs .workfile-job-tab[data-tab-key="job:job-qa-3102"]');
   mutations.length = 0;
 

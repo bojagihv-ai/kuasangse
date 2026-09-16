@@ -388,6 +388,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   let status = { copy: '제품명을 적고 사진을 추가하세요. 준비한 제품은 작업큐에 추가할 수 있습니다.', tone: '' };
   let progress = null;
   let categoryItems = [];
+  let categoriesRequested = false;
   let categoryStatus = 'Cafe24 분류를 불러오는 중…';
   let categoryLoading = false;
   let selectedProductIndex = 0;
@@ -1401,8 +1402,25 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
     bulkBar.append(element('span', 'bulk-card-spacer'));
   }
 
+  /**
+   * 분류 목록은 제품 카드의 분류 칸이 실제로 그려질 때 처음 한 번만 받아온다.
+   *
+   * 실측 2026-09-16: 예전에는 마운트에서 바로 불렀다. 그래서 입력 화면을 열지 않아도,
+   * 제품이 하나도 없어도 화면이 뜨는 순간 Cafe24 관리자 API 로
+   * POST /api/invoke/cafe24_control_tower/console-products
+   * (GET /api/v2/admin/categories?limit=100&offset=0) 가 나갔다. 조립공장 검사 3건이
+   * "이 화면은 바깥으로 아무것도 내보내지 않는다" 계약으로 이것을 잡아냈다.
+   * 사람이 분류를 고르려 할 때 부르면 충분하고, 그때까지 Cafe24 를 건드릴 이유가 없다.
+   */
+  function ensureCategories() {
+    if (categoriesRequested) return;
+    categoriesRequested = true;
+    void refreshCategories();
+  }
+
   async function refreshCategories() {
     if (categoryLoading) return;
+    categoriesRequested = true;
     categoryLoading = true;
     categoryStatus = 'Cafe24 분류를 불러오는 중…';
     schedulePlan();
@@ -1548,6 +1566,7 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   }
 
   function renderCategoryField(entry, group, index) {
+    ensureCategories();
     const box = element('div', 'intake-category-picker');
     const label = element('label', 'bulk-default-field');
     const select = document.createElement('select');
@@ -2165,7 +2184,6 @@ export function mountBulkIntake(runtime, { root = document.getElementById('bulk-
   root.addEventListener('click', onClick);
   rebuild();
   void restoreWorkingState();
-  void refreshCategories();
   void loadInputPolicy();
 
   return () => {
