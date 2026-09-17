@@ -339,3 +339,49 @@ test('Cafe24 승인: 열려 있는 제품은 네 단계를 한 번에 밟고, �
   assert.equal(opens.length, 1);
   assert.equal(opens[0].body.restoreOnly, true);
 });
+
+test('앞 체크박스로 여러 작업을 골라 한 번에 지운다 — 조립공장이 연 제품은 잠기고 이유를 말한다', { timeout: 60_000 }, async t => {
+  const deleted = [];
+  const dialogs = [];
+  const { page } = await openWorkbench(t, {
+    apiPort: 19578, frontendPort: 19598,
+    beforeNavigate: async candidate => {
+      candidate.on('dialog', dialog => { dialogs.push(dialog.message()); void dialog.accept(); });
+      await candidate.route(/\/api\/factory\/jobs\/(job-qa-3102|job-qa-3)$/u, async route => {
+        const request = route.request();
+        if (request.method() !== 'DELETE') { await route.fallback(); return; }
+        const jobId = request.url().split('/').pop();
+        deleted.push({ jobId, csrf: request.headers()['x-control-tower-csrf'] });
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ accepted: true, jobId, productName: jobId, removed: true }) });
+      });
+      await candidate.route('**/api/factory/jobs', async route => {
+        if (route.request().method() !== 'GET') { await route.fallback(); return; }
+        let response;
+        try { response = await route.fetch(); } catch { await route.abort().catch(() => {}); return; }
+        const body = await response.json();
+        const gone = new Set(deleted.map(item => item.jobId));
+        if (Array.isArray(body.jobs)) body.jobs = body.jobs.filter(job => !gone.has(job.jobId));
+        await route.fulfill({ response, body: JSON.stringify(body) });
+      });
+    },
+  });
+  // 조립공장이 열고 있는 2994 는 잠긴다 — 이유가 title 에 있다.
+  const livePick = page.locator('#wb-queue .wb-row[data-job-id="factory-job-qa-2994"] input.wb-row-pick');
+  assert.equal(await livePick.isDisabled(), true);
+  assert.match(await livePick.getAttribute('title'), /열고 있는 제품/u);
+  assert.equal(await page.locator('#wb-bulk').isHidden(), true);
+  await page.locator('#wb-queue .wb-row[data-job-id="job-qa-3102"] input.wb-row-pick').check();
+  await page.locator('#wb-queue .wb-row[data-job-id="job-qa-3"] input.wb-row-pick').check();
+  assert.equal(await page.locator('#wb-bulk').isHidden(), false);
+  assert.match(await page.locator('#wb-bulk-count').innerText(), /2개 골랐습니다/u);
+  // 체크박스를 눌러도 행이 펼쳐지지 않는다.
+  assert.equal(await page.locator('#wb-queue .wb-row[data-open="true"]').count(), 0);
+  await page.locator('#wb-bulk-delete').click();
+  await page.waitForFunction(() => /2개를 지웠습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(dialogs.length, 1);
+  assert.match(dialogs[0], /2개 작업을 지울까요/u);
+  assert.deepEqual(deleted.map(item => item.jobId).sort(), ['job-qa-3', 'job-qa-3102']);
+  assert.ok(deleted.every(item => item.csrf), 'CSRF 없이 지웠다');
+  await page.waitForFunction(() => document.querySelectorAll('#wb-queue .wb-row').length === 1);
+  assert.equal(await page.locator('#wb-bulk').isHidden(), true);
+});

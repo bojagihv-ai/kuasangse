@@ -85,6 +85,8 @@ const state = {
   busy: new Set(),
   lastError: '',
   panels: new Map(),
+  // 체크박스로 고른 작업들 — 한 번에 지운다.
+  selected: new Set(),
   autoPick: record(loadStored(STORAGE.autoPick, {})),
   autoPickDefault: text(loadStored(STORAGE.autoPickDefault, '')),
   // jobId → { signature, at, error } — 같은 단계·후보 수에 두 번 묻지 않는다.
@@ -233,7 +235,12 @@ function render() {
     autoPick: state.autoPick,
     autoPickDefault: state.autoPickDefault,
     source: sourceWait() || {},
+    selected: state.selected,
     handlers: {
+      toggleSelect: (jobId, checked) => {
+        if (checked) state.selected.add(jobId); else state.selected.delete(jobId);
+        renderBulk();
+      },
       open: row => { state.openJobId = state.openJobId === row.jobId ? '' : row.jobId; render(); },
       resume: jobId => void resumeJob(jobId),
       remove: (jobId, productName) => void removeJob(jobId, productName),
@@ -254,7 +261,53 @@ function render() {
       tabCommand: request => void sendTabCommand(request),
     },
   });
+  renderBulk();
   renderDiag();
+}
+
+/** 고른 작업 수와 「선택 지우기」 — 고른 게 없으면 숨긴다. 줄에서 사라진 작업은 선택에서도 뺀다. */
+function renderBulk() {
+  const bar = $('wb-bulk');
+  if (!bar) return;
+  for (const jobId of [...state.selected]) if (!jobById(jobId)) state.selected.delete(jobId);
+  const count = state.selected.size;
+  bar.hidden = count === 0;
+  const label = $('wb-bulk-count');
+  if (label) label.textContent = `${count}개 골랐습니다`;
+}
+
+/** 고른 작업을 한 번에 지운다. 확인은 한 번, 지우기는 하나씩(백엔드에 일괄 삭제가 없다). 못 지운 것은 이유와 함께. */
+async function bulkDelete() {
+  const ids = [...state.selected];
+  if (!ids.length || state.busy.has('bulk-delete')) return;
+  const names = ids.map(jobId => text(jobById(jobId)?.productName) || jobId);
+  const preview = names.slice(0, 5).join(', ') + (names.length > 5 ? ` 외 ${names.length - 5}개` : '');
+  if (!globalThis.confirm(`${ids.length}개 작업을 지울까요? ${preview}\n되돌릴 수 없고, 저장 기록에서도 실제로 없어집니다.`)) return;
+  state.busy.add('bulk-delete');
+  const removed = [];
+  const failed = [];
+  try {
+    for (const jobId of ids) {
+      try {
+        const result = await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+        removed.push(text(result?.productName) || text(jobById(jobId)?.productName) || jobId);
+        state.jobs = state.jobs.filter(job => text(job.jobId) !== jobId);
+        state.selected.delete(jobId);
+        if (state.openJobId === jobId) state.openJobId = '';
+      } catch (error) {
+        failed.push(`${text(jobById(jobId)?.productName) || jobId}: ${DELETE_COPY[text(error?.code)] || humanError(error)}`);
+      }
+    }
+    if (roots.queue.contains(document.activeElement)) document.activeElement.blur();
+    setStatus(
+      `${removed.length}개를 지웠습니다${failed.length ? ` · 못 지운 ${failed.length}개 — ${failed.join(' / ')}` : '.'}`,
+      failed.length ? 'error' : 'ok',
+    );
+  } finally {
+    state.busy.delete('bulk-delete');
+    render();
+    void refresh();
+  }
 }
 
 async function resumeJob(jobId) {
@@ -744,6 +797,8 @@ function bindShell() {
     autoDefault.value = state.autoPickDefault;
     autoDefault.addEventListener('change', () => setAutoPickDefault(autoDefault.value));
   }
+  $('wb-bulk-delete')?.addEventListener('click', () => void bulkDelete());
+  $('wb-bulk-clear')?.addEventListener('click', () => { state.selected.clear(); render(); });
   const toggleDiag = open => {
     roots.diag.hidden = !open;
     $('wb-btn-diag').setAttribute('aria-expanded', String(open));

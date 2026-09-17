@@ -131,9 +131,18 @@ function element(tag, className = '', content = '') {
  *             importSource, copyFrom, openInFactory, publish, setAutoPick, tabCommand }
  * source: { jobId, db } — 조립공장이 지금 열고 있는 제품이 출처 확정을 기다리면 그 자료.
  */
+/** 왜 이 행은 못 지우는가 — 체크박스 title 로 보인다. 백엔드(delete_product_job)가 거절하는 세 경우 그대로. */
+export function deleteBlockReason(row) {
+  if (row.canDelete) return '';
+  if (row.live) return '조립공장이 지금 열고 있는 제품이라 지울 수 없습니다. 다른 제품으로 넘어간 뒤.';
+  if (text(record(row.raw).status) === 'running') return '돌아가는 중이라 지울 수 없습니다. 멈추거나 끝난 뒤.';
+  if (text(row.registrationStatus) === 'staged_verified') return 'Cafe24 에 등록된 작업이라 지울 수 없습니다.';
+  return '지금은 지울 수 없습니다.';
+}
+
 export function renderQueue(root, model, {
   filter = 'all', openJobId = '', handlers = {}, panel = {}, projection = {},
-  autoPick = {}, autoPickDefault = '', source = {},
+  autoPick = {}, autoPickDefault = '', source = {}, selected = new Set(),
 } = {}) {
   root.replaceChildren();
   root.dataset.filter = filter;
@@ -157,6 +166,21 @@ export function renderQueue(root, model, {
     head.setAttribute('role', 'button');
     head.tabIndex = 0;
     head.setAttribute('aria-expanded', String(openJobId === row.jobId));
+
+    // 앞의 체크박스 — 여러 작업을 골라 한 번에 지운다. 못 지우는 행은 잠그고 이유를 title 로 말한다.
+    const pick = document.createElement('input');
+    pick.type = 'checkbox';
+    pick.className = 'wb-row-pick';
+    pick.name = 'select-job';
+    pick.value = row.jobId;
+    pick.checked = selected.has(row.jobId);
+    pick.disabled = !row.canDelete;
+    pick.title = row.canDelete ? '지울 작업으로 고르기' : deleteBlockReason(row);
+    pick.setAttribute('aria-label', `${row.productName} 고르기`);
+    pick.addEventListener('click', event => event.stopPropagation());
+    pick.addEventListener('keydown', event => event.stopPropagation());
+    pick.addEventListener('change', () => handlers.toggleSelect?.(row.jobId, pick.checked));
+    head.append(pick);
 
     head.append(element('span', 'wb-state', row.stateLabel));
 
