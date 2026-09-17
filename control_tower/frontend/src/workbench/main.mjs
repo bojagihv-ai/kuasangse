@@ -545,12 +545,23 @@ async function sendTabCommand({ jobId, tabId, action, value, label = '변경' })
   panel.source.note = `${label} 요청을 조립공장에 보내는 중…`;
   render();
   try {
-    const payload = buildTabCommand({
-      jobId, tabId, action, value, projection: state.projection,
-      idempotencyKey: `wb-tab:${jobId}:${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`,
-    });
     const base = `/api/factory/jobs/${encodeURIComponent(jobId)}/tab-command`;
-    const accepted = await apiRequest(base, { method: 'POST', body: payload });
+    const idempotencyKey = `wb-tab:${jobId}:${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`;
+    let accepted = null;
+    // 조립공장은 자기 저장(autosave)으로도 리비전을 올린다. 그 사이에 만든 명령은 stale_workfile_revision 으로
+    // 거절되는데(실측 2026-09-17: 연속 명령 4건 중 2건), 정체(제품·실행·지문)는 그대로라 최신 투영으로 다시 만들면 통한다.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const projection = attempt === 1 ? state.projection : await apiRequest('/api/factory/state');
+      if (attempt > 1 && projection && typeof projection === 'object') state.projection = projection;
+      const payload = buildTabCommand({ jobId, tabId, action, value, projection, idempotencyKey });
+      try {
+        accepted = await apiRequest(base, { method: 'POST', body: payload });
+        break;
+      } catch (error) {
+        if (text(error?.code) !== 'stale_workfile_revision' || attempt === 3) throw error;
+        await wait(1500);
+      }
+    }
     if (!accepted?.accepted || !text(accepted.orderId)) throw new Error('조립공장이 요청을 접수하지 못했습니다.');
     const deadline = Date.now() + 90_000;
     let receipt = null;

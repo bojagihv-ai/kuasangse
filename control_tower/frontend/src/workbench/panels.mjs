@@ -270,6 +270,11 @@ export function renderChosenReview(row) {
   box.dataset.stageKey = 'chosen';
   const cells = list(record(row.raw).cells);
   const picked = cells.filter(cell => text(cell.selectedId));
+  // 아직 아무 후보도 안 만들어진 제품이면 빈 칸 여섯 개 대신 한 줄로.
+  if (!picked.length && cells.every(cell => !Number(cell.candidateCount))) {
+    box.append(element('p', 'wb-note', '아직 만든 컷이 없습니다. 조립공장이 대표이미지부터 만들면 여기에 후보가 뜹니다.'));
+    return box;
+  }
   const head = element('div', 'wb-stage-head');
   head.append(element('b', '', picked.length === cells.length && cells.length
     ? `여섯 단계를 다 골랐습니다 · 고른 컷 ${picked.length}개`
