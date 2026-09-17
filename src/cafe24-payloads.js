@@ -2211,8 +2211,11 @@ function factoryCafe24DetailTermsCompatible(term = '', expectedTerms = []) {
     if (!normalizedExpected) return false;
     if (normalizedTerm === normalizedExpected) return true;
     if (normalizedTerm.length >= 4 && normalizedExpected.endsWith(normalizedTerm)) return true;
+    // 후보 이름이 4글자짜리 일반명사(동전지갑·수저집 등)이고 우리 상품명 안에 통째로 들어 있으면 우리 제품을 가리키는 말이다.
+    // 실측 2026-09-18: "[생산관제 시험] 색동 동전지갑 작업대 …" 가 신화DB 후보 "동전지갑" 때문에 등록마다 막혔다 —
+    // 이름이 그 말로 끝나지 않으면 5글자 미만은 호환으로 안 봤기 때문. 포함이면 4글자부터 호환.
     return (normalizedExpected.length >= 5 && normalizedTerm.includes(normalizedExpected)) ||
-      (normalizedTerm.length >= 5 && normalizedExpected.includes(normalizedTerm));
+      (normalizedTerm.length >= 4 && normalizedExpected.includes(normalizedTerm));
   });
 }
 
