@@ -11,6 +11,7 @@
  */
 import { apiRequest, ORIGINS } from './api.mjs?wb=1';
 import { FILTERS, buildQueueModel, renderQueue } from './queue.mjs?wb=1';
+import { mountIntake } from './intake.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -481,6 +482,20 @@ function bindShell() {
   };
   $('wb-btn-intake').addEventListener('click', () => toggleIntake(intake.hidden));
   $('wb-btn-intake-close')?.addEventListener('click', () => toggleIntake(false));
+  const intakeBody = $('wb-intake-body');
+  if (intakeBody) {
+    mountIntake(intakeBody, {
+      handlers: {
+        status: (message, tone) => setStatus(message, tone),
+        queued: job => {
+          toggleIntake(false);
+          state.filter = 'all';
+          state.openJobId = text(job?.jobId);
+          void refresh();
+        },
+      },
+    });
+  }
   const toggleDiag = open => {
     roots.diag.hidden = !open;
     $('wb-btn-diag').setAttribute('aria-expanded', String(open));

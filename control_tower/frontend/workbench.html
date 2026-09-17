@@ -49,6 +49,8 @@
       color-scheme: dark;
     }
     * { box-sizing: border-box; }
+    /* display 를 준 요소(.wb-intake 의 grid 등)가 hidden 속성을 이기지 못하게. 없으면 접은 자리가 그대로 보인다. */
+    [hidden] { display: none !important; }
     html, body { margin: 0; }
     body {
       background: var(--wb-bg); color: var(--wb-ink); font-family: var(--wb-font);
@@ -181,6 +183,25 @@
     .wb-gate li[data-state="now"] { color: var(--wb-ink); border-color: var(--wb-accent); background: var(--wb-accent-wash); }
     @media (max-width: 860px) { .wb-bring { grid-template-columns: 1fr; } }
 
+    /* 제품 넣기 — 한 장에 다섯 묶음. 칸 안 스크롤 없이 아래로 길어진다. */
+    .wb-intake-form { display: grid; gap: 22px; }
+    .wb-intake-block { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--wb-line); }
+    .wb-intake-block h3 { font-size: 15px; }
+    .wb-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .wb-photo { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); background: var(--wb-card-2); }
+    .wb-photo img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: var(--wb-radius); display: block; background: var(--wb-card); }
+    .wb-photo[data-role="base"] img { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+    .wb-photo-meta { display: grid; gap: 6px; font-size: 12.5px; }
+    .wb-photo-meta b { overflow-wrap: anywhere; }
+    .wb-photo-meta select, .wb-photo-meta input { min-height: 36px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 13px; }
+    .wb-check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; min-height: 36px; }
+    .wb-check input { width: 18px; height: 18px; accent-color: var(--wb-accent); }
+    .wb-field select { min-height: 40px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 14px; }
+    .wb-actions select, .wb-actions input[type="text"] { min-height: 40px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 14px; }
+    .wb-matrix { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 4px 18px; }
+    .wb-matrix-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; font-size: 13.5px; padding: 2px 0; }
+    .wb-note.error:empty { display: none; }
+
     .wb-diag { margin-top: 28px; padding: 18px 20px; border: 1px dashed var(--wb-line-strong); border-radius: var(--wb-radius-lg); background: var(--wb-card-2); display: grid; gap: 12px; }
     .wb-diag h2 { font-size: 15px; }
     .wb-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; margin: 0; }
@@ -218,10 +239,11 @@
       <div class="wb-intake-head">
         <div>
           <h2>제품 넣기</h2>
-          <p>사진과 이름만 있으면 줄에 섭니다. 이 자리는 다음 조각에서 채워집니다 — 지금은 옛 화면의 「입력·소스」에서 넣으세요.</p>
+          <p>사진과 이름만 있으면 줄에 섭니다. 값은 아는 만큼만 — 빈 칸은 조립공장이 채우거나 줄에서 「내 차례」로 묻습니다.</p>
         </div>
         <button class="wb-btn ghost sm" id="wb-btn-intake-close" type="button">접기</button>
       </div>
+      <div id="wb-intake-body"></div>
     </section>
 
     <main aria-label="제품 줄">
