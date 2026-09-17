@@ -564,6 +564,22 @@ export function renderSourcePanel(row, ctx = {}, handlers = {}) {
   }
   const db = record(ctx.db);
   root.append(element('p', 'wb-note', `조립공장이 「${text(db.query) || row.productName}」로 찾은 후보입니다. 같은 제품이 있으면 고르고, 새 제품이면 「후보 없음」으로 못박습니다. 둘 다 정해지면 이어서 돌립니다.`));
+  // 후보 다시 찾기 — 조립공장 DB 탭의 「후보 검색」과 같은 명령. 후보 목록이 등록 검사(다른 상품명 단서)에 걸릴 때
+  // 검색어를 바꿔 목록을 갈아 끼우는 데도 쓴다.
+  const search = element('form', 'wb-bring');
+  search.noValidate = true;
+  search.addEventListener('submit', event => event.preventDefault());
+  const query = document.createElement('input');
+  query.type = 'search';
+  query.name = 'db-query';
+  query.placeholder = '후보 다시 찾기 — 검색어';
+  query.value = text(db.query) || row.productName;
+  query.autocomplete = 'off';
+  const scope = document.createElement('select');
+  scope.name = 'db-source';
+  scope.append(new Option('신화사DB + Cafe24', 'all'), new Option('신화사DB', 'db'), new Option('Cafe24', 'cafe24'));
+  search.append(query, scope, button('후보 검색', 'wb-btn sm', () => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'db', action: 'search', value: { query: query.value, source: scope.value }, label: '후보 검색' }), { disabled: ctx.busy === true, action: 'db-search' }));
+  root.append(search);
   const groups = [
     ['db', '신화사DB', list(db.dbCandidates), db.dbNone === true, text(db.selectedDbCandidateKey)],
     ['cafe24', 'Cafe24', list(db.cafe24Candidates), db.cafe24None === true, text(db.selectedCafe24CandidateKey)],

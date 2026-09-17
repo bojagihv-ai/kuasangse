@@ -150,11 +150,15 @@ function operatorControls(projection) {
 function sourceWait() {
   const jobId = activeJobId();
   const job = jobById(jobId);
-  const stage = text(job?.stageKey);
-  if (!job || !['db', 'competitors'].includes(stage) || !['waiting_manual', 'blocked'].includes(text(job.status))) return null;
+  if (!job) return null;
   const controls = operatorControls(state.projection);
   const db = record(controls?.db);
   const competitor = record(controls?.competitor);
+  let stage = text(job.stageKey);
+  // 등록 사전점검이 "다른 상품명 단서" 로 막으면 그 단서는 후보 목록에서 온다 — 출처 패널(후보 다시 찾기)을 연다.
+  const blockers = list(record(record(state.projection).registration).blockers).map(text);
+  if (!['db', 'competitors'].includes(stage) && blockers.some(item => item.includes('상품명 단서')) && Object.keys(db).length) stage = 'db';
+  if (!['db', 'competitors'].includes(stage) || !['waiting_manual', 'blocked', 'completed'].includes(text(job.status))) return null;
   if (stage === 'db' && !Object.keys(db).length) return null;
   if (stage === 'competitors' && !Object.keys(competitor).length) return null;
   return { jobId, stage, db, competitor };
@@ -723,11 +727,12 @@ async function sendTabCommand({ jobId, tabId, action, value, label = '변경' })
         setStatus('출처 확정 끝 · 이어서 돌립니다.', 'ok');
         await resumeJob(jobId);
       }
-    } else if (tabId === 'db' && pending) {
+    } else if (tabId === 'db' && pending && action !== 'search') {
       const db = record(pending.db);
       const dbDone = db.dbNone === true || text(db.selectedDbCandidateKey);
       const cafe24Done = db.cafe24None === true || text(db.selectedCafe24CandidateKey);
-      if (dbDone && cafe24Done) {
+      // 출처 단계에서 기다리는 중일 때만 이어 돌린다 — 등록 사전점검 때문에 연 패널이면 사람이 다음을 정한다.
+      if (dbDone && cafe24Done && text(jobById(jobId)?.status) === 'waiting_manual' && text(jobById(jobId)?.stageKey) === 'db') {
         setStatus('출처 확정 끝 · 이어서 돌립니다.', 'ok');
         await resumeJob(jobId);
       }
