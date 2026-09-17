@@ -64,7 +64,12 @@ def create_app(
             settings.pdp_service_key,
         ),
         gpt_judge=gpt_judge or GptOAuthJudge(settings.api_hub_url),
-        claude_judge=claude_judge or ClaudeOAuthJudge(settings.api_hub_url),
+        # 후보 그림은 조립공장 보관함(43030)과 관제탑 자신(history assets)에서 내려받아 Claude 에게 파일로 보여 준다.
+        claude_judge=claude_judge or ClaudeOAuthJudge(
+            settings.api_hub_url,
+            asset_base_url=settings.factory_backend_url,
+            tower_base_url=f"http://{settings.backend_host}:{settings.backend_port}",
+        ),
         factory_archive_root=Path(settings.cache_root).resolve().parent / "local-archive",
     )
 

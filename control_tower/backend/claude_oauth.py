@@ -15,8 +15,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 
 import requests
 
@@ -92,9 +95,21 @@ class ClaudeOAuthJudge:
         api_hub_url: str = "http://127.0.0.1:4321",
         *,
         request_fn: Callable[..., GptHttpResponse] = requests.request,
+        asset_base_url: str = "http://127.0.0.1:43030",
+        tower_base_url: str = "http://127.0.0.1:41009",
+        image_dir: str | os.PathLike[str] | None = None,
+        fetch_fn: Callable[..., GptHttpResponse] = requests.get,
+        max_images: int = 12,
     ) -> None:
         self.api_hub_url = api_hub_url.rstrip("/")
         self._request = request_fn
+        # 후보 그림을 내려받아 둘 곳. 허브의 Claude 브리지는 글자만 받으므로(apiClaudeOauth.js, 이미지 필드 없음)
+        # 그림은 같은 PC 의 파일로 두고 Claude CLI(plan 모드 · 읽기 도구 허용)가 경로를 열어 보게 한다.
+        self.asset_base_url = asset_base_url.rstrip("/")
+        self.tower_base_url = tower_base_url.rstrip("/")
+        self.image_dir = Path(image_dir) if image_dir else Path(tempfile.gettempdir()) / "control-tower-claude-judge"
+        self._fetch = fetch_fn
+        self.max_images = max_images
 
     def _call(
         self,
@@ -131,6 +146,61 @@ class ClaudeOAuthJudge:
             raise ClaudeOAuthError("oauth_not_ready", retryable=True)
         return self._call("GET", "/api/claude-oauth/options")
 
+    def _image_url(self, reference: str) -> str:
+        """후보 그림 참조를 내려받을 수 있는 주소로. 조립공장 보관함 원본(/image)은 768px 축소본으로 바꿔 받는다."""
+        ref = str(reference or "").strip()
+        if not ref or ref.startswith("thumb:") or ref.startswith("asset:"):
+            return ""
+        if ref.startswith("http://") or ref.startswith("https://"):
+            return ref
+        if ref.startswith("/api/local-archive/"):
+            ref = re.sub(r"/image(?:\?.*)?$", "/thumbnail?w=768", ref)
+            return f"{self.asset_base_url}{ref}"
+        if ref.startswith("/api/factory/"):
+            return f"{self.tower_base_url}{ref}"
+        return ""
+
+    def _attach_images(self, evidence: Mapping[str, JsonValue]) -> list[JsonObject]:
+        """증거 묶음의 후보 그림을 파일로 내려받는다. 못 받은 후보는 뺀다(글자 판정으로 남는다).
+
+        돌아오는 값: [{candidateId, path, bytes}]. 파일 이름은 내용 다이제스트라 같은 그림은 다시 받지 않는다.
+        """
+        attached: list[JsonObject] = []
+        # build_evidence_bundle 은 후보를 candidateRefs 로 싣는다(candidateId·thumbnailRef·contentDigest).
+        candidates = evidence.get("candidateRefs") if isinstance(evidence, Mapping) else None
+        if not isinstance(candidates, list):
+            return attached
+        try:
+            self.image_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return attached
+        for item in candidates[: self.max_images]:
+            if not isinstance(item, Mapping):
+                continue
+            url = self._image_url(str(item.get("thumbnailRef") or ""))
+            candidate_id = str(item.get("candidateId") or "")
+            if not url or not candidate_id:
+                continue
+            digest = re.sub(r"[^A-Za-z0-9_-]", "", str(item.get("contentDigest") or candidate_id))[:64] or "candidate"
+            try:
+                response = self._fetch(url, timeout=(3, 30))
+                if response.status_code != 200:
+                    continue
+                content = response.content
+                content_type = str(response.headers.get("Content-Type") or "").lower()
+            except (requests.RequestException, AttributeError):
+                continue
+            if not content or len(content) > 8 * 1024 * 1024:
+                continue
+            suffix = ".png" if "png" in content_type else ".webp" if "webp" in content_type else ".jpg"
+            path = self.image_dir / f"{digest}{suffix}"
+            try:
+                path.write_bytes(content)
+            except OSError:
+                continue
+            attached.append({"candidateId": candidate_id, "path": str(path), "bytes": len(content)})
+        return attached
+
     def judge(
         self,
         *,
@@ -165,26 +235,35 @@ class ClaudeOAuthJudge:
         if available_efforts and effort not in available_efforts:
             raise ClaudeOAuthError("effort_option_invalid")
         timeout_ms = int(defaults.get("timeoutMs") or 180000)
-        payload: JsonObject = {
-            "prompt": json.dumps(
-                {
-                    "decisionType": decision_type,
-                    "evidence": evidence,
-                    "instruction": (
-                        "Return one JSON object only with these exact keys: "
-                        "decision ('selected' or 'manual_required'), "
-                        "selectedCandidateId (one referenced candidate ID or null), "
-                        "scores (an object with sameProductLikelihood, visualSimilarity, "
-                        "taskSuitability, quality, factConsistency; every value is a number 0..1), "
-                        "confidence (number 0..1), scoreGap (number 0..1), "
-                        "riskFlags (array of strings), rationale (nonempty string). "
-                        "Choose only a referenced candidate. If evidence is insufficient or "
-                        "conflicting, use manual_required and null selectedCandidateId."
-                    ),
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
+        # 그림을 파일로 내려 두고 경로를 알려 준다. 브리지는 Claude CLI 를 plan 모드로 띄우므로 읽기 도구로 열어 볼 수 있다.
+        # 그림을 하나도 못 받으면 글자 판정으로 남는다 — 그때는 모델이 manual_required 로 답하는 게 맞다.
+        images = self._attach_images(evidence)
+        prompt_body: JsonObject = {
+            "decisionType": decision_type,
+            "evidence": evidence,
+            "instruction": (
+                "Return one JSON object only with these exact keys: "
+                "decision ('selected' or 'manual_required'), "
+                "selectedCandidateId (one referenced candidate ID or null), "
+                "scores (an object with sameProductLikelihood, visualSimilarity, "
+                "taskSuitability, quality, factConsistency; every value is a number 0..1), "
+                "confidence (number 0..1), scoreGap (number 0..1), "
+                "riskFlags (array of strings), rationale (nonempty string). "
+                "Choose only a referenced candidate. If evidence is insufficient or "
+                "conflicting, use manual_required and null selectedCandidateId."
             ),
+        }
+        if images:
+            prompt_body["imageFiles"] = [{"candidateId": item["candidateId"], "path": item["path"]} for item in images]
+            prompt_body["viewingInstruction"] = (
+                "Before judging, open every file listed in imageFiles with your Read tool "
+                "(absolute local paths; they are the candidate pictures) and look at each picture. "
+                "Judge visually: the product must be shown whole and clearly for its stage "
+                "(representative, size guide, colour option, or image cut). "
+                "Do not answer manual_required merely because pictures are files — you can read them."
+            )
+        payload: JsonObject = {
+            "prompt": json.dumps(prompt_body, ensure_ascii=False, separators=(",", ":")),
             "model": resolved_model,
             "effort": effort,
             "timeoutMs": timeout_ms,
@@ -223,6 +302,8 @@ class ClaudeOAuthJudge:
             "preset": preset,
             "evidenceBundleDigest": evidence["bundleDigest"],
             "judgementDigest": _digest(judgement),
+            # 그림을 몇 장 보여 줬는지 — 0 이면 글자만 보고 판정한 것이다(영수증만 보고도 알 수 있어야 한다).
+            "imageCount": len(images),
         }
         # 얼마나 쓰는지 보이지 않으면 안 된다 — 브리지가 주는 비용을 영수증에 그대로 싣는다.
         cost = response.get("totalCostUsd")
