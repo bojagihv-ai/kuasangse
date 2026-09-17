@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>생산관제 작업대</title>
+  <style>
+    /* 작업대 — 제품 넣기 · 줄 · 진단, 세 자리만. 바깥 출처는 부르지 않는다(글꼴도). */
+    :root {
+      --wb-bg: #EFEFEB; --wb-card: #FFFFFF; --wb-card-2: #F7F7F4;
+      --wb-line: #D9D8D2; --wb-line-strong: #B9B8B0;
+      --wb-ink: #1C1B19; --wb-ink-2: #47463F; --wb-muted: #7A7973;
+      --wb-accent: #0F6E6E; --wb-accent-ink: #0A5252; --wb-accent-wash: #E1F0EF; --wb-on-accent: #FFFFFF;
+      --wb-mine: #B4550F; --wb-mine-wash: #FBEBDC;
+      --wb-blocked: #B3261E; --wb-blocked-wash: #F8E0DE;
+      --wb-done: #2E7D32; --wb-done-wash: #E0F0E1;
+      --wb-run: #0F6E6E;
+      --wb-shadow: 0 1px 2px rgba(28,27,25,.06), 0 4px 14px rgba(28,27,25,.05);
+      --wb-radius: 6px; --wb-radius-lg: 10px;
+      --wb-font: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "Segoe UI", sans-serif;
+      --wb-mono: ui-monospace, Consolas, "Cascadia Mono", monospace;
+      --wb-touch: 44px;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --wb-bg: #161715; --wb-card: #1F2120; --wb-card-2: #262927;
+        --wb-line: #35383B; --wb-line-strong: #4C5054;
+        --wb-ink: #ECEAE4; --wb-ink-2: #C9C7C0; --wb-muted: #9C9A93;
+        --wb-accent: #5FBDB4; --wb-accent-ink: #8ED6CF; --wb-accent-wash: #1B3532; --wb-on-accent: #0F1E1D;
+        --wb-mine: #E09A4A; --wb-mine-wash: #3A2A17;
+        --wb-blocked: #E3736A; --wb-blocked-wash: #3E2321;
+        --wb-done: #72C176; --wb-done-wash: #1F3623;
+        --wb-run: #5FBDB4;
+        --wb-shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.35);
+        color-scheme: dark;
+      }
+    }
+    :root[data-theme="dark"] {
+      --wb-bg: #161715; --wb-card: #1F2120; --wb-card-2: #262927;
+      --wb-line: #35383B; --wb-line-strong: #4C5054;
+      --wb-ink: #ECEAE4; --wb-ink-2: #C9C7C0; --wb-muted: #9C9A93;
+      --wb-accent: #5FBDB4; --wb-accent-ink: #8ED6CF; --wb-accent-wash: #1B3532; --wb-on-accent: #0F1E1D;
+      --wb-mine: #E09A4A; --wb-mine-wash: #3A2A17;
+      --wb-blocked: #E3736A; --wb-blocked-wash: #3E2321;
+      --wb-done: #72C176; --wb-done-wash: #1F3623;
+      --wb-run: #5FBDB4;
+      --wb-shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.35);
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--wb-bg); color: var(--wb-ink); font-family: var(--wb-font);
+      font-size: 15px; line-height: 1.55; word-break: keep-all; overflow-wrap: anywhere;
+    }
+    h1, h2, h3 { margin: 0; font-weight: 600; text-wrap: balance; }
+    button { font: inherit; cursor: pointer; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+    .wb-wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px 96px; }
+    .wb-eyebrow { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--wb-muted); font-weight: 500; }
+
+    .wb-top { display: grid; grid-template-columns: 1fr auto auto; gap: 24px; align-items: end; padding: 28px 0 14px; }
+    .wb-top h1 { font-size: 26px; letter-spacing: -.01em; }
+    .wb-counts { display: flex; gap: 8px; }
+    .wb-count { display: grid; gap: 2px; min-width: 96px; padding: 10px 14px; border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); background: var(--wb-card); }
+    .wb-count b { font-family: var(--wb-mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 500; line-height: 1; }
+    .wb-count span { font-size: 12.5px; color: var(--wb-muted); }
+    .wb-count.mine { border-color: var(--wb-mine); background: var(--wb-mine-wash); } .wb-count.mine b { color: var(--wb-mine); }
+    .wb-count.run b { color: var(--wb-run); } .wb-count.done b { color: var(--wb-done); }
+    .wb-top-actions { display: flex; gap: 8px; }
+
+    .wb-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--wb-touch); padding: 0 16px; border-radius: var(--wb-radius); border: 1px solid var(--wb-line-strong); background: var(--wb-card); color: var(--wb-ink); font-weight: 500; }
+    .wb-btn:hover { border-color: var(--wb-ink-2); }
+    .wb-btn.primary { background: var(--wb-accent); border-color: var(--wb-accent); color: var(--wb-on-accent); }
+    .wb-btn.primary:hover { background: var(--wb-accent-ink); border-color: var(--wb-accent-ink); }
+    .wb-btn.ghost { border-color: transparent; background: transparent; color: var(--wb-ink-2); }
+    .wb-btn.ghost:hover { background: var(--wb-card-2); border-color: var(--wb-line); }
+    .wb-btn.danger { color: var(--wb-blocked); border-color: var(--wb-blocked); background: transparent; }
+    .wb-btn.danger:hover { background: var(--wb-blocked-wash); }
+    .wb-btn.sm { padding: 0 12px; font-size: 14px; }
+    .wb-btn[aria-pressed="true"] { background: var(--wb-ink); color: var(--wb-bg); border-color: var(--wb-ink); }
+
+    .wb-status { margin: 0 0 12px; padding: 10px 14px; border-radius: var(--wb-radius); border: 1px solid var(--wb-line); background: var(--wb-card-2); font-size: 14px; }
+    .wb-status[data-tone="ok"] { border-color: var(--wb-done); background: var(--wb-done-wash); }
+    .wb-status[data-tone="error"] { border-color: var(--wb-blocked); background: var(--wb-blocked-wash); }
+
+    .wb-intake { margin: 6px 0 22px; padding: 22px 24px 24px; background: var(--wb-card); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); box-shadow: var(--wb-shadow); display: grid; gap: 14px; }
+    .wb-intake-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+    .wb-intake-head h2 { font-size: 19px; }
+    .wb-intake-head p { margin: 4px 0 0; color: var(--wb-muted); font-size: 14px; }
+
+    .wb-queue-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: 8px 0 10px; flex-wrap: wrap; }
+    .wb-queue-head h2 { font-size: 19px; }
+    .wb-note { font-size: 13px; color: var(--wb-muted); }
+    .wb-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+    .wb-empty { padding: 28px; text-align: center; color: var(--wb-muted); border: 1px dashed var(--wb-line-strong); border-radius: var(--wb-radius-lg); }
+
+    .wb-row { background: var(--wb-card); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); margin-bottom: 8px; box-shadow: var(--wb-shadow); }
+    .wb-row[data-stale="true"] { outline: 2px solid var(--wb-blocked); outline-offset: -2px; }
+    .wb-row[data-live="true"] { box-shadow: inset 4px 0 0 var(--wb-accent), var(--wb-shadow); }
+    .wb-row-head { display: grid; grid-template-columns: 112px 1fr 300px auto; gap: 16px; align-items: center; padding: 14px 18px; cursor: pointer; border-radius: var(--wb-radius-lg); }
+    .wb-row-head:hover { background: var(--wb-card-2); }
+    .wb-row[data-open="true"] .wb-row-head { border-bottom: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg) var(--wb-radius-lg) 0 0; }
+    .wb-state { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; }
+    .wb-state::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--wb-muted); }
+    .wb-row[data-state="mine"] .wb-state { color: var(--wb-mine); } .wb-row[data-state="mine"] .wb-state::before { background: var(--wb-mine); }
+    .wb-row[data-state="run"] .wb-state { color: var(--wb-run); } .wb-row[data-state="run"] .wb-state::before { background: var(--wb-run); animation: wb-pulse 1.6s infinite; }
+    .wb-row[data-state="blocked"] .wb-state { color: var(--wb-blocked); } .wb-row[data-state="blocked"] .wb-state::before { background: var(--wb-blocked); }
+    .wb-row[data-state="done"] .wb-state { color: var(--wb-done); } .wb-row[data-state="done"] .wb-state::before { background: var(--wb-done); }
+    @keyframes wb-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) { .wb-row[data-state="run"] .wb-state::before { animation: none; } }
+    .wb-name { display: grid; gap: 2px; min-width: 0; }
+    .wb-name b { font-weight: 600; font-size: 15.5px; }
+    .wb-sub { font-size: 13px; color: var(--wb-muted); }
+    .wb-wait { color: var(--wb-mine); font-weight: 500; }
+    .wb-stale { font-size: 13px; font-weight: 600; color: var(--wb-blocked); }
+
+    .wb-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+    .wb-strip i { display: grid; gap: 4px; font-style: normal; text-align: center; }
+    .wb-strip i::before { content: ""; display: block; height: 8px; border-radius: 3px; background: var(--wb-card-2); border: 1px solid var(--wb-line-strong); }
+    .wb-strip i span { font-size: 10.5px; color: var(--wb-muted); }
+    .wb-strip i[data-s="done"]::before { background: var(--wb-accent); border-color: var(--wb-accent); opacity: .55; }
+    .wb-strip i[data-s="now"]::before { background: var(--wb-mine); border-color: var(--wb-mine); }
+    .wb-strip i[data-s="now"] span { color: var(--wb-ink); font-weight: 600; }
+    .wb-row[data-state="run"] .wb-strip i[data-s="now"]::before { background: var(--wb-run); border-color: var(--wb-run); }
+    .wb-row[data-state="blocked"] .wb-strip i[data-s="now"]::before { background: var(--wb-blocked); border-color: var(--wb-blocked); }
+    .wb-row[data-state="done"] .wb-strip i::before { background: var(--wb-done); border-color: var(--wb-done); opacity: .55; }
+
+    .wb-panel { padding: 18px 20px 22px; display: grid; gap: 14px; }
+    .wb-why { padding: 10px 14px; border-radius: var(--wb-radius); background: var(--wb-card-2); border: 1px solid var(--wb-line); font-size: 14px; }
+    .wb-row[data-state="blocked"] .wb-why { background: var(--wb-blocked-wash); border-color: var(--wb-blocked); }
+    .wb-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .wb-spacer { flex: 1; }
+
+    .wb-diag { margin-top: 28px; padding: 18px 20px; border: 1px dashed var(--wb-line-strong); border-radius: var(--wb-radius-lg); background: var(--wb-card-2); display: grid; gap: 12px; }
+    .wb-diag h2 { font-size: 15px; }
+    .wb-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; margin: 0; }
+    .wb-kv dt { color: var(--wb-muted); } .wb-kv dd { margin: 0; font-family: var(--wb-mono); }
+    .wb-foot { margin-top: 18px; display: flex; justify-content: center; gap: 12px; align-items: center; font-size: 13px; color: var(--wb-muted); }
+    .wb-foot a { color: var(--wb-accent-ink); }
+
+    @media (max-width: 860px) {
+      .wb-top { grid-template-columns: 1fr; align-items: start; }
+      .wb-row-head { grid-template-columns: 1fr; gap: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wb-wrap">
+    <header class="wb-top">
+      <div>
+        <div class="wb-eyebrow">보자기 상세페이지 · 조립공장 제어</div>
+        <h1>생산관제</h1>
+      </div>
+      <div class="wb-counts" aria-label="요약">
+        <div class="wb-count mine"><b id="wb-count-mine">0</b><span>내 차례</span></div>
+        <div class="wb-count run"><b id="wb-count-run">0</b><span>돌아가는 중</span></div>
+        <div class="wb-count done"><b id="wb-count-done">0</b><span>완료</span></div>
+      </div>
+      <div class="wb-top-actions">
+        <button class="wb-btn primary" id="wb-btn-intake" type="button" aria-expanded="false" aria-controls="wb-intake">＋ 제품 넣기</button>
+        <button class="wb-btn ghost" id="wb-btn-diag" type="button" aria-expanded="false" aria-controls="wb-diag">진단</button>
+      </div>
+    </header>
+
+    <p class="wb-status" id="wb-status" role="status" aria-live="polite" hidden></p>
+
+    <section class="wb-intake" id="wb-intake" hidden aria-label="제품 넣기">
+      <div class="wb-intake-head">
+        <div>
+          <h2>제품 넣기</h2>
+          <p>사진과 이름만 있으면 줄에 섭니다. 이 자리는 다음 조각에서 채워집니다 — 지금은 옛 화면의 「입력·소스」에서 넣으세요.</p>
+        </div>
+        <button class="wb-btn ghost sm" id="wb-btn-intake-close" type="button">접기</button>
+      </div>
+    </section>
+
+    <main aria-label="제품 줄">
+      <div class="wb-queue-head">
+        <h2>줄 <span class="wb-note" id="wb-headline">읽는 중…</span></h2>
+        <div class="wb-filters" id="wb-filters" role="group" aria-label="보기"></div>
+      </div>
+      <div id="wb-queue" aria-live="polite"></div>
+    </main>
+
+    <section class="wb-diag" id="wb-diag" hidden aria-label="진단">
+      <h2>진단 — 고장났을 때만 여는 곳</h2>
+      <div id="wb-diag-body"></div>
+      <p class="wb-note">병렬 보드 · 작업파일 탭 · 같이 보는 사람 · 감사 타임라인 · 연결 세부는 옛 화면에 그대로 있습니다.</p>
+    </section>
+
+    <div class="wb-foot">
+      <a id="wb-old-page" href="./control-tower.html">옛 화면(관제탑 전체) 열기</a>
+    </div>
+  </div>
+  <script type="module" src="./src/workbench/main.mjs?wb=1"></script>
+</body>
+</html>
