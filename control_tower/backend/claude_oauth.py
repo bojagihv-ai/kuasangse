@@ -48,6 +48,44 @@ def strip_json_fence(text: str) -> str:
     return _JSON_FENCE.sub("", text).strip()
 
 
+def extract_json_object(text: str) -> str:
+    """펜스를 벗겨도 JSON 이 아니면, 본문 안의 첫 번째 균형 잡힌 {…} 객체만 꺼낸다.
+
+    실측 2026-09-17: 같은 프롬프트로 두 번 부르니 한 번은 순수 펜스 JSON, 한 번은 앞뒤에
+    설명 문장이 붙어 json.loads 가 실패했다(judgement_json_invalid). 모델 출력은 형식이
+    흔들리므로, 검증(validate_judgement)은 그대로 두고 꺼내는 쪽만 너그럽게 한다.
+    """
+    stripped = strip_json_fence(text)
+    try:
+        json.loads(stripped)
+        return stripped
+    except json.JSONDecodeError:
+        pass
+    start = stripped.find("{")
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(stripped)) if start >= 0 else ():
+        char = stripped[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return stripped[start:index + 1]
+    return stripped
+
+
 class ClaudeOAuthJudge:
     def __init__(
         self,
@@ -168,7 +206,7 @@ class ClaudeOAuthJudge:
         if not isinstance(text, str):
             raise ClaudeOAuthError("judgement_text_missing")
         try:
-            raw_judgement = json.loads(strip_json_fence(text))
+            raw_judgement = json.loads(extract_json_object(text))
         except json.JSONDecodeError as error:
             raise ClaudeOAuthError("judgement_json_invalid") from error
         judgement = validate_judgement(raw_judgement, decision_type=decision_type, evidence=evidence)
@@ -186,4 +224,8 @@ class ClaudeOAuthJudge:
             "evidenceBundleDigest": evidence["bundleDigest"],
             "judgementDigest": _digest(judgement),
         }
+        # 얼마나 쓰는지 보이지 않으면 안 된다 — 브리지가 주는 비용을 영수증에 그대로 싣는다.
+        cost = response.get("totalCostUsd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            metadata["costUsd"] = float(cost)
         return {"receipt": metadata | {"judgement": judgement, "evidence": evidence}}

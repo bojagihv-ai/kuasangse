@@ -17,6 +17,7 @@ from control_tower.backend.claude_oauth import (
     PROVIDER_ID,
     ClaudeOAuthError,
     ClaudeOAuthJudge,
+    extract_json_object,
     strip_json_fence,
 )
 
@@ -204,3 +205,26 @@ def test_judgement_must_pick_a_referenced_candidate() -> None:
     with pytest.raises(Exception) as error:
         judge.judge(decision_type="size_image", input_refs=[], candidates=CANDIDATES)
     assert "candidate" in str(error.value).lower() or "judgement" in str(error.value).lower()
+
+
+def test_extract_json_object_tolerates_prose_around_the_object() -> None:
+    # 실측 2026-09-17: 같은 프롬프트로 두 번 부르니 한 번은 설명 문장이 붙어 왔다.
+    wrapped = "
+".join([
+        "Here is my judgement:",
+        "```json",
+        '{"a": {"b": "x}y"}, "c": [1, 2]}',
+        "```",
+        "Hope this helps.",
+    ])
+    assert json.loads(extract_json_object(wrapped)) == {"a": {"b": "x}y"}, "c": [1, 2]}
+    assert extract_json_object('{"a":1}') == '{"a":1}'
+
+
+def test_bridge_cost_lands_in_receipt() -> None:
+    body = {"ok": True, "usedClaudeOAuth": True, "rawTokenReturned": False, "text": json.dumps(valid_judgement()), "totalCostUsd": 0.0312}
+    transport, _ = fake_transport_factory(valid_judgement(), exec_body=body)
+    judge = ClaudeOAuthJudge("http://hub.test", request_fn=transport)
+    receipt = judge.judge(decision_type="size_image", input_refs=[], candidates=CANDIDATES)["receipt"]
+    assert receipt["costUsd"] == 0.0312
+
