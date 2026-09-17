@@ -95,9 +95,43 @@ function candidateCaption(candidate) {
  * 컷 고르기. ui = { chosen: {stageKey: candidateId}, busy, receipt, note }
  * handlers: select({jobId, stageKey, candidateId}), judge({jobId, provider}), choose({stageKey, candidateId})
  */
+export function providerName(provider) {
+  return text(provider) === 'claude-oauth' ? 'Claude' : text(provider) === 'gpt-oauth' ? 'GPT' : text(provider);
+}
+
+/**
+ * 자동 고르기 토글. 켜 두면 이 제품의 컷은 고른 판정자가 고른다 — 지금 기다리는 단계부터, 다음 단계도 저절로.
+ * ui.autoPick = '' | 'gpt-oauth' | 'claude-oauth', ui.autoPickInherited = 전체 기본값에서 온 것인가.
+ */
+export function renderAutoToggle(row, ui = {}, handlers = {}) {
+  const bar = element('div', 'wb-auto');
+  bar.dataset.on = String(Boolean(text(ui.autoPick)));
+  const provider = text(ui.autoPick);
+  const label = element('label', 'wb-switch');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.name = 'auto-pick';
+  input.setAttribute('role', 'switch');
+  input.checked = Boolean(provider);
+  label.append(input, element('span', '', '자동으로 고르기'));
+  const select = document.createElement('select');
+  select.name = 'auto-pick-provider';
+  for (const item of PROVIDERS) select.append(new Option(providerName(item.key), item.key));
+  select.value = provider || 'claude-oauth';
+  select.disabled = !input.checked;
+  input.addEventListener('change', () => handlers.setAutoPick?.({ jobId: row.jobId, provider: input.checked ? select.value : '' }));
+  select.addEventListener('change', () => { if (input.checked) handlers.setAutoPick?.({ jobId: row.jobId, provider: select.value }); });
+  bar.append(label, select);
+  bar.append(element('span', 'wb-note', provider
+    ? `${providerName(provider)}가 이 제품의 컷을 고릅니다 — 기다리는 단계부터 바로, 다음 단계도 저절로.${ui.autoPickInherited ? ' (전체 기본값)' : ''}`
+    : '끄면 후보를 보고 내가 고릅니다. 한 번만 맡기려면 아래 GPT/Claude 버튼.'));
+  return bar;
+}
+
 export function renderPickPanel(row, ui = {}, handlers = {}) {
   const root = element('div', 'wb-pick');
   root.dataset.panel = 'pick';
+  root.append(renderAutoToggle(row, ui, handlers));
   const cells = pickableCells(row);
   const chosen = record(ui.chosen);
   if (!cells.length) {
@@ -123,8 +157,9 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
     list(cell.candidates).forEach((candidate, index) => {
       const id = text(candidate.id);
       const { label, why } = candidateCaption(candidate);
-      const cut = element('button', 'wb-cut');
-      cut.type = 'button';
+      // 타일은 div — 안에 「크게」 버튼이 들어가므로 button 으로 두면 겹친 버튼이 된다. 키보드는 Enter/Space.
+      const cut = element('div', 'wb-cut');
+      cut.tabIndex = 0;
       cut.dataset.candidateId = id;
       cut.dataset.stageKey = stageKey;
       cut.setAttribute('role', 'radio');
@@ -142,6 +177,8 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
         image.src = src;
         image.addEventListener('error', () => { frame.dataset.broken = 'true'; }, { once: true });
         frame.append(image);
+        const full = fullImageSrc(candidate.contentUrl || candidate.thumbnailUrl);
+        frame.append(button('크게', 'wb-cut-zoom', () => openLightbox(full, `${index + 1} · ${label}${why ? ` — ${why}` : ''}`), { action: 'zoom-cut' }));
       } else {
         frame.dataset.empty = 'true';
         frame.append(element('span', 'wb-cut-doc', candidate.kind === 'document' ? '문서' : '그림 없음'));
@@ -150,9 +187,10 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
       cut.append(element('span', 'wb-cut-n', String(index + 1)));
       cut.append(element('span', 'wb-cut-label', label));
       if (why) cut.append(element('span', 'wb-cut-why', why));
-      cut.addEventListener('click', event => {
-        event.stopPropagation();
-        handlers.choose?.({ stageKey, candidateId: id });
+      const choose = () => handlers.choose?.({ stageKey, candidateId: id });
+      cut.addEventListener('click', event => { event.stopPropagation(); choose(); });
+      cut.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
       });
       grid.append(cut);
     });
@@ -181,6 +219,49 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
   if (ui.receipt) root.append(renderReceipt(ui.receipt));
   if (text(ui.note)) root.append(element('p', 'wb-note', text(ui.note)));
   return root;
+}
+
+/** 원본 크기 주소. 축소본으로 바꾸지 않는다 — 크게 보기용. */
+export function fullImageSrc(source) {
+  const raw = text(source);
+  if (!raw) return '';
+  const base = raw.startsWith('/api/local-archive/') ? ORIGINS.factoryBackend : ORIGINS.apiBase;
+  try {
+    const resolved = new URL(raw, `${base}/`);
+    return ['http:', 'https:'].includes(resolved.protocol) ? resolved.href : '';
+  } catch {
+    return '';
+  }
+}
+
+let lightbox = null;
+
+/** 크게 보기. 한 장짜리 dialog 하나를 돌려쓴다. 바깥을 누르거나 ESC·닫기로 닫는다. */
+export function openLightbox(src, caption = '') {
+  if (!src || typeof document === 'undefined') return null;
+  if (!lightbox) {
+    lightbox = document.createElement('dialog');
+    lightbox.className = 'wb-lightbox';
+    lightbox.addEventListener('click', event => {
+      if (event.target === lightbox || event.target?.dataset?.action === 'close-lightbox') lightbox.close();
+    });
+    document.body.append(lightbox);
+  }
+  lightbox.replaceChildren();
+  const figure = element('figure');
+  const image = document.createElement('img');
+  image.src = src;
+  image.alt = caption || '크게 보기';
+  figure.append(image);
+  const foot = element('div', 'wb-actions');
+  if (caption) foot.append(element('figcaption', '', caption));
+  foot.append(element('span', 'wb-spacer'));
+  foot.append(button('닫기', 'wb-btn sm', () => lightbox.close(), { action: 'close-lightbox' }));
+  figure.append(foot);
+  lightbox.append(figure);
+  if (typeof lightbox.showModal === 'function') lightbox.showModal();
+  else lightbox.setAttribute('open', '');
+  return lightbox;
 }
 
 /** 이미 고른 컷 한눈에 — 단계마다 몇 개 중 몇 번째를 골랐고 그 그림은 무엇인지. 고칠 일이 없으면 여기서 끝. */
@@ -386,5 +467,181 @@ export function renderCafe24Panel(row, ctx = {}, handlers = {}) {
       text(result.status) ? `상태 ${text(result.status)}` : '',
     ].filter(Boolean).join(' · ')));
   }
+  return root;
+}
+
+const SOURCE_VALUE_LABELS = Object.freeze([['material', '소재'], ['size', '사이즈'], ['salePrice', '판매가']]);
+
+/**
+ * 출처 확정 — 신화사DB·Cafe24 에서 "같은 제품" 을 고르거나 「후보 없음(새 제품)」으로 못박는다.
+ * 조립공장이 스스로 못 정했을 때(판정자 한도 등) 사람 차례로 올라오는 단계다. 옛 앞면의 DB 탭 조작과
+ * 같은 탭 명령(tabId db · apply-… / confirm-no-… / clear-…)을 보낸다.
+ * ctx = { live, connected, db: {query, dbCandidates, cafe24Candidates, dbNone, cafe24None, selectedDbCandidateKey, selectedCafe24CandidateKey}, busy, note }
+ * handlers: tabCommand({ jobId, tabId: 'db', action, value, label })
+ */
+export function renderSourcePanel(row, ctx = {}, handlers = {}) {
+  const root = element('div', 'wb-source');
+  root.dataset.panel = 'source';
+  if (!ctx.live || !ctx.connected) {
+    root.append(element('p', 'wb-note', '출처 확정은 조립공장이 열고 있는 제품에만 됩니다. 「조립공장에서 이 제품 열기」부터.'));
+    return root;
+  }
+  const db = record(ctx.db);
+  root.append(element('p', 'wb-note', `조립공장이 「${text(db.query) || row.productName}」로 찾은 후보입니다. 같은 제품이 있으면 고르고, 새 제품이면 「후보 없음」으로 못박습니다. 둘 다 정해지면 이어서 돌립니다.`));
+  const groups = [
+    ['db', '신화사DB', list(db.dbCandidates), db.dbNone === true, text(db.selectedDbCandidateKey)],
+    ['cafe24', 'Cafe24', list(db.cafe24Candidates), db.cafe24None === true, text(db.selectedCafe24CandidateKey)],
+  ];
+  for (const [kind, title, rows, none, selectedKey] of groups) {
+    const section = element('section', 'wb-stage');
+    section.dataset.source = kind;
+    section.dataset.decided = String(none || Boolean(selectedKey));
+    const head = element('div', 'wb-stage-head');
+    head.append(element('b', '', `${title} · 후보 ${rows.length}개`));
+    head.append(element('span', none ? 'wb-tag' : selectedKey ? 'wb-tag' : 'wb-tag warn', none ? '후보 없음으로 확정' : selectedKey ? `확정 · ${selectedKey}` : '아직 안 정함'));
+    section.append(head);
+    if (rows.length) {
+      const grid = element('div', 'wb-cuts wb-cuts-source');
+      rows.forEach((item, index) => {
+        const card = element('div', 'wb-cut');
+        card.dataset.candidateKey = text(item.id);
+        if (item.selected === true) card.dataset.chosen = 'true';
+        const frame = element('span', 'wb-cut-frame');
+        const src = thumbnailSrc(item.thumbnailUrl || item.contentUrl);
+        if (src) {
+          const image = document.createElement('img');
+          image.alt = text(item.title) || text(item.label) || text(item.id);
+          image.loading = 'lazy';
+          image.decoding = 'async';
+          image.src = src;
+          image.addEventListener('error', () => { frame.dataset.broken = 'true'; }, { once: true });
+          frame.append(image);
+          frame.append(button('크게', 'wb-cut-zoom', () => openLightbox(fullImageSrc(item.contentUrl || item.thumbnailUrl), image.alt), { action: 'zoom-source' }));
+        } else {
+          frame.dataset.empty = 'true';
+          frame.append(element('span', 'wb-cut-doc', '그림 없음'));
+        }
+        card.append(frame);
+        card.append(element('span', 'wb-cut-n', String(index + 1)));
+        card.append(element('span', 'wb-cut-label', `${text(item.title) || text(item.label) || text(item.id)} · ${text(item.id)}`));
+        const values = record(item.values);
+        const facts = SOURCE_VALUE_LABELS.filter(([key]) => text(values[key])).map(([key, label]) => `${label} ${text(values[key])}`).join(' · ');
+        if (facts) card.append(element('span', 'wb-cut-why', facts));
+        card.append(button(
+          item.selected === true ? '확정됨' : '이 제품이 맞다',
+          item.selected === true ? 'wb-btn sm' : 'wb-btn sm primary',
+          () => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'db', action: `apply-${kind}-candidate`, value: { candidateIdentity: item.identity }, label: `${title} 후보 확정` }),
+          { disabled: item.selected === true || ctx.busy === true, action: `apply-${kind}-candidate` },
+        ));
+        grid.append(card);
+      });
+      section.append(grid);
+    }
+    const bar = element('div', 'wb-actions');
+    bar.append(button(
+      none ? '후보 없음으로 확정됨' : `${title} 에 없는 새 제품`,
+      none ? 'wb-btn sm' : 'wb-btn sm primary',
+      () => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'db', action: `confirm-no-${kind}-candidate`, value: null, label: `${title} 후보 없음` }),
+      { disabled: none || ctx.busy === true, action: `confirm-no-${kind}-candidate` },
+    ));
+    if (none || selectedKey) {
+      bar.append(button('확정 해제', 'wb-btn sm ghost',
+        () => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'db', action: `clear-${kind}-candidate`, value: null, label: `${title} 확정 해제` }),
+        { disabled: ctx.busy === true, action: `clear-${kind}-candidate` }));
+    }
+    section.append(bar);
+    root.append(section);
+  }
+  if (text(ctx.note)) root.append(element('p', 'wb-note', text(ctx.note)));
+  return root;
+}
+
+const COMPETITOR_SITES = Object.freeze([
+  ['coupang', '쿠팡'], ['naver', '스마트스토어'], ['gmarket', 'G마켓'], ['auction', '옥션'], ['elevenst', '11번가'],
+]);
+
+/** 후보 id 앞머리(coupang_…, naver_ss_…)로 쇼핑몰을 가른다. 조립공장이 후보를 그렇게 이름 짓는다. */
+export function competitorSite(candidate) {
+  const id = text(candidate?.id);
+  const hit = COMPETITOR_SITES.find(([key]) => id.startsWith(`${key}_`));
+  return hit ? hit[0] : 'other';
+}
+
+/**
+ * 경쟁사 고르기 — 쇼핑몰마다 참고할 상품을 하나 이상 고른다. 조립공장은 후보가 있는 쇼핑몰마다 고른 것이 없으면
+ * 「경쟁사 선택 대기」로 멈춘다(자동이면 GPT 가 고르는데, 한도에 막히면 사람 차례). 옛 앞면의 경쟁사 탭과 같은
+ * 탭 명령(competitor · marketAction toggle-candidate)을 보내고, 다 고르면 이어 돌린다.
+ * ctx = { live, connected, competitor: { candidates, searchKeyword, selectedSites, detailImages }, busy, note }
+ * handlers: tabCommand({jobId, tabId:'competitor', action, value, label}), resume(jobId)
+ */
+export function renderCompetitorPanel(row, ctx = {}, handlers = {}) {
+  const root = element('div', 'wb-source wb-competitor');
+  root.dataset.panel = 'competitor';
+  if (!ctx.live || !ctx.connected) {
+    root.append(element('p', 'wb-note', '경쟁사 고르기는 조립공장이 열고 있는 제품에만 됩니다. 「조립공장에서 이 제품 열기」부터.'));
+    return root;
+  }
+  const competitor = record(ctx.competitor);
+  const candidates = list(competitor.candidates);
+  root.append(element('p', 'wb-note', `조립공장이 「${text(competitor.searchKeyword) || row.productName}」로 모은 경쟁사 후보입니다. 쇼핑몰마다 참고할 상품을 하나 이상 고르면 이어 돌릴 수 있습니다. 사진은 각 쇼핑몰에서 바로 옵니다.`));
+  const groups = new Map();
+  for (const candidate of candidates) {
+    const site = competitorSite(candidate);
+    if (!groups.has(site)) groups.set(site, []);
+    groups.get(site).push(candidate);
+  }
+  let missing = 0;
+  for (const [site, label] of [...COMPETITOR_SITES, ['other', '기타']]) {
+    const rows = groups.get(site) || [];
+    if (!rows.length) continue;
+    const picked = rows.filter(item => item.selected === true).length;
+    if (!picked) missing += 1;
+    const section = element('section', 'wb-stage');
+    section.dataset.site = site;
+    section.dataset.decided = String(picked > 0);
+    const head = element('div', 'wb-stage-head');
+    head.append(element('b', '', `${label} · 후보 ${rows.length}개`));
+    head.append(element('span', picked ? 'wb-tag' : 'wb-tag warn', picked ? `참고 ${picked}개` : '아직 안 고름'));
+    section.append(head);
+    const grid = element('div', 'wb-cuts wb-cuts-source');
+    rows.forEach((item, index) => {
+      const card = element('div', 'wb-cut');
+      card.dataset.candidateId = text(item.id);
+      if (item.selected === true) card.dataset.chosen = 'true';
+      const frame = element('span', 'wb-cut-frame');
+      const src = text(item.thumbnailUrl);
+      if (/^https?:\/\//u.test(src)) {
+        const image = document.createElement('img');
+        image.alt = text(item.label) || text(item.id);
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        image.src = src;
+        image.addEventListener('error', () => { frame.dataset.broken = 'true'; }, { once: true });
+        frame.append(image);
+        frame.append(button('크게', 'wb-cut-zoom', () => openLightbox(src, image.alt), { action: 'zoom-competitor' }));
+      } else {
+        frame.dataset.empty = 'true';
+        frame.append(element('span', 'wb-cut-doc', '그림 없음'));
+      }
+      card.append(frame);
+      card.append(element('span', 'wb-cut-n', String(index + 1)));
+      card.append(element('span', 'wb-cut-label', text(item.label) || text(item.id)));
+      card.append(button(
+        item.selected === true ? '참고 해제' : '이 상품 참고',
+        item.selected === true ? 'wb-btn sm' : 'wb-btn sm primary',
+        () => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'competitor', action: 'marketAction', value: { type: 'toggle-candidate', candidateId: text(item.id) }, label: `${label} 후보 ${item.selected === true ? '해제' : '참고'}` }),
+        { disabled: ctx.busy === true, action: 'toggle-competitor' },
+      ));
+      grid.append(card);
+    });
+    section.append(grid);
+    root.append(section);
+  }
+  const bar = element('div', 'wb-actions');
+  bar.append(button('고른 대로 이어 돌리기', 'wb-btn primary', () => handlers.resume?.(row.jobId), { disabled: missing > 0 || ctx.busy === true, action: 'resume-after-competitors' }));
+  bar.append(element('span', 'wb-note', missing > 0 ? `아직 안 고른 쇼핑몰 ${missing}곳` : '쇼핑몰마다 참고 상품이 있습니다. 이어 돌리면 조립공장이 대표이미지부터 만듭니다.'));
+  root.append(bar);
+  if (text(ctx.note)) root.append(element('p', 'wb-note', text(ctx.note)));
   return root;
 }

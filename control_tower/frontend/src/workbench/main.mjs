@@ -4,14 +4,19 @@
  * 화면은 세 자리뿐이다: 제품 넣기(접힘) · 줄 · 진단(접힘). 옛 앞면(control-tower.html)은
  * 그대로 두고 진단에서 연다 — 지우는 게 아니라 자리를 옮긴다.
  *
- * 펼친 행에서 사람이 하는 일 셋(컷 고르기 · 값 채우기 · Cafe24 승인)이 여기서 API 로 간다:
+ * 펼친 행에서 사람이 하는 일이 여기서 API 로 간다:
  *   컷    → POST /api/factory/jobs/selections (손: mode=manual · 자동: mode=auto + judgementOptions.provider)
  *   값    → POST /api/factory/jobs/{id}/values (바뀐 칸만) · GET /api/pdp/sources?q= (신화DB 찾기)
+ *   출처  → POST /api/factory/jobs/{id}/tab-command (tabId db · 옛 앞면의 DB 탭과 같은 명령) → 영수증 폴링
  *   Cafe24 → 미리보기 → 승인 → 확인 → 등록, 옛 앞면과 같은 네 본문. 관문은 조립공장이 지금 연 제품에만 걸린다.
+ *
+ * 자동 고르기: 제품별 토글(또는 전체 기본값)이 켜져 있으면 컷 고르기 차례가 올 때마다 그 판정자에게 맡긴다.
+ * 같은 단계·같은 후보 수에는 한 번만 부른다(새로고침해도 — localStorage 에 적어 둔다).
  */
 import { apiRequest, ORIGINS } from './api.mjs?wb=1';
-import { FILTERS, buildQueueModel, renderQueue } from './queue.mjs?wb=1';
+import { FILTERS, buildQueueModel, renderQueue, autoPickFor } from './queue.mjs?wb=1';
 import { mountIntake } from './intake.mjs?wb=1';
+import { providerName } from './panels.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -37,6 +42,12 @@ const ERROR_COPY = Object.freeze({
   cafe24_preflight_blocked: '등록 준비가 덜 됐습니다 — 분류·상세페이지·이미지 중 빠진 것이 있습니다.',
   factory_cafe24_approval_required: '승인 관문을 거쳐야 등록됩니다.',
   stale_run_fingerprint: '조립공장 상태가 바뀌었습니다. 화면을 새로 고친 뒤 다시 하세요.',
+  factory_tab_command_job_mismatch: '조립공장이 지금 다른 제품을 열고 있습니다.',
+  factory_tab_command_action_invalid: '조립공장이 받지 않는 명령입니다.',
+  factory_tab_command_invalid: '명령 본문이 조립공장 규격과 다릅니다.',
+  factory_product_job_not_editable: '지금 상태에서는 조립공장이 고칠 수 없는 작업입니다.',
+  stale_product_checkpoint: '저장 지점이 바뀌었습니다. 화면을 새로 고친 뒤 다시 하세요.',
+  idempotency_conflict: '같은 요청이 이미 접수돼 있습니다.',
 });
 
 /** 자동 판정 기본 옵션. 옛 앞면의 기본값과 같다. provider 만 버튼이 정한다. */
@@ -47,6 +58,25 @@ export const JUDGEMENT_DEFAULTS = Object.freeze({
   preset: 'fast_single',
 });
 
+const STORAGE = Object.freeze({
+  autoPick: 'wb-auto-pick',
+  autoPickDefault: 'wb-auto-pick-default',
+  autoDone: 'wb-auto-pick-done',
+});
+
+function loadStored(key, fallback) {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveStored(key, value) {
+  try { globalThis.localStorage?.setItem(key, JSON.stringify(value)); } catch { /* 저장소가 없어도 화면은 돈다 */ }
+}
+
 const state = {
   jobs: [],
   projection: {},
@@ -54,7 +84,11 @@ const state = {
   openJobId: '',
   busy: new Set(),
   lastError: '',
-  panel: emptyPanel(''),
+  panels: new Map(),
+  autoPick: record(loadStored(STORAGE.autoPick, {})),
+  autoPickDefault: text(loadStored(STORAGE.autoPickDefault, '')),
+  // jobId → { signature, at, error } — 같은 단계·후보 수에 두 번 묻지 않는다.
+  autoDone: record(loadStored(STORAGE.autoDone, {})),
 };
 
 function emptyPanel(jobId) {
@@ -63,6 +97,7 @@ function emptyPanel(jobId) {
     pick: { chosen: {}, receipt: null, note: '', busy: false },
     values: { sources: [], searched: false, prefill: {}, note: '', busy: false },
     gate: { step: '', done: [], error: '', result: null },
+    source: { busy: false, note: '' },
   };
 }
 
@@ -91,8 +126,31 @@ function jobById(jobId) {
 }
 
 function panelFor(jobId) {
-  if (state.panel.jobId !== jobId) state.panel = emptyPanel(jobId);
-  return state.panel;
+  if (!state.panels.has(jobId)) state.panels.set(jobId, emptyPanel(jobId));
+  return state.panels.get(jobId);
+}
+
+/** 조립공장이 준 조작 자료(operator controls). 살아 있는 제품에만 있다. */
+function operatorControls(projection) {
+  const item = list(record(projection).inputs).find(input => text(input?.key) === 'operator_controls');
+  return list(item?.items).find(entry => text(entry?.schema) === 'factory-operator-controls:v1') || null;
+}
+
+/**
+ * 참조 단계에서 사람을 기다리는 살아 있는 제품 — { jobId, stage: 'db' | 'competitors', db, competitor } 또는 null.
+ * 조립공장이 스스로 못 정한 출처(신화DB·Cafe24 매칭)나 경쟁사 후보 선택이 여기로 온다.
+ */
+function sourceWait() {
+  const jobId = activeJobId();
+  const job = jobById(jobId);
+  const stage = text(job?.stageKey);
+  if (!job || !['db', 'competitors'].includes(stage) || !['waiting_manual', 'blocked'].includes(text(job.status))) return null;
+  const controls = operatorControls(state.projection);
+  const db = record(controls?.db);
+  const competitor = record(controls?.competitor);
+  if (stage === 'db' && !Object.keys(db).length) return null;
+  if (stage === 'competitors' && !Object.keys(competitor).length) return null;
+  return { jobId, stage, db, competitor };
 }
 
 function renderHeader(model) {
@@ -100,6 +158,8 @@ function renderHeader(model) {
   $('wb-count-run').textContent = String(model.counts.run);
   $('wb-count-done').textContent = String(model.counts.done);
   $('wb-headline').textContent = model.headline;
+  const auto = $('wb-auto-pick-default');
+  if (auto && auto.value !== state.autoPickDefault) auto.value = state.autoPickDefault;
 }
 
 function renderFilters(model) {
@@ -130,6 +190,7 @@ function renderDiag() {
     ['조립공장 주소', ORIGINS.factoryBackend],
     ['지금 열린 제품', activeJobId() || '없음'],
     ['줄에 선 작업', `${state.jobs.length}건`],
+    ['컷 자동 고르기', `${state.autoPickDefault ? `전체 기본 ${providerName(state.autoPickDefault)}` : '전체 기본 끔'} · 제품별 ${Object.keys(state.autoPick).length}건`],
   ];
   const dl = document.createElement('dl');
   dl.className = 'wb-kv';
@@ -148,11 +209,19 @@ function siblingsWithValues() {
     .map(job => ({ jobId: text(job.jobId), productName: text(job.productName), requiredValues: record(job.requiredValues) }));
 }
 
+function currentModel() {
+  return buildQueueModel({ jobs: state.jobs, projection: state.projection, activeJobId: activeJobId() });
+}
+
 function render() {
-  // 글자를 치는 중이면 다시 그리지 않는다 — 입력이 날아간다.
+  // 글자를 치는 중이면 다시 그리지 않는다 — 입력이 날아간다. 체크박스·라디오·버튼은 글자가 아니다.
   const active = document.activeElement;
-  if (roots.queue.contains(active) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active?.tagName)) return;
-  const model = buildQueueModel({ jobs: state.jobs, projection: state.projection, activeJobId: activeJobId() });
+  const typing = active && roots.queue.contains(active) && (
+    active.tagName === 'TEXTAREA' || active.tagName === 'SELECT'
+    || (active.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'file'].includes(String(active.type || 'text').toLowerCase()))
+  );
+  if (typing) return;
+  const model = currentModel();
   renderHeader(model);
   renderFilters(model);
   const panel = state.openJobId ? panelFor(state.openJobId) : emptyPanel('');
@@ -161,6 +230,9 @@ function render() {
     openJobId: state.openJobId,
     projection: state.projection,
     panel: { ...panel, siblings: siblingsWithValues() },
+    autoPick: state.autoPick,
+    autoPickDefault: state.autoPickDefault,
+    source: sourceWait() || {},
     handlers: {
       open: row => { state.openJobId = state.openJobId === row.jobId ? '' : row.jobId; render(); },
       resume: jobId => void resumeJob(jobId),
@@ -178,6 +250,8 @@ function render() {
       copyFrom: jobId => copyValuesFrom(jobId),
       openInFactory: jobId => void openInFactory(jobId),
       publish: jobId => void publishToCafe24(jobId),
+      setAutoPick: ({ jobId, provider }) => setAutoPick(jobId, provider),
+      tabCommand: request => void sendTabCommand(request),
     },
   });
   renderDiag();
@@ -252,12 +326,14 @@ async function selectCandidate({ jobId, stageKey, candidateId }) {
   }
 }
 
-async function judgeCandidates({ jobId, provider }) {
+/** 판정자에게 맡긴다. 돌아오는 값은 성공 여부 — 자동 고르기가 재시도 여부를 정하는 데 쓴다. */
+async function judgeCandidates({ jobId, provider, automatic = false }) {
   const panel = panelFor(jobId);
-  if (panel.pick.busy) return;
+  if (panel.pick.busy) return false;
   panel.pick.busy = true;
-  panel.pick.note = `${provider === 'claude-oauth' ? 'Claude' : 'GPT'} 가 후보를 보는 중… 보통 10초 안팎입니다.`;
+  panel.pick.note = `${providerName(provider)}가 후보를 보는 중… 보통 10초 안팎입니다.`;
   render();
+  let ok = false;
   try {
     const response = await apiRequest('/api/factory/jobs/selections', {
       method: 'POST',
@@ -268,16 +344,77 @@ async function judgeCandidates({ jobId, provider }) {
     panel.pick.receipt = Object.keys(receipt).length
       ? { provider: text(receipt.provider) || provider, candidateId: text(result?.candidateId), ...receipt }
       : null;
-    const copy = selectionCopy(result, provider === 'claude-oauth' ? 'Claude 가' : 'GPT 가');
+    const copy = selectionCopy(result, `${automatic ? '자동 고르기 · ' : ''}${providerName(provider)} 가`);
     setStatus(copy.message, copy.tone);
     panel.pick.note = copy.tone === 'ok' ? '' : text(receipt.reason) || '';
+    ok = copy.tone === 'ok';
     await refresh();
   } catch (error) {
     panel.pick.note = '';
-    setStatus(`자동 선택 실패 · ${humanError(error)}`, 'error');
+    setStatus(`${automatic ? '자동 고르기 ' : '자동 선택 '}실패 · ${humanError(error)}`, 'error');
   } finally {
     panel.pick.busy = false;
     render();
+  }
+  return ok;
+}
+
+/** 제품별 자동 고르기 설정을 바꾼다. 켜면 지금 기다리는 단계부터 바로 맡긴다. */
+function setAutoPick(jobId, provider) {
+  const next = { ...state.autoPick };
+  if (text(provider)) next[jobId] = text(provider);
+  else if (state.autoPickDefault) next[jobId] = 'off';
+  else delete next[jobId];
+  state.autoPick = next;
+  saveStored(STORAGE.autoPick, next);
+  // 토글·판정자 select 에 초점이 남아 있으면 그리기가 미뤄진다 — 설정은 바로 보여야 한다.
+  if (roots.queue.contains(document.activeElement)) document.activeElement.blur();
+  const resolved = autoPickFor(jobId, state.autoPick, state.autoPickDefault);
+  setStatus(resolved.provider
+    ? `${text(jobById(jobId)?.productName) || jobId} 의 컷은 ${providerName(resolved.provider)}가 고릅니다.`
+    : `${text(jobById(jobId)?.productName) || jobId} 의 컷은 내가 고릅니다.`, 'ok');
+  render();
+  void autoPickTick();
+}
+
+function setAutoPickDefault(provider) {
+  state.autoPickDefault = text(provider);
+  saveStored(STORAGE.autoPickDefault, state.autoPickDefault);
+  setStatus(state.autoPickDefault
+    ? `새로 오는 컷 고르기는 ${providerName(state.autoPickDefault)}에게 맡깁니다(제품별로 끌 수 있음).`
+    : '새로 오는 컷 고르기는 내가 합니다.', 'ok');
+  render();
+  void autoPickTick();
+}
+
+/**
+ * 자동 고르기 한 바퀴. 켜진 제품 중 컷 고르기 차례이고 아직 예약 안 된 단계가 있으면 판정자를 부른다.
+ * 같은 단계·후보 수(서명)는 한 번만. 실패한 서명은 2분 뒤에 다시.
+ */
+async function autoPickTick() {
+  const model = currentModel();
+  for (const row of model.rows) {
+    const { provider } = autoPickFor(row.jobId, state.autoPick, state.autoPickDefault);
+    if (!provider || row.state !== 'mine' || row.kind !== 'pick') continue;
+    const cells = list(record(row.raw).cells).filter(cell => cell.pickable && !text(cell.reservedCandidateId));
+    if (!cells.length) continue;
+    const signature = `${cells.map(cell => `${text(cell.stageKey)}:${cell.candidateCount}`).join('|')}@${provider}`;
+    const last = record(state.autoDone[row.jobId]);
+    if (last.signature === signature && (!last.error || Date.now() - Number(last.at || 0) < 120_000)) continue;
+    const key = `auto:${row.jobId}`;
+    if (state.busy.has(key)) continue;
+    state.busy.add(key);
+    state.autoDone = { ...state.autoDone, [row.jobId]: { signature, at: Date.now(), error: '' } };
+    saveStored(STORAGE.autoDone, state.autoDone);
+    try {
+      const ok = await judgeCandidates({ jobId: row.jobId, provider, automatic: true });
+      if (!ok) {
+        state.autoDone = { ...state.autoDone, [row.jobId]: { signature, at: Date.now(), error: 'failed' } };
+        saveStored(STORAGE.autoDone, state.autoDone);
+      }
+    } finally {
+      state.busy.delete(key);
+    }
   }
 }
 
@@ -366,6 +503,100 @@ async function openInFactory(jobId) {
     setStatus(`열지 못했습니다 · ${humanError(error)}`, 'error');
   } finally {
     state.busy.delete(jobId);
+    render();
+  }
+}
+
+/**
+ * 조립공장 탭 명령. 옛 앞면의 buildFactoryTabCommand 와 같은 본문 — 살아 있는 세션의 정체(제품·실행·지문·리비전)를
+ * 실어 보내고, 접수된 주문(orderId)의 영수증이 applied 가 될 때까지 기다린다.
+ */
+export function buildTabCommand({ jobId, tabId, action, value, projection, idempotencyKey }) {
+  const session = record(record(projection).session);
+  const registration = record(record(projection).registration);
+  if (record(projection).connected !== true || text(registration.jobId) !== jobId || text(session.workspaceId) !== `batch:${jobId}`
+    || !['productId', 'productKey', 'runId', 'inputFingerprint'].every(key => text(session[key]))
+    || ![session.revision, session.storeRevision].every(number => Number.isInteger(number) && number >= 0)) {
+    throw Object.assign(new Error('현재 제품의 저장 상태를 확인할 수 없습니다. 조립공장이 이 제품을 연 뒤 다시 하세요.'), { code: 'factory_tab_command_job_mismatch' });
+  }
+  return {
+    schema: 'factory-tab-command:v1',
+    jobId,
+    tabId,
+    action,
+    value: value === undefined ? null : value,
+    expectedWorkspaceId: session.workspaceId,
+    productId: session.productId,
+    productKey: session.productKey,
+    expectedRunId: session.runId,
+    expectedInputFingerprint: session.inputFingerprint,
+    expectedRevision: session.revision,
+    expectedStoreRevision: session.storeRevision,
+    idempotencyKey,
+  };
+}
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function sendTabCommand({ jobId, tabId, action, value, label = '변경' }) {
+  const panel = panelFor(jobId);
+  if (panel.source.busy) return;
+  panel.source.busy = true;
+  panel.source.note = `${label} 요청을 조립공장에 보내는 중…`;
+  render();
+  try {
+    const payload = buildTabCommand({
+      jobId, tabId, action, value, projection: state.projection,
+      idempotencyKey: `wb-tab:${jobId}:${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`,
+    });
+    const base = `/api/factory/jobs/${encodeURIComponent(jobId)}/tab-command`;
+    const accepted = await apiRequest(base, { method: 'POST', body: payload });
+    if (!accepted?.accepted || !text(accepted.orderId)) throw new Error('조립공장이 요청을 접수하지 못했습니다.');
+    const deadline = Date.now() + 90_000;
+    let receipt = null;
+    while (Date.now() < deadline) {
+      await wait(1000);
+      const result = await apiRequest(`${base}/${encodeURIComponent(text(accepted.orderId))}`);
+      if (text(result?.status) === 'error' || text(result?.error?.code)) {
+        throw Object.assign(new Error(text(result?.error?.message) || text(result?.reason) || '조립공장이 명령을 거절했습니다.'), { code: text(result?.error?.code) || text(result?.reason) });
+      }
+      if (result?.receipt) {
+        receipt = result.receipt;
+        if (text(receipt.status) !== 'applied' || text(receipt.jobId) !== jobId || text(receipt.tabId) !== tabId || text(receipt.action) !== action) {
+          throw new Error(`조립공장이 다른 결과를 돌려줬습니다 (${text(receipt.status) || '상태 없음'})`);
+        }
+        break;
+      }
+    }
+    if (!receipt) throw new Error('조립공장 응답을 90초 동안 기다렸지만 오지 않았습니다.');
+    // 영수증이 실어 온 투영이 가장 새롭다(리비전이 올라가 있다). 다음 명령은 이 리비전을 기대값으로 써야 통한다 —
+    // 2초 폴링이 따라잡기 전에 두 번째 명령을 보내면 옛 리비전으로 거절된다(실측 2026-09-17).
+    if (record(record(receipt.projection).session).workspaceId) state.projection = receipt.projection;
+    panel.source.note = `${label} 적용됨.`;
+    setStatus(`${label} — 조립공장에 적용했습니다.`, 'ok');
+    await refresh();
+    // 신화DB·Cafe24 둘 다 정해졌으면 사람이 또 누를 이유가 없다 — 이어서 돌린다.
+    const pending = sourceWait();
+    if (tabId === 'db' && !pending) {
+      const job = jobById(jobId);
+      if (text(job?.status) === 'waiting_manual') {
+        setStatus('출처 확정 끝 · 이어서 돌립니다.', 'ok');
+        await resumeJob(jobId);
+      }
+    } else if (tabId === 'db' && pending) {
+      const db = record(pending.db);
+      const dbDone = db.dbNone === true || text(db.selectedDbCandidateKey);
+      const cafe24Done = db.cafe24None === true || text(db.selectedCafe24CandidateKey);
+      if (dbDone && cafe24Done) {
+        setStatus('출처 확정 끝 · 이어서 돌립니다.', 'ok');
+        await resumeJob(jobId);
+      }
+    }
+  } catch (error) {
+    panel.source.note = '';
+    setStatus(`${label} 실패 · ${humanError(error)}${text(error?.code) ? ` (${text(error.code)})` : ''}`, 'error');
+  } finally {
+    panel.source.busy = false;
     render();
   }
 }
@@ -468,6 +699,7 @@ async function refresh() {
     setStatus(`관제탑 상태를 못 읽었습니다 · ${state.lastError}`, 'error');
   }
   render();
+  void autoPickTick();
 }
 
 function bindShell() {
@@ -495,6 +727,11 @@ function bindShell() {
         },
       },
     });
+  }
+  const autoDefault = $('wb-auto-pick-default');
+  if (autoDefault) {
+    autoDefault.value = state.autoPickDefault;
+    autoDefault.addEventListener('change', () => setAutoPickDefault(autoDefault.value));
   }
   const toggleDiag = open => {
     roots.diag.hidden = !open;

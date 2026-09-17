@@ -8,7 +8,7 @@
  */
 import { projectProductionBoard, describeBlocked } from '../production-board-model.mjs?parallelBoard=46';
 import { buildNextActionInbox, inboxHeadline } from '../next-action-model.mjs?nextAction=3';
-import { renderPickPanel, renderValuesPanel, renderCafe24Panel } from './panels.mjs?wb=1';
+import { renderPickPanel, renderValuesPanel, renderCafe24Panel, renderSourcePanel, renderCompetitorPanel, providerName } from './panels.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -90,6 +90,7 @@ export function buildQueueModel({ jobs, projection, activeJobId = '', results = 
         && text(row.status) !== 'running'
         && text(row.registrationStatus) !== 'staged_verified',
       canResume: state === 'blocked',
+      hasCuts: list(row.cells).some(cell => list(cell.candidates).length),
       raw: row,
       order: orderByJob.has(text(row.jobId))
         ? orderByJob.get(text(row.jobId))
@@ -109,6 +110,14 @@ export function buildQueueModel({ jobs, projection, activeJobId = '', results = 
   });
 }
 
+/** 제품별 자동 고르기 설정. 'off' 는 전체 기본값이 켜져 있어도 이 제품은 내가 고른다는 뜻. */
+export function autoPickFor(jobId, autoPick = {}, autoPickDefault = '') {
+  const explicit = text(record(autoPick)[jobId]);
+  if (explicit === 'off') return { provider: '', inherited: false };
+  if (explicit) return { provider: explicit, inherited: false };
+  return { provider: text(autoPickDefault), inherited: Boolean(text(autoPickDefault)) };
+}
+
 function element(tag, className = '', content = '') {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -118,9 +127,14 @@ function element(tag, className = '', content = '') {
 
 /**
  * 줄을 그린다. 한 번에 한 행만 펼쳐진다. 행의 버튼은 handlers 로만 밖에 말한다.
- * handlers: { resume(jobId), remove(jobId, productName), open(row) }
+ * handlers: { resume(jobId), remove(jobId, productName), open(row), choose, select, judge, save, search,
+ *             importSource, copyFrom, openInFactory, publish, setAutoPick, tabCommand }
+ * source: { jobId, db } — 조립공장이 지금 열고 있는 제품이 출처 확정을 기다리면 그 자료.
  */
-export function renderQueue(root, model, { filter = 'all', openJobId = '', handlers = {}, panel = {}, projection = {} } = {}) {
+export function renderQueue(root, model, {
+  filter = 'all', openJobId = '', handlers = {}, panel = {}, projection = {},
+  autoPick = {}, autoPickDefault = '', source = {},
+} = {}) {
   root.replaceChildren();
   root.dataset.filter = filter;
   const visible = model.rows.filter(row => filter === 'all' || row.state === filter);
@@ -129,6 +143,7 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
     return;
   }
   for (const row of visible) {
+    const auto = autoPickFor(row.jobId, autoPick, autoPickDefault);
     const article = element('article', 'wb-row');
     article.dataset.jobId = row.jobId;
     article.dataset.state = row.state;
@@ -136,6 +151,7 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
     article.dataset.stale = String(row.stale);
     article.dataset.live = String(row.live);
     article.dataset.open = String(openJobId === row.jobId);
+    article.dataset.autoPick = auto.provider || 'off';
 
     const head = element('div', 'wb-row-head');
     head.setAttribute('role', 'button');
@@ -150,6 +166,7 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
       .filter(Boolean).join(' · ');
     if (row.stale) name.append(element('span', 'wb-stale', `오래 묵음 · ${row.waitLabel} 대기`));
     if (sub) name.append(element('span', row.state === 'mine' ? 'wb-sub wb-wait' : 'wb-sub', row.stale ? row.headline : sub));
+    if (auto.provider) name.append(element('span', 'wb-auto-tag', `자동 고르기 · ${providerName(auto.provider)}${auto.inherited ? ' (전체 기본)' : ''}`));
     head.append(name);
 
     const strip = element('div', 'wb-strip');
@@ -162,7 +179,7 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
     }
     head.append(strip);
 
-    const action = element('button', row.state === 'mine' ? 'wb-btn primary sm' : 'wb-btn sm', primaryLabel(row));
+    const action = element('button', row.state === 'mine' ? 'wb-btn primary sm' : 'wb-btn sm', primaryLabel(row, source));
     action.type = 'button';
     action.dataset.action = 'primary';
     action.addEventListener('click', event => {
@@ -178,9 +195,23 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
     });
     article.append(head);
 
-    if (openJobId === row.jobId) article.append(renderPanel(row, handlers, panel, projection));
+    if (openJobId === row.jobId) article.append(renderPanel(row, handlers, panel, projection, { auto, source }));
     root.append(article);
   }
+}
+
+/** 행 오른쪽 버튼의 말. 무엇을 하러 들어가는지 말한다 — 옛 보드 이름이 아니라. */
+export function primaryLabel(row, source = {}) {
+  // 막힌 작업은 먼저 되살려야 한다 — 컷이 있어도 버튼은 다시 시작. 컷은 행을 펼치면 보인다.
+  if (row.state === 'blocked') return '다시 시작';
+  if (row.state === 'done') return '기록 보기';
+  if (text(record(source).jobId) === row.jobId) return text(record(source).stage) === 'competitors' ? '경쟁사 고르기' : '출처 확정';
+  if (row.kind === 'pick' || row.hasCuts) return '생성컷 보기';
+  if (row.kind === 'values') return '값 채우기';
+  if (row.kind === 'cafe24') return 'Cafe24 승인';
+  if (row.kind === 'link') return '이어 열기';
+  if (row.state === 'run') return '보기';
+  return text(record(row.primary).label) || '열기';
 }
 
 /** 이 행이 조립공장이 지금 열고 있는 제품이고 Cafe24 승인만 남았는가. */
@@ -192,19 +223,13 @@ export function cafe24Pending(row, projection) {
   return Boolean(live) && (status === 'approval_required' || row.raw?.approvalRequired === true);
 }
 
-function primaryLabel(row) {
-  if (row.state === 'blocked') return '다시 시작';
-  if (row.state === 'done') return '기록 보기';
-  if (row.state === 'run') return '보기';
-  return text(record(row.primary).label) || '열기';
-}
-
 /**
  * 펼친 행. 무엇을 보일지는 인박스의 kind 가 정한다:
  *   pick → 컷 고르기 · values → 값 채우기 · cafe24 → 승인 관문 · blocked → 다시 시작.
+ * 출처 확정을 기다리는 살아 있는 제품이면 그 패널이 먼저다.
  * 살아 있는 제품에 승인만 남았으면 어느 kind 든 관문을 아래에 덧붙인다 — 화면을 옮길 이유가 없다.
  */
-function renderPanel(row, handlers, ui = {}, projection = {}) {
+function renderPanel(row, handlers, ui = {}, projection = {}, { auto = {}, source = {} } = {}) {
   const panel = element('div', 'wb-panel');
   const why = element('div', 'wb-why', row.detail || row.headline || '');
   panel.append(why);
@@ -221,8 +246,18 @@ function renderPanel(row, handlers, ui = {}, projection = {}) {
   }
   const connected = projection?.connected === true;
   const live = text(record(record(projection).registration).jobId) === row.jobId;
-  if (row.kind === 'pick' || (row.state === 'blocked' && list(record(row.raw).cells).some(cell => cell.pickable))) {
-    panel.append(renderPickPanel(row, record(ui.pick), handlers));
+  const sourceWait = text(record(source).jobId) === row.jobId;
+  if (sourceWait) {
+    const shared = { live, connected, busy: record(ui.source).busy === true, note: text(record(ui.source).note) };
+    if (text(record(source).stage) === 'competitors') {
+      panel.append(renderCompetitorPanel(row, { ...shared, competitor: record(source).competitor }, handlers));
+    } else {
+      panel.append(renderSourcePanel(row, { ...shared, db: record(source).db }, handlers));
+    }
+  }
+  const pickUi = { ...record(ui.pick), autoPick: auto.provider || '', autoPickInherited: auto.inherited === true };
+  if (row.kind === 'pick' || row.hasCuts || (row.state === 'blocked' && list(record(row.raw).cells).some(cell => cell.pickable))) {
+    panel.append(renderPickPanel(row, pickUi, handlers));
   }
   if (row.kind === 'values' || list(record(row.raw).missingRequiredValues).length) {
     panel.append(renderValuesPanel(row, { ...record(ui.values), siblings: list(ui.siblings) }, handlers));

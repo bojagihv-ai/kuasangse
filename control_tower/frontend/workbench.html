@@ -143,9 +143,43 @@
     .wb-pick { display: grid; gap: 18px; }
     .wb-stage { display: grid; gap: 10px; }
     .wb-stage-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
-    .wb-cuts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-    .wb-cut { position: relative; display: grid; gap: 6px; padding: 8px; text-align: left; background: var(--wb-card); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); color: var(--wb-ink); }
+    .wb-cuts { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+    .wb-cut { position: relative; display: grid; gap: 6px; padding: 8px; text-align: left; background: var(--wb-card); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); color: var(--wb-ink); cursor: pointer; }
     .wb-cut:hover { border-color: var(--wb-ink-2); }
+    .wb-cut:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+    .wb-cut-frame { position: relative; }
+    .wb-cut-zoom { position: absolute; right: 6px; bottom: 6px; min-height: 30px; padding: 0 10px; border-radius: 999px; border: 0; background: rgba(28,27,25,.72); color: #fff; font-size: 12.5px; opacity: 0; transition: opacity .12s; }
+    .wb-cut:hover .wb-cut-zoom, .wb-cut:focus-within .wb-cut-zoom { opacity: 1; }
+    @media (hover: none) { .wb-cut-zoom { opacity: 1; } }
+
+    /* 자동 고르기 토글 */
+    .wb-auto { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-radius: var(--wb-radius); border: 1px solid var(--wb-line); background: var(--wb-card-2); }
+    .wb-auto[data-on="true"] { border-color: var(--wb-accent); background: var(--wb-accent-wash); }
+    .wb-auto select { min-height: 36px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 14px; }
+    .wb-switch { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14.5px; cursor: pointer; min-height: 36px; }
+    .wb-switch input { appearance: none; width: 44px; height: 24px; border-radius: 999px; background: var(--wb-line-strong); position: relative; cursor: pointer; margin: 0; transition: background .15s; }
+    .wb-switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+    .wb-switch input:checked { background: var(--wb-accent); }
+    .wb-switch input:checked::after { transform: translateX(20px); }
+    .wb-switch input:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+    .wb-auto-tag { font-size: 12.5px; color: var(--wb-accent-ink); font-weight: 600; }
+    .wb-queue-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .wb-auto-default { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--wb-ink-2); }
+    .wb-auto-default select { min-height: 36px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 13.5px; }
+
+    /* 크게 보기 */
+    .wb-lightbox { border: 0; padding: 0; background: transparent; max-width: min(96vw, 1400px); max-height: 96vh; }
+    .wb-lightbox::backdrop { background: rgba(0,0,0,.72); }
+    .wb-lightbox figure { margin: 0; display: grid; gap: 10px; padding: 12px; background: var(--wb-card); border-radius: var(--wb-radius-lg); box-shadow: var(--wb-shadow); }
+    .wb-lightbox img { max-width: min(92vw, 1360px); max-height: 80vh; width: auto; height: auto; object-fit: contain; display: block; border-radius: var(--wb-radius); }
+    .wb-lightbox figcaption { font-size: 14px; color: var(--wb-ink-2); }
+
+    /* 출처 확정 — 신화DB·Cafe24 후보 */
+    .wb-source { display: grid; gap: 18px; }
+    .wb-cuts-source { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+    .wb-cuts-source .wb-cut { cursor: default; }
+    .wb-cuts-source .wb-cut[data-chosen="true"] { border-color: var(--wb-accent); box-shadow: 0 0 0 3px var(--wb-accent-wash); }
+    .wb-stage[data-decided="true"] .wb-stage-head b { color: var(--wb-done); }
     .wb-cut[aria-checked="true"] { border-color: var(--wb-accent); box-shadow: 0 0 0 3px var(--wb-accent-wash), var(--wb-shadow); }
     .wb-cut[data-reserved="true"] .wb-cut-label::after { content: " · 예약됨"; color: var(--wb-accent-ink); }
     .wb-chosen .wb-cut { cursor: default; } .wb-chosen .wb-cut:hover { border-color: var(--wb-line); }
@@ -249,7 +283,17 @@
     <main aria-label="제품 줄">
       <div class="wb-queue-head">
         <h2>줄 <span class="wb-note" id="wb-headline">읽는 중…</span></h2>
-        <div class="wb-filters" id="wb-filters" role="group" aria-label="보기"></div>
+        <div class="wb-queue-tools">
+          <div class="wb-filters" id="wb-filters" role="group" aria-label="보기"></div>
+          <label class="wb-auto-default" title="켜 두면 새로 오는 컷 고르기를 판정자에게 맡깁니다. 제품별로 끌 수 있습니다.">
+            <span>컷 자동 고르기</span>
+            <select id="wb-auto-pick-default" name="auto-pick-default">
+              <option value="">끔 · 내가 고른다</option>
+              <option value="gpt-oauth">GPT 에게</option>
+              <option value="claude-oauth">Claude 에게</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div id="wb-queue" aria-live="polite"></div>
     </main>
