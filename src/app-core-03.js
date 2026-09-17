@@ -19179,7 +19179,21 @@ async function factoryRuntimeControlChooseReference(decisionId, candidates, payl
     }
   }
   const cfg = state.modelConfig || {};
-  const client = new GptOAuthAPI(getGptOAuthSelectedModelId(), {
+  // 참조 판단(신화DB·Cafe24·경쟁사·필수값)의 판정자. 모델 설정의 실행 provider 가 Claude OAuth 면 Claude 로 시작하고,
+  // 아니면 GPT OAuth 로 시작하되 GPT 가 한도 등으로 실패하면 폴백(기본 Claude OAuth)으로 한 번 더 묻는다.
+  // 2026-09-18 실측: GPT 한도 하나로 출처·경쟁사 판단이 전부 "판단 실패" 가 되어 사람 차례로 멈췄다(사용자: "claude oauth 로").
+  // Claude 브리지는 그림을 못 받으므로(ClaudeOAuthAPI 가 images 를 거절) Claude 에는 이름·값만 보낸다.
+  const normalizedCfg = typeof normalizeModelConfig === 'function' ? normalizeModelConfig(cfg) : cfg;
+  const claudeAvailable = typeof ClaudeOAuthAPI === 'function';
+  const isClaudeClient = judgeClient => claudeAvailable && judgeClient instanceof ClaudeOAuthAPI;
+  const preferClaude = claudeAvailable && normalizedCfg.llmProvider === 'claude_oauth';
+  const claudeFallbackAllowed = claudeAvailable && !preferClaude && normalizedCfg.fallbackEnabled !== false
+    && String(normalizedCfg.fallbackProvider || 'claude_oauth') === 'claude_oauth';
+  const makeClaudeClient = () => new ClaudeOAuthAPI(
+    preferClaude ? normalizedCfg.llmModel : (normalizedCfg.fallbackModel || ''),
+    { effort: normalizedCfg.claudeOAuthEffort },
+  );
+  let client = preferClaude ? makeClaudeClient() : new GptOAuthAPI(getGptOAuthSelectedModelId(), {
     reasoningEffort: cfg.gptOAuthReasoningEffort, serviceTier: cfg.gptOAuthServiceTier,
   });
   const isFieldDecision = decisionId === 'required_field_candidate';
@@ -19193,11 +19207,28 @@ ${isFieldDecision ? `필수값 ${fieldId}은 확정 원본에 있는 값 중에�
     requiredValues: payload.requiredValues || {}, picturedIds,
     candidates: candidates.map(({ id, title }) => ({ id, title })) })}`;
   let choice;
+  const judgeOnce = async judgeClient => {
+    const imagesForClient = isClaudeClient(judgeClient) ? [] : images;
+    const value = await judgeClient._execJson(prompt, { purpose: `생산관제 후보 판단 · ${decisionId}`, images: imagesForClient, timeoutMs: 180000 });
+    return factoryRuntimeControlValidateReferenceChoice(value, isFieldDecision ? candidates : candidates.filter(candidate => picturedIds.includes(candidate.id)));
+  };
+  const providerLabel = judgeClient => (isClaudeClient(judgeClient) ? 'Claude OAuth' : 'GPT OAuth');
   try {
-    const value = await client._execJson(prompt, { purpose: `생산관제 후보 판단 · ${decisionId}`, images, timeoutMs: 180000 });
-    choice = factoryRuntimeControlValidateReferenceChoice(value, isFieldDecision ? candidates : candidates.filter(candidate => picturedIds.includes(candidate.id)));
+    choice = await judgeOnce(client);
   } catch (error) {
-    choice = { selectedId: '', confidence: 0, rationale: `GPT OAuth 판단 실패: ${String(error?.message || error).slice(0, 300)}` };
+    const firstFailure = `${providerLabel(client)} 판단 실패: ${String(error?.message || error).slice(0, 300)}`;
+    if (claudeFallbackAllowed) {
+      try {
+        const fallbackClient = makeClaudeClient();
+        choice = await judgeOnce(fallbackClient);
+        client = fallbackClient;
+        factoryLog(`후보 판단 · GPT OAuth 실패 → Claude OAuth 폴백 · ${decisionId} · ${String(error?.message || error).slice(0, 120)}`, 'warn');
+      } catch (fallbackError) {
+        choice = { selectedId: '', confidence: 0, rationale: `${firstFailure} · Claude OAuth 폴백 실패: ${String(fallbackError?.message || fallbackError).slice(0, 200)}` };
+      }
+    } else {
+      choice = { selectedId: '', confidence: 0, rationale: firstFailure };
+    }
   }
   const currentScope = factoryRuntimeControlTabScope();
   if (!factoryRuntimeControlTabScopeMatches(scope, currentScope) || scope.revision !== currentScope.revision
@@ -19205,10 +19236,11 @@ ${isFieldDecision ? `필수값 ${fieldId}은 확정 원본에 있는 값 중에�
     throw factoryRuntimeBatchCommandError('stale_reference_decision');
   }
   await factoryRuntimeUpdateOwnedFactory('factory/control:prepareProduct', 'factory', draft => {
-    const receipt = { ...choice, decisionId, fieldId, model: client.model, reasoningEffort: client.reasoningEffort, serviceTier: client.serviceTier,
-      auth: 'chatgpt-login-oauth', imageCount: images.length, picturedIds, at: Date.now() };
+    const usedClaude = isClaudeClient(client);
+    const receipt = { ...choice, decisionId, fieldId, model: client.model, reasoningEffort: usedClaude ? client.effort : client.reasoningEffort, serviceTier: client.serviceTier,
+      auth: usedClaude ? 'claude-subscription-oauth' : 'chatgpt-login-oauth', imageCount: usedClaude ? 0 : images.length, picturedIds, at: Date.now() };
     draft.goalRun.referenceDecisions = { ...(draft.goalRun.referenceDecisions || {}), [fieldId ? `${decisionId}:${fieldId}` : decisionId]: receipt };
-    factoryLog(`후보 판단 · GPT OAuth ${client.model} / ${client.reasoningEffort} · ${decisionId} · ${choice.selectedId || '직접 확인 대기'} · ${choice.rationale}`, choice.selectedId ? 'ok' : 'warn', draft);
+    factoryLog(`후보 판단 · ${providerLabel(client)} ${client.model} / ${usedClaude ? client.effort : client.reasoningEffort} · ${decisionId} · ${choice.selectedId || '직접 확인 대기'} · ${choice.rationale}`, choice.selectedId ? 'ok' : 'warn', draft);
     return true;
   });
   return choice;

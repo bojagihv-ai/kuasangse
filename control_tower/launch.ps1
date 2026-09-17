@@ -40,7 +40,8 @@ $BackendReviewsUrl = "http://127.0.0.1:$BackendPort/api/reviews"
 $BackendFactoryStateUrl = "http://127.0.0.1:$BackendPort/api/factory/state"
 # localhost 는 윈도우에서 ::1 로 먼저 풀린다. 화면 서버는 127.0.0.1 만 듣고 있어
 # localhost 로 열면 준비 확인부터 실패한다. 주소는 127.0.0.1 로 둔다.
-$FrontendUrl = "http://127.0.0.1:$FrontendPort/control-tower.html"
+# 2026-09-18: 바탕화면 아이콘은 새 앞면(작업대)을 연다. 옛 화면(control-tower.html)은 작업대 맨 아래 링크로 연다.
+$FrontendUrl = "http://127.0.0.1:$FrontendPort/workbench.html"
 $FrontendReadyMarker = if ($BackendPort -eq 41009) {
     'const healthUrl = "http://localhost:41009/api/health";'
 }
