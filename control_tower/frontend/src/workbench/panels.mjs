@@ -62,6 +62,12 @@ export function thumbnailSrc(source, width = THUMB_WIDTH) {
   return resolved.href;
 }
 
+/** 후보 그림 주소에서 보관함 id 를 뽑는다(/api/local-archive/assets/<id>/…). 프롬프트 기록은 이 id 로 찾는다. */
+export function archiveIdOf(source) {
+  const match = text(source).match(/\/local-archive\/assets\/([^/?#]+)\//u);
+  return match ? match[1] : '';
+}
+
 /** 고를 수 있는 칸. 인박스가 가리킨 단계가 있으면 그것을 앞에 세운다. */
 export function pickableCells(row) {
   const cells = list(record(row.raw).cells).filter(cell => cell.pickable);
@@ -187,6 +193,20 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
       cut.append(element('span', 'wb-cut-n', String(index + 1)));
       cut.append(element('span', 'wb-cut-label', label));
       if (why) cut.append(element('span', 'wb-cut-why', why));
+      // 저장된 프롬프트 — 조립공장 보관함 기록에서 읽는다(옛 보드의 「프롬프트 보기」). 새 컷의 바탕으로 쓴다.
+      const archiveId = archiveIdOf(candidate.thumbnailUrl);
+      if (archiveId) {
+        const prompt = record(record(ui.prompts)[archiveId]);
+        const promptBar = element('span', 'wb-cut-prompt');
+        if (prompt.loading) promptBar.append(element('span', 'wb-note', '프롬프트 읽는 중…'));
+        else if (typeof prompt.prompt === 'string') {
+          promptBar.append(element('span', 'wb-note', prompt.prompt || prompt.note || '저장된 프롬프트가 없습니다.'));
+          if (prompt.prompt) promptBar.append(button('이 프롬프트로 새 컷', 'wb-btn sm ghost', () => handlers.prefillCompose?.({ stageKey, prompt: prompt.prompt }), { action: 'prefill-compose' }));
+        } else {
+          promptBar.append(button('프롬프트 보기', 'wb-btn sm ghost', () => handlers.showPrompt?.({ archiveId }), { action: 'show-prompt' }));
+        }
+        cut.append(promptBar);
+      }
       const choose = () => handlers.choose?.({ stageKey, candidateId: id });
       cut.addEventListener('click', event => { event.stopPropagation(); choose(); });
       cut.addEventListener('keydown', event => {
@@ -214,6 +234,23 @@ export function renderPickPanel(row, ui = {}, handlers = {}) {
       ));
     }
     section.append(bar);
+    // 새 컷 만들기 — 옛 보드의 compose 폼과 같은 요청(POST /compose-cut {stageKey, prompt}). 마음에 드는 컷이 없을 때.
+    const compose = element('form', 'wb-compose');
+    compose.dataset.stageKey = stageKey;
+    compose.noValidate = true;
+    compose.addEventListener('submit', event => event.preventDefault());
+    const promptField = element('label', 'wb-field');
+    promptField.append(element('span', 'wb-field-name', `${text(cell.stageLabel) || stageKey} 새 컷 만들기 — 프롬프트`));
+    const promptInput = document.createElement('textarea');
+    promptInput.name = `compose-${stageKey}`;
+    promptInput.rows = 2;
+    promptInput.placeholder = '예: 밝은 회백색 스튜디오 배경, 제품 중앙 정렬, 넉넉한 여백';
+    promptInput.value = text(record(ui.composeDraft)[stageKey]);
+    promptInput.addEventListener('input', () => handlers.rememberCompose?.({ stageKey, prompt: promptInput.value }));
+    promptField.append(promptInput);
+    compose.append(promptField);
+    compose.append(button('이 프롬프트로 만들기', 'wb-btn sm', () => handlers.compose?.({ jobId: row.jobId, stageKey, prompt: promptInput.value }), { disabled: ui.busy === true, action: 'compose-cut' }));
+    section.append(compose);
     root.append(section);
   }
   if (ui.receipt) root.append(renderReceipt(ui.receipt));

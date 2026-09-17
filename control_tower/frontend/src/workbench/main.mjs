@@ -99,7 +99,7 @@ const state = {
 function emptyPanel(jobId) {
   return {
     jobId,
-    pick: { chosen: {}, receipt: null, note: '', busy: false },
+    pick: { chosen: {}, receipt: null, note: '', busy: false, prompts: {}, composeDraft: {} },
     values: { sources: [], searched: false, prefill: {}, note: '', busy: false },
     gate: { step: '', done: [], error: '', result: null },
     source: { busy: false, note: '' },
@@ -273,6 +273,14 @@ function render() {
       },
       select: request => void selectCandidate(request),
       judge: request => void judgeCandidates(request),
+      showPrompt: ({ archiveId }) => void loadCutPrompt(archiveId),
+      prefillCompose: ({ stageKey, prompt }) => {
+        const current = panelFor(state.openJobId);
+        current.pick.composeDraft = { ...current.pick.composeDraft, [stageKey]: prompt };
+        render();
+      },
+      rememberCompose: ({ stageKey, prompt }) => { panelFor(state.openJobId).pick.composeDraft[stageKey] = prompt; },
+      compose: request => void composeCut(request),
       save: (jobId, values) => void saveValues(jobId, values),
       search: query => void searchSources(query),
       importSource: source => importSource(source),
@@ -432,6 +440,46 @@ async function judgeCandidates({ jobId, provider, automatic = false }) {
     render();
   }
   return ok;
+}
+
+/** 컷의 저장된 프롬프트 — 조립공장 보관함 기록(옛 보드의 「프롬프트 보기」와 같은 GET). 한 번 읽으면 패널에 남는다. */
+async function loadCutPrompt(archiveId) {
+  const panel = panelFor(state.openJobId);
+  const id = text(archiveId);
+  if (!id || panel.pick.prompts[id]) return;
+  panel.pick.prompts = { ...panel.pick.prompts, [id]: { loading: true } };
+  render();
+  try {
+    const body = await apiRequest(`/api/factory/archive-prompt/${encodeURIComponent(id)}`);
+    panel.pick.prompts = { ...panel.pick.prompts, [id]: { prompt: text(body?.prompt), note: text(body?.note) } };
+  } catch (error) {
+    panel.pick.prompts = { ...panel.pick.prompts, [id]: { prompt: '', note: `프롬프트를 못 읽었습니다 · ${humanError(error)}` } };
+  }
+  render();
+}
+
+/** 새 컷 만들기 — 옛 보드의 compose 폼과 같은 요청. 조립공장이 이 프롬프트로 그 단계 컷을 하나 더 만든다. */
+async function composeCut({ jobId, stageKey, prompt }) {
+  const panel = panelFor(jobId);
+  const wanted = text(prompt);
+  if (!wanted) {
+    setStatus('프롬프트를 적어야 새 컷을 만들 수 있습니다.', 'error');
+    return;
+  }
+  if (panel.pick.busy) return;
+  panel.pick.busy = true;
+  render();
+  try {
+    await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/compose-cut`, { method: 'POST', body: { stageKey, prompt: wanted } });
+    panel.pick.composeDraft = { ...panel.pick.composeDraft, [stageKey]: '' };
+    setStatus(`${stageKey} 새 컷을 만들라고 조립공장에 보냈습니다. 만들어지면 후보에 더해집니다.`, 'ok');
+    await refresh();
+  } catch (error) {
+    setStatus(`새 컷 만들기 실패 · ${humanError(error)}`, 'error');
+  } finally {
+    panel.pick.busy = false;
+    render();
+  }
 }
 
 /** 제품별 자동 고르기 설정을 바꾼다. 켜면 지금 기다리는 단계부터 바로 맡긴다. */

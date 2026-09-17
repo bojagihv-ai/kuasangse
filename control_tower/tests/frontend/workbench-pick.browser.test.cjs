@@ -326,3 +326,54 @@ test('섹션 설정: 조립공장 섹션 공정을 그대로 편집한다 — �
   assert.equal(commands[3].action, 'setSectionBasisMode');
   assert.deepEqual(commands[3].value, { sectionId: 'hook', basisId: 'combined' });
 });
+
+test('컷 다시 만들기: 저장된 프롬프트를 읽어 바탕으로 삼고, 새 컷은 옛 보드와 같은 compose-cut 요청으로 보낸다', { timeout: 60_000 }, async t => {
+  const composes = [];
+  const promptReads = [];
+  const { page } = await openWorkbench(t, {
+    apiPort: 19581, frontendPort: 19601,
+    beforeNavigate: async candidate => {
+      // 섹션 단계 첫 후보에 보관함 그림 주소를 달아 프롬프트 기록이 있는 컷으로 만든다.
+      await candidate.route('**/api/factory/jobs', async route => {
+        if (route.request().method() !== 'GET') { await route.fallback(); return; }
+        let response;
+        try { response = await route.fetch(); } catch { await route.abort().catch(() => {}); return; }
+        const body = await response.json();
+        body.jobs = body.jobs.map(job => {
+          if (job.jobId !== 'factory-job-qa-2994') return job;
+          const stages = (job.progress?.stages || []).map(stage => (stage.key === 'sections' || stage.stageKey === 'sections')
+            ? { ...stage, candidates: stage.candidates.map((item, index) => index === 0 ? { ...item, thumbnailUrl: '/api/local-archive/assets/arch0001/image' } : item) }
+            : stage);
+          return { ...job, progress: { ...job.progress, stages } };
+        });
+        await route.fulfill({ response, body: JSON.stringify(body) });
+      });
+      await candidate.route('**/api/factory/archive-prompt/arch0001', async route => {
+        promptReads.push(route.request().url());
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ archiveId: 'arch0001', prompt: '밝은 회백색 배경, 제품 정면', note: '' }) });
+      });
+      await candidate.route('**/api/factory/jobs/factory-job-qa-2994/compose-cut', async route => {
+        composes.push({ csrf: route.request().headers()['x-control-tower-csrf'], body: JSON.parse(route.request().postData() || '{}') });
+        await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true, orderId: 'order-compose-1' }) });
+      });
+    },
+  });
+  const row = page.locator('#wb-queue .wb-row[data-job-id="factory-job-qa-2994"]');
+  await row.locator('button[data-action="primary"]').click();
+  const stage = row.locator('.wb-stage[data-stage-key="sections"]');
+  const first = stage.locator('.wb-cut').first();
+  await first.locator('button[data-action="show-prompt"]').click();
+  await page.waitForFunction(() => /밝은 회백색 배경, 제품 정면/u.test(document.querySelector('#wb-queue')?.textContent || ''));
+  assert.equal(promptReads.length, 1);
+  // 「이 프롬프트로 새 컷」은 폼을 채우기만 한다 — 보내는 건 사람이.
+  await first.locator('button[data-action="prefill-compose"]').click();
+  const textarea = stage.locator('textarea[name="compose-sections"]');
+  assert.equal(await textarea.inputValue(), '밝은 회백색 배경, 제품 정면');
+  assert.equal(composes.length, 0);
+  await textarea.fill('밝은 회백색 배경, 제품 정면, 여백 넉넉히');
+  await stage.locator('button[data-action="compose-cut"]').click();
+  await page.waitForFunction(() => /새 컷을 만들라고 조립공장에 보냈습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(composes.length, 1);
+  assert.ok(composes[0].csrf);
+  assert.deepEqual(composes[0].body, { stageKey: 'sections', prompt: '밝은 회백색 배경, 제품 정면, 여백 넉넉히' });
+});
