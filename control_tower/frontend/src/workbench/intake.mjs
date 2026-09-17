@@ -12,6 +12,7 @@ import { buildProductPayload, isSupportedImage, readImageName } from '../bulk-in
 import { loadCafe24Categories } from '../intake-categories.mjs?intakeCategories=1';
 import { PRODUCT_VALUE_LABELS } from '../production-board-model.mjs?parallelBoard=46';
 import { apiRequest, ORIGINS } from './api.mjs?wb=1';
+import { readWorkfile, describeWorkfile, submitWorkfile, WORKFILE_COPY } from './workfile.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -201,6 +202,65 @@ export function mountIntake(root, { handlers = {}, request = apiRequest, loadCat
 
   const form = element('form', 'wb-intake-form');
   form.noValidate = true;
+
+  // 0. 작업파일로 시작 — 조립공장에서 저장한 .kuasangse 를 그대로 줄에 세운다(옛 앞면의 작업파일 탭과 같은 경로).
+  const workfileBlock = element('section', 'wb-intake-block wb-workfile');
+  workfileBlock.append(element('h3', '', '작업파일(.kuasangse)로 시작'));
+  const workfileInput = document.createElement('input');
+  workfileInput.type = 'file';
+  workfileInput.accept = '.kuasangse';
+  workfileInput.id = 'wb-intake-workfile';
+  workfileInput.hidden = true;
+  const workfileLabel = element('label', 'wb-btn');
+  workfileLabel.htmlFor = workfileInput.id;
+  workfileLabel.textContent = '작업파일 고르기';
+  const workfileLine = element('p', 'wb-note');
+  workfileLine.id = 'wb-intake-workfile-summary';
+  workfileLine.textContent = '조립공장에서 이미 진행하던 제품이면 사진·값을 다시 넣지 않고 그 작업파일부터 이어 갑니다. 조립공장이 다른 제품을 열고 있으면 안 됩니다.';
+  const workfileBar = element('div', 'wb-actions');
+  const workfileSubmit = button('이 작업파일로 줄에 세우기', 'wb-btn primary', () => void handleWorkfileSubmit(), { action: 'queue-workfile', disabled: true });
+  workfileBar.append(workfileLabel, workfileSubmit);
+  workfileBlock.append(workfileBar, workfileInput, workfileLine);
+  form.append(workfileBlock);
+  let workfile = null;
+  workfileInput.addEventListener('change', async () => {
+    const file = workfileInput.files?.[0];
+    workfileInput.value = '';
+    if (!file) return;
+    workfile = null;
+    workfileSubmit.disabled = true;
+    workfileLine.textContent = `${file.name} 읽는 중…`;
+    try {
+      workfile = await readWorkfile(file);
+      workfileLine.textContent = `${workfile.fileName} · ${describeWorkfile(workfile)}`;
+      workfileSubmit.disabled = false;
+    } catch (error) {
+      workfileLine.textContent = `${file.name} · ${WORKFILE_COPY[text(error?.code)] || text(error?.message || error)}`;
+    }
+  });
+  async function handleWorkfileSubmit() {
+    if (!workfile || state.busy) return;
+    if (!globalThis.confirm(`${text(workfile.classification?.product?.name) || workfile.fileName} 작업파일로 줄에 세울까요? 조립공장이 이 파일을 열어 이어 갑니다.`)) return;
+    state.busy = true;
+    workfileSubmit.disabled = true;
+    workfileSubmit.textContent = '세우는 중…';
+    try {
+      const { job } = await submitWorkfile(workfile, { request });
+      const name = text(job?.productName) || text(workfile.classification?.product?.name) || workfile.fileName;
+      workfile = null;
+      workfileLine.textContent = `${name} 을(를) 작업파일로 줄에 세웠습니다.`;
+      handlers.queued?.(job);
+      handlers.status?.(`${name} 을(를) 작업파일로 줄에 세웠습니다.`, 'ok');
+    } catch (error) {
+      const message = `${WORKFILE_COPY[text(error?.code)] || text(error?.message || error)}${text(error?.code) ? ` (${text(error.code)})` : ''}`;
+      workfileLine.textContent = message;
+      handlers.status?.(`작업파일로 세우지 못했습니다 · ${message}`, 'error');
+      workfileSubmit.disabled = !workfile;
+    } finally {
+      state.busy = false;
+      workfileSubmit.textContent = '이 작업파일로 줄에 세우기';
+    }
+  }
 
   // 1. 사진
   const photosBlock = element('section', 'wb-intake-block');

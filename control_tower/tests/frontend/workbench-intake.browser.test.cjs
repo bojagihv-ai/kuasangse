@@ -196,3 +196,90 @@ test('제품 넣기: 직접 정하기는 결정 지점 15개를 하나씩 보내
   assert.deepEqual(body.cafe24Registration, { registrationMode: 'update', targetProductNo: '530' });
   assert.equal(body.requiredValues.optionMode, 'none');
 });
+
+test('작업파일(.kuasangse)로 시작: 파일을 읽어 신원을 뽑고 옛 앞면과 같은 from-workfile 본문으로 줄에 세운다', { timeout: 60_000 }, async t => {
+  const { createHash } = require('node:crypto');
+  const workfile = {
+    format: 'kuasangse.factory.project',
+    version: 1,
+    exportedAt: '2026-09-17T10:00:00+09:00',
+    summary: { productName: '작업파일 시험 보자기', sections: 3 },
+    persistence: { revision: 3 },
+    project: {
+      id: 'batch:job-workfile-1',
+      name: '작업파일 시험 보자기',
+      payload: {
+        factory: {
+          product: {
+            productName: '작업파일 시험 보자기',
+            workspaceId: 'batch:job-workfile-1',
+            productKey: '작업파일시험보자기',
+            runId: 'run-workfile-1',
+            inputFingerprint: 'sha256:workfile-input',
+            revision: 3,
+          },
+        },
+      },
+    },
+  };
+  const workfileText = JSON.stringify(workfile);
+  const sha256 = createHash('sha256').update(workfileText, 'utf8').digest('hex');
+  const forks = [];
+  const queued = [];
+  const { page } = await openIntake(t, { apiPort: 19580, frontendPort: 19600, queued });
+  page.on('dialog', dialog => void dialog.accept());
+  // 조립공장이 비어 있어야 작업파일을 열 수 있다 — QA 투영의 살아 있는 제품을 비운다.
+  await page.route('**/api/factory/state', async route => {
+    let response;
+    try { response = await route.fetch(); } catch { await route.abort().catch(() => {}); return; }
+    const body = await response.json();
+    body.registration = { status: 'idle', blockers: [], jobId: '', productId: '', productKey: '' };
+    body.session = { workspaceId: '', productId: '', productKey: '', runId: '', inputFingerprint: '', revision: 0, storeRevision: 0 };
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+  await page.route('**/api/factory/jobs/from-workfile', async route => {
+    forks.push({ csrf: route.request().headers()['x-control-tower-csrf'], body: JSON.parse(route.request().postData() || '{}') });
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true, status: 'hydrating', job: { jobId: 'factory-job-workfile-1', status: 'hydrating' } }) });
+  });
+  await page.route('**/api/factory/jobs', async route => {
+    if (route.request().method() !== 'GET') { await route.fallback(); return; }
+    let response;
+    try { response = await route.fetch(); } catch { await route.abort().catch(() => {}); return; }
+    const body = await response.json();
+    if (forks.length) {
+      body.jobs = [...body.jobs, {
+        jobId: 'factory-job-workfile-1', productName: '작업파일 시험 보자기', status: 'running', sourceKind: 'workfile',
+        sourceSha256: sha256, sourceRevision: 3, sourceRunId: 'run-workfile-1', progress: { percent: 0, stages: [], registration: { status: 'idle', blockers: [] } },
+      }];
+    }
+    await route.fulfill({ response, body: JSON.stringify(body) });
+  });
+  const form = page.locator('#wb-intake form.wb-intake-form');
+  assert.equal(await form.locator('button[data-action="queue-workfile"]').isDisabled(), true);
+  await page.locator('#wb-intake-workfile').setInputFiles({ name: '작업파일 시험 보자기.kuasangse', mimeType: 'application/json', buffer: Buffer.from(workfileText, 'utf8') });
+  await page.waitForFunction(() => /작업파일 시험 보자기/u.test(document.querySelector('#wb-intake-workfile-summary')?.textContent || ''));
+  assert.equal(await form.locator('button[data-action="queue-workfile"]').isDisabled(), false);
+  await form.locator('button[data-action="queue-workfile"]').click();
+  await page.waitForFunction(() => /작업파일로 줄에 세웠습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(forks.length, 1);
+  assert.ok(forks[0].csrf, 'CSRF 없이 보냈다');
+  const body = forks[0].body;
+  assert.equal(body.fileName, '작업파일 시험 보자기.kuasangse');
+  assert.equal(body.workfileText, workfileText);
+  assert.equal(body.expectedSha256, sha256);
+  assert.equal(body.expectedWorkspaceId, 'batch:job-workfile-1');
+  assert.equal(body.expectedProductId, 'factory:작업파일시험보자기');
+  assert.equal(body.expectedProductKey, '작업파일시험보자기');
+  assert.equal(body.expectedRunId, 'run-workfile-1');
+  assert.equal(body.expectedInputFingerprint, 'sha256:workfile-input');
+  assert.equal(body.expectedHydratedWorkfileRevision, 3);
+  assert.equal(body.expectedWorkfileRevision, 0);
+  assert.equal(body.batchId, `workfile:${sha256.slice(0, 16)}`);
+  assert.equal(body.mode, 'manual');
+  assert.equal(body.productName, '작업파일 시험 보자기');
+  assert.equal(body.idempotencyKey, `factory-workfile-fork:${sha256}:3:manual`);
+  // 사진 투입 경로는 건드리지 않았다.
+  assert.equal(queued.length, 0);
+  assert.equal(await page.locator('#wb-intake').isHidden(), true);
+  await page.waitForSelector('#wb-queue .wb-row[data-job-id="factory-job-workfile-1"]');
+});

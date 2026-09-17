@@ -46,6 +46,9 @@ const ERROR_COPY = Object.freeze({
   factory_tab_command_action_invalid: '조립공장이 받지 않는 명령입니다.',
   factory_tab_command_invalid: '명령 본문이 조립공장 규격과 다릅니다.',
   factory_product_job_not_editable: '지금 상태에서는 조립공장이 고칠 수 없는 작업입니다.',
+  policy_manual: '이 단계는 넣을 때 「내가 고른다」로 정해 두어 판정자가 고르지 않습니다. 컷을 눌러 직접 고르세요.',
+  candidate_empty: '고를 후보가 아직 없습니다.',
+  stage_not_waiting: '지금은 고르는 차례가 아닙니다.',
   stale_product_checkpoint: '저장 지점이 바뀌었습니다. 화면을 새로 고친 뒤 다시 하세요.',
   idempotency_conflict: '같은 요청이 이미 접수돼 있습니다.',
 });
