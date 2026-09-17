@@ -230,6 +230,8 @@
 
     /* Cafe24 승인 — 네 단계 관문. */
     .wb-cafe24 { display: grid; gap: 12px; }
+    .wb-blockers { display: grid; gap: 8px; padding: 10px 14px; border-radius: var(--wb-radius); border: 1px solid var(--wb-blocked); background: var(--wb-blocked-wash); font-size: 13.5px; }
+    .wb-blockers ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
     .wb-gate { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: gate; }
     .wb-gate li { counter-increment: gate; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--wb-line); font-size: 13px; color: var(--wb-muted); }
     .wb-gate li::before { content: counter(gate); font-family: var(--wb-mono); font-size: 11.5px; }

@@ -299,7 +299,10 @@ function renderPanel(row, handlers, ui = {}, projection = {}, { auto = {}, sourc
   // 고를 컷이 하나도 안 남은 "컷 고르기" 는 사실상 등록 차례다 — 다음 걸음(관문 또는 열기)을 같이 보인다.
   const nothingToPick = row.kind === 'pick' && !list(record(row.raw).cells).some(cell => cell.pickable);
   if (row.kind === 'cafe24' || nothingToPick || cafe24Pending(row, projection)) {
-    panel.append(renderCafe24Panel(row, { live, connected, gate: record(ui.gate) }, handlers));
+    const blockers = live
+      ? list(record(record(projection).registration).blockers)
+      : list(record(record(row.raw).registration).blockers);
+    panel.append(renderCafe24Panel(row, { live, connected, gate: record(ui.gate), blockers, busy: record(ui.source).busy === true }, handlers));
   }
   if (row.state === 'done' && row.kind !== 'cafe24') {
     actions.append(element('span', 'wb-note', `등록 상태 ${row.registrationStatus || '기록 없음'} · 자세한 기록은 옛 화면의 작업파일 탭에 있습니다.`));

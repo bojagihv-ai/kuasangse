@@ -451,6 +451,19 @@ export function renderValuesPanel(row, ui = {}, handlers = {}) {
   return root;
 }
 
+/** 조립공장 사전점검이 내는 막힘 코드. 문장으로 온 것은 그대로 보인다. */
+export const BLOCKER_COPY = Object.freeze({
+  html_digest: '상세페이지 HTML 이 아직 없거나 확정되지 않았습니다.',
+  image_digests: '상세페이지 이미지가 아직 없습니다.',
+  factory_cafe24_preflight_incomplete: '조립공장 사전점검이 끝나지 않았습니다.',
+  size_a_cut: '사이즈 이미지 컷을 아직 고르지 않았습니다.',
+  general_a_cut: '이미지컷을 아직 고르지 않았습니다.',
+  representative_a_cut: '대표 이미지 컷을 아직 고르지 않았습니다.',
+  option_a_cut: '색상옵션 컷을 아직 고르지 않았습니다.',
+  required_values_missing: '필수값이 비어 있습니다.',
+  approved_workfile_required: '승인된 작업파일 연결이 필요합니다.',
+});
+
 export const GATE_STEPS = Object.freeze([
   { key: 'preview', label: '미리보기' },
   { key: 'approve', label: '승인' },
@@ -500,6 +513,27 @@ export function renderCafe24Panel(row, ctx = {}, handlers = {}) {
       : '조립공장 창이 관제탑에 붙어 있어야 합니다.'));
   }
   root.append(bar);
+  // 등록을 막는 사유(조립공장 사전점검)와 복구 — 옛 보드의 recover 세 가지와 같다.
+  const blockers = list(ctx.blockers).map(text).filter(Boolean);
+  if (blockers.length) {
+    const box = element('div', 'wb-blockers');
+    box.append(element('b', '', `등록을 막는 것 ${blockers.length}건`));
+    const ul = element('ul', '');
+    for (const blocker of blockers) ul.append(element('li', '', BLOCKER_COPY[blocker] || blocker));
+    box.append(ul);
+    const fixes = element('div', 'wb-actions');
+    for (const [action, label, hint] of [
+      ['regenerate-sections', '섹션 다시 생성', '현재 상품 기준으로 섹션을 다시 만든다(다른 상품명 단서가 남았을 때)'],
+      ['unlock-sections', '섹션 잠금 풀기', '잠긴 섹션을 다시 편집·생성할 수 있게'],
+      ['clear-cafe24-target', 'Cafe24 대상 떼기', '엉뚱한 기존 상품에 붙었을 때 떼어 낸다'],
+    ]) {
+      const b = button(label, 'wb-btn sm', () => handlers.recover?.({ jobId: row.jobId, action, label }), { disabled: !ctx.live || !ctx.connected || ctx.busy === true, action: `recover-${action}` });
+      b.title = hint;
+      fixes.append(b);
+    }
+    box.append(fixes);
+    root.append(box);
+  }
   if (text(gate.error)) root.append(element('p', 'wb-note error', text(gate.error)));
   if (gate.result) {
     const result = record(gate.result);

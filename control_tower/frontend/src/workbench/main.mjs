@@ -287,6 +287,7 @@ function render() {
       copyFrom: jobId => copyValuesFrom(jobId),
       openInFactory: jobId => void openInFactory(jobId),
       publish: jobId => void publishToCafe24(jobId),
+      recover: request => void recoverJob(request),
       setAutoPick: ({ jobId, provider }) => setAutoPick(jobId, provider),
       tabCommand: request => void sendTabCommand(request),
     },
@@ -733,6 +734,27 @@ async function sendTabCommand({ jobId, tabId, action, value, label = '변경' })
     }
   } catch (error) {
     panel.source.note = '';
+    setStatus(`${label} 실패 · ${humanError(error)}${text(error?.code) ? ` (${text(error.code)})` : ''}`, 'error');
+  } finally {
+    panel.source.busy = false;
+    render();
+  }
+}
+
+/**
+ * 막힌 등록을 되살리는 조립공장 지시 — 옛 보드의 recover 세 가지(섹션 다시 생성 · 섹션 잠금 풀기 · Cafe24 대상 떼기).
+ * POST /api/factory/jobs/{id}/recover {action}. 조립공장이 받아서 처리하고 진행이 바뀌면 줄에 반영된다.
+ */
+async function recoverJob({ jobId, action, label = action }) {
+  const panel = panelFor(jobId);
+  if (panel.source.busy) return;
+  panel.source.busy = true;
+  render();
+  try {
+    await apiRequest(`/api/factory/jobs/${encodeURIComponent(jobId)}/recover`, { method: 'POST', body: { action } });
+    setStatus(`${label} — 조립공장에 지시했습니다. 진행이 바뀌면 줄에 반영됩니다.`, 'ok');
+    await refresh();
+  } catch (error) {
     setStatus(`${label} 실패 · ${humanError(error)}${text(error?.code) ? ` (${text(error.code)})` : ''}`, 'error');
   } finally {
     panel.source.busy = false;
