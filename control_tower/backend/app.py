@@ -11,6 +11,7 @@ from .config import ConfigurationError, ControlTowerConfig, load_config
 from .cafe24_bridge import Cafe24CommandBridge, QueuedCafe24CommandBridge
 from .factory_sync import FactorySyncBridge
 from .gpt_oauth import GptOAuthJudge
+from .claude_oauth import ClaudeOAuthJudge
 from .pdp_client import PdpControlHttpApi
 from .pdp_workbench_client import PdpWorkbenchApi, PdpWorkbenchHttpApi
 from .routes import PdpApi, register_routes
@@ -39,6 +40,7 @@ def create_app(
     workbench_api: PdpWorkbenchApi | None = None,
     factory_sync_bridge: FactorySyncBridge | None = None,
     gpt_judge: GptOAuthJudge | None = None,
+    claude_judge: ClaudeOAuthJudge | None = None,
 ) -> Flask:
     settings = config if config is not None else load_config()
     app = Flask(__name__)
@@ -62,6 +64,7 @@ def create_app(
             settings.pdp_service_key,
         ),
         gpt_judge=gpt_judge or GptOAuthJudge(settings.api_hub_url),
+        claude_judge=claude_judge or ClaudeOAuthJudge(settings.api_hub_url),
         factory_archive_root=Path(settings.cache_root).resolve().parent / "local-archive",
     )
 

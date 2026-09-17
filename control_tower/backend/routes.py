@@ -35,6 +35,7 @@ from .factory_sync import (
 )
 from .candidate_selector import CandidateSelectionError, decide_candidates
 from .gpt_oauth import GptOAuthError, GptOAuthJudge
+from .claude_oauth import ClaudeOAuthJudge
 from .policy import (
     COMPETITOR_MARKETS,
     DECISION_POINT_IDS,
@@ -745,6 +746,7 @@ def register_routes(
     workbench_api: PdpWorkbenchApi | None = None,
     factory_sync_bridge: FactorySyncBridge | None = None,
     gpt_judge: GptOAuthJudge | None = None,
+    claude_judge: ClaudeOAuthJudge | None = None,
     factory_archive_root: Path | None = None,
     human_presence_store: HumanPresenceStore | None = None,
 ) -> None:
@@ -756,6 +758,19 @@ def register_routes(
     factory_sync = factory_sync_bridge if factory_sync_bridge is not None else FactorySyncBridge()
     human_presences = human_presence_store if human_presence_store is not None else HumanPresenceStore()
     judge = gpt_judge if gpt_judge is not None else GptOAuthJudge()
+    # 판정 제공자는 요청의 judgementOptions.provider 로 고른다. 기본은 지금까지의 GPT.
+    # 둘은 같은 judge() 계약을 지키므로 candidate_selector 는 누가 답했는지 모른 채 돌고,
+    # 누가 답했는지는 영수증(provider·connectorId)이 든다 — 숨기지 않는다.
+    judges: dict[str, object] = {
+        "gpt-oauth": judge,
+        "claude-oauth": claude_judge if claude_judge is not None else ClaudeOAuthJudge(),
+    }
+
+    def _judge_for(options: Mapping[str, object]) -> object:
+        provider = str(options.get("provider") or "gpt-oauth")
+        if provider not in judges:
+            raise CandidateSelectionError("judge_provider_invalid")
+        return judges[provider]
     archive_root = (factory_archive_root or (Path("output") / "local-archive")).resolve()
 
     @app.get("/api/session")
@@ -884,7 +899,7 @@ def register_routes(
                 raw_candidates,
                 identity=raw_identity,
                 policy_snapshot=raw_policy,
-                judge=judge,
+                judge=_judge_for(raw_options),
                 input_refs=(),
                 model=str(raw_options.get("model") or "latestModel"),
                 reasoning_effort=str(raw_options.get("reasoningEffort") or "medium"),
@@ -2040,7 +2055,7 @@ def register_routes(
                         "eventId": str(projection.get("cursor") or ""),
                     },
                     policy_snapshot=policy_snapshot,
-                    judge=judge,
+                    judge=_judge_for(raw_options),
                     model=str(raw_options.get("model") or "latestModel"),
                     reasoning_effort=str(raw_options.get("reasoningEffort") or "medium"),
                     service_tier=str(raw_options.get("serviceTier") or "standard"),
@@ -2126,7 +2141,7 @@ def register_routes(
                     "eventId": str(checkpoint.get("savedAt") or ""),
                 },
                 policy_snapshot=policy_snapshot,
-                judge=judge,
+                judge=_judge_for(options),
                 model=str(options.get("model") or "latestModel"),
                 reasoning_effort=str(options.get("reasoningEffort") or "medium"),
                 service_tier=str(options.get("serviceTier") or "standard"),
@@ -2581,7 +2596,8 @@ def register_routes(
             "judgeId": (
                 "manual"
                 if required_text["decisionMode"] == "manual"
-                else "chatgpt_login_oauth"
+                # 누가 답했는지는 영수증이 안다. GPT 영수증은 connectorId 를 안 실으므로 예전 값이 기본.
+                else str(receipt.get("connectorId") or "chatgpt_login_oauth")
             ),
             "model": str(receipt.get("model") or "deterministic"),
             "reasoningEffort": (

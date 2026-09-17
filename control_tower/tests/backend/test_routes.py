@@ -1645,3 +1645,112 @@ def test_archive_document_rejects_malformed_archive_id(tmp_path: Path) -> None:
     response = client.get("/api/factory/archive-document/..%2F..%2Fetc")
 
     assert response.status_code in {404, 422}
+
+
+class FakeClaudeJudge:
+    """GPT 가짜와 같은 계약이지만 영수증에 제공자·커넥터를 싣는다 — 실제 ClaudeOAuthJudge 가 그렇다."""
+
+    def __init__(self) -> None:
+        self.calls: list[JsonObject] = []
+
+    def judge(self, **kwargs) -> JsonObject:
+        self.calls.append(kwargs)
+        selected = kwargs["candidates"][0]["candidateId"]
+        return {
+            "receipt": {
+                "provider": "claude-oauth",
+                "connectorId": "claude_login_oauth",
+                "model": "claude-test",
+                "reasoningEffort": kwargs["reasoning_effort"],
+                "serviceTier": kwargs["service_tier"],
+                "preset": kwargs["preset"],
+                "judgement": {
+                    "decision": "selected",
+                    "selectedCandidateId": selected,
+                    "confidence": 0.9,
+                    "scoreGap": 0.25,
+                    "riskFlags": [],
+                    "rationale": "claude candidate evidence",
+                    "scores": {
+                        "sameProductLikelihood": 0.9,
+                        "taskSuitability": 0.9,
+                        "quality": 0.85,
+                    },
+                },
+            },
+        }
+
+
+def _decision_request(client, headers: dict[str, str], provider: str | None) -> JsonObject:
+    snapshot = client.post(
+        "/api/automation/policy/snapshot",
+        json={"batchId": "batch-p", "productId": "product-p", "preset": "full_auto"},
+        headers=headers,
+    ).get_json()
+    options: JsonObject = {
+        "model": "latestModel", "reasoningEffort": "medium", "serviceTier": "standard", "preset": "fast_single",
+    }
+    if provider is not None:
+        options["provider"] = provider
+    return {
+        "jobId": "job-p",
+        "decisionType": "representative_image",
+        "identity": {
+            "jobId": "job-p", "productId": "product-p", "productKey": "key-p", "runId": "run-p",
+            "inputFingerprint": "sha256:p", "revision": 3, "eventId": "event-3",
+        },
+        "policySnapshot": {**snapshot},
+        "candidates": [
+            {"candidateId": "a", "identityKey": "a", "contentDigest": "sha256:a", "source": "factory", "thumbnailRef": "asset:a"},
+            {"candidateId": "b", "identityKey": "b", "contentDigest": "sha256:b", "source": "factory", "thumbnailRef": "asset:b"},
+        ],
+        "judgementOptions": options,
+    }
+
+
+def test_decision_provider_claude_routes_to_claude_judge_and_not_gpt(tmp_path: Path) -> None:
+    """2026-09-17: 모든 판단 지점을 GPT 또는 Claude 로 고를 수 있어야 한다. provider 하나로 판정기가 갈린다."""
+    api = FakePdpApi()
+    gpt = FakeGptJudge()
+    claude = FakeClaudeJudge()
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=api, gpt_judge=gpt, claude_judge=claude).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+
+    decision = client.post("/api/automation/decisions", json=_decision_request(client, headers, "claude-oauth"), headers=headers)
+
+    assert decision.status_code == 200, decision.get_json()
+    assert decision.get_json()["candidateId"] == "a"
+    assert len(claude.calls) == 1 and len(gpt.calls) == 0
+
+
+def test_decision_provider_defaults_to_gpt_when_omitted(tmp_path: Path) -> None:
+    api = FakePdpApi()
+    gpt = FakeGptJudge()
+    claude = FakeClaudeJudge()
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=api, gpt_judge=gpt, claude_judge=claude).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+
+    decision = client.post("/api/automation/decisions", json=_decision_request(client, headers, None), headers=headers)
+
+    assert decision.status_code == 200, decision.get_json()
+    assert len(gpt.calls) == 1 and len(claude.calls) == 0
+
+
+def test_decision_unknown_provider_is_refused_clearly(tmp_path: Path) -> None:
+    api = FakePdpApi()
+    gpt = FakeGptJudge()
+    claude = FakeClaudeJudge()
+    config = ControlTowerConfig.from_env({"CONTROL_TOWER_CACHE_ROOT": str(tmp_path)})
+    client = create_app(config, pdp_api=api, gpt_judge=gpt, claude_judge=claude).test_client()
+    session = client.get("/api/session").get_json()
+    headers = {"X-Control-Tower-CSRF": session["csrfToken"], "X-Control-Tower-Session": session["sessionId"]}
+
+    decision = client.post("/api/automation/decisions", json=_decision_request(client, headers, "gemini-nope"), headers=headers)
+
+    assert decision.status_code == 422
+    assert decision.get_json()["error"]["code"] == "judge_provider_invalid"
+    assert len(gpt.calls) == 0 and len(claude.calls) == 0
