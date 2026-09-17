@@ -561,6 +561,152 @@ export function renderSourcePanel(row, ctx = {}, handlers = {}) {
   return root;
 }
 
+const SECTION_CONTENT_FIELDS = Object.freeze([
+  ['headline', '제목'], ['subheadline', '보조 제목'], ['body_text', '본문'],
+  ['cta_text', '행동 유도 문구'], ['layout_suggestion', '구성 지시'], ['extra_elements', '추가 요소 · 한 줄씩'],
+]);
+
+function labelOf(choices, id) {
+  const hit = list(choices).find(item => text(item?.id) === text(id));
+  return hit ? text(hit.label || hit.name || hit.id) : text(id);
+}
+
+function draftField(ctx, handlers, key, label, initial, { choices = null, multiline = false, placeholder = '' } = {}) {
+  const wrapper = element('label', 'wb-field');
+  wrapper.dataset.key = key;
+  wrapper.append(element('span', 'wb-field-name', label));
+  const drafts = record(ctx.drafts);
+  const control = document.createElement(choices ? 'select' : multiline ? 'textarea' : 'input');
+  control.name = key;
+  if (choices) for (const choice of choices) control.append(new Option(text(choice.label || choice.name || choice.id), text(choice.id)));
+  if (multiline) control.rows = 3;
+  else if (!choices) control.type = 'text';
+  if (placeholder && !choices) control.placeholder = placeholder;
+  control.value = key in drafts ? text(drafts[key]) : text(initial);
+  control.disabled = ctx.busy === true;
+  control.addEventListener('input', () => handlers.remember?.(key, control.value));
+  control.addEventListener('change', () => handlers.remember?.(key, control.value));
+  wrapper.append(control);
+  return { wrapper, control };
+}
+
+/**
+ * 섹션 설정 — 조립공장의 섹션 15개 공정을 그대로 편집한다. 지시문(프롬프트)은 비우면 조립공장 기본,
+ * 적으면 그 섹션만 바뀐다. 옛 앞면의 섹션 편집(renderFactorySectionControls)과 같은 탭 명령을 보낸다.
+ * ctx = { live, connected, sections, options: {basisModes, generationModes, assemblySources, cutUsages, cutCandidates}, drafts, busy, note }
+ * handlers: tabCommand({jobId, tabId:'sections', action, value, label}), remember(key, value)
+ */
+export function renderSectionsPanel(row, ctx = {}, handlers = {}) {
+  const root = element('details', 'wb-sections');
+  root.dataset.panel = 'sections';
+  if (ctx.open === true) root.open = true;
+  const sections = list(ctx.sections);
+  const options = record(ctx.options);
+  const summary = element('summary', '', `섹션 설정 · ${sections.length}개 공정 · 프롬프트는 조립공장 기본, 바꾸면 그 섹션만`);
+  root.append(summary);
+  root.addEventListener('toggle', () => handlers.rememberOpen?.('__root', root.open));
+  if (!ctx.live || !ctx.connected) {
+    root.append(element('p', 'wb-note', '섹션 설정은 조립공장이 열고 있는 제품에만 됩니다.'));
+    return root;
+  }
+  root.append(element('p', 'wb-note', '순서·사용 여부·생성 기준·생성 방식·지시문·기준 자료·이미지컷 배치·문구 직접 수정 — 조립공장 섹션 탭과 같은 항목입니다. 저장 버튼마다 조립공장에 바로 적용됩니다.'));
+  const send = (action, value, label) => handlers.tabCommand?.({ jobId: row.jobId, tabId: 'sections', action, value, label });
+  sections.forEach((section, index) => {
+    const id = text(section.id);
+    const card = element('details', 'wb-section');
+    card.dataset.sectionId = id;
+    if (record(ctx.openSections)[id]) card.open = true;
+    const enabled = section.enabled !== false;
+    const custom = text(section.instruction).length > 0;
+    card.append(element('summary', '', `${String(index + 1).padStart(2, '0')} ${text(section.label) || id} · ${enabled ? '사용' : '사용 안 함'} · 기준 ${labelOf(options.basisModes, section.basisMode)} · 방식 ${labelOf(options.generationModes, section.generationMode)} · 지시문 ${custom ? '직접' : '기본'}`));
+    card.addEventListener('toggle', () => handlers.rememberOpen?.(id, card.open));
+    const body = element('div', 'wb-section-body');
+
+    const bar = element('div', 'wb-actions');
+    bar.append(button(enabled ? '섹션 사용 안 함' : '섹션 사용', 'wb-btn sm', () => send('setSectionEnabled', { sectionId: id, enabled: !enabled }, `${text(section.label) || id} ${enabled ? '끄기' : '켜기'}`), { disabled: ctx.busy === true, action: 'section-enabled' }));
+    for (const [offset, label] of [[-1, '위로'], [1, '아래로']]) {
+      const target = index + offset;
+      bar.append(button(label, 'wb-btn sm ghost', () => {
+        const ids = sections.map(item => text(item.id));
+        [ids[index], ids[target]] = [ids[target], ids[index]];
+        send('updateSectionOrder', ids, `${text(section.label) || id} ${label}`);
+      }, { disabled: ctx.busy === true || target < 0 || target >= sections.length, action: `section-move-${offset < 0 ? 'up' : 'down'}` }));
+    }
+    body.append(bar);
+
+    const modes = element('div', 'wb-form');
+    for (const [key, label, choices, action, valueKey] of [
+      ['basisMode', '생성 기준', options.basisModes, 'setSectionBasisMode', 'basisId'],
+      ['generationMode', '생성 방식', options.generationModes, 'setSectionGenerationMode', 'modeId'],
+    ]) {
+      if (!list(choices).length) continue;
+      const field = draftField(ctx, handlers, `${id}:${key}`, label, section[key], { choices });
+      field.wrapper.append(button(`${label} 저장`, 'wb-btn sm', () => send(action, { sectionId: id, [valueKey]: field.control.value }, `${text(section.label) || id} ${label}`), { disabled: ctx.busy === true, action: `save-${key}` }));
+      modes.append(field.wrapper);
+    }
+    body.append(modes);
+
+    const instruction = draftField(ctx, handlers, `${id}:instruction`, '섹션 지시문 (프롬프트)', section.instruction, { multiline: true, placeholder: '비우면 조립공장 기본 지시문으로 만듭니다. 적으면 이 섹션만 이 지시문을 씁니다.' });
+    const instructionBar = element('div', 'wb-actions');
+    instructionBar.append(button('지시문 저장', 'wb-btn sm primary', () => send('updateSectionInstruction', { sectionId: id, value: instruction.control.value }, `${text(section.label) || id} 지시문`), { disabled: ctx.busy === true, action: 'save-instruction' }));
+    if (custom) instructionBar.append(button('기본으로 되돌리기', 'wb-btn sm ghost', () => send('updateSectionInstruction', { sectionId: id, value: '' }, `${text(section.label) || id} 지시문 기본`), { disabled: ctx.busy === true, action: 'reset-instruction' }));
+    instruction.wrapper.append(instructionBar);
+    body.append(instruction.wrapper);
+
+    const assembly = record(section.assembly);
+    if (list(options.assemblySources).length) {
+      const sources = element('div', 'wb-actions');
+      sources.append(element('span', 'wb-field-name', '기준 자료'));
+      for (const source of options.assemblySources) {
+        const selected = record(assembly.sources)[text(source.id)] === true;
+        const toggle = button(`${selected ? '포함' : '제외'} · ${text(source.label || source.name || source.id)}`, selected ? 'wb-btn sm' : 'wb-btn sm ghost',
+          () => send('updateSectionAssemblySource', { sectionId: id, sourceId: text(source.id), selected: !selected }, `${text(section.label) || id} 기준 자료`),
+          { disabled: ctx.busy === true, action: 'toggle-assembly-source' });
+        toggle.setAttribute('aria-pressed', String(selected));
+        sources.append(toggle);
+      }
+      body.append(sources);
+    }
+    const placement = element('div', 'wb-form');
+    if (list(options.cutUsages).length) {
+      const use = draftField(ctx, handlers, `${id}:cutUsage`, '이미지컷 사용 방식', assembly.cutUsage, { choices: options.cutUsages });
+      use.wrapper.append(button('사용 방식 저장', 'wb-btn sm', () => send('updateSectionAssemblyCutUsage', { sectionId: id, cutUsage: use.control.value }, `${text(section.label) || id} 이미지컷 사용 방식`), { disabled: ctx.busy === true, action: 'save-cut-usage' }));
+      placement.append(use.wrapper);
+    }
+    if (list(options.cutCandidates).length) {
+      const cut = draftField(ctx, handlers, `${id}:cut`, '배치할 이미지컷', assembly.cutAssetKey, { choices: [{ id: '', label: '선택 안 함' }, ...options.cutCandidates] });
+      cut.wrapper.append(button('배치 컷 저장', 'wb-btn sm', () => send('updateSectionAssemblyCut', { sectionId: id, cutAssetKey: cut.control.value }, `${text(section.label) || id} 배치 컷`), { disabled: ctx.busy === true, action: 'save-cut' }));
+      placement.append(cut.wrapper);
+    }
+    const note = draftField(ctx, handlers, `${id}:note`, '배치 지시', assembly.note, { multiline: true });
+    note.wrapper.append(button('배치 지시 저장', 'wb-btn sm', () => send('updateSectionAssemblyNote', { sectionId: id, note: note.control.value }, `${text(section.label) || id} 배치 지시`), { disabled: ctx.busy === true, action: 'save-note' }));
+    placement.append(note.wrapper);
+    body.append(placement);
+
+    const content = element('details', 'wb-section-content');
+    content.append(element('summary', '', '상세 문구 직접 수정'));
+    const edits = new Map();
+    const contentGrid = element('div', 'wb-form');
+    for (const [key, label] of SECTION_CONTENT_FIELDS) {
+      const current = record(section.content)[key];
+      const field = draftField(ctx, handlers, `${id}:content:${key}`, label, Array.isArray(current) ? current.join('\n') : current, { multiline: true });
+      edits.set(key, field.control);
+      contentGrid.append(field.wrapper);
+    }
+    content.append(contentGrid);
+    content.append(button('상세 문구 저장', 'wb-btn sm', () => send('saveManualSection', {
+      sectionId: id, content: Object.fromEntries([...edits].map(([key, control]) => [key, control.value])),
+    }, `${text(section.label) || id} 상세 문구`), { disabled: ctx.busy === true, action: 'save-content' }));
+    body.append(content);
+
+    body.append(button('이 섹션 생성', 'wb-btn sm primary', () => send('generateSection', { sectionId: id }, `${text(section.label) || id} 생성`), { disabled: ctx.busy === true, action: 'generate-section' }));
+    card.append(body);
+    root.append(card);
+  });
+  if (text(ctx.note)) root.append(element('p', 'wb-note', text(ctx.note)));
+  return root;
+}
+
 const COMPETITOR_SITES = Object.freeze([
   ['coupang', '쿠팡'], ['naver', '스마트스토어'], ['gmarket', 'G마켓'], ['auction', '옥션'], ['elevenst', '11번가'],
 ]);

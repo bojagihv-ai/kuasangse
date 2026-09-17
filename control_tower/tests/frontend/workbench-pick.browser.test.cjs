@@ -242,3 +242,87 @@ test('출처 확정: 조립공장이 못 정한 신화DB·Cafe24 매칭을 사�
   assert.equal(commands[1].body.action, 'confirm-no-cafe24-candidate');
   assert.deepEqual(resumes, [{ jobIds: ['factory-job-qa-2994'] }]);
 });
+
+test('섹션 설정: 조립공장 섹션 공정을 그대로 편집한다 — 지시문(프롬프트) 저장·기본 되돌리기·사용 끄기·생성 기준', { timeout: 90_000 }, async t => {
+  const commands = [];
+  const { page } = await openWorkbench(t, {
+    apiPort: 19579, frontendPort: 19599,
+    beforeNavigate: async candidate => {
+      await candidate.route('**/api/factory/state', async route => {
+        let response;
+        try { response = await route.fetch(); } catch { await route.abort().catch(() => {}); return; }
+        const body = await response.json();
+        body.session = { ...(body.session || {}), workspaceId: 'batch:factory-job-qa-2994', storeRevision: Number.isInteger(body.session?.storeRevision) ? body.session.storeRevision : 3 };
+        body.inputs = [...(body.inputs || []).filter(input => input.key !== 'operator_controls'), {
+          key: 'operator_controls',
+          items: [{
+            schema: 'factory-operator-controls:v1',
+            sections: [
+              { id: 'header', label: '헤더 (Header)', enabled: true, order: 0, basisMode: 'current', generationMode: 'mixed', instruction: '', assembly: { sources: { image_analysis: true }, cutUsage: 'auto', note: '' }, content: {} },
+              { id: 'hook', label: '훅 (Hook)', enabled: true, order: 1, basisMode: 'current', generationMode: 'mixed', instruction: '기존 지시문', assembly: {}, content: { headline: '옛 제목' } },
+            ],
+            options: {
+              basisModes: [{ id: 'current', label: '현재 지시문' }, { id: 'combined', label: '총합버전' }],
+              generationModes: [{ id: 'mixed', label: '이미지 생성 + 글자 따로' }, { id: 'text_only', label: '글자/레이아웃만' }],
+              assemblySources: [{ id: 'image_analysis', label: 'AI 분석 + DB 확정값' }, { id: 'competitor_plan', label: '경쟁사 분석플랜' }],
+              cutUsages: [{ id: 'none', label: '이미지컷 사용 안 함' }, { id: 'auto', label: 'AI가 어울릴 때만' }],
+              cutCandidates: [],
+            },
+          }],
+        }];
+        await route.fulfill({ response, body: JSON.stringify(body) });
+      });
+      await candidate.route('**/api/factory/jobs/factory-job-qa-2994/tab-command', async route => {
+        const body = JSON.parse(route.request().postData() || '{}');
+        commands.push(body);
+        await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ accepted: true, orderId: `order-${commands.length}`, status: 'queued' }) });
+      });
+      await candidate.route('**/api/factory/jobs/factory-job-qa-2994/tab-command/*', async route => {
+        const orderId = route.request().url().split('/').pop();
+        const command = commands[Number(orderId.split('-')[1]) - 1];
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          orderId, status: 'applied',
+          receipt: { schema: 'factory-tab-command-receipt:v1', status: 'applied', jobId: command.jobId, tabId: command.tabId, action: command.action },
+        }) });
+      });
+    },
+  });
+  const row = page.locator('#wb-queue .wb-row[data-job-id="factory-job-qa-2994"]');
+  await row.locator('button[data-action="primary"]').click();
+  const panel = row.locator('.wb-sections');
+  await panel.waitFor();
+  assert.match(await panel.locator('summary').first().innerText(), /섹션 설정 · 2개 공정/u);
+  assert.equal(await panel.evaluate(node => node.open), false, '섹션 설정은 접혀서 시작한다');
+  await panel.locator('summary').first().click();
+  const header = panel.locator('.wb-section[data-section-id="header"]');
+  assert.match(await header.locator('summary').first().innerText(), /01 헤더 \(Header\) · 사용 · 기준 현재 지시문 · 방식 이미지 생성 \+ 글자 따로 · 지시문 기본/u);
+  await header.locator('summary').first().click();
+  // 지시문(프롬프트)은 비어 있으면 기본 — 적고 저장하면 그 섹션만.
+  const instruction = header.locator('textarea[name="header:instruction"]');
+  assert.equal(await instruction.inputValue(), '');
+  assert.match(await instruction.getAttribute('placeholder'), /조립공장 기본 지시문/u);
+  await instruction.fill('밝은 배경, 제품을 정면 크게');
+  await header.locator('button[data-action="save-instruction"]').click();
+  await page.waitForFunction(() => /헤더 \(Header\) 지시문 — 조립공장에 적용했습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].tabId, 'sections');
+  assert.equal(commands[0].action, 'updateSectionInstruction');
+  assert.deepEqual(commands[0].value, { sectionId: 'header', value: '밝은 배경, 제품을 정면 크게' });
+  assert.equal(commands[0].expectedWorkspaceId, 'batch:factory-job-qa-2994');
+  // 이미 직접 지시문이 있는 섹션엔 「기본으로 되돌리기」가 있고, 빈 값을 보낸다.
+  const hook = panel.locator('.wb-section[data-section-id="hook"]');
+  await hook.locator('summary').first().click();
+  await hook.locator('button[data-action="reset-instruction"]').click();
+  await page.waitForFunction(() => /훅 \(Hook\) 지시문 기본 — 조립공장에 적용했습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.deepEqual(commands[1].value, { sectionId: 'hook', value: '' });
+  // 사용 끄기와 생성 기준 저장.
+  await hook.locator('button[data-action="section-enabled"]').click();
+  await page.waitForFunction(() => /훅 \(Hook\) 끄기 — 조립공장에 적용했습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(commands[2].action, 'setSectionEnabled');
+  assert.deepEqual(commands[2].value, { sectionId: 'hook', enabled: false });
+  await hook.locator('select[name="hook:basisMode"]').selectOption('combined');
+  await hook.locator('button[data-action="save-basisMode"]').click();
+  await page.waitForFunction(() => /훅 \(Hook\) 생성 기준 — 조립공장에 적용했습니다/u.test(document.querySelector('#wb-status')?.textContent || ''));
+  assert.equal(commands[3].action, 'setSectionBasisMode');
+  assert.deepEqual(commands[3].value, { sectionId: 'hook', basisId: 'combined' });
+});

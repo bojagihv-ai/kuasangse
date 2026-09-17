@@ -8,7 +8,7 @@
  */
 import { projectProductionBoard, describeBlocked } from '../production-board-model.mjs?parallelBoard=46';
 import { buildNextActionInbox, inboxHeadline } from '../next-action-model.mjs?nextAction=3';
-import { renderPickPanel, renderValuesPanel, renderCafe24Panel, renderSourcePanel, renderCompetitorPanel, providerName } from './panels.mjs?wb=1';
+import { renderPickPanel, renderValuesPanel, renderCafe24Panel, renderSourcePanel, renderCompetitorPanel, renderSectionsPanel, providerName } from './panels.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -142,7 +142,7 @@ export function deleteBlockReason(row) {
 
 export function renderQueue(root, model, {
   filter = 'all', openJobId = '', handlers = {}, panel = {}, projection = {},
-  autoPick = {}, autoPickDefault = '', source = {}, selected = new Set(),
+  autoPick = {}, autoPickDefault = '', source = {}, selected = new Set(), sections = {},
 } = {}) {
   root.replaceChildren();
   root.dataset.filter = filter;
@@ -219,7 +219,7 @@ export function renderQueue(root, model, {
     });
     article.append(head);
 
-    if (openJobId === row.jobId) article.append(renderPanel(row, handlers, panel, projection, { auto, source }));
+    if (openJobId === row.jobId) article.append(renderPanel(row, handlers, panel, projection, { auto, source, sections }));
     root.append(article);
   }
 }
@@ -253,7 +253,7 @@ export function cafe24Pending(row, projection) {
  * 출처 확정을 기다리는 살아 있는 제품이면 그 패널이 먼저다.
  * 살아 있는 제품에 승인만 남았으면 어느 kind 든 관문을 아래에 덧붙인다 — 화면을 옮길 이유가 없다.
  */
-function renderPanel(row, handlers, ui = {}, projection = {}, { auto = {}, source = {} } = {}) {
+function renderPanel(row, handlers, ui = {}, projection = {}, { auto = {}, source = {}, sections = {} } = {}) {
   const panel = element('div', 'wb-panel');
   const why = element('div', 'wb-why', row.detail || row.headline || '');
   panel.append(why);
@@ -285,6 +285,16 @@ function renderPanel(row, handlers, ui = {}, projection = {}, { auto = {}, sourc
   }
   if (row.kind === 'values' || list(record(row.raw).missingRequiredValues).length) {
     panel.append(renderValuesPanel(row, { ...record(ui.values), siblings: list(ui.siblings) }, handlers));
+  }
+  // 섹션 설정은 조립공장이 열고 있는 제품에만 — 접힌 채로 두고, 프롬프트를 바꾸고 싶을 때만 편다.
+  if (text(record(sections).jobId) === row.jobId && list(record(sections).sections).length) {
+    const sectionUi = record(ui.sections);
+    panel.append(renderSectionsPanel(row, {
+      live, connected,
+      sections: record(sections).sections, options: record(sections).options,
+      drafts: record(sectionUi.drafts), openSections: record(sectionUi.open), open: sectionUi.expanded === true,
+      busy: record(ui.source).busy === true, note: text(record(ui.source).note),
+    }, handlers));
   }
   // 고를 컷이 하나도 안 남은 "컷 고르기" 는 사실상 등록 차례다 — 다음 걸음(관문 또는 열기)을 같이 보인다.
   const nothingToPick = row.kind === 'pick' && !list(record(row.raw).cells).some(cell => cell.pickable);

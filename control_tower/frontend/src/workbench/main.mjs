@@ -100,6 +100,8 @@ function emptyPanel(jobId) {
     values: { sources: [], searched: false, prefill: {}, note: '', busy: false },
     gate: { step: '', done: [], error: '', result: null },
     source: { busy: false, note: '' },
+    // 섹션 편집 초안 — 저장 전 글자는 여기 있다가 다시 그릴 때 되살아난다. open 은 펼쳐 둔 섹션.
+    sections: { drafts: {}, open: {}, expanded: false },
   };
 }
 
@@ -153,6 +155,16 @@ function sourceWait() {
   if (stage === 'db' && !Object.keys(db).length) return null;
   if (stage === 'competitors' && !Object.keys(competitor).length) return null;
   return { jobId, stage, db, competitor };
+}
+
+/** 살아 있는 제품의 섹션 15개 공정과 선택지 — { jobId, sections, options } 또는 null. 조립공장 조작 자료 그대로. */
+function sectionsCtx() {
+  const jobId = activeJobId();
+  if (!jobId || !jobById(jobId)) return null;
+  const controls = operatorControls(state.projection);
+  const sections = list(controls?.sections);
+  if (!sections.length) return null;
+  return { jobId, sections, options: record(controls?.options) };
 }
 
 function renderHeader(model) {
@@ -235,8 +247,15 @@ function render() {
     autoPick: state.autoPick,
     autoPickDefault: state.autoPickDefault,
     source: sourceWait() || {},
+    sections: sectionsCtx() || {},
     selected: state.selected,
     handlers: {
+      remember: (key, value) => { panelFor(state.openJobId).sections.drafts[key] = value; },
+      rememberOpen: (id, open) => {
+        const current = panelFor(state.openJobId).sections;
+        if (id === '__root') current.expanded = open === true;
+        else current.open[id] = open === true;
+      },
       toggleSelect: (jobId, checked) => {
         if (checked) state.selected.add(jobId); else state.selected.delete(jobId);
         renderBulk();
@@ -636,6 +655,11 @@ async function sendTabCommand({ jobId, tabId, action, value, label = '변경' })
     // 영수증이 실어 온 투영이 가장 새롭다(리비전이 올라가 있다). 다음 명령은 이 리비전을 기대값으로 써야 통한다 —
     // 2초 폴링이 따라잡기 전에 두 번째 명령을 보내면 옛 리비전으로 거절된다(실측 2026-09-17).
     if (record(record(receipt.projection).session).workspaceId) state.projection = receipt.projection;
+    // 저장된 섹션의 초안은 이제 조립공장 값이 정본이다 — 되살리지 않는다.
+    if (tabId === 'sections' && text(record(value).sectionId)) {
+      const prefix = `${text(record(value).sectionId)}:`;
+      for (const key of Object.keys(panel.sections.drafts)) if (key.startsWith(prefix)) delete panel.sections.drafts[key];
+    }
     panel.source.note = `${label} 적용됨.`;
     setStatus(`${label} — 조립공장에 적용했습니다.`, 'ok');
     await refresh();

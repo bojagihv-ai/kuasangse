@@ -177,6 +177,20 @@
     .wb-lightbox img { max-width: min(92vw, 1360px); max-height: 80vh; width: auto; height: auto; object-fit: contain; display: block; border-radius: var(--wb-radius); }
     .wb-lightbox figcaption { font-size: 14px; color: var(--wb-ink-2); }
 
+    /* 섹션 설정 — 접힌 채로 있다가 프롬프트를 바꿀 때만 편다. 칸 안 스크롤 없이 아래로 길어진다. */
+    .wb-sections { border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); background: var(--wb-card-2); padding: 0 14px; }
+    .wb-sections > summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: 14px; list-style: none; }
+    .wb-sections > summary::before { content: "▸ "; color: var(--wb-muted); }
+    .wb-sections[open] > summary::before { content: "▾ "; }
+    .wb-sections > .wb-note { margin: 0 0 10px; }
+    .wb-section { border-top: 1px solid var(--wb-line); }
+    .wb-section > summary { cursor: pointer; padding: 10px 0; font-size: 13.5px; list-style: none; }
+    .wb-section > summary::before { content: "▸ "; color: var(--wb-muted); }
+    .wb-section[open] > summary::before { content: "▾ "; }
+    .wb-section-body { display: grid; gap: 12px; padding: 4px 0 16px; }
+    .wb-field textarea { min-height: 72px; padding: 8px 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 14px; resize: vertical; }
+    .wb-section-content > summary { cursor: pointer; font-size: 13.5px; color: var(--wb-ink-2); padding: 6px 0; }
+
     /* 출처 확정 — 신화DB·Cafe24 후보 */
     .wb-source { display: grid; gap: 18px; }
     .wb-cuts-source { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
