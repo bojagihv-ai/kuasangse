@@ -209,8 +209,7 @@ def test_judgement_must_pick_a_referenced_candidate() -> None:
 
 def test_extract_json_object_tolerates_prose_around_the_object() -> None:
     # 실측 2026-09-17: 같은 프롬프트로 두 번 부르니 한 번은 설명 문장이 붙어 왔다.
-    wrapped = "
-".join([
+    wrapped = chr(10).join([
         "Here is my judgement:",
         "```json",
         '{"a": {"b": "x}y"}, "c": [1, 2]}',
