@@ -8,6 +8,7 @@
  */
 import { projectProductionBoard, describeBlocked } from '../production-board-model.mjs?parallelBoard=46';
 import { buildNextActionInbox, inboxHeadline } from '../next-action-model.mjs?nextAction=3';
+import { renderPickPanel, renderValuesPanel, renderCafe24Panel } from './panels.mjs?wb=1';
 
 const text = value => String(value ?? '').trim();
 const record = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
@@ -119,7 +120,7 @@ function element(tag, className = '', content = '') {
  * 줄을 그린다. 한 번에 한 행만 펼쳐진다. 행의 버튼은 handlers 로만 밖에 말한다.
  * handlers: { resume(jobId), remove(jobId, productName), open(row) }
  */
-export function renderQueue(root, model, { filter = 'all', openJobId = '', handlers = {} } = {}) {
+export function renderQueue(root, model, { filter = 'all', openJobId = '', handlers = {}, panel = {}, projection = {} } = {}) {
   root.replaceChildren();
   root.dataset.filter = filter;
   const visible = model.rows.filter(row => filter === 'all' || row.state === filter);
@@ -177,9 +178,18 @@ export function renderQueue(root, model, { filter = 'all', openJobId = '', handl
     });
     article.append(head);
 
-    if (openJobId === row.jobId) article.append(renderPanel(row, handlers));
+    if (openJobId === row.jobId) article.append(renderPanel(row, handlers, panel, projection));
     root.append(article);
   }
+}
+
+/** 이 행이 조립공장이 지금 열고 있는 제품이고 Cafe24 승인만 남았는가. */
+export function cafe24Pending(row, projection) {
+  const registration = record(record(projection).registration);
+  const live = text(registration.jobId) && text(registration.jobId) === row.jobId;
+  // 살아 있는 제품의 등록 상태는 조립공장 투영이 정본이다. 작업 목록의 진행 스냅샷은 한 박자 늦을 수 있다.
+  const status = text(registration.status) || text(row.registrationStatus);
+  return Boolean(live) && (status === 'approval_required' || row.raw?.approvalRequired === true);
 }
 
 function primaryLabel(row) {
@@ -189,7 +199,12 @@ function primaryLabel(row) {
   return text(record(row.primary).label) || '열기';
 }
 
-function renderPanel(row, handlers) {
+/**
+ * 펼친 행. 무엇을 보일지는 인박스의 kind 가 정한다:
+ *   pick → 컷 고르기 · values → 값 채우기 · cafe24 → 승인 관문 · blocked → 다시 시작.
+ * 살아 있는 제품에 승인만 남았으면 어느 kind 든 관문을 아래에 덧붙인다 — 화면을 옮길 이유가 없다.
+ */
+function renderPanel(row, handlers, ui = {}, projection = {}) {
   const panel = element('div', 'wb-panel');
   const why = element('div', 'wb-why', row.detail || row.headline || '');
   panel.append(why);
@@ -204,8 +219,21 @@ function renderPanel(row, handlers) {
   if (row.state === 'run') {
     actions.append(element('span', 'wb-note', `진행 ${row.percent}% · 조립공장이 이 제품을 열고 있습니다. 사람 손이 필요해지면 위로 올라옵니다.`));
   }
-  if (row.state === 'mine') {
-    actions.append(element('span', 'wb-note', row.detail ? '' : '이 단계의 선택 화면은 다음 조각에서 채워집니다.'));
+  const connected = projection?.connected === true;
+  const live = text(record(record(projection).registration).jobId) === row.jobId;
+  if (row.kind === 'pick' || (row.state === 'blocked' && list(record(row.raw).cells).some(cell => cell.pickable))) {
+    panel.append(renderPickPanel(row, record(ui.pick), handlers));
+  }
+  if (row.kind === 'values' || list(record(row.raw).missingRequiredValues).length) {
+    panel.append(renderValuesPanel(row, { ...record(ui.values), siblings: list(ui.siblings) }, handlers));
+  }
+  // 고를 컷이 하나도 안 남은 "컷 고르기" 는 사실상 등록 차례다 — 다음 걸음(관문 또는 열기)을 같이 보인다.
+  const nothingToPick = row.kind === 'pick' && !list(record(row.raw).cells).some(cell => cell.pickable);
+  if (row.kind === 'cafe24' || nothingToPick || cafe24Pending(row, projection)) {
+    panel.append(renderCafe24Panel(row, { live, connected, gate: record(ui.gate) }, handlers));
+  }
+  if (row.state === 'done' && row.kind !== 'cafe24') {
+    actions.append(element('span', 'wb-note', `등록 상태 ${row.registrationStatus || '기록 없음'} · 자세한 기록은 옛 화면의 작업파일 탭에 있습니다.`));
   }
   actions.append(element('span', 'wb-spacer'));
   if (row.canDelete) {

@@ -132,6 +132,54 @@
     .wb-row[data-state="blocked"] .wb-why { background: var(--wb-blocked-wash); border-color: var(--wb-blocked); }
     .wb-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .wb-spacer { flex: 1; }
+    .wb-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-style: normal; font-weight: 500; color: var(--wb-accent-ink); background: var(--wb-accent-wash); }
+    .wb-tag.warn { color: var(--wb-mine); background: var(--wb-mine-wash); }
+    .wb-note.error { color: var(--wb-blocked); } .wb-note.ok { color: var(--wb-done); }
+    .wb-or { font-size: 13px; color: var(--wb-muted); padding: 0 4px; }
+
+    /* 컷 고르기 — 후보는 한 줄에 다 펴진다. 칸 안 스크롤 없음: 많으면 행이 아래로 길어진다. */
+    .wb-pick { display: grid; gap: 18px; }
+    .wb-stage { display: grid; gap: 10px; }
+    .wb-stage-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+    .wb-cuts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .wb-cut { position: relative; display: grid; gap: 6px; padding: 8px; text-align: left; background: var(--wb-card); border: 1px solid var(--wb-line); border-radius: var(--wb-radius-lg); color: var(--wb-ink); }
+    .wb-cut:hover { border-color: var(--wb-ink-2); }
+    .wb-cut[aria-checked="true"] { border-color: var(--wb-accent); box-shadow: 0 0 0 3px var(--wb-accent-wash), var(--wb-shadow); }
+    .wb-cut[data-reserved="true"] .wb-cut-label::after { content: " · 예약됨"; color: var(--wb-accent-ink); }
+    .wb-chosen .wb-cut { cursor: default; } .wb-chosen .wb-cut:hover { border-color: var(--wb-line); }
+    .wb-chosen .wb-cut[data-chosen="false"] { opacity: .6; }
+    .wb-cut-frame { display: grid; place-items: center; aspect-ratio: 1 / 1; border-radius: var(--wb-radius); background: var(--wb-card-2); overflow: hidden; }
+    .wb-cut-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .wb-cut-frame[data-broken="true"] img { visibility: hidden; }
+    .wb-cut-doc { font-size: 12.5px; color: var(--wb-muted); }
+    .wb-cut-n { position: absolute; top: 12px; left: 12px; min-width: 22px; height: 22px; padding: 0 6px; display: grid; place-items: center; border-radius: 999px; background: var(--wb-ink); color: var(--wb-bg); font-family: var(--wb-mono); font-size: 12px; }
+    .wb-cut-label { font-size: 13.5px; font-weight: 600; }
+    .wb-cut-why { font-size: 12px; color: var(--wb-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .wb-receipt { display: grid; gap: 4px; padding: 10px 14px; border-radius: var(--wb-radius); border: 1px solid var(--wb-line); background: var(--wb-card-2); font-size: 13.5px; }
+    .wb-receipt[data-provider="claude-oauth"] { border-left: 4px solid var(--wb-mine); }
+    .wb-receipt[data-provider="gpt-oauth"] { border-left: 4px solid var(--wb-accent); }
+
+    /* 값 채우기 — 빈 칸이 앞에 온다. */
+    .wb-values { display: grid; gap: 14px; }
+    .wb-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 14px; }
+    .wb-field { display: grid; gap: 4px; font-size: 13px; }
+    .wb-field-name { color: var(--wb-ink-2); display: flex; align-items: center; }
+    .wb-field input, .wb-bring input, .wb-bring select { min-height: 40px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-radius); background: var(--wb-card); color: var(--wb-ink); font: inherit; font-size: 14px; }
+    .wb-field[data-missing="true"] input { border-color: var(--wb-mine); background: var(--wb-mine-wash); }
+    .wb-field[data-prefilled="true"] input { border-color: var(--wb-accent); background: var(--wb-accent-wash); }
+    .wb-bring { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+    .wb-sources { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+    .wb-link { border: 0; background: transparent; padding: 6px 8px; text-align: left; color: var(--wb-accent-ink); border-radius: var(--wb-radius); font-size: 14px; }
+    .wb-link:hover { background: var(--wb-accent-wash); }
+
+    /* Cafe24 승인 — 네 단계 관문. */
+    .wb-cafe24 { display: grid; gap: 12px; }
+    .wb-gate { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: gate; }
+    .wb-gate li { counter-increment: gate; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--wb-line); font-size: 13px; color: var(--wb-muted); }
+    .wb-gate li::before { content: counter(gate); font-family: var(--wb-mono); font-size: 11.5px; }
+    .wb-gate li[data-state="done"] { color: var(--wb-done); border-color: var(--wb-done); background: var(--wb-done-wash); }
+    .wb-gate li[data-state="now"] { color: var(--wb-ink); border-color: var(--wb-accent); background: var(--wb-accent-wash); }
+    @media (max-width: 860px) { .wb-bring { grid-template-columns: 1fr; } }
 
     .wb-diag { margin-top: 28px; padding: 18px 20px; border: 1px dashed var(--wb-line-strong); border-radius: var(--wb-radius-lg); background: var(--wb-card-2); display: grid; gap: 12px; }
     .wb-diag h2 { font-size: 15px; }
